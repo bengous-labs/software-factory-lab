@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { floorOf } from "./floor.ts";
+import { FABLE_LANDS, floorOf } from "./floor.ts";
 
 describe("floorOf", () => {
   test("app code and docs under the cap are the model's to judge", () => {
@@ -35,7 +35,7 @@ describe("harness-only changes", () => {
   test("a change whose only risky paths are scripts/harness lands as land:auto after a deep review and a Fable OK", () => {
     const triage = floorOf({ paths: ["scripts/harness/watch.ts", "app/src/cli.ts"], lines: 30, messages: ["fix: x"] });
 
-    expect(triage).toMatchObject({ land: "auto", review: "deep", needsFable: true });
+    expect(triage).toMatchObject({ land: FABLE_LANDS ? "auto" : "human", review: "deep", needsFable: true });
   });
 
   test("past the line cap or with a breaking commit, a harness change still goes to the owner", () => {

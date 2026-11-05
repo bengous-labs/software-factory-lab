@@ -251,6 +251,17 @@ describe("harness-only changes and the Fable review", () => {
     expect(kinds(notOk)).not.toContain("auto-merge");
   });
 
+  test("while Fable is measured, a land:human harness change still gets its Fable review, then waits for the owner", () => {
+    const measured = { ...converged, record: { ...converged.record, triage: { [P1]: { ...HARNESS, land: "human" as const } } } };
+
+    expect(stepsOf(measured)).toContainEqual({ kind: "fable", patch: P1 });
+
+    const reviewed = { ...measured, record: { ...measured.record, fable: { [P1]: { ok: true, reason: "fine" } } } };
+
+    expect(gate(reviewed)).toBe("pending");
+    expect(kinds(reviewed)).not.toContain("auto-merge");
+  });
+
   test("an open Important comes before Fable: no Fable review runs on a PR that is not converged", () => {
     expect(kinds({ ...converged, openImportant: 1 })).not.toContain("fable");
   });

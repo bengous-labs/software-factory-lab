@@ -240,7 +240,7 @@ export function decide(snapshot: Snapshot): Decision {
 
   let land = next.rounds >= 2 ? "human" : labels.land;
 
-  if (land === "auto" && triage.needsFable === true) {
+  if (triage.needsFable === true && next.rounds < 2) {
     const verdict = next.fable?.[snapshot.patch];
 
     if (verdict === undefined) {
@@ -249,7 +249,7 @@ export function decide(snapshot: Snapshot): Decision {
       return { kind: "steps", steps };
     }
 
-    if (!verdict.ok) {
+    if (!verdict.ok && land === "auto") {
       steps.push({ kind: "labels", land: "human", review: labels.review });
       land = "human";
     }

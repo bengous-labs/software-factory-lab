@@ -9,6 +9,13 @@ import type { Triage } from "../conductor/decide.ts";
 
 export const HARNESS = ["scripts/harness/**"].map((glob) => new Bun.Glob(glob));
 
+/**
+ * Whether a Fable OK lands a harness-only change without the owner. Off until the owner has seen what
+ * the first Fable reviews in CI cost and whether they draw on the subscription or on usage credits:
+ * until then Fable runs, posts its verdict and its cost, and the change stays land:human.
+ */
+export const FABLE_LANDS = false;
+
 export const RISKY = [
   ".github/**",
   "scripts/**",
@@ -52,10 +59,10 @@ export function floorOf({ paths, lines, messages }: FloorInput): Triage | null {
 
   if (risky.length > 0) {
     return {
-      land: "auto",
+      land: FABLE_LANDS ? "auto" : "human",
       review: "deep",
       secondRound: true,
-      reason: `touches the harness only: ${risky.slice(0, 3).join(", ")}; lands after a deep review and a Fable OK`,
+      reason: `touches the harness only: ${risky.slice(0, 3).join(", ")}; ${FABLE_LANDS ? "lands after a deep review and a Fable OK" : "Fable reviews it, the owner lands it while Fable is measured"}`,
       model: null,
       needsFable: true,
     };
