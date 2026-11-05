@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 
 import { add } from "./commands/add.ts";
+import { clear } from "./commands/clear.ts";
 import { done } from "./commands/done.ts";
 import { list } from "./commands/list.ts";
 import { load, save } from "./store/store.ts";
 import { TaskError } from "./task.ts";
 
-const USAGE = "usage: todo add <title> | todo list [--all] | todo done <id>";
+const USAGE = "usage: todo add <title> | todo list [--all] | todo done <id> | todo clear";
 
 /** Runs one command against the store at `path` and returns what to print. */
 export function run(argv: readonly string[], path: string): string {
@@ -29,6 +30,13 @@ export function run(argv: readonly string[], path: string): string {
       save(path, done(load(path), id));
 
       return `done #${id}`;
+    }
+    case "clear": {
+      const tasks = load(path);
+      const kept = clear(tasks);
+      save(path, kept);
+
+      return `cleared ${tasks.length - kept.length}`;
     }
     default:
       throw new TaskError(USAGE);
