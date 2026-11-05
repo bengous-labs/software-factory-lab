@@ -17,7 +17,7 @@ import { commentOf, EFFORT, type Finding, MODEL, promptOf as reviewPrompt, revie
 import { fable, promptOf as fablePrompt } from "../review/fable.ts";
 import { floorOf } from "../triage/floor.ts";
 import { judge } from "../triage/judge.ts";
-import { type CheckState, conflictingOf, decide, landOkCounts, openImportantOf, deltaStart, EMPTY_RECORD, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
+import { afterFable, type CheckState, conflictingOf, decide, deltaStart, EMPTY_RECORD, FABLE_TRIES, landOkCounts, openImportantOf, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
 
 const STATE_MARKER = "<!-- lab-conductor-state";
 
@@ -345,12 +345,16 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
       const guide = readFileSync(join(env.cwd, "REVIEW.md"), "utf8");
       const result = await fable(run, env.cwd, fablePrompt(guide, await git(env, ["diff", `${range.base}..${range.head}`])));
       const by = `${result.model ?? "Fable"}${result.costUsd === null ? "" : `, $${result.costUsd.toFixed(3)}`}`;
-      log(`#${pr.number} fable ${step.patch.slice(0, 8)}: ${result.verdict.ok ? "OK" : "NOT OK"} by ${by} (${result.verdict.reason})`);
-      await api(env, `repos/${env.repo}/issues/${pr.number}/comments`, "POST", {
-        body: `Fable review (${by}): ${result.verdict.ok ? "OK" : "NOT OK, so land:human"}. ${result.verdict.reason}`,
-      });
-      const next = { ...record, fable: { ...(record.fable ?? {}), [step.patch]: result.verdict } };
+      const next = afterFable(record, step.patch, result.verdict);
+      const failures = next.fableFailures?.[step.patch] ?? 0;
+      // The record first: a failed comment must not make the next pass pay for Fable again.
       await writeRecord(env, pr.number, recordId, next);
+      const said =
+        result.verdict === null
+          ? `no verdict (${result.failure}), run ${failures} of ${FABLE_TRIES}${failures >= FABLE_TRIES ? ", so the owner decides" : ", asked again"}.`
+          : `${result.verdict.ok ? "OK" : "NOT OK"}. ${result.verdict.reason}`;
+      log(`#${pr.number} fable ${step.patch.slice(0, 8)} by ${by}: ${said}`);
+      await api(env, `repos/${env.repo}/issues/${pr.number}/comments`, "POST", { body: `Fable review (${by}): ${said}` });
 
       return next;
     }
