@@ -1,48 +1,52 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Run } from "../lib/run.ts";
-import { fable, FABLE_MODEL, promptOf, verdictOf } from "./fable.ts";
+import type { Answer, Ask, Question } from "../lib/ask.ts";
+import { fable, FABLE_MODEL, promptOf, SCHEMA, verdictOf } from "./fable.ts";
 
-const answer = (structured: object): string =>
-  JSON.stringify({ structured_output: structured, total_cost_usd: 0.2, modelUsage: { "claude-fable-5-1": { costUSD: 0.2 } } });
+function asking(answer: Answer): { ask: Ask; questions: Question[] } {
+  const questions: Question[] = [];
+
+  return {
+    ask: async (question) => {
+      questions.push(question);
+
+      return answer;
+    },
+    questions,
+  };
+}
 
 describe("verdictOf", () => {
-  test("an explicit ok true or false is a verdict; a missing ok or unreadable output is none", () => {
-    const cases: [string, { ok: boolean; reason: string } | null][] = [
-      [answer({ ok: true, reason: "fine" }), { ok: true, reason: "fine" }],
-      [answer({ ok: false, reason: "bypass" }), { ok: false, reason: "bypass" }],
-      [answer({ ok: false }), { ok: false, reason: "" }],
-      [answer({ reason: "?" }), null],
-      [answer({ ok: "yes", reason: "?" }), null],
-      [JSON.stringify({ result: "looks fine" }), null],
-      ["not json", null],
+  test("an explicit ok true or false is a verdict; a missing or non-boolean ok is none", () => {
+    const cases: [unknown, { ok: boolean; reason: string } | null][] = [
+      [{ ok: true, reason: "fine" }, { ok: true, reason: "fine" }],
+      [{ ok: false, reason: "bypass" }, { ok: false, reason: "bypass" }],
+      [{ ok: false }, { ok: false, reason: "" }],
+      [{ reason: "?" }, null],
+      [{ ok: "yes", reason: "?" }, null],
+      [null, null],
+      ["looks fine", null],
     ];
 
-    for (const [stdout, verdict] of cases) expect(verdictOf(stdout)).toEqual(verdict);
+    for (const [structured, verdict] of cases) expect(verdictOf(structured)).toEqual(verdict);
   });
 });
 
 describe("fable", () => {
-  test("runs Fable with no tool and a schema, and reads its verdict, model and cost", async () => {
-    const calls: string[][] = [];
-    const run: Run = async (argv) => {
-      calls.push([...argv]);
+  test("asks Fable with the schema, and reads its verdict, model and cost", async () => {
+    const { ask, questions } = asking({ kind: "answered", structured: { ok: true, reason: "fine" }, costUsd: 0.2, model: "claude-fable-5-1" });
+    const result = await fable(ask, "/repo", "prompt");
 
-      return { code: 0, stdout: answer({ ok: true, reason: "fine" }), stderr: "" };
-    };
-
-    const result = await fable(run, "/repo", "prompt");
-
-    expect(calls[0]).toEqual(expect.arrayContaining(["--model", FABLE_MODEL, "--tools", "", "--json-schema"]));
+    expect(questions).toEqual([{ model: FABLE_MODEL, prompt: "prompt", schema: SCHEMA, cwd: "/repo", timeoutMs: 900_000 }]);
     expect(result).toEqual({ verdict: { ok: true, reason: "fine" }, failure: null, model: "claude-fable-5-1", costUsd: 0.2 });
   });
 
-  test("a failed run or an answer outside the schema gives no verdict, with the reason", async () => {
-    const failed: Run = async () => ({ code: 124, stdout: "", stderr: "timed out" });
-    const offSchema: Run = async () => ({ code: 0, stdout: JSON.stringify({ result: "ok I guess" }), stderr: "" });
+  test("a failed call or an answer outside the schema gives no verdict, with the reason", async () => {
+    const failed = asking({ kind: "failed", error: "timed out after 900000 ms", costUsd: null, model: null }).ask;
+    const offSchema = asking({ kind: "answered", structured: { verdict: "ok I guess" }, costUsd: 0.1, model: "claude-fable-5-1" }).ask;
 
-    expect(await fable(failed, "/repo", "prompt")).toMatchObject({ verdict: null, failure: "Fable exited 124." });
-    expect(await fable(offSchema, "/repo", "prompt")).toMatchObject({ verdict: null, failure: "Fable answered outside the schema." });
+    expect(await fable(failed, "/repo", "prompt")).toEqual({ verdict: null, failure: "Fable failed: timed out after 900000 ms", model: null, costUsd: null });
+    expect(await fable(offSchema, "/repo", "prompt")).toMatchObject({ verdict: null, failure: "Fable answered outside the schema.", costUsd: 0.1 });
   });
 });
 
