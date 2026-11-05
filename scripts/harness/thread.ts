@@ -13,6 +13,9 @@ export const REPLY = "mutation($id:ID!,$body:String!){addPullRequestReviewThread
 
 export const RESOLVE = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}";
 
+/** Marks a reply as the author's own, so the author's watcher does not print it back. */
+export const AUTHOR_MARK = "<!-- lab-author-reply -->";
+
 export const USAGE = 'usage: bun scripts/harness/thread.ts <thread-id> "<reply>"';
 
 /** The thread id and the reply, or null when either is missing or blank. */
@@ -26,7 +29,7 @@ export function argsOf(argv: readonly string[]): { id: string; body: string } | 
 
 /** Replies first, so a thread is never resolved without the author's answer in it. */
 export async function answer(runner: Run, cwd: string, id: string, body: string): Promise<void> {
-  await checked(runner, ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", `id=${id}`, "-f", `body=${body}`], { cwd });
+  await checked(runner, ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", `id=${id}`, "-f", `body=${body}\n\n${AUTHOR_MARK}`], { cwd });
   await checked(runner, ["gh", "api", "graphql", "-f", `query=${RESOLVE}`, "-f", `id=${id}`], { cwd });
 }
 

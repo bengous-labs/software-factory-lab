@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Run } from "./lib/run.ts";
-import { answer, argsOf, REPLY, RESOLVE } from "./thread.ts";
+import { answer, argsOf, AUTHOR_MARK, REPLY, RESOLVE } from "./thread.ts";
 
 describe("argsOf", () => {
   test("a thread id and a reply are read; a missing or blank one is refused", () => {
@@ -24,7 +24,7 @@ describe("answer", () => {
     await answer(run, "/repo", "PRRT_1", "Rejected: intended");
 
     expect(calls).toEqual([
-      ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", "id=PRRT_1", "-f", "body=Rejected: intended"],
+      ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", "id=PRRT_1", "-f", `body=Rejected: intended\n\n${AUTHOR_MARK}`],
       ["gh", "api", "graphql", "-f", `query=${RESOLVE}`, "-f", "id=PRRT_1"],
     ]);
   });

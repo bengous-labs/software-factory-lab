@@ -25,6 +25,9 @@ export interface Triage {
   readonly needsFable?: boolean;
 }
 
+/** Fable runs per patch that may give no verdict before the change goes to the owner. */
+export const FABLE_TRIES = 2;
+
 export interface FableVerdict {
   readonly ok: boolean;
   readonly reason: string;
@@ -48,6 +51,8 @@ export interface StateRecord {
   readonly bodyImportant?: Readonly<Record<string, number>>;
   /** The Fable review of each patch that needs one, keyed by patch identity. */
   readonly fable?: Readonly<Record<string, FableVerdict>>;
+  /** Fable runs that gave no verdict, per patch. */
+  readonly fableFailures?: Readonly<Record<string, number>>;
 }
 
 export const EMPTY_RECORD: StateRecord = {
@@ -243,13 +248,14 @@ export function decide(snapshot: Snapshot): Decision {
   if (triage.needsFable === true && next.rounds < 2) {
     const verdict = next.fable?.[snapshot.patch];
 
-    if (verdict === undefined) {
+    if (verdict === undefined && (next.fableFailures?.[snapshot.patch] ?? 0) < FABLE_TRIES) {
       steps.push({ kind: "fable", patch: snapshot.patch });
 
       return { kind: "steps", steps };
     }
 
-    if (!verdict.ok && land === "auto") {
+    // No verdict after FABLE_TRIES failed runs counts as NOT OK.
+    if (verdict?.ok !== true && land === "auto") {
       steps.push({ kind: "labels", land: "human", review: labels.review });
       land = "human";
     }
