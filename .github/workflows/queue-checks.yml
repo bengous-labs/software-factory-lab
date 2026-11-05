@@ -1,0 +1,41 @@
+name: queue-checks
+
+# Re-posts the App's `agent-review` and `land-gate` on the merge queue's own commit
+# (`scripts/harness/queue/repost.ts`), each green only when it is green on the PR's head. GitHub reads
+# this file from the queue's commit, so a PR can change it; the script itself is checked out from the
+# default branch.
+on:
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+jobs:
+  repost:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the agents' App token
+        id: app
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_KEY }}
+          permission-checks: write
+          permission-pull-requests: read
+
+      - name: Checkout the default branch
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Set up bun via mise
+        uses: jdx/mise-action@v5.2.5
+
+      - name: Re-post the App's checks on the queue's commit
+        run: bun scripts/harness/queue/repost.ts
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          APP_SLUG: bengous-labs-agents
