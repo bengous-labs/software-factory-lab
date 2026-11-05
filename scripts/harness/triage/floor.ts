@@ -29,7 +29,7 @@ export interface FloorInput {
   readonly messages: readonly string[];
 }
 
-const human = (reason: string): Triage => ({ land: "human", review: "deep", secondRound: true, reason });
+const human = (reason: string): Triage => ({ land: "human", review: "deep", secondRound: true, reason, model: null });
 
 /** The floor's answer, or null when the change is the model's to judge. */
 export function floorOf({ paths, lines, messages }: FloorInput): Triage | null {

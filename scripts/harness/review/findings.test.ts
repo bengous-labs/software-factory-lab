@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { commentOf, findingsOf, NIT_CAP, promptOf, severityOfBody } from "./findings.ts";
+import { commentOf, findingsOf, NIT_CAP, promptOf, severityOfBody, usageOf } from "./findings.ts";
 
 const out = (findings: object[]): string => JSON.stringify({ structured_output: { findings } });
 
@@ -45,5 +45,17 @@ describe("promptOf", () => {
     expect(prompt).toContain("hunt for nothing new");
     expect(prompt).toContain("Author: intended");
     expect(promptOf("guide", "diff", 1, [])).not.toContain("round 2");
+  });
+});
+
+describe("usageOf", () => {
+  test("the exact model is the one that cost the most; the cost is the run's total", () => {
+    const stdout = JSON.stringify({
+      total_cost_usd: 0.05,
+      modelUsage: { "claude-haiku-5-5": { costUSD: 0.001 }, "claude-opus-5-5": { costUSD: 0.049 } },
+    });
+
+    expect(usageOf(stdout)).toEqual({ costUsd: 0.05, model: "claude-opus-5-5" });
+    expect(usageOf("not json")).toEqual({ costUsd: null, model: null });
   });
 });
