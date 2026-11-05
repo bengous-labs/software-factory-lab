@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { conflictingOf, decide, EMPTY_RECORD, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
+import { conflictingOf, decide, deltaStart, EMPTY_RECORD, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -170,5 +170,17 @@ describe("conflictingOf", () => {
     expect(conflictingOf("dirty")).toBe(true);
 
     for (const state of ["unknown", "blocked", "clean", "behind", null, undefined]) expect(conflictingOf(state)).toBe(false);
+  });
+});
+
+describe("deltaStart", () => {
+  test("the delta starts at the reviewed head only while it is an ancestor of this head", () => {
+    expect(deltaStart("base", "reviewed", 0)).toBe("reviewed");
+  });
+
+  test("after a rebase, an unknown object, or with no review yet, the delta is the whole PR", () => {
+    expect(deltaStart("base", "reviewed", 1)).toBe("base");
+    expect(deltaStart("base", "reviewed", 128)).toBe("base");
+    expect(deltaStart("base", null, null)).toBe("base");
   });
 });

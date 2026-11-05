@@ -16,7 +16,7 @@ import { checked, run } from "../lib/run.ts";
 import { commentOf, EFFORT, type Finding, MODEL, promptOf as reviewPrompt, review, severityOfBody, type RejectedThread } from "../review/findings.ts";
 import { floorOf } from "../triage/floor.ts";
 import { judge } from "../triage/judge.ts";
-import { type CheckState, conflictingOf, decide, EMPTY_RECORD, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
+import { type CheckState, conflictingOf, decide, deltaStart, EMPTY_RECORD, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
 
 const STATE_MARKER = "<!-- lab-conductor-state";
 
@@ -204,7 +204,7 @@ async function deltaBase(env: Env, range: Range, record: StateRecord): Promise<s
 
   const ancestor = await run(["git", "merge-base", "--is-ancestor", record.reviewedHead, range.head], { cwd: env.cwd });
 
-  return ancestor.code === 0 ? record.reviewedHead : range.base;
+  return deltaStart(range.base, record.reviewedHead, ancestor.code);
 }
 
 async function triage(env: Env, range: Range, record: StateRecord, delta: boolean) {
