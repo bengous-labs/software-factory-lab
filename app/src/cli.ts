@@ -18,7 +18,7 @@ export function run(argv: readonly string[], path: string): string {
 
   switch (command) {
     case "add": {
-      const tasks = add(load(path), rest.join(" "));
+      const tasks = add(load(path), rest.join(" "), new Date().toISOString());
       save(path, tasks);
 
       return `added #${tasks.at(-1)?.id}`;
