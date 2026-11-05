@@ -19,7 +19,7 @@ export interface Triage {
   /** On a delta after a fixed Important: whether the fix is risky enough for a second round. */
   readonly secondRound: boolean;
   readonly reason: string;
-  /** The exact model that answered, or null when the floor did. */
+  /** The model asked, exact when it answered; null when the floor decided. */
   readonly model: string | null;
 }
 

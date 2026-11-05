@@ -88,7 +88,7 @@ export async function judge(run: Run, cwd: string, stat: string, patch: string, 
       review: "deep",
       secondRound: true,
       reason: `the triage failed (exit ${ran.code}): ${(ran.stderr || ran.stdout).trim().slice(0, 200)}`,
-      model: null,
+      model: TRIAGE_MODEL,
     }
   );
 }
