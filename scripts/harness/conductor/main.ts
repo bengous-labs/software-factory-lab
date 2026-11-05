@@ -345,9 +345,9 @@ async function numbersOf(env: Env): Promise<number[]> {
 
   if (event === "workflow_run") {
     const sha = required("RUN_HEAD_SHA");
-    const listed = JSON.parse(await gh(env, ["pr", "list", "--repo", env.repo, "--state", "open", "--search", sha, "--json", "number"])) as { number: number }[];
+    const listed = await api<{ number: number; state: string }[]>(env, `repos/${env.repo}/commits/${sha}/pulls`);
 
-    return listed.map((found) => found.number);
+    return listed.filter((found) => found.state === "open").map((found) => found.number);
   }
 
   const open = JSON.parse(await gh(env, ["pr", "list", "--repo", env.repo, "--state", "open", "--json", "number"])) as { number: number }[];
