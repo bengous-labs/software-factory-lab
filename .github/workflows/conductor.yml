@@ -4,15 +4,19 @@ name: conductor
 # PR: `workflow_run` and `pull_request_target` both read this file and the checkout from `dev`, and the
 # PR's head is fetched as git data only. Every write goes through the agents' App: a `GITHUB_TOKEN`
 # write starts no workflow, and only an App can post check runs. The sweep catches what no event
-# carries, such as a review thread resolved.
+# carries, such as a review thread resolved, and what a landing changes in the other open PRs, such
+# as a new conflict. A push to the default branch is the main sweep trigger; the schedule is a net,
+# because GitHub may drop scheduled runs.
 on:
+  push:
+    branches: [dev]
   workflow_run:
     workflows: [CI]
     types: [completed]
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled, dequeued]
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7,37 * * * *"
   workflow_dispatch:
     inputs:
       pr:
