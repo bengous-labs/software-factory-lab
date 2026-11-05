@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { checked, run } from "../lib/run.ts";
 import { commentOf, EFFORT, type Finding, MODEL, promptOf as reviewPrompt, review, severityOfBody, type RejectedThread } from "../review/findings.ts";
+import { fable, promptOf as fablePrompt } from "../review/fable.ts";
 import { floorOf } from "../triage/floor.ts";
 import { judge } from "../triage/judge.ts";
 import { type CheckState, conflictingOf, decide, landOkCounts, openImportantOf, deltaStart, EMPTY_RECORD, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
@@ -340,6 +341,19 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
       await api(env, `repos/${env.repo}/issues/${pr.number}/labels/land-ok`, "DELETE");
 
       return record;
+    case "fable": {
+      const guide = readFileSync(join(env.cwd, "REVIEW.md"), "utf8");
+      const result = await fable(run, env.cwd, fablePrompt(guide, await git(env, ["diff", `${range.base}..${range.head}`])));
+      const by = `${result.model ?? "Fable"}${result.costUsd === null ? "" : `, $${result.costUsd.toFixed(3)}`}`;
+      log(`#${pr.number} fable ${step.patch.slice(0, 8)}: ${result.verdict.ok ? "OK" : "NOT OK"} by ${by} (${result.verdict.reason})`);
+      await api(env, `repos/${env.repo}/issues/${pr.number}/comments`, "POST", {
+        body: `Fable review (${by}): ${result.verdict.ok ? "OK" : "NOT OK, so land:human"}. ${result.verdict.reason}`,
+      });
+      const next = { ...record, fable: { ...(record.fable ?? {}), [step.patch]: result.verdict } };
+      await writeRecord(env, pr.number, recordId, next);
+
+      return next;
+    }
     case "auto-merge":
       try {
         await graphql(env, "mutation($id:ID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:MERGE}){clientMutationId}}", { id: pr.node_id });
@@ -384,7 +398,7 @@ async function conduct(env: Env, number: number, dequeueReason: string | null, l
 
       if (current === null) return;
 
-      if (step.kind === "triage" || step.kind === "review") modelRan = true;
+      if (step.kind === "triage" || step.kind === "review" || step.kind === "fable") modelRan = true;
     }
 
     if (!modelRan) return;
