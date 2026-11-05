@@ -6,14 +6,22 @@ import { type Task, TaskError } from "../task.ts";
 export const FORMAT_VERSION = 2;
 
 /** Versions read as they are; a version 1 task has no createdAt. A save always writes FORMAT_VERSION. */
-const READABLE_VERSIONS: readonly (number | undefined)[] = [1, FORMAT_VERSION];
+const READABLE_VERSIONS: readonly number[] = [1, FORMAT_VERSION];
+
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 interface StoreFile {
   readonly version: number;
   readonly tasks: readonly Task[];
 }
 
-function isTask(value: unknown): value is Task {
+function hasValidCreatedAt(createdAt: unknown, version: number): boolean {
+  if (version === 1) return createdAt === undefined;
+
+  return createdAt === undefined || (typeof createdAt === "string" && ISO_TIMESTAMP.test(createdAt));
+}
+
+function isTask(value: unknown, version: number): value is Task {
   if (typeof value !== "object" || value === null) return false;
 
   const record = value as Record<string, unknown>;
@@ -22,7 +30,7 @@ function isTask(value: unknown): value is Task {
     typeof record["id"] === "number" &&
     typeof record["title"] === "string" &&
     typeof record["done"] === "boolean" &&
-    (record["createdAt"] === undefined || typeof record["createdAt"] === "string")
+    hasValidCreatedAt(record["createdAt"], version)
   );
 }
 
@@ -33,11 +41,13 @@ export function parse(text: string, path: string): readonly Task[] {
 
   const file = data as Partial<StoreFile>;
 
-  if (!READABLE_VERSIONS.includes(file.version)) {
-    throw new TaskError(`${path}: format version ${String(file.version)}, expected ${FORMAT_VERSION}`);
+  const version = file.version;
+
+  if (typeof version !== "number" || !READABLE_VERSIONS.includes(version)) {
+    throw new TaskError(`${path}: format version ${String(version)}, expected ${READABLE_VERSIONS.join(" or ")}`);
   }
 
-  if (!Array.isArray(file.tasks) || !file.tasks.every(isTask)) {
+  if (!Array.isArray(file.tasks) || !file.tasks.every((task) => isTask(task, version))) {
     throw new TaskError(`${path}: tasks is not a list of tasks`);
   }
 

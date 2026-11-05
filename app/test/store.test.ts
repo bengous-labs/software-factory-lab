@@ -30,7 +30,7 @@ describe("store", () => {
   test("the versions just below and above the readable ones are refused", () => {
     for (const version of [0, 3]) {
       expect(() => parse(JSON.stringify({ version, tasks: [] }), "f.json")).toThrow(
-        `format version ${version}, expected 2`,
+        `format version ${version}, expected 1 or 2`,
       );
     }
   });
@@ -58,6 +58,24 @@ describe("store", () => {
     save(path, tasks);
 
     expect(load(path)).toEqual(tasks);
+  });
+
+  test("a version 1 task with a creation date is refused", () => {
+    const text = JSON.stringify({
+      version: 1,
+      tasks: [{ id: 1, title: "a", done: false, createdAt: "2026-11-05T09:00:00.000Z" }],
+    });
+
+    expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");
+  });
+
+  test("a creation date that is not an ISO timestamp is refused", () => {
+    const text = JSON.stringify({
+      version: FORMAT_VERSION,
+      tasks: [{ id: 1, title: "a", done: false, createdAt: "yesterday" }],
+    });
+
+    expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");
   });
 
   test("a creation date that is not a string is refused", () => {
