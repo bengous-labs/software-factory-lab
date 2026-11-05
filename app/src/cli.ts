@@ -5,12 +5,13 @@ import { clear } from "./commands/clear.ts";
 import { count } from "./commands/count.ts";
 import { done } from "./commands/done.ts";
 import { list } from "./commands/list.ts";
+import { remove } from "./commands/remove.ts";
 import { rename } from "./commands/rename.ts";
 import { load, save } from "./store/store.ts";
 import { TaskError } from "./task.ts";
 
 const USAGE =
-  "usage: todo add <title> | todo list [--all | --done] | todo count | todo done <id> | todo clear | todo rename <id> <title>";
+  "usage: todo add <title> | todo list [--all | --done] | todo count | todo done <id> | todo clear | todo rename <id> <title> | todo remove <id>";
 
 /** Runs one command against the store at `path` and returns what to print. */
 export function run(argv: readonly string[], path: string): string {
@@ -51,6 +52,15 @@ export function run(argv: readonly string[], path: string): string {
       save(path, rename(load(path), id, rest.slice(1).join(" ")));
 
       return `renamed #${id}`;
+    }
+    case "remove": {
+      const id = Number(rest[0]);
+
+      if (!Number.isInteger(id)) throw new TaskError(`not a task id: ${String(rest[0])}`);
+
+      save(path, remove(load(path), id));
+
+      return `removed #${id}`;
     }
     default:
       throw new TaskError(USAGE);
