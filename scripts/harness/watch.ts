@@ -87,7 +87,7 @@ export function eventsOf(pr: number, state: PrState): readonly Event[] {
       events.push({ key: `thread:${thread.id}`, line: `Finding ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}` });
     }
 
-    for (const reply of thread.replies.filter((found) => !found.body.includes(AUTHOR_MARK))) {
+    for (const reply of thread.replies.filter((found) => found.author !== APP_LOGIN && !found.body.includes(AUTHOR_MARK))) {
       events.push({ key: `comment:${reply.id}`, line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}` });
     }
   }

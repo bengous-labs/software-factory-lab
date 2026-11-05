@@ -28,6 +28,13 @@ export interface Triage {
 /** Fable runs per patch that may give no verdict before the change goes to the owner. */
 export const FABLE_TRIES = 2;
 
+/** The record after one Fable run on `patch`: its verdict, or one more failure when it gave none. */
+export function afterFable(record: StateRecord, patch: string, verdict: FableVerdict | null): StateRecord {
+  if (verdict !== null) return { ...record, fable: { ...(record.fable ?? {}), [patch]: verdict } };
+
+  return { ...record, fableFailures: { ...(record.fableFailures ?? {}), [patch]: (record.fableFailures?.[patch] ?? 0) + 1 } };
+}
+
 export interface FableVerdict {
   readonly ok: boolean;
   readonly reason: string;

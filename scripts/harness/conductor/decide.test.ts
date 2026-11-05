@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { conflictingOf, decide, deltaStart, EMPTY_RECORD, FABLE_TRIES, landOkCounts, openImportantOf, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
+import { afterFable, conflictingOf, decide, deltaStart, EMPTY_RECORD, FABLE_TRIES, landOkCounts, openImportantOf, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -290,5 +290,29 @@ describe("harness-only changes and the Fable review", () => {
 
   test("an open Important comes before Fable: no Fable review runs on a PR that is not converged", () => {
     expect(kinds({ ...converged, openImportant: 1 })).not.toContain("fable");
+  });
+});
+
+describe("afterFable", () => {
+  test("a run with no verdict adds one failure for its patch and sets no verdict; a verdict is kept and adds none", () => {
+    const once = afterFable(EMPTY_RECORD, P1, null);
+    const twice = afterFable(once, P1, null);
+
+    expect(once.fableFailures).toEqual({ [P1]: 1 });
+    expect(once.fable).toBeUndefined();
+    expect(twice.fableFailures).toEqual({ [P1]: 2 });
+    expect(afterFable(twice, "patch-2", null).fableFailures).toEqual({ [P1]: 2, "patch-2": 1 });
+
+    const ok = afterFable(twice, P1, { ok: true, reason: "fine" });
+
+    expect(ok.fable).toEqual({ [P1]: { ok: true, reason: "fine" } });
+    expect(ok.fableFailures).toEqual({ [P1]: 2 });
+  });
+
+  test("two failed runs on a patch end the retries: decide then asks Fable no more", () => {
+    const HARNESS: Triage = { land: "auto", review: "deep", secondRound: true, reason: "harness", model: null, needsFable: true };
+    const record = afterFable(afterFable({ ...EMPTY_RECORD, reviewedPatch: P1, triage: { [P1]: HARNESS } }, P1, null), P1, null);
+
+    expect(kinds({ ...READY, record })).not.toContain("fable");
   });
 });

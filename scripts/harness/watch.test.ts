@@ -51,6 +51,7 @@ describe("eventsOf", () => {
         replies: [
           { id: "C1", author: "bengous", body: "please fix this one anyway" },
           { id: "C2", author: "bengous", body: `Fixed in abc.\n\n${AUTHOR_MARK}` },
+          { id: "C4", author: "bengous-labs-agents", body: "re-checked" },
         ],
       },
       { id: "T8", resolved: true, path: "a.ts", line: 1, author: "bengous-labs-agents", body: nit, replies: [{ id: "C3", author: "bengous", body: "old" }] },
