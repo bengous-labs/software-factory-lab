@@ -2,6 +2,7 @@
 
 import { add } from "./commands/add.ts";
 import { clear } from "./commands/clear.ts";
+import { count } from "./commands/count.ts";
 import { done } from "./commands/done.ts";
 import { list } from "./commands/list.ts";
 import { rename } from "./commands/rename.ts";
@@ -9,7 +10,7 @@ import { load, save } from "./store/store.ts";
 import { TaskError } from "./task.ts";
 
 const USAGE =
-  "usage: todo add <title> | todo list [--all] | todo done <id> | todo clear | todo rename <id> <title>";
+  "usage: todo add <title> | todo list [--all] | todo count | todo done <id> | todo clear | todo rename <id> <title>";
 
 /** Runs one command against the store at `path` and returns what to print. */
 export function run(argv: readonly string[], path: string): string {
@@ -24,6 +25,8 @@ export function run(argv: readonly string[], path: string): string {
     }
     case "list":
       return list(load(path), { all: rest.includes("--all") });
+    case "count":
+      return count(load(path));
     case "done": {
       const id = Number(rest[0]);
 

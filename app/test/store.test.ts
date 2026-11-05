@@ -48,6 +48,18 @@ describe("cli", () => {
     expect(run(["list"], path)).toBe("[ ] #2 ship");
   });
 
+  test("count prints the open tasks, done ones left out", () => {
+    const path = tempFile();
+
+    expect(run(["count"], path)).toBe("0 open");
+
+    run(["add", "a"], path);
+    run(["add", "b"], path);
+    run(["done", "1"], path);
+
+    expect(run(["count"], path)).toBe("1 open");
+  });
+
   test("an unknown command prints the usage", () => {
     expect(() => run(["remove"], tempFile())).toThrow("usage: todo");
   });
