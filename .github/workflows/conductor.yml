@@ -39,7 +39,8 @@ jobs:
           app-id: ${{ secrets.AGENTS_APP_ID }}
           private-key: ${{ secrets.AGENTS_APP_KEY }}
           permission-checks: write
-          permission-contents: read
+          # write: enabling auto-merge needs it; the job never pushes.
+          permission-contents: write
           permission-pull-requests: write
           permission-issues: write
 
