@@ -4,7 +4,7 @@
  */
 
 import type { Level } from "../conductor/decide.ts";
-import type { Run } from "../lib/run.ts";
+import type { Ask } from "../lib/ask.ts";
 
 export type Severity = "important" | "nit" | "pre_existing";
 
@@ -18,7 +18,7 @@ export interface Finding {
 
 export const MODEL: Record<Exclude<Level, "none">, string> = { light: "sonnet", deep: "opus" };
 
-/** The review passes no effort flag: the model runs at its own default. */
+/** The review passes no effort option: the model runs at its own default. */
 export const EFFORT = "default";
 
 /** The cap on Nits REVIEW.md sets. */
@@ -78,29 +78,24 @@ export function promptOf(guide: string, diff: string, round: 1 | 2, rejected: re
   ].join("\n");
 }
 
-/** The findings in `claude -p --output-format json --json-schema` output, Nits capped; null when it does not read. */
-export function findingsOf(stdout: string): readonly Finding[] | null {
-  try {
-    const out = JSON.parse(stdout) as {
-      structured_output?: { findings?: { file: string; line: number | null; severity: Severity; summary: string; failure_scenario: string }[] };
-    };
-    const raw = out.structured_output?.findings;
+/** The findings in the schema's answer, Nits capped; null when it does not read. */
+export function findingsOf(structured: unknown): readonly Finding[] | null {
+  const raw = (structured as {
+    findings?: { file: string; line: number | null; severity: Severity; summary: string; failure_scenario: string }[];
+  } | null)?.findings;
 
-    if (!Array.isArray(raw)) return null;
+  if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null)) return null;
 
-    const findings = raw.map((finding) => ({
-      file: finding.file,
-      line: finding.line,
-      severity: finding.severity,
-      summary: finding.summary,
-      failureScenario: finding.failure_scenario,
-    }));
-    const nits = findings.filter((finding) => finding.severity === "nit").slice(0, NIT_CAP);
+  const findings = raw.map((finding) => ({
+    file: finding.file,
+    line: finding.line,
+    severity: finding.severity,
+    summary: finding.summary,
+    failureScenario: finding.failure_scenario,
+  }));
+  const nits = findings.filter((finding) => finding.severity === "nit").slice(0, NIT_CAP);
 
-    return [...findings.filter((finding) => finding.severity !== "nit"), ...nits];
-  } catch {
-    return null;
-  }
+  return [...findings.filter((finding) => finding.severity !== "nit"), ...nits];
 }
 
 const LABEL: Record<Severity, string> = { important: "Important", nit: "Nit", pre_existing: "Pre-existing" };
@@ -118,50 +113,32 @@ export function commentOf(finding: Finding): string {
   return `**${LABEL[finding.severity]}**: ${finding.summary}\n\n${finding.failureScenario}\n\n${markerOf(finding.severity)}`;
 }
 
-/** The cost and the exact model in `claude -p --output-format json` output: the model that cost the most, when several ran. */
-export function usageOf(stdout: string): { costUsd: number | null; model: string | null } {
-  try {
-    const out = JSON.parse(stdout) as { total_cost_usd?: number; modelUsage?: Record<string, { costUSD?: number }> };
-    const models = Object.entries(out.modelUsage ?? {}).sort((a, b) => (b[1].costUSD ?? 0) - (a[1].costUSD ?? 0));
-
-    return { costUsd: out.total_cost_usd ?? null, model: models[0]?.[0] ?? null };
-  } catch {
-    return { costUsd: null, model: null };
-  }
-}
-
 export interface ReviewRun {
+  /** Null when the review gave no answer, or one that does not read; `error` then says why. */
   readonly findings: readonly Finding[] | null;
   readonly costUsd: number | null;
+  /** The exact model that ran, null when the call gave no result. */
   readonly model: string | null;
   readonly ms: number;
-  readonly code: number;
+  readonly error: string | null;
 }
 
 export async function review(
-  run: Run,
+  ask: Ask,
   cwd: string,
   level: Exclude<Level, "none">,
   prompt: string,
   now: () => number,
 ): Promise<ReviewRun> {
   const started = now();
-  const ran = await run(
-    [
-      "claude",
-      "-p",
-      "--model",
-      MODEL[level],
-      "--tools",
-      "",
-      "--strict-mcp-config",
-      "--output-format",
-      "json",
-      "--json-schema",
-      JSON.stringify(SCHEMA),
-      prompt,
-    ],
-    { cwd, timeoutMs: 900_000 },
-  );
-  return { findings: ran.code === 0 ? findingsOf(ran.stdout) : null, ...usageOf(ran.stdout), ms: now() - started, code: ran.code };
+  const answer = await ask({ model: MODEL[level], prompt, schema: SCHEMA, cwd, timeoutMs: 900_000 });
+  const ms = now() - started;
+
+  const { costUsd, model } = answer;
+
+  if (answer.kind === "failed") return { findings: null, costUsd, model, ms, error: answer.error };
+
+  const findings = findingsOf(answer.structured);
+
+  return { findings, costUsd, model, ms, error: findings === null ? "the answer does not read" : null };
 }
