@@ -195,8 +195,20 @@ async function setLabels(env: Env, pr: PullJson, land: Land, level: Level): Prom
   if (missing.length > 0) await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: missing });
 }
 
+/**
+ * Where a delta starts: the head the last review read, while it is still an ancestor of this head.
+ * A rebase leaves it out of the PR's history, and the delta is then the whole PR again.
+ */
+async function deltaBase(env: Env, range: Range, record: StateRecord): Promise<string> {
+  if (record.reviewedHead === null) return range.base;
+
+  const ancestor = await run(["git", "merge-base", "--is-ancestor", record.reviewedHead, range.head], { cwd: env.cwd });
+
+  return ancestor.code === 0 ? record.reviewedHead : range.base;
+}
+
 async function triage(env: Env, range: Range, record: StateRecord, delta: boolean) {
-  const from = delta && record.reviewedHead !== null ? record.reviewedHead : range.base;
+  const from = delta ? await deltaBase(env, range, record) : range.base;
   const paths = (await git(env, ["diff", "--name-only", `${range.base}..${range.head}`])).split("\n").filter((path) => path !== "");
   const numstat = await git(env, ["diff", "--numstat", `${range.base}..${range.head}`]);
   const lines = numstat.split("\n").reduce((sum, row) => sum + row.split("\t").slice(0, 2).reduce((acc, n) => acc + (Number(n) || 0), 0), 0);
@@ -258,7 +270,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
       return next;
     }
     case "review": {
-      const from = step.round === 2 && record.reviewedHead !== null ? record.reviewedHead : range.base;
+      const from = step.round === 2 ? await deltaBase(env, range, record) : range.base;
       const guide = readFileSync(join(env.cwd, "REVIEW.md"), "utf8");
       const prompt = reviewPrompt(guide, await git(env, ["diff", `${from}..${range.head}`]), step.round, rejectedOf(env, threads));
       let result = await review(run, env.cwd, step.level, prompt, Date.now);
