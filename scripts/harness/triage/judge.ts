@@ -4,7 +4,7 @@
  */
 
 import type { Triage } from "../conductor/decide.ts";
-import type { Run } from "../lib/run.ts";
+import type { Ask } from "../lib/ask.ts";
 
 export const TRIAGE_MODEL = "haiku";
 
@@ -42,51 +42,29 @@ export function promptOf(stat: string, patch: string, delta: boolean): string {
   ].join("\n");
 }
 
-/** The triage in `claude -p --output-format json --json-schema` output, or null when it does not read. */
-export function triageOf(stdout: string): Triage | null {
-  try {
-    const out = JSON.parse(stdout) as { structured_output?: Record<string, unknown> };
-    const answer = out.structured_output;
+/** The triage in the schema's answer, or null when it does not read. */
+export function triageOf(structured: unknown): Triage | null {
+  if (typeof structured !== "object" || structured === null) return null;
 
-    if (answer === undefined) return null;
+  const { land, review, second_round: secondRound, reason } = structured as Record<string, unknown>;
 
-    const { land, review, second_round: secondRound, reason } = answer;
-
-    if ((land !== "auto" && land !== "human") || (review !== "none" && review !== "light" && review !== "deep")) {
-      return null;
-    }
-
-    return { land, review, secondRound: secondRound === true, reason: typeof reason === "string" ? reason : "" };
-  } catch {
+  if ((land !== "auto" && land !== "human") || (review !== "none" && review !== "light" && review !== "deep")) {
     return null;
   }
+
+  return { land, review, secondRound: secondRound === true, reason: typeof reason === "string" ? reason : "" };
 }
 
-export async function judge(run: Run, cwd: string, stat: string, patch: string, delta: boolean): Promise<Triage> {
-  const ran = await run(
-    [
-      "claude",
-      "-p",
-      "--model",
-      TRIAGE_MODEL,
-      "--tools",
-      "",
-      "--strict-mcp-config",
-      "--output-format",
-      "json",
-      "--json-schema",
-      JSON.stringify(SCHEMA),
-      promptOf(stat, patch, delta),
-    ],
-    { cwd, timeoutMs: 180_000 },
-  );
+export async function judge(ask: Ask, cwd: string, stat: string, patch: string, delta: boolean): Promise<Triage> {
+  const answer = await ask({ model: TRIAGE_MODEL, prompt: promptOf(stat, patch, delta), schema: SCHEMA, cwd, timeoutMs: 180_000 });
+  const triage = answer.kind === "answered" ? triageOf(answer.structured) : null;
 
   return (
-    (ran.code === 0 ? triageOf(ran.stdout) : null) ?? {
+    triage ?? {
       land: "human",
       review: "deep",
       secondRound: true,
-      reason: `the triage failed (exit ${ran.code}): ${(ran.stderr || ran.stdout).trim().slice(0, 200)}`,
+      reason: `the triage failed: ${(answer.kind === "failed" ? answer.error : "its answer does not read").slice(0, 200)}`,
     }
   );
 }

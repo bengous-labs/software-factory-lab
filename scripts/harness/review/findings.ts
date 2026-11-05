@@ -4,7 +4,7 @@
  */
 
 import type { Level } from "../conductor/decide.ts";
-import type { Run } from "../lib/run.ts";
+import type { Ask } from "../lib/ask.ts";
 
 export type Severity = "important" | "nit" | "pre_existing";
 
@@ -75,29 +75,24 @@ export function promptOf(guide: string, diff: string, round: 1 | 2, rejected: re
   ].join("\n");
 }
 
-/** The findings in `claude -p --output-format json --json-schema` output, Nits capped; null when it does not read. */
-export function findingsOf(stdout: string): readonly Finding[] | null {
-  try {
-    const out = JSON.parse(stdout) as {
-      structured_output?: { findings?: { file: string; line: number | null; severity: Severity; summary: string; failure_scenario: string }[] };
-    };
-    const raw = out.structured_output?.findings;
+/** The findings in the schema's answer, Nits capped; null when it does not read. */
+export function findingsOf(structured: unknown): readonly Finding[] | null {
+  const raw = (structured as {
+    findings?: { file: string; line: number | null; severity: Severity; summary: string; failure_scenario: string }[];
+  } | null)?.findings;
 
-    if (!Array.isArray(raw)) return null;
+  if (!Array.isArray(raw)) return null;
 
-    const findings = raw.map((finding) => ({
-      file: finding.file,
-      line: finding.line,
-      severity: finding.severity,
-      summary: finding.summary,
-      failureScenario: finding.failure_scenario,
-    }));
-    const nits = findings.filter((finding) => finding.severity === "nit").slice(0, NIT_CAP);
+  const findings = raw.map((finding) => ({
+    file: finding.file,
+    line: finding.line,
+    severity: finding.severity,
+    summary: finding.summary,
+    failureScenario: finding.failure_scenario,
+  }));
+  const nits = findings.filter((finding) => finding.severity === "nit").slice(0, NIT_CAP);
 
-    return [...findings.filter((finding) => finding.severity !== "nit"), ...nits];
-  } catch {
-    return null;
-  }
+  return [...findings.filter((finding) => finding.severity !== "nit"), ...nits];
 }
 
 const LABEL: Record<Severity, string> = { important: "Important", nit: "Nit", pre_existing: "Pre-existing" };
@@ -116,44 +111,27 @@ export function commentOf(finding: Finding): string {
 }
 
 export interface ReviewRun {
+  /** Null when the review gave no answer, or one that does not read; `error` then says why. */
   readonly findings: readonly Finding[] | null;
   readonly costUsd: number | null;
   readonly ms: number;
-  readonly code: number;
+  readonly error: string | null;
 }
 
 export async function review(
-  run: Run,
+  ask: Ask,
   cwd: string,
   level: Exclude<Level, "none">,
   prompt: string,
   now: () => number,
 ): Promise<ReviewRun> {
   const started = now();
-  const ran = await run(
-    [
-      "claude",
-      "-p",
-      "--model",
-      MODEL[level],
-      "--tools",
-      "",
-      "--strict-mcp-config",
-      "--output-format",
-      "json",
-      "--json-schema",
-      JSON.stringify(SCHEMA),
-      prompt,
-    ],
-    { cwd, timeoutMs: 900_000 },
-  );
-  let costUsd: number | null = null;
+  const answer = await ask({ model: MODEL[level], prompt, schema: SCHEMA, cwd, timeoutMs: 900_000 });
+  const ms = now() - started;
 
-  try {
-    costUsd = (JSON.parse(ran.stdout) as { total_cost_usd?: number }).total_cost_usd ?? null;
-  } catch {
-    costUsd = null;
-  }
+  if (answer.kind === "failed") return { findings: null, costUsd: answer.costUsd, ms, error: answer.error };
 
-  return { findings: ran.code === 0 ? findingsOf(ran.stdout) : null, costUsd, ms: now() - started, code: ran.code };
+  const findings = findingsOf(answer.structured);
+
+  return { findings, costUsd: answer.costUsd, ms, error: findings === null ? "the answer does not read" : null };
 }

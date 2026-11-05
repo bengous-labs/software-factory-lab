@@ -56,8 +56,9 @@ jobs:
       - name: Set up bun via mise
         uses: jdx/mise-action@v5.2.5
 
-      - name: Install Claude Code
-        run: npm install --global @anthropic-ai/claude-code@2.1.318
+      # The Agent SDK, pinned in package.json, brings the Claude Code binary the models run in.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Conduct
         run: bun scripts/harness/conductor/main.ts

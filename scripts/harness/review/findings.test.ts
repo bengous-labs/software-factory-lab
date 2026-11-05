@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { commentOf, findingsOf, NIT_CAP, promptOf, severityOfBody } from "./findings.ts";
+import type { Answer, Ask, Question } from "../lib/ask.ts";
+import { commentOf, findingsOf, MODEL, NIT_CAP, promptOf, review, SCHEMA, severityOfBody } from "./findings.ts";
 
-const out = (findings: object[]): string => JSON.stringify({ structured_output: { findings } });
+const out = (findings: object[]): object => ({ findings });
 
 const finding = (severity: string, summary: string): object => ({
   file: "app/src/cli.ts",
@@ -22,9 +23,47 @@ describe("findingsOf", () => {
     expect(findings?.map((found) => found.severity)).toEqual(["important", "pre_existing", "nit", "nit", "nit"]);
   });
 
-  test("an answer without structured output does not read", () => {
-    expect(findingsOf(JSON.stringify({ result: "looks good" }))).toBeNull();
-    expect(findingsOf("not json")).toBeNull();
+  test("an answer without a findings array does not read", () => {
+    expect(findingsOf({ result: "looks good" })).toBeNull();
+    expect(findingsOf(null)).toBeNull();
+    expect(findingsOf("not an object")).toBeNull();
+  });
+});
+
+describe("review", () => {
+  const asking = (answer: Answer): { ask: Ask; questions: Question[] } => {
+    const questions: Question[] = [];
+
+    return {
+      ask: async (question) => {
+        questions.push(question);
+
+        return answer;
+      },
+      questions,
+    };
+  };
+
+  test("the level picks the model, the schema goes with the prompt, and the answer reads into findings", async () => {
+    const { ask, questions } = asking({ kind: "answered", structured: out([finding("important", "a")]), costUsd: 0.02 });
+    const result = await review(ask, "/repo", "deep", "the prompt", () => 0);
+
+    expect(questions).toEqual([{ model: MODEL.deep, prompt: "the prompt", schema: SCHEMA, cwd: "/repo", timeoutMs: 900_000 }]);
+    expect(result).toEqual({ findings: [expect.objectContaining({ severity: "important", summary: "a" })], costUsd: 0.02, ms: 0, error: null });
+  });
+
+  test("a failed call gives no findings, with its cost and its error", async () => {
+    const { ask } = asking({ kind: "failed", error: "timed out after 900000 ms", costUsd: null });
+
+    expect(await review(ask, "/repo", "light", "p", () => 0)).toEqual({ findings: null, costUsd: null, ms: 0, error: "timed out after 900000 ms" });
+  });
+
+  test("an answer that does not read gives no findings, and says so", async () => {
+    const { ask } = asking({ kind: "answered", structured: { verdict: "fine" }, costUsd: 0.01 });
+    const result = await review(ask, "/repo", "light", "p", () => 0);
+
+    expect(result.findings).toBeNull();
+    expect(result.error).toBe("the answer does not read");
   });
 });
 
