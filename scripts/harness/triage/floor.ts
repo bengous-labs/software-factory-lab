@@ -10,11 +10,11 @@ import type { Triage } from "../conductor/decide.ts";
 export const HARNESS = ["scripts/harness/**"].map((glob) => new Bun.Glob(glob));
 
 /**
- * Whether a Fable OK lands a harness-only change without the owner. Off until the owner has seen what
- * the first Fable reviews in CI cost and whether they draw on the subscription or on usage credits:
- * until then Fable runs, posts its verdict and its cost, and the change stays land:human.
+ * Whether a Fable OK lands a harness-only change without the owner: once the deep review leaves no
+ * Important open and Fable answers OK, the change is land:auto. When false it stays land:human and Fable
+ * only posts its verdict.
  */
-export const FABLE_LANDS = false;
+export const FABLE_LANDS = true;
 
 export const RISKY = [
   ".github/**",
