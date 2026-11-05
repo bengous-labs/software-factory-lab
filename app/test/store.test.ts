@@ -27,6 +27,48 @@ describe("store", () => {
     expect(() => parse(JSON.stringify({ version: 99, tasks: [] }), "f.json")).toThrow(TaskError);
   });
 
+  test("the versions just below and above the readable ones are refused", () => {
+    for (const version of [0, 3]) {
+      expect(() => parse(JSON.stringify({ version, tasks: [] }), "f.json")).toThrow(
+        `format version ${version}, expected 2`,
+      );
+    }
+  });
+
+  test("a version 1 file loads, its tasks have no date", () => {
+    const text = JSON.stringify({ version: 1, tasks: [{ id: 1, title: "a", done: false }] });
+    const tasks = parse(text, "f.json");
+
+    expect(tasks).toEqual([{ id: 1, title: "a", done: false }]);
+    expect(tasks[0]).not.toHaveProperty("createdAt");
+  });
+
+  test("a loaded version 1 file is saved as version 2, its tasks still without a date", () => {
+    const text = JSON.stringify({ version: 1, tasks: [{ id: 1, title: "a", done: false }] });
+    const saved = JSON.parse(serialize(parse(text, "f.json")));
+
+    expect(saved).toEqual({ version: 2, tasks: [{ id: 1, title: "a", done: false }] });
+    expect(saved.tasks[0]).not.toHaveProperty("createdAt");
+  });
+
+  test("a version 2 task keeps its creation date through a save and a load", () => {
+    const path = tempFile();
+    const tasks = [{ id: 1, title: "a", done: false, createdAt: "2026-11-05T09:00:00.000Z" }];
+
+    save(path, tasks);
+
+    expect(load(path)).toEqual(tasks);
+  });
+
+  test("a creation date that is not a string is refused", () => {
+    const text = JSON.stringify({
+      version: FORMAT_VERSION,
+      tasks: [{ id: 1, title: "a", done: false, createdAt: 20261105 }],
+    });
+
+    expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");
+  });
+
   test("a task missing a field is refused", () => {
     const text = JSON.stringify({ version: FORMAT_VERSION, tasks: [{ id: 1 }] });
 
@@ -46,6 +88,14 @@ describe("cli", () => {
     expect(run(["add", "ship"], path)).toBe("added #2");
     expect(run(["done", "1"], path)).toBe("done #1");
     expect(run(["list"], path)).toBe("[ ] #2 ship");
+  });
+
+  test("add stamps the task with the time it was added", () => {
+    const path = tempFile();
+
+    run(["add", "a"], path);
+
+    expect(load(path)[0]?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
 
   test("count prints the open tasks, done ones left out", () => {

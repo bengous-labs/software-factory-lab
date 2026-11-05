@@ -3,7 +3,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { type Task, TaskError } from "../task.ts";
 
 /** The version of the file format; a file of another version is refused, never guessed at. */
-export const FORMAT_VERSION = 1;
+export const FORMAT_VERSION = 2;
+
+/** Versions read as they are; a version 1 task has no createdAt. A save always writes FORMAT_VERSION. */
+const READABLE_VERSIONS: readonly (number | undefined)[] = [1, FORMAT_VERSION];
 
 interface StoreFile {
   readonly version: number;
@@ -18,7 +21,8 @@ function isTask(value: unknown): value is Task {
   return (
     typeof record["id"] === "number" &&
     typeof record["title"] === "string" &&
-    typeof record["done"] === "boolean"
+    typeof record["done"] === "boolean" &&
+    (record["createdAt"] === undefined || typeof record["createdAt"] === "string")
   );
 }
 
@@ -29,7 +33,7 @@ export function parse(text: string, path: string): readonly Task[] {
 
   const file = data as Partial<StoreFile>;
 
-  if (file.version !== FORMAT_VERSION) {
+  if (!READABLE_VERSIONS.includes(file.version)) {
     throw new TaskError(`${path}: format version ${String(file.version)}, expected ${FORMAT_VERSION}`);
   }
 

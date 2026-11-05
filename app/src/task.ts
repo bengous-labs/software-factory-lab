@@ -2,6 +2,7 @@ export interface Task {
   readonly id: number;
   readonly title: string;
   readonly done: boolean;
+  readonly createdAt?: string;
 }
 
 export class TaskError extends Error {}

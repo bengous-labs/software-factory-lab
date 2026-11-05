@@ -11,26 +11,33 @@ const TASKS: readonly Task[] = [
   { id: 3, title: "review the PR", done: false },
 ];
 
+const NOW = "2026-11-05T09:00:00.000Z";
+
 describe("add", () => {
   test("a new task takes the next id after the highest one, open, its title trimmed", () => {
-    expect(add(TASKS, "  land it ").at(-1)).toEqual({ id: 4, title: "land it", done: false });
+    expect(add(TASKS, "  land it ", NOW).at(-1)).toEqual({
+      id: 4,
+      title: "land it",
+      done: false,
+      createdAt: NOW,
+    });
   });
 
   test("the first task is #1", () => {
-    expect(add([], "start")).toEqual([{ id: 1, title: "start", done: false }]);
+    expect(add([], "start", NOW)).toEqual([{ id: 1, title: "start", done: false, createdAt: NOW }]);
   });
 
   test("a blank title is refused", () => {
-    expect(() => add(TASKS, "   ")).toThrow(TaskError);
+    expect(() => add(TASKS, "   ", NOW)).toThrow(TaskError);
   });
 
   test("a title of 200 characters is kept", () => {
     const title = "a".repeat(200);
-    expect(add([], title).at(-1)?.title).toBe(title);
+    expect(add([], title, NOW).at(-1)?.title).toBe(title);
   });
 
   test("a title of 201 characters is refused with the limit", () => {
-    expect(() => add([], "a".repeat(201))).toThrow("a title takes at most 200 characters");
+    expect(() => add([], "a".repeat(201), NOW)).toThrow("a title takes at most 200 characters");
   });
 });
 
