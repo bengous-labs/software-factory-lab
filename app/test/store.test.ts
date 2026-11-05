@@ -60,6 +60,20 @@ describe("cli", () => {
     expect(run(["count"], path)).toBe("1 open");
   });
 
+  test("list --done shows only the done tasks", () => {
+    const path = tempFile();
+
+    run(["add", "a"], path);
+    run(["add", "b"], path);
+    run(["done", "2"], path);
+
+    expect(run(["list", "--done"], path)).toBe("[x] #2 b");
+  });
+
+  test("list --done --all is refused", () => {
+    expect(() => run(["list", "--done", "--all"], tempFile())).toThrow(TaskError);
+  });
+
   test("an unknown command prints the usage", () => {
     expect(() => run(["remove"], tempFile())).toThrow("usage: todo");
   });

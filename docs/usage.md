@@ -11,7 +11,7 @@ bun app/src/cli.ts count                   # 0 open
 bun app/src/cli.ts rename 1 "final spec"   # renamed #1
 ```
 
-`list` shows open tasks; `--all` adds the done ones. `count` prints how many tasks are open.
+`list` shows open tasks; `--all` shows every task; `--done` shows only the done ones. `--done` and `--all` cannot be combined. `count` prints how many tasks are open.
 
 ## Where the tasks live
 
