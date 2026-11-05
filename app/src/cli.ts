@@ -7,11 +7,12 @@ import { done } from "./commands/done.ts";
 import { list } from "./commands/list.ts";
 import { remove } from "./commands/remove.ts";
 import { rename } from "./commands/rename.ts";
+import { search } from "./commands/search.ts";
 import { load, save } from "./store/store.ts";
 import { TaskError } from "./task.ts";
 
 const USAGE =
-  "usage: todo add <title> | todo list [--all | --done] | todo count | todo done <id> | todo clear | todo rename <id> <title> | todo remove <id>";
+  "usage: todo add <title> | todo list [--all | --done] | todo count | todo done <id> | todo clear | todo rename <id> <title> | todo remove <id> | todo search <word>";
 
 /** Runs one command against the store at `path` and returns what to print. */
 export function run(argv: readonly string[], path: string): string {
@@ -62,6 +63,8 @@ export function run(argv: readonly string[], path: string): string {
 
       return `removed #${id}`;
     }
+    case "search":
+      return search(load(path), rest.join(" "));
     default:
       throw new TaskError(USAGE);
   }
