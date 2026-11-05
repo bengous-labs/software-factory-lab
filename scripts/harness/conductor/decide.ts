@@ -21,6 +21,13 @@ export interface Triage {
   readonly reason: string;
   /** The model asked, exact when it answered; null when the floor decided. */
   readonly model: string | null;
+  /** A harness-only change: land:auto holds only once an independent Fable review answers OK. */
+  readonly needsFable?: boolean;
+}
+
+export interface FableVerdict {
+  readonly ok: boolean;
+  readonly reason: string;
 }
 
 /** The record the App keeps in one comment per PR. */
@@ -39,6 +46,8 @@ export interface StateRecord {
   readonly dequeued: { readonly head: string; readonly reason: string } | null;
   /** Important findings posted in a review's body, with no thread to resolve, per patch reviewed. */
   readonly bodyImportant?: Readonly<Record<string, number>>;
+  /** The Fable review of each patch that needs one, keyed by patch identity. */
+  readonly fable?: Readonly<Record<string, FableVerdict>>;
 }
 
 export const EMPTY_RECORD: StateRecord = {
@@ -110,6 +119,7 @@ export type Step =
   | { readonly kind: "needs-human"; readonly reason: string }
   | { readonly kind: "record"; readonly record: StateRecord }
   | { readonly kind: "remove-land-ok" }
+  | { readonly kind: "fable"; readonly patch: string }
   | { readonly kind: "auto-merge" };
 
 export type Decision =
@@ -228,7 +238,22 @@ export function decide(snapshot: Snapshot): Decision {
     check: { kind: "success", summary: labels.review === "none" ? "review:none, nothing to read." : "No Important finding open." },
   });
 
-  const land = next.rounds >= 2 ? "human" : labels.land;
+  let land = next.rounds >= 2 ? "human" : labels.land;
+
+  if (land === "auto" && triage.needsFable === true) {
+    const verdict = next.fable?.[snapshot.patch];
+
+    if (verdict === undefined) {
+      steps.push({ kind: "fable", patch: snapshot.patch });
+
+      return { kind: "steps", steps };
+    }
+
+    if (!verdict.ok) {
+      steps.push({ kind: "labels", land: "human", review: labels.review });
+      land = "human";
+    }
+  }
 
   if (snapshot.devRed) return finish(pending("dev is red: landing is on hold."));
 

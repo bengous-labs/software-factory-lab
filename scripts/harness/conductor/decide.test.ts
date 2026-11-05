@@ -226,3 +226,32 @@ describe("landOkCounts", () => {
     expect(landOkCounts(true, "2026-11-05T20:00:00Z", null)).toBe(true);
   });
 });
+
+describe("harness-only changes and the Fable review", () => {
+  const HARNESS: Triage = { land: "auto", review: "deep", secondRound: true, reason: "harness", model: null, needsFable: true };
+  const converged = { ...READY, record: { ...EMPTY_RECORD, reviewedPatch: P1, triage: { [P1]: HARNESS } } };
+
+  test("a converged harness-only PR asks Fable before land-gate can turn green", () => {
+    expect(stepsOf(converged)).toContainEqual({ kind: "fable", patch: P1 });
+    expect(kinds(converged)).not.toContain("land-gate");
+  });
+
+  test("a Fable OK lands it as land:auto", () => {
+    const ok = { ...converged, record: { ...converged.record, fable: { [P1]: { ok: true, reason: "fine" } } } };
+
+    expect(gate(ok)).toBe("success");
+    expect(kinds(ok)).toContain("auto-merge");
+  });
+
+  test("any other Fable verdict raises it to land:human, waiting for the owner", () => {
+    const notOk = { ...converged, record: { ...converged.record, fable: { [P1]: { ok: false, reason: "gate bypass" } } } };
+
+    expect(stepsOf(notOk)).toContainEqual({ kind: "labels", land: "human", review: "deep" });
+    expect(gate(notOk)).toBe("pending");
+    expect(kinds(notOk)).not.toContain("auto-merge");
+  });
+
+  test("an open Important comes before Fable: no Fable review runs on a PR that is not converged", () => {
+    expect(kinds({ ...converged, openImportant: 1 })).not.toContain("fable");
+  });
+});
