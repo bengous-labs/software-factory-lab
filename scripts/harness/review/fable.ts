@@ -1,7 +1,8 @@
 /**
  * The independent second read of a harness-only change, by Fable, after a deep review left no
  * Important open. It runs with no tool, reads only the guide and the diff, and answers with a schema.
- * Anything but an explicit OK, a failure included, sends the change to the owner.
+ * Its answer is OK or NOT OK; a run that fails or answers outside the schema gives no verdict, and
+ * the conductor asks again, up to FABLE_TRIES times per patch, before it sends the change to the owner.
  */
 
 import type { FableVerdict } from "../conductor/decide.ts";
@@ -32,21 +33,22 @@ export function promptOf(guide: string, diff: string): string {
   ].join("\n");
 }
 
-/** The verdict in `claude -p --output-format json --json-schema` output; anything unreadable is not OK. */
-export function verdictOf(stdout: string): FableVerdict {
+/** The verdict in `claude -p --output-format json --json-schema` output: an explicit ok true or false, else null. */
+export function verdictOf(stdout: string): FableVerdict | null {
   try {
     const answer = (JSON.parse(stdout) as { structured_output?: { ok?: unknown; reason?: unknown } }).structured_output;
+    const reason = typeof answer?.reason === "string" ? answer.reason : "";
 
-    if (answer?.ok === true) return { ok: true, reason: typeof answer.reason === "string" ? answer.reason : "" };
-
-    return { ok: false, reason: typeof answer?.reason === "string" ? answer.reason : "Fable gave no readable verdict." };
+    return typeof answer?.ok === "boolean" ? { ok: answer.ok, reason } : null;
   } catch {
-    return { ok: false, reason: "Fable gave no readable verdict." };
+    return null;
   }
 }
 
+/** A verdict, or the reason Fable gave none. */
 export interface FableRun {
-  readonly verdict: FableVerdict;
+  readonly verdict: FableVerdict | null;
+  readonly failure: string | null;
   readonly model: string | null;
   readonly costUsd: number | null;
 }
@@ -70,10 +72,8 @@ export async function fable(run: Run, cwd: string, prompt: string): Promise<Fabl
     { cwd, timeoutMs: 900_000 },
   );
   const usage = usageOf(ran.stdout);
+  const verdict = ran.code === 0 ? verdictOf(ran.stdout) : null;
+  const failure = verdict !== null ? null : ran.code === 0 ? "Fable answered outside the schema." : `Fable exited ${ran.code}.`;
 
-  return {
-    verdict: ran.code === 0 ? verdictOf(ran.stdout) : { ok: false, reason: `Fable failed (exit ${ran.code}).` },
-    model: usage.model,
-    costUsd: usage.costUsd,
-  };
+  return { verdict, failure, model: usage.model, costUsd: usage.costUsd };
 }

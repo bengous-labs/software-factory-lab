@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { conflictingOf, decide, deltaStart, EMPTY_RECORD, landOkCounts, openImportantOf, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
+import { conflictingOf, decide, deltaStart, EMPTY_RECORD, FABLE_TRIES, landOkCounts, openImportantOf, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -234,6 +234,32 @@ describe("harness-only changes and the Fable review", () => {
   test("a converged harness-only PR asks Fable before land-gate can turn green", () => {
     expect(stepsOf(converged)).toContainEqual({ kind: "fable", patch: P1 });
     expect(kinds(converged)).not.toContain("land-gate");
+  });
+
+  test("a Fable run with no verdict is asked again, up to FABLE_TRIES times per patch, then counts as NOT OK", () => {
+    const cases: [number, boolean][] = [
+      [0, true],
+      [FABLE_TRIES - 1, true],
+      [FABLE_TRIES, false],
+    ];
+
+    for (const [failures, asked] of cases) {
+      const snapshot = { ...converged, record: { ...converged.record, fableFailures: { [P1]: failures } } };
+
+      expect(kinds(snapshot).includes("fable")).toBe(asked);
+    }
+
+    const exhausted = { ...converged, record: { ...converged.record, fableFailures: { [P1]: FABLE_TRIES } } };
+
+    expect(stepsOf(exhausted)).toContainEqual({ kind: "labels", land: "human", review: "deep" });
+    expect(gate(exhausted)).toBe("pending");
+    expect(kinds(exhausted)).not.toContain("auto-merge");
+  });
+
+  test("failures on another patch do not count for this one", () => {
+    const other = { ...converged, record: { ...converged.record, fableFailures: { "patch-0": FABLE_TRIES } } };
+
+    expect(stepsOf(other)).toContainEqual({ kind: "fable", patch: P1 });
   });
 
   test("a Fable OK lands it as land:auto", () => {
