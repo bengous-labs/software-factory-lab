@@ -20,4 +20,13 @@ describe("rename", () => {
     expect(() => rename(TASKS, 1, " ")).toThrow(TaskError);
     expect(() => rename(TASKS, 9, "x")).toThrow("no task #9");
   });
+
+  test("a title of 200 characters is kept", () => {
+    const title = "a".repeat(200);
+    expect(rename(TASKS, 1, title)[0]?.title).toBe(title);
+  });
+
+  test("a title of 201 characters is refused with the limit", () => {
+    expect(() => rename(TASKS, 1, "a".repeat(201))).toThrow("a title takes at most 200 characters");
+  });
 });
