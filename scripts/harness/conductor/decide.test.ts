@@ -184,3 +184,24 @@ describe("deltaStart", () => {
     expect(deltaStart("base", null, null)).toBe("base");
   });
 });
+
+describe("land-ok across a patch change", () => {
+  test("a stale land-ok is removed and its patch cleared in the record, even when a triage ends the run", () => {
+    const snapshot = {
+      ...READY,
+      labels: ["land-ok"],
+      landOkByOwner: true,
+      record: { ...EMPTY_RECORD, landOkPatch: "patch-0" },
+    };
+    const steps = stepsOf(snapshot);
+
+    expect(steps.map((step) => step.kind)).toEqual(["remove-land-ok", "record", "triage"]);
+    expect(steps[1]).toEqual({ kind: "record", record: { ...EMPTY_RECORD, landOkPatch: null } });
+  });
+
+  test("a land-ok patch left in the record without the label is cleared, so a new land-ok counts", () => {
+    const record = { ...READY.record, reviewedPatch: P1, landOkPatch: "patch-0" };
+
+    expect(stepsOf({ ...READY, record })).toContainEqual({ kind: "record", record: { ...record, landOkPatch: null } });
+  });
+});

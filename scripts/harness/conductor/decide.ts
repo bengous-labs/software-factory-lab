@@ -134,11 +134,15 @@ export function decide(snapshot: Snapshot): Decision {
       steps.push({ kind: "remove-land-ok" });
       next = { ...next, landOkPatch: null };
     }
+  } else if (record.landOkPatch !== null) {
+    next = { ...next, landOkPatch: null };
   }
+
+  // Written now: a triage or a review below ends this run before land-gate is reached.
+  if (next !== record) steps.push({ kind: "record", record: next });
 
   const landOk = snapshot.landOkByOwner && next.landOkPatch === snapshot.patch;
   const finish = (gate: CheckState): Decision => {
-    if (next !== record) steps.push({ kind: "record", record: next });
     steps.push({ kind: "land-gate", check: gate });
 
     return { kind: "steps", steps };
