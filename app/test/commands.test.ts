@@ -23,6 +23,15 @@ describe("add", () => {
   test("a blank title is refused", () => {
     expect(() => add(TASKS, "   ")).toThrow(TaskError);
   });
+
+  test("a title of 200 characters is kept", () => {
+    const title = "a".repeat(200);
+    expect(add([], title).at(-1)?.title).toBe(title);
+  });
+
+  test("a title of 201 characters is refused with the limit", () => {
+    expect(() => add([], "a".repeat(201))).toThrow("a title takes at most 200 characters");
+  });
 });
 
 describe("done", () => {

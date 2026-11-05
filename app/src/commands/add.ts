@@ -1,9 +1,7 @@
-import { type Task, TaskError } from "../task.ts";
+import { cleanTitle, type Task } from "../task.ts";
 
 export function add(tasks: readonly Task[], title: string): readonly Task[] {
-  const trimmed = title.trim();
-
-  if (trimmed === "") throw new TaskError("a task needs a title");
+  const trimmed = cleanTitle(title);
 
   const id = tasks.reduce((max, task) => Math.max(max, task.id), 0) + 1;
 
