@@ -8,3 +8,15 @@ The app under `app/` is a small task CLI that gives the agents something to chan
 bun install
 bun run check
 ```
+
+## Commands
+
+Each command runs as `bun app/src/cli.ts <command>`.
+
+- `add <title>` adds an open task and prints its id.
+- `list [--all]` shows open tasks. `--all` also shows done tasks.
+- `done <id>` marks a task as done.
+- `clear` removes every done task.
+- `rename <id> <title>` changes the title of a task.
+
+See [docs/usage.md](docs/usage.md) for examples.
