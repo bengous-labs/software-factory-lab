@@ -30,7 +30,7 @@ export function promptOf(stat: string, patch: string, delta: boolean): string {
     "- land: `auto` when the change can land without the owner reading it; `human` when a wrong change would be costly to notice or to undo.",
     "- review: `none` for docs, text and comments only; `light` for ordinary code with tests; `deep` for subtle logic, data handling or anything you are unsure of.",
     delta
-      ? "- second_round: this is the delta since the last review, which found an Important issue. `true` only when this fix is itself risky enough to be read again; else `false`."
+      ? "- second_round: this is the delta since the last review. `true` only when this delta is itself risky enough to be read again, such as a fix to an Important finding that changes logic; `false` for nit fixes, docs, tests and renames."
       : "- second_round: `false`.",
     "- reason: one sentence.",
     "",

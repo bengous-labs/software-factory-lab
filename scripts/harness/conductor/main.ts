@@ -187,10 +187,18 @@ async function triage(env: Env, range: Range, record: StateRecord, delta: boolea
   const lines = numstat.split("\n").reduce((sum, row) => sum + row.split("\t").slice(0, 2).reduce((acc, n) => acc + (Number(n) || 0), 0), 0);
   const messages = (await git(env, ["log", "--format=%B%x00", `${range.base}..${range.head}`])).split("\0").map((message) => message.trim()).filter((message) => message !== "");
   const floor = floorOf({ paths, lines, messages });
+  const asked = async () =>
+    judge(run, env.cwd, await git(env, ["diff", "--stat", `${from}..${range.head}`]), await git(env, ["diff", `${from}..${range.head}`]), delta);
 
-  if (floor !== null) return floor;
+  if (floor === null) return asked();
 
-  return judge(run, env.cwd, await git(env, ["diff", "--stat", `${from}..${range.head}`]), await git(env, ["diff", `${from}..${range.head}`]), delta);
+  if (!delta) return floor;
+
+  // The floor holds the labels of the whole PR; whether this delta is read again is the delta's own question.
+  const deltaPaths = (await git(env, ["diff", "--name-only", `${from}..${range.head}`])).split("\n").filter((path) => path !== "");
+  const deltaFloor = floorOf({ paths: deltaPaths, lines: 0, messages: [] });
+
+  return { ...floor, secondRound: deltaFloor !== null || (await asked()).secondRound };
 }
 
 function rejectedOf(env: Env, threads: readonly ThreadJson[]): RejectedThread[] {

@@ -88,8 +88,21 @@ describe("decide", () => {
     ).toContainEqual({ kind: "review", level: "light", round: 2 });
   });
 
+  test("after a review with no Important, a new patch is read again only when the triage of its delta asks", () => {
+    const record = { ...READY.record, reviewedPatch: "patch-0", rounds: 0 };
+
+    expect(kinds({ ...READY, record })).not.toContain("review");
+    expect(gate({ ...READY, record })).toBe("success");
+    expect(
+      stepsOf({ ...READY, record: { ...record, triage: { [P1]: { ...LIGHT, secondRound: true } } } }),
+    ).toContainEqual({ kind: "review", level: "light", round: 1 });
+  });
+
   test("a third round never runs: the PR goes to land:human and needs the owner", () => {
-    const steps = stepsOf({ ...READY, record: { ...READY.record, reviewedPatch: "patch-0", rounds: 2 } });
+    const steps = stepsOf({
+      ...READY,
+      record: { ...READY.record, reviewedPatch: "patch-0", rounds: 2, triage: { [P1]: { ...LIGHT, secondRound: true } } },
+    });
 
     expect(steps.map((step) => step.kind)).not.toContain("review");
     expect(steps).toContainEqual({ kind: "labels", land: "human", review: "light" });
