@@ -14,7 +14,7 @@ bun run check
 Each command runs as `bun app/src/cli.ts <command>`.
 
 - `add <title>` adds an open task and prints its id.
-- `list [--all]` shows open tasks. `--all` also shows done tasks.
+- `list [--all | --done]` shows open tasks. `--all` shows every task. `--done` shows only done tasks. The two flags cannot be combined.
 - `done <id>` marks a task as done.
 - `clear` removes every done task.
 - `rename <id> <title>` changes the title of a task.

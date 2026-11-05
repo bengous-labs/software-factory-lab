@@ -10,7 +10,7 @@ import { load, save } from "./store/store.ts";
 import { TaskError } from "./task.ts";
 
 const USAGE =
-  "usage: todo add <title> | todo list [--all] | todo count | todo done <id> | todo clear | todo rename <id> <title>";
+  "usage: todo add <title> | todo list [--all | --done] | todo count | todo done <id> | todo clear | todo rename <id> <title>";
 
 /** Runs one command against the store at `path` and returns what to print. */
 export function run(argv: readonly string[], path: string): string {
@@ -24,7 +24,7 @@ export function run(argv: readonly string[], path: string): string {
       return `added #${tasks.at(-1)?.id}`;
     }
     case "list":
-      return list(load(path), { all: rest.includes("--all") });
+      return list(load(path), { all: rest.includes("--all"), done: rest.includes("--done") });
     case "count":
       return count(load(path));
     case "done": {

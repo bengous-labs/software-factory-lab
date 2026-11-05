@@ -54,14 +54,26 @@ describe("count", () => {
 
 describe("list", () => {
   test("open tasks only by default", () => {
-    expect(list(TASKS, { all: false })).toBe("[ ] #3 review the PR");
+    expect(list(TASKS, { all: false, done: false })).toBe("[ ] #3 review the PR");
   });
 
   test("every task with --all", () => {
-    expect(list(TASKS, { all: true })).toBe("[x] #1 write the spec\n[ ] #3 review the PR");
+    expect(list(TASKS, { all: true, done: false })).toBe(
+      "[x] #1 write the spec\n[ ] #3 review the PR",
+    );
+  });
+
+  test("done tasks only with --done", () => {
+    expect(list(TASKS, { all: false, done: true })).toBe("[x] #1 write the spec");
+  });
+
+  test("--done with --all is refused", () => {
+    expect(() => list(TASKS, { all: true, done: true })).toThrow(
+      "--done and --all cannot be used together",
+    );
   });
 
   test("an empty list says so", () => {
-    expect(list([], { all: false })).toBe("nothing to do");
+    expect(list([], { all: false, done: false })).toBe("nothing to do");
   });
 });
