@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { AUTHOR_MARK } from "./thread.ts";
-import { eventsOf, type PrState } from "./watch.ts";
+import { eventsOf, type PrState } from "./pr-watch.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
@@ -65,7 +65,7 @@ describe("eventsOf", () => {
   test("a conversation comment prints, except the App's own and the author's marked ones", () => {
     const comments = [
       { id: "11", author: "bengous", body: "rename the command to reopen" },
-      { id: "12", author: "bengous-labs-agents", body: "Conductor state for this PR" },
+      { id: "12", author: "bengous-labs-agents", body: "Merge bot state for this PR" },
       { id: "13", author: "bengous", body: `done\n\n${AUTHOR_MARK}` },
     ];
 

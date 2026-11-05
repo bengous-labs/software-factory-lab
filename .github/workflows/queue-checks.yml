@@ -1,9 +1,9 @@
 name: queue-checks
 
-# Re-posts the App's `agent-review` and `land-gate` on the merge queue's own commit
-# (`scripts/harness/queue/repost.ts`), each green only when it is green on the PR's head. GitHub reads
-# this file from the queue's commit, so a PR can change it; the script itself is checked out from the
-# default branch.
+# Re-posts the App's Review check (`agent-review`) and Land gate (`land-gate`) on the merge queue's own
+# commit (`scripts/land-loop/queue/repost.ts`), each green only when it is green on the PR's head.
+# GitHub reads this file from the queue's commit, so a PR can change it; the script itself is checked
+# out from the default branch.
 on:
   merge_group:
     types: [checks_requested]
@@ -33,7 +33,9 @@ jobs:
         uses: jdx/mise-action@v5.2.5
 
       - name: Re-post the App's checks on the queue's commit
-        run: bun scripts/harness/queue/repost.ts
+        # The second path is for the transition: the fallback goes with the next change to this file.
+        run: |
+          if [ -f scripts/land-loop/queue/repost.ts ]; then bun scripts/land-loop/queue/repost.ts; else bun scripts/harness/queue/repost.ts; fi
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}

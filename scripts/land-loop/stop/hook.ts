@@ -2,11 +2,11 @@
 
 /**
  * The Stop hook of an author session. It reads the session, git and the branch's PR, decides with
- * `decide.ts`, and acts: runs the gates, asks a fork of the session whether the task is finished,
- * pushes the branch, opens or readies the PR, and tells the agent to arm its watcher. Every step is
- * appended to `.lab/stop.log` as one JSON line, with the fork's latency and cost.
+ * `decide.ts`, and acts: runs the gates, asks the Done judge, a fork of the session, whether the task
+ * is finished, then publishes: pushes the branch, opens or readies the PR, and tells the agent to arm
+ * its PR watch. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's latency and cost.
  *
- * Reads the Stop input on stdin; `LAB_FORK_PROBE=1` marks a fork this hook launched.
+ * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -27,7 +27,7 @@ import {
   type Snapshot,
 } from "./decide.ts";
 
-export const FORK_FLAG = "LAB_FORK_PROBE";
+export const FORK_FLAG = "LAB_STOP_FORK";
 
 const TRUNK = "dev";
 
@@ -35,9 +35,9 @@ const FORK_TIMEOUT_MS = 180_000;
 
 const GATES_TIMEOUT_MS = 300_000;
 
-export const DONE_QUESTION = `${FORK_MARKER} Harness question, not the user's: is your current change finished and committed, with no question pending for the user? Watching the pull request is the harness's job, not part of this answer. Answer YES or NO, then a reason.`;
+export const DONE_QUESTION = `${FORK_MARKER} Stop hook question, not the user's: is your current change finished and committed, with no question pending for the user? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason.`;
 
-export const BODY_REQUEST = `${FORK_MARKER} Harness request, not the user's: write the pull request for the commits on this branch. First line: its title, as a conventional commit subject. Then a blank line, then its body in Markdown: what changed and why, and how you verified it. Print nothing else.`;
+export const BODY_REQUEST = `${FORK_MARKER} Stop hook request, not the user's: write the pull request for the commits on this branch. First line: its title, as a conventional commit subject. Then a blank line, then its body in Markdown: what changed and why, and how you verified it. Print nothing else.`;
 
 export interface StopInput {
   readonly session_id: string;
@@ -118,7 +118,7 @@ interface ForkResult {
 
 async function askFork(deps: Deps, input: StopInput, model: string | null, prompt: string): Promise<ForkResult> {
   const started = deps.now();
-  // No tool: a fork that re-armed the session's watcher waited on it until it was killed (#38, #39).
+  // No tool: a fork that re-armed the session's PR watch waited on it until it was killed (#38, #39).
   const argv = ["claude", "-p", "--resume", input.session_id, "--fork-session", "--tools", "", "--strict-mcp-config", "--output-format", "json"];
   const ran = await deps.run([...argv, ...(model === null ? [] : ["--model", model]), prompt], {
     cwd: input.cwd,
@@ -180,17 +180,18 @@ async function gates(deps: Deps, cwd: string, stateDir: string, head: string): P
 export type Outcome = { readonly kind: "allow" } | { readonly kind: "block"; readonly reason: string };
 
 /**
- * A fork that exits non-zero or prints nothing gave no answer, which is not a NO: the first such stop
- * blocks so the agent stops again and the hook asks again; a second one lets the session end.
+ * A Done judge whose fork exits non-zero or prints nothing gave no answer, which is not a NO: the
+ * first such stop blocks so the agent stops again and the hook asks again; a second one lets the
+ * session end.
  */
-export function forkFailure(code: number, text: string, stopHookActive: boolean): Outcome | null {
+export function doneJudgeFailure(code: number, text: string, stopHookActive: boolean): Outcome | null {
   if (code === 0 && text.trim() !== "") return null;
 
   if (stopHookActive) return { kind: "allow" };
 
   return {
     kind: "block",
-    reason: `The harness could not ask whether your change is finished (the fork exited ${code} with no answer), so nothing was handed over. Stop again to retry; ask no question.`,
+    reason: `The Stop hook could not ask whether your change is finished (the Done judge's fork exited ${code} with no answer), so nothing was published. Stop again to retry; ask no question.`,
   };
 }
 
@@ -228,8 +229,8 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   };
   const armedFile = (pr: number): string => join(stateDir, `armed-${pr}-${head}`);
   const withArmed = { ...snapshot, armed: snapshot.pr !== null && existsSync(armedFile(snapshot.pr.number)) };
-  const watch = `bun ${join(root, "scripts", "harness", "watch.ts")}`;
-  const thread = `bun ${join(root, "scripts", "harness", "thread.ts")}`;
+  const watch = `bun ${join(root, "scripts", "land-loop", "pr-watch.ts")}`;
+  const thread = `bun ${join(root, "scripts", "land-loop", "thread.ts")}`;
 
   const admission = admit(withArmed);
   log({ step: "admit", branch, head, pr: withArmed.pr?.number ?? null, ...admission });
@@ -250,11 +251,11 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   if (next.kind === "block") return { kind: "block", reason: next.reason };
 
   const model = modelOf(transcript);
-  const fork = await askFork(deps, input, model, DONE_QUESTION);
-  const answer = answerOf(fork.text);
-  log({ step: "fork", model, answer, ms: fork.ms, costUsd: fork.costUsd, cacheRead: fork.cacheRead, code: fork.code, text: fork.text.slice(0, 300) });
+  const doneJudge = await askFork(deps, input, model, DONE_QUESTION);
+  const answer = answerOf(doneJudge.text);
+  log({ step: "done-judge", model, answer, ms: doneJudge.ms, costUsd: doneJudge.costUsd, cacheRead: doneJudge.cacheRead, code: doneJudge.code, text: doneJudge.text.slice(0, 300) });
 
-  const failed = forkFailure(fork.code, fork.text, withArmed.stopHookActive);
+  const failed = doneJudgeFailure(doneJudge.code, doneJudge.text, withArmed.stopHookActive);
 
   if (failed !== null) return failed;
 
@@ -284,7 +285,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
     if (action.ready) await checked(deps.run, ["gh", "pr", "ready", String(number)], { cwd });
   }
 
-  log({ step: "handed", action: action.kind, pr: number, head });
+  log({ step: "published", action: action.kind, pr: number, head });
   writeFileSync(armedFile(number), "asked\n");
 
   return { kind: "block", reason: armReason(number, `${watch} ${number}`, thread) };

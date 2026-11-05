@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Answer, Ask, Question } from "../lib/ask.ts";
-import { fable, FABLE_MODEL, promptOf, SCHEMA, verdictOf } from "./fable.ts";
+import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf, SCHEMA, verdictOf } from "./principal-judge.ts";
 
 function asking(answer: Answer): { ask: Ask; questions: Question[] } {
   const questions: Question[] = [];
@@ -32,12 +32,12 @@ describe("verdictOf", () => {
   });
 });
 
-describe("fable", () => {
-  test("asks Fable with the schema, and reads its verdict, model and cost", async () => {
+describe("principalJudge", () => {
+  test("asks the Principal judge's model with the schema, and reads its verdict, model and cost", async () => {
     const { ask, questions } = asking({ kind: "answered", structured: { ok: true, reason: "fine" }, costUsd: 0.2, model: "claude-fable-5-1" });
-    const result = await fable(ask, "/repo", "prompt");
+    const result = await principalJudge(ask, "/repo", "prompt");
 
-    expect(questions).toEqual([{ model: FABLE_MODEL, prompt: "prompt", schema: SCHEMA, cwd: "/repo", timeoutMs: 900_000 }]);
+    expect(questions).toEqual([{ model: PRINCIPAL_JUDGE_MODEL, prompt: "prompt", schema: SCHEMA, cwd: "/repo", timeoutMs: 900_000 }]);
     expect(result).toEqual({ verdict: { ok: true, reason: "fine" }, failure: null, model: "claude-fable-5-1", costUsd: 0.2 });
   });
 
@@ -45,8 +45,17 @@ describe("fable", () => {
     const failed = asking({ kind: "failed", error: "timed out after 900000 ms", costUsd: null, model: null }).ask;
     const offSchema = asking({ kind: "answered", structured: { verdict: "ok I guess" }, costUsd: 0.1, model: "claude-fable-5-1" }).ask;
 
-    expect(await fable(failed, "/repo", "prompt")).toEqual({ verdict: null, failure: "Fable failed: timed out after 900000 ms", model: null, costUsd: null });
-    expect(await fable(offSchema, "/repo", "prompt")).toMatchObject({ verdict: null, failure: "Fable answered outside the schema.", costUsd: 0.1 });
+    expect(await principalJudge(failed, "/repo", "prompt")).toEqual({
+      verdict: null,
+      failure: "The Principal judge failed: timed out after 900000 ms",
+      model: null,
+      costUsd: null,
+    });
+    expect(await principalJudge(offSchema, "/repo", "prompt")).toMatchObject({
+      verdict: null,
+      failure: "The Principal judge answered outside the schema.",
+      costUsd: 0.1,
+    });
   });
 });
 

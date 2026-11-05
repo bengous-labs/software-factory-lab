@@ -1,22 +1,22 @@
 #!/usr/bin/env bun
 
 /**
- * The author's watcher, armed with Monitor on its PR: every 30 s it reads the PR and prints one line
+ * The author's PR watch, armed with Monitor on its PR: every 30 s it reads the PR and prints one line
  * per event the author acts on: a failing check, a new open Important finding, a new comment in an open
  * thread or in the PR's conversation, the PR moved to draft. The App's own Nit and Pre-existing findings
  * and its conversation comments (state record, verdicts) print nothing; nor do the author's own replies,
  * which `thread.ts` marks, since an author and a human reviewer can post under one gh identity.
  * It exits when the PR is merged or closed. What it printed is kept in `.lab/state/watch-<pr>.json`,
- * so a watcher armed again after an expiry repeats nothing.
+ * so a PR watch armed again after an expiry repeats nothing.
  *
- *   bun scripts/harness/watch.ts <pr>
+ *   bun scripts/land-loop/pr-watch.ts <pr>
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { checked, run, type Run } from "./lib/run.ts";
-import { severityOfBody } from "./review/findings.ts";
+import { severityOfBody } from "./review/code-review.ts";
 import { AUTHOR_MARK } from "./thread.ts";
 
 const POLL_MS = 30_000;
@@ -175,7 +175,7 @@ async function read(runner: Run, pr: number): Promise<PrState> {
 if (import.meta.main) {
   const pr = Number(process.argv[2]);
 
-  if (!Number.isInteger(pr)) throw new Error("usage: bun scripts/harness/watch.ts <pr>");
+  if (!Number.isInteger(pr)) throw new Error("usage: bun scripts/land-loop/pr-watch.ts <pr>");
 
   const stateDir = join(process.cwd(), ".lab", "state");
   mkdirSync(stateDir, { recursive: true });
@@ -194,7 +194,7 @@ if (import.meta.main) {
         if (event.key === "end") process.exit(0);
       }
     } catch (error) {
-      console.error(`watch: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`pr-watch: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     await Bun.sleep(POLL_MS);

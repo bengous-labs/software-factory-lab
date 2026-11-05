@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
 /**
- * Re-posts the App's required checks on the merge queue's own commit. The conductor posts
- * `agent-review` and `land-gate` on the PR head, while the queue tests a new commit of its own: without
+ * Re-posts the App's required checks on the merge queue's own commit. The Merge bot posts the
+ * Review check and the Land gate on the PR head, while the queue tests a new commit of its own: without
  * this job the required checks never report there and the queue times out. A check reads green on the
  * queue's commit only when the App's latest check of that name is green on the PR's head.
  *
@@ -10,8 +10,9 @@
  */
 
 import { checked, run } from "../lib/run.ts";
+import { LAND_GATE, REVIEW_CHECK } from "../merge-bot/decide.ts";
 
-export const CHECKS = ["agent-review", "land-gate"] as const;
+export const CHECKS = [REVIEW_CHECK, LAND_GATE] as const;
 
 export function prOfRef(ref: string): number | null {
   const match = /\/pr-(\d+)-[0-9a-f]{40}$/u.exec(ref);
