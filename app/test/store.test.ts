@@ -52,6 +52,15 @@ describe("cli", () => {
     expect(() => run(["remove"], tempFile())).toThrow("usage: todo");
   });
 
+  test("rename changes the title of the task it names", () => {
+    const path = tempFile();
+
+    run(["add", "draft"], path);
+
+    expect(run(["rename", "1", "final", "text"], path)).toBe("renamed #1");
+    expect(run(["list"], path)).toBe("[ ] #1 final text");
+  });
+
   test("done needs a numeric id", () => {
     expect(() => run(["done", "x"], tempFile())).toThrow("not a task id: x");
   });
