@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { commentOf, findingsOf, NIT_CAP, promptOf, severityOfBody, usageOf } from "./findings.ts";
+import type { Answer, Ask, Question } from "../lib/ask.ts";
+import { commentOf, findingsOf, MODEL, NIT_CAP, promptOf, review, SCHEMA, severityOfBody } from "./findings.ts";
 
-const out = (findings: object[]): string => JSON.stringify({ structured_output: { findings } });
+const out = (findings: object[]): object => ({ findings });
 
 const finding = (severity: string, summary: string): object => ({
   file: "app/src/cli.ts",
@@ -22,9 +23,54 @@ describe("findingsOf", () => {
     expect(findings?.map((found) => found.severity)).toEqual(["important", "pre_existing", "nit", "nit", "nit"]);
   });
 
-  test("an answer without structured output does not read", () => {
-    expect(findingsOf(JSON.stringify({ result: "looks good" }))).toBeNull();
-    expect(findingsOf("not json")).toBeNull();
+  test("an answer without a findings array does not read", () => {
+    expect(findingsOf({ result: "looks good" })).toBeNull();
+    expect(findingsOf(null)).toBeNull();
+    expect(findingsOf("not an object")).toBeNull();
+    expect(findingsOf({ findings: [null] })).toBeNull();
+  });
+});
+
+describe("review", () => {
+  const asking = (answer: Answer): { ask: Ask; questions: Question[] } => {
+    const questions: Question[] = [];
+
+    return {
+      ask: async (question) => {
+        questions.push(question);
+
+        return answer;
+      },
+      questions,
+    };
+  };
+
+  test("the level picks the model, the schema goes with the prompt, and the answer reads into findings", async () => {
+    const { ask, questions } = asking({ kind: "answered", structured: out([finding("important", "a")]), costUsd: 0.02, model: "claude-opus-5-5" });
+    const result = await review(ask, "/repo", "deep", "the prompt", () => 0);
+
+    expect(questions).toEqual([{ model: MODEL.deep, prompt: "the prompt", schema: SCHEMA, cwd: "/repo", timeoutMs: 900_000 }]);
+    expect(result).toEqual({
+      findings: [expect.objectContaining({ severity: "important", summary: "a" })],
+      costUsd: 0.02,
+      model: "claude-opus-5-5",
+      ms: 0,
+      error: null,
+    });
+  });
+
+  test("a failed call gives no findings, with its cost, its model and its error", async () => {
+    const { ask } = asking({ kind: "failed", error: "timed out after 900000 ms", costUsd: null, model: null });
+
+    expect(await review(ask, "/repo", "light", "p", () => 0)).toEqual({ findings: null, costUsd: null, model: null, ms: 0, error: "timed out after 900000 ms" });
+  });
+
+  test("an answer that does not read gives no findings, and says so", async () => {
+    const { ask } = asking({ kind: "answered", structured: { verdict: "fine" }, costUsd: 0.01, model: "claude-sonnet-5-5" });
+    const result = await review(ask, "/repo", "light", "p", () => 0);
+
+    expect(result.findings).toBeNull();
+    expect(result.error).toBe("the answer does not read");
   });
 });
 
@@ -45,17 +91,5 @@ describe("promptOf", () => {
     expect(prompt).toContain("hunt for nothing new");
     expect(prompt).toContain("Author: intended");
     expect(promptOf("guide", "diff", 1, [])).not.toContain("round 2");
-  });
-});
-
-describe("usageOf", () => {
-  test("the exact model is the one that cost the most; the cost is the run's total", () => {
-    const stdout = JSON.stringify({
-      total_cost_usd: 0.05,
-      modelUsage: { "claude-haiku-5-5": { costUSD: 0.001 }, "claude-opus-5-5": { costUSD: 0.049 } },
-    });
-
-    expect(usageOf(stdout)).toEqual({ costUsd: 0.05, model: "claude-opus-5-5" });
-    expect(usageOf("not json")).toEqual({ costUsd: null, model: null });
   });
 });

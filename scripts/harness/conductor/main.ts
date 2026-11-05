@@ -6,12 +6,13 @@
  * `decide.ts`, performs the steps, and runs again after a model step, until no model step is left.
  *
  * Reads GITHUB_REPOSITORY, OWNER (the only author served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
- * RUN_HEAD_SHA, DEQUEUE_REASON; calls gh, git and claude.
+ * RUN_HEAD_SHA, DEQUEUE_REASON; calls gh and git, and the models through the Agent SDK.
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
 import { commentOf, EFFORT, type Finding, MODEL, promptOf as reviewPrompt, review, severityOfBody, type RejectedThread } from "../review/findings.ts";
 import { floorOf } from "../triage/floor.ts";
@@ -203,7 +204,7 @@ async function triage(env: Env, range: Range, record: StateRecord, delta: boolea
   const messages = (await git(env, ["log", "--format=%B%x00", `${range.base}..${range.head}`])).split("\0").map((message) => message.trim()).filter((message) => message !== "");
   const floor = floorOf({ paths, lines, messages });
   const asked = async () =>
-    judge(run, env.cwd, await git(env, ["diff", "--stat", `${from}..${range.head}`]), await git(env, ["diff", `${from}..${range.head}`]), delta);
+    judge(ask, env.cwd, await git(env, ["diff", "--stat", `${from}..${range.head}`]), await git(env, ["diff", `${from}..${range.head}`]), delta);
 
   if (floor === null) return asked();
 
@@ -261,11 +262,11 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
       const from = step.round === 2 && record.reviewedHead !== null ? record.reviewedHead : range.base;
       const guide = readFileSync(join(env.cwd, "REVIEW.md"), "utf8");
       const prompt = reviewPrompt(guide, await git(env, ["diff", `${from}..${range.head}`]), step.round, rejectedOf(env, threads));
-      let result = await review(run, env.cwd, step.level, prompt, Date.now);
+      let result = await review(ask, env.cwd, step.level, prompt, Date.now);
 
-      if (result.findings === null) result = await review(run, env.cwd, step.level, prompt, Date.now);
+      if (result.findings === null) result = await review(ask, env.cwd, step.level, prompt, Date.now);
 
-      log(`#${pr.number} review round ${step.round} at ${step.level} (${result.model ?? MODEL[step.level]}, effort ${EFFORT}): exit ${result.code}, ${result.ms} ms, $${result.costUsd ?? "?"}, ${result.findings?.length ?? "no"} findings`);
+      log(`#${pr.number} review round ${step.round} at ${step.level} (${result.model ?? MODEL[step.level]}, effort ${EFFORT}): ${result.error ?? "answered"}, ${result.ms} ms, $${result.costUsd ?? "?"}, ${result.findings?.length ?? "no"} findings`);
 
       if (result.findings === null) {
         await setCheck(env, "agent-review", pr.head.sha, { kind: "failure", summary: "The review failed twice." });
