@@ -27,6 +27,7 @@ describe("findingsOf", () => {
     expect(findingsOf({ result: "looks good" })).toBeNull();
     expect(findingsOf(null)).toBeNull();
     expect(findingsOf("not an object")).toBeNull();
+    expect(findingsOf({ findings: [null] })).toBeNull();
   });
 });
 

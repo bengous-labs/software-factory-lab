@@ -81,7 +81,7 @@ export function findingsOf(structured: unknown): readonly Finding[] | null {
     findings?: { file: string; line: number | null; severity: Severity; summary: string; failure_scenario: string }[];
   } | null)?.findings;
 
-  if (!Array.isArray(raw)) return null;
+  if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null)) return null;
 
   const findings = raw.map((finding) => ({
     file: finding.file,

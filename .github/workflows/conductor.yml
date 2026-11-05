@@ -56,7 +56,6 @@ jobs:
       - name: Set up bun via mise
         uses: jdx/mise-action@v5.2.5
 
-      # The Agent SDK, pinned in package.json, brings the Claude Code binary the models run in.
       - name: Install dependencies
         run: bun install --frozen-lockfile
 

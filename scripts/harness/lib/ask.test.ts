@@ -77,6 +77,7 @@ describe("answerOf", () => {
 
   test("a success flagged as an error, or with no structured output, fails", () => {
     expect(answerOf(result({ is_error: true, result: "API Error: 529" }), null)).toEqual({ kind: "failed", error: "API Error: 529", costUsd: 0.01 });
+    expect(answerOf(result({ is_error: true }), null)).toEqual({ kind: "failed", error: "the result is flagged as an error", costUsd: 0.01 });
     expect(answerOf(result({}), null)).toEqual({ kind: "failed", error: "the result carries no structured output", costUsd: 0.01 });
   });
 

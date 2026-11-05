@@ -65,7 +65,7 @@ export function answerOf(result: SDKResultMessage | undefined, thrown: string | 
 
   if (result.subtype !== "success") return { kind: "failed", error: `${result.subtype}: ${result.errors.join("; ")}`, costUsd };
 
-  if (result.is_error) return { kind: "failed", error: result.result, costUsd };
+  if (result.is_error) return { kind: "failed", error: result.result || "the result is flagged as an error", costUsd };
 
   if (result.structured_output === undefined) return { kind: "failed", error: "the result carries no structured output", costUsd };
 
