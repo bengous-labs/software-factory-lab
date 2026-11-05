@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { add } from "../src/commands/add.ts";
+import { count } from "../src/commands/count.ts";
 import { done } from "../src/commands/done.ts";
 import { list } from "../src/commands/list.ts";
 import { type Task, TaskError } from "../src/task.ts";
@@ -34,6 +35,20 @@ describe("done", () => {
 
   test("an unknown id is refused", () => {
     expect(() => done(TASKS, 9)).toThrow("no task #9");
+  });
+});
+
+describe("count", () => {
+  test("an empty list has no open task", () => {
+    expect(count([])).toBe("0 open");
+  });
+
+  test("only the open tasks are counted", () => {
+    expect(count(TASKS)).toBe("1 open");
+  });
+
+  test("a list of done tasks has no open task", () => {
+    expect(count([{ id: 1, title: "write the spec", done: true }])).toBe("0 open");
   });
 });
 
