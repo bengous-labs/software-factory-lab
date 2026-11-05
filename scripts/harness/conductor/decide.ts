@@ -74,6 +74,14 @@ export function conflictingOf(mergeableState: string | null | undefined): boolea
   return mergeableState === "dirty";
 }
 
+/**
+ * Where a delta starts: the head the last review read, only while `git merge-base --is-ancestor` exits 0
+ * for it. A rebase (exit 1) or an object git does not know (exit 128) makes the delta the whole PR again.
+ */
+export function deltaStart(base: string, reviewedHead: string | null, ancestorExit: number | null): string {
+  return reviewedHead !== null && ancestorExit === 0 ? reviewedHead : base;
+}
+
 export type CheckState =
   | { readonly kind: "pending"; readonly summary: string }
   | { readonly kind: "success"; readonly summary: string }
