@@ -9,6 +9,7 @@ bun app/src/cli.ts done 1                  # done #1
 bun app/src/cli.ts list --all              # [x] #1 write the spec
 bun app/src/cli.ts count                   # 0 open
 bun app/src/cli.ts rename 1 "final spec"   # renamed #1
+bun app/src/cli.ts undone 1                # undone #1
 ```
 
 `list` shows open tasks; `--all` shows every task; `--done` shows only the done ones. `--done` and `--all` cannot be combined. `count` prints how many tasks are open.
