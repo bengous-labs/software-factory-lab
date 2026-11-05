@@ -119,7 +119,7 @@ interface ForkResult {
 async function askFork(deps: Deps, input: StopInput, model: string | null, prompt: string): Promise<ForkResult> {
   const started = deps.now();
   // No tool: a fork that re-armed the session's watcher waited on it until it was killed (#38, #39).
-  const argv = ["claude", "-p", "--resume", input.session_id, "--fork-session", "--tools", "", "--output-format", "json"];
+  const argv = ["claude", "-p", "--resume", input.session_id, "--fork-session", "--tools", "", "--strict-mcp-config", "--output-format", "json"];
   const ran = await deps.run([...argv, ...(model === null ? [] : ["--model", model]), prompt], {
     cwd: input.cwd,
     env: { [FORK_FLAG]: "1" },
@@ -178,6 +178,21 @@ async function gates(deps: Deps, cwd: string, stateDir: string, head: string): P
 }
 
 export type Outcome = { readonly kind: "allow" } | { readonly kind: "block"; readonly reason: string };
+
+/**
+ * A fork that exits non-zero or prints nothing gave no answer, which is not a NO: the first such stop
+ * blocks so the agent stops again and the hook asks again; a second one lets the session end.
+ */
+export function forkFailure(code: number, text: string, stopHookActive: boolean): Outcome | null {
+  if (code === 0 && text.trim() !== "") return null;
+
+  if (stopHookActive) return { kind: "allow" };
+
+  return {
+    kind: "block",
+    reason: `The harness could not ask whether your change is finished (the fork exited ${code} with no answer), so nothing was handed over. Stop again to retry; ask no question.`,
+  };
+}
 
 /** Reads, decides and acts; returns what Claude Code is told. `log` gets one record per step. */
 export async function stop(input: StopInput, deps: Deps, log: (record: object) => void): Promise<Outcome> {
@@ -238,6 +253,10 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   const fork = await askFork(deps, input, model, DONE_QUESTION);
   const answer = answerOf(fork.text);
   log({ step: "fork", model, answer, ms: fork.ms, costUsd: fork.costUsd, cacheRead: fork.cacheRead, code: fork.code, text: fork.text.slice(0, 300) });
+
+  const failed = forkFailure(fork.code, fork.text, withArmed.stopHookActive);
+
+  if (failed !== null) return failed;
 
   const action: Action = decide(withArmed.pr, answer);
 

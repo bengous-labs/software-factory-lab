@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { Ran, Run, RunOptions } from "../lib/run.ts";
 import { FORK_MARKER } from "./decide.ts";
-import { DONE_QUESTION, FORK_FLAG, hasForkMarker, modelOf, prTextOf, stop, type StopInput } from "./hook.ts";
+import { DONE_QUESTION, FORK_FLAG, forkFailure, hasForkMarker, modelOf, prTextOf, stop, type StopInput } from "./hook.ts";
 
 const HEAD = "d".repeat(40);
 
@@ -70,6 +70,7 @@ describe("stop", () => {
     );
     expect(fork?.options.env?.[FORK_FLAG]).toBe("1");
     expect(fork?.argv[(fork?.argv.indexOf("--tools") ?? -2) + 1]).toBe("");
+    expect(fork?.argv).toContain("--strict-mcp-config");
     expect(calls.some((call) => call.argv.join(" ").startsWith("git push --force-with-lease -u origin HEAD:refs/heads/agent/x"))).toBe(true);
 
     const create = calls.find((call) => call.argv.join(" ").startsWith("gh pr create"));
@@ -119,5 +120,20 @@ describe("transcript", () => {
   test("the PR text is the fork's first line as title, the rest as body", () => {
     expect(prTextOf("# feat: x\n\nwhy\nhow")).toEqual({ title: "feat: x", body: "why\nhow" });
     expect(prTextOf("  ")).toBeNull();
+  });
+});
+
+describe("forkFailure", () => {
+  test("an answer is not a failure", () => {
+    expect(forkFailure(0, "NO, a question is open", false)).toBeNull();
+  });
+
+  test("a fork killed or silent blocks once, so the hand-over is asked again, then lets the session end", () => {
+    const blocked = forkFailure(124, "", false);
+
+    expect(blocked?.kind).toBe("block");
+    expect(blocked?.kind === "block" && blocked.reason).toContain("exited 124");
+    expect(forkFailure(0, "  ", false)?.kind).toBe("block");
+    expect(forkFailure(124, "", true)).toEqual({ kind: "allow" });
   });
 });
