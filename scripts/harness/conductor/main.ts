@@ -16,7 +16,7 @@ import { checked, run } from "../lib/run.ts";
 import { commentOf, type Finding, promptOf as reviewPrompt, review, severityOfBody, type RejectedThread } from "../review/findings.ts";
 import { floorOf } from "../triage/floor.ts";
 import { judge } from "../triage/judge.ts";
-import { type CheckState, decide, EMPTY_RECORD, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
+import { type CheckState, conflictingOf, decide, EMPTY_RECORD, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
 
 const STATE_MARKER = "<!-- lab-conductor-state";
 
@@ -57,6 +57,7 @@ interface PullJson {
   state: "open" | "closed";
   merged: boolean;
   draft: boolean;
+  mergeable: boolean | null;
   mergeable_state: string;
   user: { login: string };
   labels: { name: string }[];
@@ -85,6 +86,18 @@ async function threadsOf(env: Env, pr: number): Promise<ThreadJson[]> {
 
 /** The App's login as GraphQL prints it, without REST's `[bot]` suffix. */
 const bare = (login: string): string => login.replace(/\[bot\]$/u, "");
+
+/** The PR from the single-PR endpoint, read again up to three times while GitHub has not computed its mergeability yet. */
+async function pullOf(env: Env, number: number): Promise<PullJson> {
+  let pr = await api<PullJson>(env, `repos/${env.repo}/pulls/${number}`);
+
+  for (let tries = 0; tries < 3 && pr.state === "open" && pr.mergeable === null; tries += 1) {
+    await Bun.sleep(5_000);
+    pr = await api<PullJson>(env, `repos/${env.repo}/pulls/${number}`);
+  }
+
+  return pr;
+}
 
 async function recordOf(env: Env, pr: number): Promise<{ id: number | null; record: StateRecord }> {
   const comments = await api<{ id: number; user: { login: string }; body: string }[]>(env, `repos/${env.repo}/issues/${pr}/comments?per_page=100`);
@@ -157,7 +170,7 @@ async function snapshotOf(env: Env, pr: PullJson, range: Range, record: StateRec
       (thread) => !thread.isResolved && thread.comments.nodes[0]?.author?.login === bare(env.appLogin) && severityOfBody(thread.comments.nodes[0]?.body ?? "") === "important",
     ).length,
     devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
-    conflicting: pr.mergeable_state === "dirty",
+    conflicting: conflictingOf(pr.mergeable_state),
     record,
   };
 }
@@ -309,7 +322,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
 
 async function conduct(env: Env, number: number, dequeueReason: string | null, log: (line: string) => void): Promise<void> {
   for (let pass = 0; pass < MAX_PASSES; pass += 1) {
-    const pr = await api<PullJson>(env, `repos/${env.repo}/pulls/${number}`);
+    const pr = await pullOf(env, number);
 
     if (pr.state !== "open") {
       log(`#${number} is ${pr.merged ? "merged" : "closed"}`);

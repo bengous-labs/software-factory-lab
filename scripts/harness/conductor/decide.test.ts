@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { decide, EMPTY_RECORD, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
+import { conflictingOf, decide, EMPTY_RECORD, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -162,5 +162,13 @@ describe("risen", () => {
   test("labels only rise: a later triage cannot lower land:human or review:deep", () => {
     expect(risen(["land:human", "review:deep"], LIGHT)).toEqual({ land: "human", review: "deep" });
     expect(risen(["review:none"], LIGHT)).toEqual({ land: "auto", review: "light" });
+  });
+});
+
+describe("conflictingOf", () => {
+  test("only GitHub's dirty state is a conflict; unknown, blocked, clean and a missing field are not", () => {
+    expect(conflictingOf("dirty")).toBe(true);
+
+    for (const state of ["unknown", "blocked", "clean", "behind", null, undefined]) expect(conflictingOf(state)).toBe(false);
   });
 });

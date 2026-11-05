@@ -67,6 +67,11 @@ export interface Snapshot {
   readonly record: StateRecord;
 }
 
+/** GitHub's `mergeable_state` of one PR, from the single-PR endpoint: `dirty` is a conflict with the base. */
+export function conflictingOf(mergeableState: string | null | undefined): boolean {
+  return mergeableState === "dirty";
+}
+
 export type CheckState =
   | { readonly kind: "pending"; readonly summary: string }
   | { readonly kind: "success"; readonly summary: string }
