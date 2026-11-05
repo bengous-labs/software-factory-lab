@@ -3,7 +3,7 @@ name: merge-bot
 # Runs the Merge bot (`scripts/land-loop/merge-bot/main.ts`) from the default branch, never from the
 # PR: `workflow_run` and `pull_request_target` both read this file and the checkout from `dev`, and the
 # PR's head is fetched as git data only. Every write goes through the agents' App: a `GITHUB_TOKEN`
-# write starts no workflow, and only an App can post check runs. The sweep catches what no event
+# write starts no GitHub workflow, and only an App can post check runs. The sweep catches what no event
 # carries, such as a review thread resolved, and what a landing changes in the other open PRs, such
 # as a new conflict. A push to the default branch is the main sweep trigger; the schedule is a net,
 # because GitHub may drop scheduled runs.
@@ -74,4 +74,4 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          EJECTION_REASON: ${{ github.event.action == 'dequeued' && (github.event.reason || 'removed from the queue') || '' }}
+          EJECTION_REASON: ${{ github.event.action == 'dequeued' && (github.event.reason || 'no reason given') || '' }}

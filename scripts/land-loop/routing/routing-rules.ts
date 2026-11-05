@@ -1,6 +1,6 @@
 /**
  * The Routing rules: what sends a change to the deepest review whatever a model says of it, and who
- * lands it. The workflows, the session hooks and settings, the task file's format and the build
+ * lands it. The GitHub workflows, the session hooks and settings, the task file's format and the build
  * config always go to the owner. A change whose only risky paths are the Land loop's own scripts may
  * land without the owner once the Principal judge answers OK on top of the deep review.
  */

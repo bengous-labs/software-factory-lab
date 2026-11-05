@@ -1,5 +1,5 @@
 /**
- * The Stop decision of an author session, as pure functions over what the hook read. `admit` settles
+ * The Stop decision of the Author's session, as pure functions over what the hook read. `admit` settles
  * what git and the transcript alone settle; `afterGates` what the gates' result adds; `decide` what
  * the Done judge's answer adds. Each returns the next thing the hook does.
  */
@@ -120,6 +120,6 @@ export function armReason(pr: number, watchCommand: string, threadCommand: strin
     `- A finding you accept: fix it with a commit, then reply and resolve its thread: \`${threadCommand} <thread-id> "Fixed in <sha>: <what changed>"\`. Then stop.`,
     `- A finding you reject: reply with your reason and resolve: \`${threadCommand} <thread-id> "<your reason>"\`. Then stop.`,
     "",
-    "Never ask the user a question about the PR: the Land loop and the owner handle the rest. When the PR watch expires, arm it again, until it reports the PR merged or closed. Then stop.",
+    "Never ask the Owner a question about the PR: the Land loop and the Owner handle the rest. When the PR watch expires, arm it again, until it reports the PR landed or closed. Then stop.",
   ].join("\n");
 }

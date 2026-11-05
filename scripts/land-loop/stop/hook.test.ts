@@ -14,7 +14,7 @@ interface Call {
   readonly options: RunOptions;
 }
 
-/** A fake of git, gh, bun and claude for one author session on `agent/x`, one commit ahead, no PR. */
+/** A fake of git, gh, bun and claude for the Author's session on `agent/x`, one commit ahead, no PR. */
 function world(doneJudgeAnswer: string): { run: Run; calls: Call[]; root: string } {
   const root = mkdtempSync(join(tmpdir(), "stop-"));
   const calls: Call[] = [];
@@ -81,8 +81,8 @@ describe("stop", () => {
     expect(outcome.kind === "block" && outcome.reason).toContain("PR #12 is ready");
   });
 
-  test("a stop that asks the user a question: the Done judge says NO and nothing is pushed", async () => {
-    const { run, calls, root } = world("NO, I asked the user which command to add.");
+  test("a stop that asks the Owner a question: the Done judge says NO and nothing is pushed", async () => {
+    const { run, calls, root } = world("NO, I asked the Owner which command to add.");
     const outcome = await stop(input(root), { run, env: {}, now: () => 0 }, () => {});
 
     expect(outcome).toEqual({ kind: "allow" });

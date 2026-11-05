@@ -76,7 +76,7 @@ describe("answerOf", () => {
     const cases: [string, "yes" | "no"][] = [
       ["YES, the task is done and tested.", "yes"],
       ["  **YES** done", "yes"],
-      ["NO: I asked the user which file to change.", "no"],
+      ["NO: I asked the Owner which file to change.", "no"],
       ["I think YES", "no"],
       ["yes", "no"],
       ["", "no"],
@@ -108,6 +108,6 @@ describe("armReason", () => {
     expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "Fixed in <sha>: <what changed>"`');
     expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "<your reason>"`');
     expect(reason).toContain("Nit and Pre-existing findings never block");
-    expect(reason).toContain("Never ask the user a question");
+    expect(reason).toContain("Never ask the Owner a question");
   });
 });

@@ -23,7 +23,7 @@ const READY: Snapshot = {
   number: 9,
   state: "OPEN",
   sameRepository: true,
-  ownAuthor: true,
+  openedByOwner: true,
   draft: false,
   head: "h1",
   patch: P1,
@@ -53,10 +53,10 @@ const gate = (snapshot: Snapshot): string | undefined => {
 };
 
 describe("decide", () => {
-  test("closed PRs, PRs from forks and PRs of other authors are ignored", () => {
+  test("closed PRs, PRs from forks and PRs not opened by the Owner are ignored", () => {
     expect(decide({ ...READY, state: "MERGED" }).kind).toBe("ignore");
     expect(decide({ ...READY, sameRepository: false }).kind).toBe("ignore");
-    expect(decide({ ...READY, ownAuthor: false }).kind).toBe("ignore");
+    expect(decide({ ...READY, openedByOwner: false }).kind).toBe("ignore");
   });
 
   test("a draft, a pending CI or a red CI leaves the Land gate pending and runs no model", () => {
@@ -161,7 +161,7 @@ describe("decide", () => {
 
     expect(step?.kind === "land-gate" && step.check).toEqual({
       kind: "failure",
-      summary: "The merge queue removed this PR: merge conflict",
+      summary: "Ejected from the merge queue: merge conflict",
     });
     expect(gate({ ...snapshot, head: "h2" })).not.toBe("failure");
   });

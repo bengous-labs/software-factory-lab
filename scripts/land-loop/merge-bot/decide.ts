@@ -2,7 +2,8 @@
  * The Merge bot's decision, a pure function over a snapshot of one PR. Each run re-reads the
  * whole state, so an event that arrives twice, late or not at all changes nothing. It returns the
  * steps to take in order; the adapter (`main.ts`) performs them and stops at the first that needs
- * a model's answer (`route`, `code-review`), then runs again with that answer in the state record.
+ * a model's answer (`route`, `code-review`, `principal-judge`), then runs again with that answer in
+ * the state record.
  */
 
 export type Land = "auto" | "human";
@@ -16,10 +17,10 @@ const DEPTH_RANK: Record<ReviewDepth, number> = { none: 0, light: 1, deep: 2 };
 /** The label of a Land approval. An external name: the owner puts it by hand, so the string stays. */
 export const LAND_APPROVAL_LABEL = "land-ok";
 
-/** The Review check's name. An external name: the ruleset requires it, so the string stays. */
+/** The Review check's name. An external name: GitHub's ruleset requires it, so the string stays. */
 export const REVIEW_CHECK = "agent-review";
 
-/** The Land gate's check name. An external name: the ruleset requires it, so the string stays. */
+/** The Land gate's check name. An external name: GitHub's ruleset requires it, so the string stays. */
 export const LAND_GATE = "land-gate";
 
 /**
@@ -92,8 +93,8 @@ export interface Snapshot {
   readonly number: number;
   readonly state: "OPEN" | "CLOSED" | "MERGED";
   readonly sameRepository: boolean;
-  /** The PR's author is the owner, the only author this public lab works for. */
-  readonly ownAuthor: boolean;
+  /** The PR was opened under the Owner's GitHub login, the only one this public lab works for. */
+  readonly openedByOwner: boolean;
   readonly draft: boolean;
   readonly head: string;
   readonly patch: string;
@@ -156,7 +157,11 @@ export type Decision =
   | { readonly kind: "ignore"; readonly reason: string }
   | { readonly kind: "steps"; readonly steps: readonly Step[] };
 
-/** Labels only rise: the higher of what is on the PR and what the Routing answers. */
+/**
+ * Labels only rise: the higher of what is on the PR and what the Routing answers. The `land:*` and
+ * `review:*` labels, read here and quoted in the check summaries below, are external names: open PRs
+ * carry them, so the strings stay.
+ */
 export function risen(labels: readonly string[], routing: Routing): { land: Land; depth: ReviewDepth } {
   const onPrLand: Land = labels.includes("land:human") ? "human" : "auto";
   const onPrDepth = (["deep", "light", "none"] as const).find((depth) => labels.includes(`review:${depth}`));
@@ -193,8 +198,8 @@ export function decide(snapshot: Snapshot): Decision {
 
   if (snapshot.state !== "OPEN") return { kind: "ignore", reason: `#${snapshot.number} is ${snapshot.state.toLowerCase()}` };
 
-  if (!snapshot.sameRepository || !snapshot.ownAuthor) {
-    return { kind: "ignore", reason: `#${snapshot.number} comes from outside the owner's own branches` };
+  if (!snapshot.sameRepository || !snapshot.openedByOwner) {
+    return { kind: "ignore", reason: `#${snapshot.number} comes from outside the Owner's own branches` };
   }
 
   const steps: Step[] = [];
@@ -213,7 +218,7 @@ export function decide(snapshot: Snapshot): Decision {
   };
 
   if (record.dequeued !== null && record.dequeued.head === snapshot.head) {
-    return finish({ kind: "failure", summary: `The merge queue removed this PR: ${record.dequeued.reason}` });
+    return finish({ kind: "failure", summary: `Ejected from the merge queue: ${record.dequeued.reason}` });
   }
 
   if (snapshot.draft) return finish(pending("Draft: the author's turn."));
@@ -289,10 +294,10 @@ export function decide(snapshot: Snapshot): Decision {
   if (snapshot.devRed) return finish(pending("dev is red: landing is on hold."));
 
   if (land === "auto" || landApproved) {
-    const gate = finish({ kind: "success", summary: land === "auto" ? "Landable, land:auto." : "Landable, land-ok from the owner." });
+    const gate = finish({ kind: "success", summary: land === "auto" ? "Landable, land:auto." : `Landable, with the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).` });
 
     if (gate.kind === "steps") return { kind: "steps", steps: [...gate.steps, { kind: "auto-merge" }] };
   }
 
-  return finish(pending("Landable, land:human: waiting for the owner's land-ok."));
+  return finish(pending("Landable, land:human: waiting for the Owner's Land approval."));
 }

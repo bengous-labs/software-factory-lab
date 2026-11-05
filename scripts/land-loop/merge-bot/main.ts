@@ -5,7 +5,7 @@
  * App's token. For each PR the event names (every open PR on a sweep), it reads a snapshot, asks
  * `decide.ts`, performs the steps, and runs again after a model step, until no model step is left.
  *
- * Reads GITHUB_REPOSITORY, OWNER (the only author served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
+ * Reads GITHUB_REPOSITORY, OWNER (the only GitHub login whose PRs are served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
  * RUN_HEAD_SHA, EJECTION_REASON; calls gh and git, and the models through the Agent SDK.
  */
 
@@ -42,6 +42,9 @@ import {
 const MERGE_BOT_STATE_MARKER = "<!-- lab-conductor-state";
 
 const MERGE_BOT_STATE_PATTERN = new RegExp(`${MERGE_BOT_STATE_MARKER} (.*) -->`, "su");
+
+/** The label that hands a PR to the Owner. An external name: open PRs carry it, so the string stays. */
+const NEEDS_OWNER_LABEL = "needs-human";
 
 const MAX_PASSES = 4;
 
@@ -185,7 +188,7 @@ async function snapshotOf(env: Env, pr: PullJson, range: Range, record: StateRec
     number: pr.number,
     state: pr.merged ? "MERGED" : pr.state === "open" ? "OPEN" : "CLOSED",
     sameRepository: pr.head.repo?.full_name === env.repo,
-    ownAuthor: pr.user.login === env.owner,
+    openedByOwner: pr.user.login === env.owner,
     draft: pr.draft,
     head: pr.head.sha,
     patch: await patchOf(env, range),
@@ -317,7 +320,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
 
       if (result.findings === null) {
         await setCheck(env, REVIEW_CHECK, pr.head.sha, { kind: "failure", summary: "The Code review failed twice." });
-        await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: ["needs-human"] });
+        await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: [NEEDS_OWNER_LABEL] });
 
         return null;
       }
@@ -353,7 +356,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
 
       return record;
     case "needs-human":
-      await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: ["needs-human"] });
+      await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: [NEEDS_OWNER_LABEL] });
 
       return record;
     case "record":

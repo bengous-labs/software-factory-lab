@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 
 /**
- * The Stop hook of an author session. It reads the session, git and the branch's PR, decides with
- * `decide.ts`, and acts: runs the gates, asks the Done judge, a fork of the session, whether the task
- * is finished, then publishes: pushes the branch, opens or readies the PR, and tells the agent to arm
- * its PR watch. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's latency and cost.
+ * The Stop hook of the Author's session. It reads the session, git and the branch's PR, decides with
+ * `decide.ts`, and acts: runs the gates, runs the Done judge, which asks a fork of the session whether
+ * the task is finished, then publishes: pushes the branch, opens or readies the PR, and tells the
+ * Author to arm its PR watch. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's latency and cost.
  *
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
@@ -35,9 +35,9 @@ const FORK_TIMEOUT_MS = 180_000;
 
 const GATES_TIMEOUT_MS = 300_000;
 
-export const DONE_QUESTION = `${FORK_MARKER} Stop hook question, not the user's: is your current change finished and committed, with no question pending for the user? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason.`;
+export const DONE_QUESTION = `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, with no question pending for the Owner? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason.`;
 
-export const BODY_REQUEST = `${FORK_MARKER} Stop hook request, not the user's: write the pull request for the commits on this branch. First line: its title, as a conventional commit subject. Then a blank line, then its body in Markdown: what changed and why, and how you verified it. Print nothing else.`;
+export const BODY_REQUEST = `${FORK_MARKER} Stop hook request, not the Owner's: write the pull request for the commits on this branch. First line: its title, as a conventional commit subject. Then a blank line, then its body in Markdown: what changed and why, and how you verified it. Print nothing else.`;
 
 export interface StopInput {
   readonly session_id: string;
@@ -181,7 +181,7 @@ export type Outcome = { readonly kind: "allow" } | { readonly kind: "block"; rea
 
 /**
  * A Done judge whose fork exits non-zero or prints nothing gave no answer, which is not a NO: the
- * first such stop blocks so the agent stops again and the hook asks again; a second one lets the
+ * first such stop blocks so the Author stops again and the hook asks again; a second one lets the
  * session end.
  */
 export function doneJudgeFailure(code: number, text: string, stopHookActive: boolean): Outcome | null {
@@ -229,7 +229,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   };
   const armedFile = (pr: number): string => join(stateDir, `armed-${pr}-${head}`);
   const withArmed = { ...snapshot, armed: snapshot.pr !== null && existsSync(armedFile(snapshot.pr.number)) };
-  const watch = `bun ${join(root, "scripts", "land-loop", "pr-watch.ts")}`;
+  const prWatch = `bun ${join(root, "scripts", "land-loop", "pr-watch.ts")}`;
   const thread = `bun ${join(root, "scripts", "land-loop", "thread.ts")}`;
 
   const admission = admit(withArmed);
@@ -240,7 +240,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   if (admission.kind === "arm") {
     writeFileSync(armedFile(admission.pr), "asked\n");
 
-    return { kind: "block", reason: armReason(admission.pr, `${watch} ${admission.pr}`, thread) };
+    return { kind: "block", reason: armReason(admission.pr, `${prWatch} ${admission.pr}`, thread) };
   }
 
   const next = afterGates(await gates(deps, cwd, stateDir, head), withArmed.stopHookActive);
@@ -288,7 +288,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   log({ step: "published", action: action.kind, pr: number, head });
   writeFileSync(armedFile(number), "asked\n");
 
-  return { kind: "block", reason: armReason(number, `${watch} ${number}`, thread) };
+  return { kind: "block", reason: armReason(number, `${prWatch} ${number}`, thread) };
 }
 
 if (import.meta.main) {
