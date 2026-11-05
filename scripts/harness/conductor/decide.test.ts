@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { decide, EMPTY_RECORD, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
+import { conflictingOf, decide, EMPTY_RECORD, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -19,6 +19,7 @@ const READY: Snapshot = {
   landOkByOwner: false,
   openImportant: 0,
   devRed: false,
+  conflicting: false,
   record: { ...EMPTY_RECORD, triage: { [P1]: LIGHT } },
 };
 
@@ -127,6 +128,16 @@ describe("decide", () => {
     );
   });
 
+  test("a ready PR in conflict with dev gets a red land-gate that tells its author to rebase, and runs no model", () => {
+    const snapshot = { ...READY, conflicting: true, ci: null, record: EMPTY_RECORD };
+    const step = stepsOf(snapshot).find((found) => found.kind === "land-gate");
+
+    expect(kinds(snapshot)).toEqual(["land-gate"]);
+    expect(step?.kind === "land-gate" && step.check.kind).toBe("failure");
+    expect(step?.kind === "land-gate" && step.check.summary).toContain("rebase");
+    expect(gate({ ...snapshot, draft: true })).toBe("pending");
+  });
+
   test("a red dev holds a converged PR", () => {
     expect(gate({ ...READY, devRed: true, record: { ...READY.record, reviewedPatch: P1 } })).toBe("pending");
   });
@@ -151,5 +162,13 @@ describe("risen", () => {
   test("labels only rise: a later triage cannot lower land:human or review:deep", () => {
     expect(risen(["land:human", "review:deep"], LIGHT)).toEqual({ land: "human", review: "deep" });
     expect(risen(["review:none"], LIGHT)).toEqual({ land: "auto", review: "light" });
+  });
+});
+
+describe("conflictingOf", () => {
+  test("only GitHub's dirty state is a conflict; unknown, blocked, clean and a missing field are not", () => {
+    expect(conflictingOf("dirty")).toBe(true);
+
+    for (const state of ["unknown", "blocked", "clean", "behind", null, undefined]) expect(conflictingOf(state)).toBe(false);
   });
 });
