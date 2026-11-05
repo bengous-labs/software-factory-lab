@@ -10,7 +10,7 @@ bun app/src/cli.ts list --all              # [x] #1 write the spec
 bun app/src/cli.ts rename 1 "final spec"   # renamed #1
 ```
 
-`list` shows open tasks; `--all` adds the done ones.
+`list` shows the open tasks; `--all` adds the done ones.
 
 ## Where the tasks live
 
