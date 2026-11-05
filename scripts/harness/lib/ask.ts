@@ -4,7 +4,7 @@
  * `PreToolUse` hook refuses by code every tool call but the one that returns the schema's answer.
  */
 
-import { type HookCallback, type Options, query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type HookCallback, type Options, query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 
 export interface Question {
   readonly model: string;
@@ -80,21 +80,29 @@ export function answerOf(result: SDKResultMessage | undefined, thrown: string | 
   return { kind: "answered", structured: result.structured_output, costUsd, model };
 }
 
-export const ask: Ask = async (question) => {
-  const abortController = new AbortController();
-  const timer = setTimeout(() => abortController.abort(), question.timeoutMs);
-  let result: SDKResultMessage | undefined;
-  let thrown: string | null = null;
+/** The messages of one SDK call, as `query()` yields them. */
+export type Stream = (call: { readonly prompt: string; readonly options: Options }) => AsyncIterable<SDKMessage>;
 
-  try {
-    for await (const message of query({ prompt: question.prompt, options: optionsOf(question, abortController) })) {
-      if (message.type === "result") result = message;
+/** An `Ask` over `stream`; the timer aborts the call, and a result read before the abort still answers. */
+export function askWith(stream: Stream): Ask {
+  return async (question) => {
+    const abortController = new AbortController();
+    const timer = setTimeout(() => abortController.abort(), question.timeoutMs);
+    let result: SDKResultMessage | undefined;
+    let thrown: string | null = null;
+
+    try {
+      for await (const message of stream({ prompt: question.prompt, options: optionsOf(question, abortController) })) {
+        if (message.type === "result") result = message;
+      }
+    } catch (error) {
+      thrown = error instanceof Error ? error.message : String(error);
+    } finally {
+      clearTimeout(timer);
     }
-  } catch (error) {
-    thrown = error instanceof Error ? error.message : String(error);
-  } finally {
-    clearTimeout(timer);
-  }
 
-  return answerOf(result, abortController.signal.aborted ? `timed out after ${question.timeoutMs} ms` : thrown);
-};
+    return answerOf(result, abortController.signal.aborted ? `timed out after ${question.timeoutMs} ms` : thrown);
+  };
+}
+
+export const ask: Ask = askWith(query);

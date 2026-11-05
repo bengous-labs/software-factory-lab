@@ -1,8 +1,19 @@
 import { describe, expect, test } from "bun:test";
 
-import type { PreToolUseHookInput, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, PreToolUseHookInput, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 
-import { type Answer, answerOf, modelOf, optionsOf, type Question, refuseTools, STRUCTURED_OUTPUT, toolDecision } from "./ask.ts";
+import {
+  type Answer,
+  answerOf,
+  askWith,
+  modelOf,
+  optionsOf,
+  type Question,
+  refuseTools,
+  type Stream,
+  STRUCTURED_OUTPUT,
+  toolDecision,
+} from "./ask.ts";
 
 const HAIKU = "claude-haiku-5-5";
 
@@ -109,5 +120,82 @@ describe("answerOf", () => {
   test("a call that ends without a result fails with what it threw, and names no model", () => {
     expect(answerOf(undefined, "timed out after 1000 ms")).toEqual({ kind: "failed", error: "timed out after 1000 ms", costUsd: null, model: null });
     expect(answerOf(undefined, null)).toEqual({ kind: "failed", error: "the call ended without a result", costUsd: null, model: null });
+  });
+});
+
+describe("askWith", () => {
+  const untilAborted = (options: Options): Promise<never> =>
+    new Promise((_, reject) => options.abortController?.signal.addEventListener("abort", () => reject(new Error("aborted by the caller"))));
+
+  const streamOf = (body: (options: Options) => AsyncGenerator<SDKMessage>): { stream: Stream; calls: { prompt: string; options: Options }[] } => {
+    const calls: { prompt: string; options: Options }[] = [];
+
+    return {
+      stream: (call) => {
+        calls.push(call);
+
+        return body(call.options);
+      },
+      calls,
+    };
+  };
+
+  test("the stream gets the question's prompt and options, and its result is the answer", async () => {
+    const { stream, calls } = streamOf(async function* () {
+      yield result({ structured_output: { ok: true } });
+    });
+
+    expect(await askWith(stream)(QUESTION)).toEqual({ kind: "answered", structured: { ok: true }, costUsd: 0.01, model: HAIKU });
+    expect(calls[0]?.prompt).toBe("p");
+    expect(calls[0]?.options).toEqual(expect.objectContaining({ model: "haiku", tools: [], permissionMode: "dontAsk" }));
+  });
+
+  test("an error result followed by a throw answers with the result's error, not the throw", async () => {
+    const { stream } = streamOf(async function* () {
+      yield result({ subtype: "error_during_execution", errors: ["overloaded"] });
+      throw new Error("Claude Code returned an error result");
+    });
+
+    expect(await askWith(stream)(QUESTION)).toMatchObject({ kind: "failed", error: "error_during_execution: overloaded" });
+  });
+
+  test("a throw with no result answers with the thrown message", async () => {
+    const { stream } = streamOf(async function* () {
+      yield* [];
+      throw new Error("Native CLI binary not found");
+    });
+
+    expect(await askWith(stream)(QUESTION)).toEqual({ kind: "failed", error: "Native CLI binary not found", costUsd: null, model: null });
+  });
+
+  test("a call that outlives its timeout is aborted and reads as timed out", async () => {
+    const { stream } = streamOf(async function* (options) {
+      yield* [];
+      await untilAborted(options);
+    });
+
+    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toEqual({ kind: "failed", error: "timed out after 10 ms", costUsd: null, model: null });
+  });
+
+  test("a result read before the timeout still answers when the call is aborted after it", async () => {
+    const { stream } = streamOf(async function* (options) {
+      yield result({ structured_output: { ok: true } });
+      await untilAborted(options);
+    });
+
+    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toMatchObject({ kind: "answered", structured: { ok: true } });
+  });
+
+  test("a call that ends in time is not aborted", async () => {
+    let signal: AbortSignal | undefined;
+    const { stream } = streamOf(async function* (options) {
+      signal = options.abortController?.signal;
+      yield result({ structured_output: {} });
+    });
+
+    await askWith(stream)({ ...QUESTION, timeoutMs: 20 });
+    await Bun.sleep(40);
+
+    expect(signal?.aborted).toBe(false);
   });
 });
