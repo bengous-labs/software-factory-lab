@@ -143,7 +143,7 @@ describe("cli", () => {
   });
 
   test("an unknown command prints the usage", () => {
-    expect(() => run(["remove"], tempFile())).toThrow("usage: todo");
+    expect(() => run(["delete"], tempFile())).toThrow("usage: todo");
   });
 
   test("rename changes the title of the task it names", () => {
@@ -153,6 +153,29 @@ describe("cli", () => {
 
     expect(run(["rename", "1", "final", "text"], path)).toBe("renamed #1");
     expect(run(["list"], path)).toBe("[ ] #1 final text");
+  });
+
+  test("remove deletes the task it names and says so", () => {
+    const path = tempFile();
+
+    run(["add", "a"], path);
+    run(["add", "b"], path);
+
+    expect(run(["remove", "1"], path)).toBe("removed #1");
+    expect(run(["list", "--all"], path)).toBe("[ ] #2 b");
+  });
+
+  test("remove with an unknown id is refused and the file keeps its tasks", () => {
+    const path = tempFile();
+
+    run(["add", "a"], path);
+
+    expect(() => run(["remove", "9"], path)).toThrow("no task #9");
+    expect(run(["list", "--all"], path)).toBe("[ ] #1 a");
+  });
+
+  test("remove needs a numeric id", () => {
+    expect(() => run(["remove", "x"], tempFile())).toThrow("not a task id: x");
   });
 
   test("done needs a numeric id", () => {

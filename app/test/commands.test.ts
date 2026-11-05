@@ -4,6 +4,7 @@ import { add } from "../src/commands/add.ts";
 import { count } from "../src/commands/count.ts";
 import { done } from "../src/commands/done.ts";
 import { list } from "../src/commands/list.ts";
+import { remove } from "../src/commands/remove.ts";
 import { type Task, TaskError } from "../src/task.ts";
 
 const TASKS: readonly Task[] = [
@@ -51,6 +52,16 @@ describe("done", () => {
 
   test("an unknown id is refused", () => {
     expect(() => done(TASKS, 9)).toThrow("no task #9");
+  });
+});
+
+describe("remove", () => {
+  test("the task with that id is deleted, the others are left as they are", () => {
+    expect(remove(TASKS, 1)).toEqual([{ id: 3, title: "review the PR", done: false }]);
+  });
+
+  test("an unknown id is refused", () => {
+    expect(() => remove(TASKS, 9)).toThrow("no task #9");
   });
 });
 
