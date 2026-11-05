@@ -56,3 +56,16 @@ describe("cli", () => {
     expect(() => run(["done", "x"], tempFile())).toThrow("not a task id: x");
   });
 });
+
+describe("clear", () => {
+  test("clear removes the done tasks and says how many", () => {
+    const path = tempFile();
+
+    run(["add", "a"], path);
+    run(["add", "b"], path);
+    run(["done", "1"], path);
+
+    expect(run(["clear"], path)).toBe("cleared 1");
+    expect(run(["list", "--all"], path)).toBe("[ ] #2 b");
+  });
+});
