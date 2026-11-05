@@ -15,6 +15,8 @@ bun app/src/cli.ts rename 1 "final spec"   # renamed #1
 
 ## Where the tasks live
 
+`todo` reads and writes `todo.json` in the current directory. Set `TODO_FILE` to a path to use another file. A relative path is taken from the current directory. The file is created by the first command that adds or changes a task.
+
 Each command reads and writes the whole file. Two `todo` commands run at the same time can lose a write.
 
 ## Troubleshooting
@@ -61,3 +63,24 @@ The file has no `tasks` array, or one task lacks a field of the right type. Each
 ### The file is not an object
 
 `todo` prints `todo: <path>: not an object` when the file holds a JSON value that is not an object, such as `null`, `5` or `"text"`. Replace the content with a file in the format above.
+
+## Two task lists
+
+Set `TODO_FILE` for a command to pick the file it uses. Each file keeps its own list, and its ids start at #1:
+
+```bash
+TODO_FILE=work.json bun app/src/cli.ts add "write the spec"   # added #1
+TODO_FILE=work.json bun app/src/cli.ts add "review the PR"    # added #2
+TODO_FILE=home.json bun app/src/cli.ts add "buy milk"         # added #1
+```
+
+`TODO_FILE=work.json bun app/src/cli.ts list` prints:
+
+```
+[ ] #1 write the spec
+[ ] #2 review the PR
+```
+
+`TODO_FILE=home.json bun app/src/cli.ts list` prints `[ ] #1 buy milk`, and `home.json` never shows the work tasks.
+
+To use one list for a whole shell session, run `export TODO_FILE=work.json` once.
