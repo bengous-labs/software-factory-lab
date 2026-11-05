@@ -103,7 +103,7 @@ export function decide(pr: PullRequest | null, answer: Answer): Action {
 }
 
 /** What the hook tells the author once its PR is ready: arm the watcher, then stop. */
-export function armReason(pr: number, watchCommand: string): string {
+export function armReason(pr: number, watchCommand: string, threadCommand: string): string {
   return [
     `PR #${pr} is ready for review. The harness pushed your branch; you do not push, open or ready anything yourself.`,
     "",
@@ -111,6 +111,12 @@ export function armReason(pr: number, watchCommand: string): string {
     "",
     `    ${watchCommand}`,
     "",
-    "Each line it prints is a failing check, a review finding or a change of state of the PR. On a failing check or a finding: fix it with a commit, or reply in the finding's thread with your reason for rejecting it, and resolve the thread; then stop. When the watcher expires, arm it again, until it reports the PR merged or closed. Then stop.",
+    "Each line it prints is a failing check, an Important finding or a human comment, or a change of state of the PR. Nit and Pre-existing findings never block: leave them.",
+    "",
+    "- A failing check: fix it with a commit, then stop.",
+    `- A finding you accept: fix it with a commit, then reply and resolve its thread: \`${threadCommand} <thread-id> "Fixed in <sha>: <what changed>"\`. Then stop.`,
+    `- A finding you reject: reply with your reason and resolve: \`${threadCommand} <thread-id> "<your reason>"\`. Then stop.`,
+    "",
+    "Never ask the user a question about the PR: the harness and the owner handle the rest. When the watcher expires, arm it again, until it reports the PR merged or closed. Then stop.",
   ].join("\n");
 }
