@@ -8,11 +8,12 @@ import { list } from "./commands/list.ts";
 import { remove } from "./commands/remove.ts";
 import { rename } from "./commands/rename.ts";
 import { search } from "./commands/search.ts";
+import { undone } from "./commands/undone.ts";
 import { load, save } from "./store/store.ts";
 import { TaskError } from "./task.ts";
 
 const USAGE =
-  "usage: todo add <title> | todo list [--all | --done] | todo count | todo done <id> | todo clear | todo rename <id> <title> | todo remove <id> | todo search <word>";
+  "usage: todo add <title> | todo list [--all | --done] | todo count | todo done <id> | todo clear | todo rename <id> <title> | todo remove <id> | todo search <word> | todo undone <id>";
 
 /** Runs one command against the store at `path` and returns what to print. */
 export function run(argv: readonly string[], path: string): string {
@@ -65,6 +66,15 @@ export function run(argv: readonly string[], path: string): string {
     }
     case "search":
       return search(load(path), rest.join(" "));
+    case "undone": {
+      const id = Number(rest[0]);
+
+      if (!Number.isInteger(id)) throw new TaskError(`not a task id: ${String(rest[0])}`);
+
+      save(path, undone(load(path), id));
+
+      return `undone #${id}`;
+    }
     default:
       throw new TaskError(USAGE);
   }
