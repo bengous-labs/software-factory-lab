@@ -10,3 +10,7 @@ bun app/src/cli.ts list --all              # [x] #1 write the spec
 ```
 
 `list` shows open tasks; `--all` adds the done ones.
+
+## Where the tasks live
+
+Each command reads and writes the whole file. Two `todo` commands run at the same time can lose a write.
