@@ -1,0 +1,12 @@
+# Usage
+
+`todo` keeps a task list in a JSON file, `todo.json` in the current directory, or the file `TODO_FILE` names.
+
+```bash
+bun app/src/cli.ts add "write the spec"   # added #1
+bun app/src/cli.ts list                    # [ ] #1 write the spec
+bun app/src/cli.ts done 1                  # done #1
+bun app/src/cli.ts list --all              # [x] #1 write the spec
+```
+
+`list` shows open tasks; `--all` adds the done ones.

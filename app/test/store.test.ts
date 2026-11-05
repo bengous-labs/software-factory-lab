@@ -1,0 +1,58 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { run } from "../src/cli.ts";
+import { FORMAT_VERSION, load, parse, save, serialize } from "../src/store/store.ts";
+import { TaskError } from "../src/task.ts";
+
+const tempFile = (): string => join(mkdtempSync(join(tmpdir(), "todo-")), "todo.json");
+
+describe("store", () => {
+  test("a missing file holds no task", () => {
+    expect(load(tempFile())).toEqual([]);
+  });
+
+  test("what is saved loads back the same", () => {
+    const path = tempFile();
+    const tasks = [{ id: 1, title: "a", done: false }];
+
+    save(path, tasks);
+
+    expect(load(path)).toEqual(tasks);
+  });
+
+  test("a file of another format version is refused", () => {
+    expect(() => parse(JSON.stringify({ version: 99, tasks: [] }), "f.json")).toThrow(TaskError);
+  });
+
+  test("a task missing a field is refused", () => {
+    const text = JSON.stringify({ version: FORMAT_VERSION, tasks: [{ id: 1 }] });
+
+    expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");
+  });
+
+  test("the file carries its format version", () => {
+    expect(JSON.parse(serialize([]))).toEqual({ version: FORMAT_VERSION, tasks: [] });
+  });
+});
+
+describe("cli", () => {
+  test("add, done and list work on the same file", () => {
+    const path = tempFile();
+
+    expect(run(["add", "write", "tests"], path)).toBe("added #1");
+    expect(run(["add", "ship"], path)).toBe("added #2");
+    expect(run(["done", "1"], path)).toBe("done #1");
+    expect(run(["list"], path)).toBe("[ ] #2 ship");
+  });
+
+  test("an unknown command prints the usage", () => {
+    expect(() => run(["remove"], tempFile())).toThrow("usage: todo");
+  });
+
+  test("done needs a numeric id", () => {
+    expect(() => run(["done", "x"], tempFile())).toThrow("not a task id: x");
+  });
+});

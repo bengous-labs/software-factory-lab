@@ -1,0 +1,14 @@
+{
+  "name": "software-factory-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "test": "bun test",
+    "check": "bun run typecheck && bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2"
+  }
+}
