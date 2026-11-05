@@ -30,9 +30,10 @@ describe("eventsOf", () => {
       { id: "T3", resolved: false, path: "a.ts", line: 2, author: "bengous-labs-agents", body: "**Nit**: n <!-- lab-finding severity=nit -->" },
       { id: "T4", resolved: false, path: "a.ts", line: 3, author: "bengous-labs-agents", body: "p <!-- lab-finding severity=pre_existing -->" },
       { id: "T5", resolved: false, path: "a.ts", line: 4, author: "bengous", body: "why this name?" },
+      { id: "T6", resolved: false, path: "a.ts", line: 5, author: "bengous", body: "quoting <!-- lab-finding severity=nit -->" },
     ];
 
-    expect(eventsOf(7, { ...OPEN, threads }).map((event) => event.key)).toEqual(["thread:T1", "thread:T5"]);
+    expect(eventsOf(7, { ...OPEN, threads }).map((event) => event.key)).toEqual(["thread:T1", "thread:T5", "thread:T6"]);
     expect(eventsOf(7, { ...OPEN, threads })[0]?.line).toStartWith("Finding T1 on app/src/cli.ts:12 by bengous-labs-agents: **Important**: off");
   });
 

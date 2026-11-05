@@ -18,6 +18,9 @@ import { severityOfBody } from "./review/findings.ts";
 
 const POLL_MS = 30_000;
 
+/** The App's login as GraphQL prints it: only its own Nit and Pre-existing findings are skipped. */
+export const APP_LOGIN = "bengous-labs-agents";
+
 export interface Check {
   readonly name: string;
   readonly bucket: string;
@@ -62,7 +65,7 @@ export function eventsOf(pr: number, state: PrState): readonly Event[] {
     }));
 
   for (const thread of state.threads.filter((found) => !found.resolved)) {
-    const severity = severityOfBody(thread.body);
+    const severity = thread.author === APP_LOGIN ? severityOfBody(thread.body) : null;
 
     if (severity === "nit" || severity === "pre_existing") continue;
 
