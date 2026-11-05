@@ -62,6 +62,8 @@ export interface Snapshot {
   readonly landOkByOwner: boolean;
   readonly openImportant: number;
   readonly devRed: boolean;
+  /** GitHub reads the PR as conflicting with its base: no CI runs on it and the queue refuses it. */
+  readonly conflicting: boolean;
   readonly record: StateRecord;
 }
 
@@ -132,6 +134,10 @@ export function decide(snapshot: Snapshot): Decision {
   }
 
   if (snapshot.draft) return finish(pending("Draft: the author's turn."));
+
+  if (snapshot.conflicting) {
+    return finish({ kind: "failure", summary: "This PR conflicts with dev: rebase it onto origin/dev, then stop." });
+  }
 
   if (snapshot.ci === null) return finish(pending("Waiting for validate."));
 

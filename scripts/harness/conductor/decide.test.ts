@@ -19,6 +19,7 @@ const READY: Snapshot = {
   landOkByOwner: false,
   openImportant: 0,
   devRed: false,
+  conflicting: false,
   record: { ...EMPTY_RECORD, triage: { [P1]: LIGHT } },
 };
 
@@ -125,6 +126,16 @@ describe("decide", () => {
     expect(kinds({ ...human, landOkByOwner: true, record: { ...human.record, landOkPatch: "patch-0" } })).toContain(
       "remove-land-ok",
     );
+  });
+
+  test("a ready PR in conflict with dev gets a red land-gate that tells its author to rebase, and runs no model", () => {
+    const snapshot = { ...READY, conflicting: true, ci: null, record: EMPTY_RECORD };
+    const step = stepsOf(snapshot).find((found) => found.kind === "land-gate");
+
+    expect(kinds(snapshot)).toEqual(["land-gate"]);
+    expect(step?.kind === "land-gate" && step.check.kind).toBe("failure");
+    expect(step?.kind === "land-gate" && step.check.summary).toContain("rebase");
+    expect(gate({ ...snapshot, draft: true })).toBe("pending");
   });
 
   test("a red dev holds a converged PR", () => {

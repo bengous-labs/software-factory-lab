@@ -57,6 +57,7 @@ interface PullJson {
   state: "open" | "closed";
   merged: boolean;
   draft: boolean;
+  mergeable_state: string;
   user: { login: string };
   labels: { name: string }[];
   head: { sha: string; ref: string; repo: { full_name: string } | null };
@@ -156,6 +157,7 @@ async function snapshotOf(env: Env, pr: PullJson, range: Range, record: StateRec
       (thread) => !thread.isResolved && thread.comments.nodes[0]?.author?.login === bare(env.appLogin) && severityOfBody(thread.comments.nodes[0]?.body ?? "") === "important",
     ).length,
     devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
+    conflicting: pr.mergeable_state === "dirty",
     record,
   };
 }
