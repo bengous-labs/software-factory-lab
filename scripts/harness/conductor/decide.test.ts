@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { conflictingOf, decide, deltaStart, EMPTY_RECORD, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
+import { conflictingOf, decide, deltaStart, EMPTY_RECORD, landOkCounts, openImportantOf, risen, type Snapshot, type Step, type Triage } from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -203,5 +203,26 @@ describe("land-ok across a patch change", () => {
     const record = { ...READY.record, reviewedPatch: P1, landOkPatch: "patch-0" };
 
     expect(stepsOf({ ...READY, record })).toContainEqual({ kind: "record", record: { ...record, landOkPatch: null } });
+  });
+});
+
+describe("openImportantOf", () => {
+  test("an Important posted with no thread stays open until the patch changes", () => {
+    const record = { ...EMPTY_RECORD, bodyImportant: { [P1]: 1 } };
+
+    expect(openImportantOf(0, record, P1)).toBe(1);
+    expect(openImportantOf(2, record, P1)).toBe(3);
+    expect(openImportantOf(0, record, "patch-2")).toBe(0);
+    expect(openImportantOf(0, EMPTY_RECORD, P1)).toBe(0);
+  });
+});
+
+describe("landOkCounts", () => {
+  test("the owner's land-ok counts when put after the head was pushed, never before, and never someone else's", () => {
+    expect(landOkCounts(true, "2026-11-05T20:00:00Z", "2026-11-05T19:00:00Z")).toBe(true);
+    expect(landOkCounts(true, "2026-11-05T18:00:00Z", "2026-11-05T19:00:00Z")).toBe(false);
+    expect(landOkCounts(false, "2026-11-05T20:00:00Z", "2026-11-05T19:00:00Z")).toBe(false);
+    expect(landOkCounts(true, null, null)).toBe(false);
+    expect(landOkCounts(true, "2026-11-05T20:00:00Z", null)).toBe(true);
   });
 });

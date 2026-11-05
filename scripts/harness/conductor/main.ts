@@ -16,7 +16,7 @@ import { checked, run } from "../lib/run.ts";
 import { commentOf, EFFORT, type Finding, MODEL, promptOf as reviewPrompt, review, severityOfBody, type RejectedThread } from "../review/findings.ts";
 import { floorOf } from "../triage/floor.ts";
 import { judge } from "../triage/judge.ts";
-import { type CheckState, conflictingOf, decide, deltaStart, EMPTY_RECORD, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
+import { type CheckState, conflictingOf, decide, landOkCounts, openImportantOf, deltaStart, EMPTY_RECORD, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
 
 const STATE_MARKER = "<!-- lab-conductor-state";
 
@@ -148,9 +148,12 @@ async function snapshotOf(env: Env, pr: PullJson, range: Range, record: StateRec
   let landOkByOwner = false;
 
   if (labels.includes("land-ok")) {
-    const events = await api<{ event: string; label?: { name: string }; actor: { login: string } }[]>(env, `repos/${env.repo}/issues/${pr.number}/events?per_page=100`);
+    const events = await api<{ event: string; label?: { name: string }; actor: { login: string }; created_at: string }[]>(env, `repos/${env.repo}/issues/${pr.number}/events?per_page=100`);
     const last = events.filter((event) => event.event === "labeled" && event.label?.name === "land-ok").at(-1);
-    landOkByOwner = last?.actor.login === env.owner;
+    // The head's first check suite is created when it is pushed: a land-ok put before that was given for another head.
+    const suites = await api<{ check_suites: { created_at: string }[] }>(env, `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`);
+    const pushedAt = suites.check_suites.map((suite) => suite.created_at).sort()[0] ?? null;
+    landOkByOwner = landOkCounts(last?.actor.login === env.owner, last?.created_at ?? null, pushedAt);
   }
 
   const devRuns = await api<{ workflow_runs: { conclusion: string | null }[] }>(env, `repos/${env.repo}/actions/runs?branch=dev&event=push&status=completed&per_page=1`);
@@ -166,9 +169,13 @@ async function snapshotOf(env: Env, pr: PullJson, range: Range, record: StateRec
     ci: validate?.status !== "completed" ? null : validate.conclusion === "success" ? "success" : "failure",
     labels,
     landOkByOwner,
-    openImportant: threads.filter(
-      (thread) => !thread.isResolved && thread.comments.nodes[0]?.author?.login === bare(env.appLogin) && severityOfBody(thread.comments.nodes[0]?.body ?? "") === "important",
-    ).length,
+    openImportant: openImportantOf(
+      threads.filter(
+        (thread) => !thread.isResolved && thread.comments.nodes[0]?.author?.login === bare(env.appLogin) && severityOfBody(thread.comments.nodes[0]?.body ?? "") === "important",
+      ).length,
+      record,
+      await patchOf(env, range),
+    ),
     devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
     conflicting: conflictingOf(pr.mergeable_state),
     record,
@@ -238,7 +245,8 @@ function rejectedOf(env: Env, threads: readonly ThreadJson[]): RejectedThread[] 
     }));
 }
 
-async function postFindings(env: Env, pr: PullJson, findings: readonly Finding[], round: 1 | 2, by: string, costUsd: number | null): Promise<void> {
+/** Posts the review; answers how many Important findings went out with no thread to resolve. */
+async function postFindings(env: Env, pr: PullJson, findings: readonly Finding[], round: 1 | 2, by: string, costUsd: number | null): Promise<number> {
   const counts = (["important", "nit", "pre_existing"] as const).map((severity) => `${findings.filter((found) => found.severity === severity).length} ${severity}`).join(", ");
   const body = `Review round ${round} (${by}): ${counts}.${costUsd === null ? "" : ` Estimated cost $${costUsd.toFixed(3)}.`}`;
   const inline = findings.filter((finding) => finding.line !== null);
@@ -252,10 +260,14 @@ async function postFindings(env: Env, pr: PullJson, findings: readonly Finding[]
       body: withLoose,
       comments: inline.map((finding) => ({ path: finding.file, line: finding.line, side: "RIGHT", body: commentOf(finding) })),
     });
+
+    return loose.filter((finding) => finding.severity === "important").length;
   } catch (error) {
     // A line outside the diff makes GitHub refuse the whole review: post it as one body instead.
     const all = findings.map((finding) => `- \`${finding.file}:${finding.line ?? "?"}\` ${commentOf(finding)}`).join("\n");
     await api(env, `repos/${env.repo}/pulls/${pr.number}/reviews`, "POST", { commit_id: pr.head.sha, event: "COMMENT", body: `${body}\n\n${all}\n\n(inline posting failed: ${String(error).slice(0, 200)})` });
+
+    return findings.filter((finding) => finding.severity === "important").length;
   }
 }
 
@@ -286,9 +298,16 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
         return null;
       }
 
-      await postFindings(env, pr, result.findings, step.round, `${step.level}: ${result.model ?? MODEL[step.level]}, effort ${EFFORT}`, result.costUsd);
+      const unthreaded = await postFindings(env, pr, result.findings, step.round, `${step.level}: ${result.model ?? MODEL[step.level]}, effort ${EFFORT}`, result.costUsd);
       const important = result.findings.some((finding) => finding.severity === "important");
-      const next = { ...record, reviewedPatch: await patchOf(env, range), reviewedHead: range.head, rounds: record.rounds + (important ? 1 : 0) };
+      const reviewedPatch = await patchOf(env, range);
+      const next = {
+        ...record,
+        reviewedPatch,
+        reviewedHead: range.head,
+        rounds: record.rounds + (important ? 1 : 0),
+        bodyImportant: { ...(record.bodyImportant ?? {}), [reviewedPatch]: unthreaded },
+      };
       await writeRecord(env, pr.number, recordId, next);
 
       if (important) {

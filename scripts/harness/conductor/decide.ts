@@ -37,6 +37,8 @@ export interface StateRecord {
   readonly landOkPatch: string | null;
   /** The queue removed the PR at this head, for this reason. */
   readonly dequeued: { readonly head: string; readonly reason: string } | null;
+  /** Important findings posted in a review's body, with no thread to resolve, per patch reviewed. */
+  readonly bodyImportant?: Readonly<Record<string, number>>;
 }
 
 export const EMPTY_RECORD: StateRecord = {
@@ -80,6 +82,18 @@ export function conflictingOf(mergeableState: string | null | undefined): boolea
  */
 export function deltaStart(base: string, reviewedHead: string | null, ancestorExit: number | null): string {
   return reviewedHead !== null && ancestorExit === 0 ? reviewedHead : base;
+}
+
+/** Open Important findings: the unresolved threads, plus those posted with no thread, until the patch changes. */
+export function openImportantOf(threads: number, record: StateRecord, patch: string): number {
+  return threads + (record.bodyImportant?.[patch] ?? 0);
+}
+
+/** The owner's land-ok counts only when it was put after the head it would land was pushed. */
+export function landOkCounts(byOwner: boolean, labeledAt: string | null, headPushedAt: string | null): boolean {
+  if (!byOwner || labeledAt === null) return false;
+
+  return headPushedAt === null || Date.parse(labeledAt) >= Date.parse(headPushedAt);
 }
 
 export type CheckState =
