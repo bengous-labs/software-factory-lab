@@ -115,6 +115,25 @@ export function risen(labels: readonly string[], triage: Triage): { land: Land; 
 
 const pending = (summary: string): CheckState => ({ kind: "pending", summary });
 
+/**
+ * The record after reading the land-ok label, the only change a decision makes to it, and whether the
+ * label goes. A label someone else put goes; one given for another patch goes and clears its patch; a
+ * patch left in the record without the label is cleared, so a new land-ok counts.
+ */
+export function landOkOf(snapshot: Snapshot, record: StateRecord): { next: StateRecord; removeLabel: boolean } {
+  if (!snapshot.labels.includes("land-ok")) {
+    return { next: record.landOkPatch === null ? record : { ...record, landOkPatch: null }, removeLabel: false };
+  }
+
+  if (!snapshot.landOkByOwner) return { next: record, removeLabel: true };
+
+  if (record.landOkPatch === null) return { next: { ...record, landOkPatch: snapshot.patch }, removeLabel: false };
+
+  if (record.landOkPatch !== snapshot.patch) return { next: { ...record, landOkPatch: null }, removeLabel: true };
+
+  return { next: record, removeLabel: false };
+}
+
 export function decide(snapshot: Snapshot): Decision {
   const { record } = snapshot;
 
@@ -125,20 +144,15 @@ export function decide(snapshot: Snapshot): Decision {
   }
 
   const steps: Step[] = [];
-  let next: StateRecord = record;
+  const { next, removeLabel } = landOkOf(snapshot, record);
 
-  if (snapshot.labels.includes("land-ok")) {
-    if (!snapshot.landOkByOwner) steps.push({ kind: "remove-land-ok" });
-    else if (record.landOkPatch === null) next = { ...next, landOkPatch: snapshot.patch };
-    else if (record.landOkPatch !== snapshot.patch) {
-      steps.push({ kind: "remove-land-ok" });
-      next = { ...next, landOkPatch: null };
-    }
-  }
+  if (removeLabel) steps.push({ kind: "remove-land-ok" });
+
+  // Written now: a triage or a review below ends this run before land-gate is reached.
+  if (next !== record) steps.push({ kind: "record", record: next });
 
   const landOk = snapshot.landOkByOwner && next.landOkPatch === snapshot.patch;
   const finish = (gate: CheckState): Decision => {
-    if (next !== record) steps.push({ kind: "record", record: next });
     steps.push({ kind: "land-gate", check: gate });
 
     return { kind: "steps", steps };
