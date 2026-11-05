@@ -213,6 +213,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   const armedFile = (pr: number): string => join(stateDir, `armed-${pr}-${head}`);
   const withArmed = { ...snapshot, armed: snapshot.pr !== null && existsSync(armedFile(snapshot.pr.number)) };
   const watch = `bun ${join(root, "scripts", "harness", "watch.ts")}`;
+  const thread = `bun ${join(root, "scripts", "harness", "thread.ts")}`;
 
   const admission = admit(withArmed);
   log({ step: "admit", branch, head, pr: withArmed.pr?.number ?? null, ...admission });
@@ -222,7 +223,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   if (admission.kind === "arm") {
     writeFileSync(armedFile(admission.pr), "asked\n");
 
-    return { kind: "block", reason: armReason(admission.pr, `${watch} ${admission.pr}`) };
+    return { kind: "block", reason: armReason(admission.pr, `${watch} ${admission.pr}`, thread) };
   }
 
   const next = afterGates(await gates(deps, cwd, stateDir, head), withArmed.stopHookActive);
@@ -266,7 +267,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   log({ step: "handed", action: action.kind, pr: number, head });
   writeFileSync(armedFile(number), "asked\n");
 
-  return { kind: "block", reason: armReason(number, `${watch} ${number}`) };
+  return { kind: "block", reason: armReason(number, `${watch} ${number}`, thread) };
 }
 
 if (import.meta.main) {

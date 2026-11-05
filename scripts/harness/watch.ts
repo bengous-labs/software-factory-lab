@@ -2,7 +2,8 @@
 
 /**
  * The author's watcher, armed with Monitor on its PR: every 30 s it reads the PR and prints one line
- * per event the author acts on: a failing check, a new open review thread, the PR moved to draft.
+ * per event the author acts on: a failing check, a new open Important finding or human comment, the
+ * PR moved to draft. Nit and Pre-existing findings never block, so they print nothing.
  * It exits when the PR is merged or closed. What it printed is kept in `.lab/state/watch-<pr>.json`,
  * so a watcher armed again after an expiry repeats nothing.
  *
@@ -13,8 +14,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { checked, run, type Run } from "./lib/run.ts";
+import { severityOfBody } from "./review/findings.ts";
 
 const POLL_MS = 30_000;
+
+/** The App's login as GraphQL prints it: only its own Nit and Pre-existing findings are skipped. */
+export const APP_LOGIN = "bengous-labs-agents";
 
 export interface Check {
   readonly name: string;
@@ -60,10 +65,14 @@ export function eventsOf(pr: number, state: PrState): readonly Event[] {
     }));
 
   for (const thread of state.threads.filter((found) => !found.resolved)) {
+    const severity = thread.author === APP_LOGIN ? severityOfBody(thread.body) : null;
+
+    if (severity === "nit" || severity === "pre_existing") continue;
+
     const where = thread.line === null ? thread.path : `${thread.path}:${thread.line}`;
     events.push({
       key: `thread:${thread.id}`,
-      line: `Finding on ${where} by ${thread.author}: ${thread.body.replace(/\s+/gu, " ").slice(0, 400)}`,
+      line: `Finding ${thread.id} on ${where} by ${thread.author}: ${thread.body.replace(/\s+/gu, " ").slice(0, 400)}`,
     });
   }
 

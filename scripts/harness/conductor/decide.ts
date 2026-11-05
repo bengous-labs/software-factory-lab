@@ -149,19 +149,20 @@ export function decide(snapshot: Snapshot): Decision {
   steps.push({ kind: "labels", ...labels });
 
   if (next.reviewedPatch !== snapshot.patch && labels.review !== "none") {
-    if (next.rounds === 0) {
+    if (next.reviewedPatch === null) {
       steps.push({ kind: "review", level: labels.review, round: 1 });
 
       return { kind: "steps", steps };
     }
 
-    if (next.rounds === 1 && triage.secondRound) {
-      steps.push({ kind: "review", level: labels.review, round: 2 });
+    // A later patch is read again only when the triage of its delta asks for it.
+    if (next.rounds < 2 && triage.secondRound) {
+      steps.push({ kind: "review", level: labels.review, round: next.rounds === 0 ? 1 : 2 });
 
       return { kind: "steps", steps };
     }
 
-    if (next.rounds >= 2) {
+    if (next.rounds >= 2 && triage.secondRound) {
       steps.push({ kind: "labels", land: "human", review: labels.review });
       steps.push({ kind: "needs-human", reason: "A third review round would be needed: the owner decides." });
     }

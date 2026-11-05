@@ -23,15 +23,18 @@ describe("eventsOf", () => {
     ]);
   });
 
-  test("an open thread prints its place and its first comment; a resolved one prints nothing", () => {
+  test("an open Important finding or human comment prints with its thread id; a resolved one, a Nit or a Pre-existing prints nothing", () => {
     const threads = [
-      { id: "T1", resolved: false, path: "app/src/cli.ts", line: 12, author: "bengous-labs-agents", body: "Important:\n  off by one" },
+      { id: "T1", resolved: false, path: "app/src/cli.ts", line: 12, author: "bengous-labs-agents", body: "**Important**: off\n\n<!-- lab-finding severity=important -->" },
       { id: "T2", resolved: true, path: "a.ts", line: 1, author: "x", body: "old" },
+      { id: "T3", resolved: false, path: "a.ts", line: 2, author: "bengous-labs-agents", body: "**Nit**: n <!-- lab-finding severity=nit -->" },
+      { id: "T4", resolved: false, path: "a.ts", line: 3, author: "bengous-labs-agents", body: "p <!-- lab-finding severity=pre_existing -->" },
+      { id: "T5", resolved: false, path: "a.ts", line: 4, author: "bengous", body: "why this name?" },
+      { id: "T6", resolved: false, path: "a.ts", line: 5, author: "bengous", body: "quoting <!-- lab-finding severity=nit -->" },
     ];
 
-    expect(eventsOf(7, { ...OPEN, threads })).toEqual([
-      { key: "thread:T1", line: "Finding on app/src/cli.ts:12 by bengous-labs-agents: Important: off by one" },
-    ]);
+    expect(eventsOf(7, { ...OPEN, threads }).map((event) => event.key)).toEqual(["thread:T1", "thread:T5", "thread:T6"]);
+    expect(eventsOf(7, { ...OPEN, threads })[0]?.line).toStartWith("Finding T1 on app/src/cli.ts:12 by bengous-labs-agents: **Important**: off");
   });
 
   test("a draft PR says it is the author's turn, once per head", () => {

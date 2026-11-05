@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { admit, afterGates, answerOf, decide, type Snapshot } from "./decide.ts";
+import { admit, afterGates, answerOf, armReason, decide, type Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -96,5 +96,18 @@ describe("decide", () => {
     expect(decide(null, "yes")).toEqual({ kind: "open" });
     expect(decide({ number: 7, draft: true, headSha: HEAD }, "yes")).toEqual({ kind: "push", pr: 7, ready: true });
     expect(decide({ number: 7, draft: false, headSha: HEAD }, "yes")).toEqual({ kind: "push", pr: 7, ready: false });
+  });
+});
+
+describe("armReason", () => {
+  test("names the PR, the watch command and the thread command, and asks for no question", () => {
+    const reason = armReason(12, "bun /r/scripts/harness/watch.ts 12", "bun /r/scripts/harness/thread.ts");
+
+    expect(reason).toContain("PR #12 is ready");
+    expect(reason).toContain("    bun /r/scripts/harness/watch.ts 12");
+    expect(reason).toContain('`bun /r/scripts/harness/thread.ts <thread-id> "Fixed in <sha>: <what changed>"`');
+    expect(reason).toContain('`bun /r/scripts/harness/thread.ts <thread-id> "<your reason>"`');
+    expect(reason).toContain("Nit and Pre-existing findings never block");
+    expect(reason).toContain("Never ask the user a question");
   });
 });
