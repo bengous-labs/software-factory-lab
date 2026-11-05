@@ -4,7 +4,7 @@ import { decide, EMPTY_RECORD, risen, type Snapshot, type Step, type Triage } fr
 
 const P1 = "patch-1";
 
-const LIGHT: Triage = { land: "auto", review: "light", secondRound: false, reason: "ordinary code" };
+const LIGHT: Triage = { land: "auto", review: "light", secondRound: false, reason: "ordinary code", model: "claude-haiku-5-5" };
 
 const READY: Snapshot = {
   number: 9,

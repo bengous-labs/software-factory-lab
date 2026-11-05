@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { checked, run } from "../lib/run.ts";
-import { commentOf, type Finding, promptOf as reviewPrompt, review, severityOfBody, type RejectedThread } from "../review/findings.ts";
+import { commentOf, EFFORT, type Finding, MODEL, promptOf as reviewPrompt, review, severityOfBody, type RejectedThread } from "../review/findings.ts";
 import { floorOf } from "../triage/floor.ts";
 import { judge } from "../triage/judge.ts";
 import { type CheckState, decide, EMPTY_RECORD, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
@@ -211,9 +211,9 @@ function rejectedOf(env: Env, threads: readonly ThreadJson[]): RejectedThread[] 
     }));
 }
 
-async function postFindings(env: Env, pr: PullJson, findings: readonly Finding[], round: 1 | 2, costUsd: number | null): Promise<void> {
+async function postFindings(env: Env, pr: PullJson, findings: readonly Finding[], round: 1 | 2, by: string, costUsd: number | null): Promise<void> {
   const counts = (["important", "nit", "pre_existing"] as const).map((severity) => `${findings.filter((found) => found.severity === severity).length} ${severity}`).join(", ");
-  const body = `Review round ${round}: ${counts}.${costUsd === null ? "" : ` Estimated cost $${costUsd.toFixed(3)}.`}`;
+  const body = `Review round ${round} (${by}): ${counts}.${costUsd === null ? "" : ` Estimated cost $${costUsd.toFixed(3)}.`}`;
   const inline = findings.filter((finding) => finding.line !== null);
   const loose = findings.filter((finding) => finding.line === null);
   const withLoose = loose.length === 0 ? body : `${body}\n\n${loose.map((finding) => `- \`${finding.file}\`: ${commentOf(finding)}`).join("\n")}`;
@@ -236,7 +236,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
   switch (step.kind) {
     case "triage": {
       const answer = await triage(env, range, record, step.delta);
-      log(`#${pr.number} triage ${step.patch.slice(0, 8)}: land:${answer.land} review:${answer.review} second:${answer.secondRound} (${answer.reason})`);
+      log(`#${pr.number} triage ${step.patch.slice(0, 8)}: land:${answer.land} review:${answer.review} second:${answer.secondRound} by ${answer.model ?? "the floor"} (${answer.reason})`);
       const next = { ...record, triage: { ...record.triage, [step.patch]: answer } };
       await writeRecord(env, pr.number, recordId, next);
 
@@ -250,7 +250,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
 
       if (result.findings === null) result = await review(run, env.cwd, step.level, prompt, Date.now);
 
-      log(`#${pr.number} review round ${step.round} at ${step.level}: exit ${result.code}, ${result.ms} ms, $${result.costUsd ?? "?"}, ${result.findings?.length ?? "no"} findings`);
+      log(`#${pr.number} review round ${step.round} at ${step.level} (${result.model ?? MODEL[step.level]}, effort ${EFFORT}): exit ${result.code}, ${result.ms} ms, $${result.costUsd ?? "?"}, ${result.findings?.length ?? "no"} findings`);
 
       if (result.findings === null) {
         await setCheck(env, "agent-review", pr.head.sha, { kind: "failure", summary: "The review failed twice." });
@@ -259,7 +259,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
         return null;
       }
 
-      await postFindings(env, pr, result.findings, step.round, result.costUsd);
+      await postFindings(env, pr, result.findings, step.round, `${step.level}: ${result.model ?? MODEL[step.level]}, effort ${EFFORT}`, result.costUsd);
       const important = result.findings.some((finding) => finding.severity === "important");
       const next = { ...record, reviewedPatch: await patchOf(env, range), reviewedHead: range.head, rounds: record.rounds + (important ? 1 : 0) };
       await writeRecord(env, pr.number, recordId, next);

@@ -19,6 +19,8 @@ export interface Triage {
   /** On a delta after a fixed Important: whether the fix is risky enough for a second round. */
   readonly secondRound: boolean;
   readonly reason: string;
+  /** The exact model that answered, or null when the floor did. */
+  readonly model: string | null;
 }
 
 /** The record the App keeps in one comment per PR. */

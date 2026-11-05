@@ -18,6 +18,9 @@ export interface Finding {
 
 export const MODEL: Record<Exclude<Level, "none">, string> = { light: "sonnet", deep: "opus" };
 
+/** The review passes no effort flag: the model runs at its own default. */
+export const EFFORT = "default";
+
 /** The cap on Nits REVIEW.md sets. */
 export const NIT_CAP = 3;
 
@@ -115,9 +118,22 @@ export function commentOf(finding: Finding): string {
   return `**${LABEL[finding.severity]}**: ${finding.summary}\n\n${finding.failureScenario}\n\n${markerOf(finding.severity)}`;
 }
 
+/** The cost and the exact model in `claude -p --output-format json` output: the model that cost the most, when several ran. */
+export function usageOf(stdout: string): { costUsd: number | null; model: string | null } {
+  try {
+    const out = JSON.parse(stdout) as { total_cost_usd?: number; modelUsage?: Record<string, { costUSD?: number }> };
+    const models = Object.entries(out.modelUsage ?? {}).sort((a, b) => (b[1].costUSD ?? 0) - (a[1].costUSD ?? 0));
+
+    return { costUsd: out.total_cost_usd ?? null, model: models[0]?.[0] ?? null };
+  } catch {
+    return { costUsd: null, model: null };
+  }
+}
+
 export interface ReviewRun {
   readonly findings: readonly Finding[] | null;
   readonly costUsd: number | null;
+  readonly model: string | null;
   readonly ms: number;
   readonly code: number;
 }
@@ -147,13 +163,5 @@ export async function review(
     ],
     { cwd, timeoutMs: 900_000 },
   );
-  let costUsd: number | null = null;
-
-  try {
-    costUsd = (JSON.parse(ran.stdout) as { total_cost_usd?: number }).total_cost_usd ?? null;
-  } catch {
-    costUsd = null;
-  }
-
-  return { findings: ran.code === 0 ? findingsOf(ran.stdout) : null, costUsd, ms: now() - started, code: ran.code };
+  return { findings: ran.code === 0 ? findingsOf(ran.stdout) : null, ...usageOf(ran.stdout), ms: now() - started, code: ran.code };
 }

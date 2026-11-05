@@ -5,6 +5,7 @@
 
 import type { Triage } from "../conductor/decide.ts";
 import type { Run } from "../lib/run.ts";
+import { usageOf } from "../review/findings.ts";
 
 export const TRIAGE_MODEL = "haiku";
 
@@ -56,7 +57,7 @@ export function triageOf(stdout: string): Triage | null {
       return null;
     }
 
-    return { land, review, secondRound: secondRound === true, reason: typeof reason === "string" ? reason : "" };
+    return { land, review, secondRound: secondRound === true, reason: typeof reason === "string" ? reason : "", model: usageOf(stdout).model };
   } catch {
     return null;
   }
@@ -87,6 +88,7 @@ export async function judge(run: Run, cwd: string, stat: string, patch: string, 
       review: "deep",
       secondRound: true,
       reason: `the triage failed (exit ${ran.code}): ${(ran.stderr || ran.stdout).trim().slice(0, 200)}`,
+      model: null,
     }
   );
 }
