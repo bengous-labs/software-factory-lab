@@ -66,9 +66,10 @@ describe("stop", () => {
     const fork = calls.find((call) => call.argv[0] === "claude" && call.argv.at(-1) === DONE_QUESTION);
 
     expect(fork?.argv).toEqual(
-      expect.arrayContaining(["-p", "--resume", "S1", "--fork-session", "--model", "claude-haiku-5-5"]),
+      expect.arrayContaining(["-p", "--resume", "S1", "--fork-session", "--tools", "", "--model", "claude-haiku-5-5"]),
     );
     expect(fork?.options.env?.[FORK_FLAG]).toBe("1");
+    expect(fork?.argv[(fork?.argv.indexOf("--tools") ?? -2) + 1]).toBe("");
     expect(calls.some((call) => call.argv.join(" ").startsWith("git push --force-with-lease -u origin HEAD:refs/heads/agent/x"))).toBe(true);
 
     const create = calls.find((call) => call.argv.join(" ").startsWith("gh pr create"));
