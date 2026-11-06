@@ -46,7 +46,16 @@ function result(fields: Record<string, unknown>): SDKResultMessage {
 
 describe("tools", () => {
   test("every tool is refused but the one that returns the schema's answer", () => {
-    for (const name of ["Bash", "Read", "Write", "Edit", "Glob", "WebFetch", "Agent", "mcp__github__create_pull_request"]) {
+    for (const name of [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "WebFetch",
+      "Agent",
+      "mcp__github__create_pull_request",
+    ]) {
       expect(toolDecision(name)).toBe("deny");
     }
 
@@ -55,9 +64,15 @@ describe("tools", () => {
 
   test("the hook turns that decision into a PreToolUse permission decision", async () => {
     expect(await decisionOf("Write")).toEqual({
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "this call runs with no tool" },
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "this call runs with no tool",
+      },
     });
-    expect(await decisionOf(STRUCTURED_OUTPUT)).toEqual({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } });
+    expect(await decisionOf(STRUCTURED_OUTPUT)).toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+    });
   });
 
   test("the options list no tool, load no setting, deny every prompt, and block a failing guard", () => {
@@ -118,16 +133,30 @@ describe("answerOf", () => {
   });
 
   test("a call that ends without a result fails with what it threw, and names no model", () => {
-    expect(answerOf(undefined, "timed out after 1000 ms")).toEqual({ kind: "failed", error: "timed out after 1000 ms", costUsd: null, model: null });
-    expect(answerOf(undefined, null)).toEqual({ kind: "failed", error: "the call ended without a result", costUsd: null, model: null });
+    expect(answerOf(undefined, "timed out after 1000 ms")).toEqual({
+      kind: "failed",
+      error: "timed out after 1000 ms",
+      costUsd: null,
+      model: null,
+    });
+    expect(answerOf(undefined, null)).toEqual({
+      kind: "failed",
+      error: "the call ended without a result",
+      costUsd: null,
+      model: null,
+    });
   });
 });
 
 describe("askWith", () => {
   const untilAborted = (options: Options): Promise<never> =>
-    new Promise((_, reject) => options.abortController?.signal.addEventListener("abort", () => reject(new Error("aborted by the caller"))));
+    new Promise((_, reject) =>
+      options.abortController?.signal.addEventListener("abort", () => reject(new Error("aborted by the caller"))),
+    );
 
-  const streamOf = (body: (options: Options) => AsyncGenerator<SDKMessage>): { stream: Stream; calls: { prompt: string; options: Options }[] } => {
+  const streamOf = (
+    body: (options: Options) => AsyncGenerator<SDKMessage>,
+  ): { stream: Stream; calls: { prompt: string; options: Options }[] } => {
     const calls: { prompt: string; options: Options }[] = [];
 
     return {
@@ -145,9 +174,16 @@ describe("askWith", () => {
       yield result({ structured_output: { ok: true } });
     });
 
-    expect(await askWith(stream)(QUESTION)).toEqual({ kind: "answered", structured: { ok: true }, costUsd: 0.01, model: HAIKU });
+    expect(await askWith(stream)(QUESTION)).toEqual({
+      kind: "answered",
+      structured: { ok: true },
+      costUsd: 0.01,
+      model: HAIKU,
+    });
     expect(calls[0]?.prompt).toBe("p");
-    expect(calls[0]?.options).toEqual(expect.objectContaining({ model: "haiku", tools: [], permissionMode: "dontAsk" }));
+    expect(calls[0]?.options).toEqual(
+      expect.objectContaining({ model: "haiku", tools: [], permissionMode: "dontAsk" }),
+    );
   });
 
   test("an error result followed by a throw answers with the result's error, not the throw", async () => {
@@ -156,7 +192,10 @@ describe("askWith", () => {
       throw new Error("Claude Code returned an error result");
     });
 
-    expect(await askWith(stream)(QUESTION)).toMatchObject({ kind: "failed", error: "error_during_execution: overloaded" });
+    expect(await askWith(stream)(QUESTION)).toMatchObject({
+      kind: "failed",
+      error: "error_during_execution: overloaded",
+    });
   });
 
   test("a throw with no result answers with the thrown message", async () => {
@@ -165,7 +204,12 @@ describe("askWith", () => {
       throw new Error("Native CLI binary not found");
     });
 
-    expect(await askWith(stream)(QUESTION)).toEqual({ kind: "failed", error: "Native CLI binary not found", costUsd: null, model: null });
+    expect(await askWith(stream)(QUESTION)).toEqual({
+      kind: "failed",
+      error: "Native CLI binary not found",
+      costUsd: null,
+      model: null,
+    });
   });
 
   test("a call that outlives its timeout is aborted and reads as timed out", async () => {
@@ -174,7 +218,12 @@ describe("askWith", () => {
       await untilAborted(options);
     });
 
-    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toEqual({ kind: "failed", error: "timed out after 10 ms", costUsd: null, model: null });
+    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toEqual({
+      kind: "failed",
+      error: "timed out after 10 ms",
+      costUsd: null,
+      model: null,
+    });
   });
 
   test("a result read before the timeout still answers when the call is aborted after it", async () => {
@@ -183,7 +232,10 @@ describe("askWith", () => {
       await untilAborted(options);
     });
 
-    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toMatchObject({ kind: "answered", structured: { ok: true } });
+    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toMatchObject({
+      kind: "answered",
+      structured: { ok: true },
+    });
   });
 
   test("a call that ends in time is not aborted", async () => {

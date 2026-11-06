@@ -7,9 +7,10 @@
  *   bun scripts/land-loop/thread.ts <thread-id> "<reply>"
  */
 
-import { checked, run, type Run } from "./lib/run.ts";
+import { checked, type Run, run } from "./lib/run.ts";
 
-export const REPLY = "mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}";
+export const REPLY =
+  "mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}";
 
 export const RESOLVE = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}";
 
@@ -29,7 +30,11 @@ export function argsOf(argv: readonly string[]): { id: string; body: string } | 
 
 /** Replies first, so a thread is never resolved without the author's answer in it. */
 export async function answer(runner: Run, cwd: string, id: string, body: string): Promise<void> {
-  await checked(runner, ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", `id=${id}`, "-f", `body=${body}\n\n${AUTHOR_MARK}`], { cwd });
+  await checked(
+    runner,
+    ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", `id=${id}`, "-f", `body=${body}\n\n${AUTHOR_MARK}`],
+    { cwd },
+  );
   await checked(runner, ["gh", "api", "graphql", "-f", `query=${RESOLVE}`, "-f", `id=${id}`], { cwd });
 }
 

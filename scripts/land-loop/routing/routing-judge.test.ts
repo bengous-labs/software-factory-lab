@@ -20,7 +20,9 @@ function asking(answer: Answer): { ask: Ask; questions: Question[] } {
 
 describe("routingOf", () => {
   test("the schema's answer reads into a Routing answer that carries the exact model that gave it", () => {
-    expect(routingOf({ land: "auto", review: "light", second_round: false, reason: "small" }, "claude-haiku-5-5")).toEqual({
+    expect(
+      routingOf({ land: "auto", review: "light", second_round: false, reason: "small" }, "claude-haiku-5-5"),
+    ).toEqual({
       land: "auto",
       review: "light",
       secondRound: false,
@@ -49,11 +51,22 @@ describe("routingJudge", () => {
     expect(questions).toHaveLength(1);
     expect(questions[0]).toEqual(expect.objectContaining({ model: ROUTING_JUDGE_MODEL, schema: SCHEMA, cwd: "/repo" }));
     expect(questions[0]?.prompt).toContain("+docs");
-    expect(routing).toEqual({ land: "auto", review: "none", secondRound: false, reason: "docs", model: "claude-haiku-5-5" });
+    expect(routing).toEqual({
+      land: "auto",
+      review: "none",
+      secondRound: false,
+      reason: "docs",
+      model: "claude-haiku-5-5",
+    });
   });
 
   test("a failed call answers the safe side, with the error as its reason, named after the model that ran", async () => {
-    const { ask } = asking({ kind: "failed", error: "error_during_execution: overloaded", costUsd: 0.001, model: "claude-haiku-5-5" });
+    const { ask } = asking({
+      kind: "failed",
+      error: "error_during_execution: overloaded",
+      costUsd: 0.001,
+      model: "claude-haiku-5-5",
+    });
     const routing = await routingJudge(ask, "/repo", "s", "p", true);
 
     expect(routing).toEqual(expect.objectContaining({ ...SAFE, model: "claude-haiku-5-5" }));
@@ -63,11 +76,18 @@ describe("routingJudge", () => {
   test("a call with no result is named after the model asked, never the Routing rules", async () => {
     const { ask } = asking({ kind: "failed", error: "timed out after 180000 ms", costUsd: null, model: null });
 
-    expect(await routingJudge(ask, "/repo", "s", "p", false)).toEqual(expect.objectContaining({ ...SAFE, model: ROUTING_JUDGE_MODEL }));
+    expect(await routingJudge(ask, "/repo", "s", "p", false)).toEqual(
+      expect.objectContaining({ ...SAFE, model: ROUTING_JUDGE_MODEL }),
+    );
   });
 
   test("an answer that does not read answers the safe side", async () => {
-    const { ask } = asking({ kind: "answered", structured: { land: "soon" }, costUsd: 0.003, model: "claude-haiku-5-5" });
+    const { ask } = asking({
+      kind: "answered",
+      structured: { land: "soon" },
+      costUsd: 0.003,
+      model: "claude-haiku-5-5",
+    });
 
     expect(await routingJudge(ask, "/repo", "s", "p", false)).toEqual(expect.objectContaining(SAFE));
   });

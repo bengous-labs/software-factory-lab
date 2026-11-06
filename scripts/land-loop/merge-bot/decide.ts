@@ -58,10 +58,17 @@ export interface RoutingAnswer {
 export const PRINCIPAL_JUDGE_TRIES = 2;
 
 /** The record after one Principal judge run on `patch`: its verdict, or one more failure when it gave none. */
-export function afterPrincipalJudge(record: StateRecord, patch: string, verdict: PrincipalJudgeVerdict | null): StateRecord {
+export function afterPrincipalJudge(
+  record: StateRecord,
+  patch: string,
+  verdict: PrincipalJudgeVerdict | null,
+): StateRecord {
   if (verdict !== null) return { ...record, fable: { ...(record.fable ?? {}), [patch]: verdict } };
 
-  return { ...record, fableFailures: { ...(record.fableFailures ?? {}), [patch]: (record.fableFailures?.[patch] ?? 0) + 1 } };
+  return {
+    ...record,
+    fableFailures: { ...(record.fableFailures ?? {}), [patch]: (record.fableFailures?.[patch] ?? 0) + 1 },
+  };
 }
 
 export interface PrincipalJudgeVerdict {
@@ -111,21 +118,32 @@ export type StoredRecord = Omit<StateRecord, "triage"> & {
 
 /** The record a comment stores, with each Land route read back from its stored value. */
 export function recordOfStored(stored: StoredRecord): StateRecord {
-  const triage = Object.entries(stored.triage).map(([patch, routing]) => [patch, { ...routing, land: landRouteOf(routing.land) }] as const);
+  const triage = Object.entries(stored.triage).map(
+    ([patch, routing]) => [patch, { ...routing, land: landRouteOf(routing.land) }] as const,
+  );
 
   return { ...stored, triage: Object.fromEntries(triage) };
 }
 
 /** The record its comment's JSON holds, each field it lacks read as in a record with no review yet. */
 export function recordOfJson(json: string): StateRecord {
-  const noReview: StoredRecord = { reviewedPatch: null, reviewedHead: null, reviewRounds: 0, triage: {}, landOkPatch: null, dequeued: null };
+  const noReview: StoredRecord = {
+    reviewedPatch: null,
+    reviewedHead: null,
+    reviewRounds: 0,
+    triage: {},
+    landOkPatch: null,
+    dequeued: null,
+  };
 
   return recordOfStored({ ...noReview, ...(JSON.parse(json) as Partial<StoredRecord>) });
 }
 
 /** The record as its comment stores it, each Land route in its stored value. */
 export function storedOfRecord(record: StateRecord): StoredRecord {
-  const triage = Object.entries(record.triage).map(([patch, routing]) => [patch, { ...routing, land: storedLandRouteOf(routing.land) }] as const);
+  const triage = Object.entries(record.triage).map(
+    ([patch, routing]) => [patch, { ...routing, land: storedLandRouteOf(routing.land) }] as const,
+  );
 
   return { ...record, triage: Object.fromEntries(triage) };
 }
@@ -195,8 +213,7 @@ export type Step =
   | { readonly kind: "auto-merge" };
 
 export type Decision =
-  | { readonly kind: "ignore"; readonly reason: string }
-  | { readonly kind: "steps"; readonly steps: readonly Step[] };
+  { readonly kind: "ignore"; readonly reason: string } | { readonly kind: "steps"; readonly steps: readonly Step[] };
 
 /**
  * Labels only rise: the higher of what is on the PR and what the Routing answer says. The `land:*` and
@@ -237,7 +254,8 @@ export function landApprovalOf(snapshot: Snapshot, record: StateRecord): { next:
 export function decide(snapshot: Snapshot): Decision {
   const { record } = snapshot;
 
-  if (snapshot.state !== "OPEN") return { kind: "ignore", reason: `#${snapshot.number} is ${snapshot.state.toLowerCase()}` };
+  if (snapshot.state !== "OPEN")
+    return { kind: "ignore", reason: `#${snapshot.number} is ${snapshot.state.toLowerCase()}` };
 
   if (!snapshot.sameRepository || !snapshot.openedByOwner) {
     return { kind: "ignore", reason: `#${snapshot.number} comes from outside the Owner's own branches` };
@@ -307,14 +325,20 @@ export function decide(snapshot: Snapshot): Decision {
   }
 
   if (snapshot.openImportant > 0) {
-    steps.push({ kind: "review-check", check: { kind: "failure", summary: `${snapshot.openImportant} Important finding(s) open.` } });
+    steps.push({
+      kind: "review-check",
+      check: { kind: "failure", summary: `${snapshot.openImportant} Important finding(s) open.` },
+    });
 
     return finish(pending("Not landable: Important findings are open."));
   }
 
   steps.push({
     kind: "review-check",
-    check: { kind: "success", summary: labels.depth === "none" ? "review:none, nothing to read." : "No Important finding open." },
+    check: {
+      kind: "success",
+      summary: labels.depth === "none" ? "review:none, nothing to read." : "No Important finding open.",
+    },
   });
 
   let route: LandRoute = thirdRoundNeeded ? "owner" : labels.route;
@@ -339,7 +363,13 @@ export function decide(snapshot: Snapshot): Decision {
   if (snapshot.devRed) return finish(pending("dev is red: landing is on hold."));
 
   if (route === "auto" || landApproved) {
-    const gate = finish({ kind: "success", summary: route === "auto" ? "Landable, land:auto." : `Landable, with the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).` });
+    const gate = finish({
+      kind: "success",
+      summary:
+        route === "auto"
+          ? "Landable, land:auto."
+          : `Landable, with the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).`,
+    });
 
     if (gate.kind === "steps") return { kind: "steps", steps: [...gate.steps, { kind: "auto-merge" }] };
   }

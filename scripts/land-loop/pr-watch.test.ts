@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { AUTHOR_MARK } from "./thread.ts";
 import { END_KEY, endOf, type PrState, readingOf, wakesOf } from "./pr-watch.ts";
+import { AUTHOR_MARK } from "./thread.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
@@ -26,12 +26,44 @@ describe("wakesOf", () => {
 
   test("an open Important finding prints as a Finding and a human thread as a Comment, with its thread id; a resolved one, a Nit or a Pre-existing prints nothing", () => {
     const threads = [
-      { id: "T1", resolved: false, path: "app/src/cli.ts", line: 12, author: "bengous-labs-agents", body: "**Important**: off\n\n<!-- lab-finding severity=important -->", replies: [] },
+      {
+        id: "T1",
+        resolved: false,
+        path: "app/src/cli.ts",
+        line: 12,
+        author: "bengous-labs-agents",
+        body: "**Important**: off\n\n<!-- lab-finding severity=important -->",
+        replies: [],
+      },
       { id: "T2", resolved: true, path: "a.ts", line: 1, author: "x", body: "old", replies: [] },
-      { id: "T3", resolved: false, path: "a.ts", line: 2, author: "bengous-labs-agents", body: "**Nit**: n <!-- lab-finding severity=nit -->", replies: [] },
-      { id: "T4", resolved: false, path: "a.ts", line: 3, author: "bengous-labs-agents", body: "p <!-- lab-finding severity=pre_existing -->", replies: [] },
+      {
+        id: "T3",
+        resolved: false,
+        path: "a.ts",
+        line: 2,
+        author: "bengous-labs-agents",
+        body: "**Nit**: n <!-- lab-finding severity=nit -->",
+        replies: [],
+      },
+      {
+        id: "T4",
+        resolved: false,
+        path: "a.ts",
+        line: 3,
+        author: "bengous-labs-agents",
+        body: "p <!-- lab-finding severity=pre_existing -->",
+        replies: [],
+      },
       { id: "T5", resolved: false, path: "a.ts", line: 4, author: "bengous", body: "why this name?", replies: [] },
-      { id: "T6", resolved: false, path: "a.ts", line: 5, author: "bengous", body: "quoting <!-- lab-finding severity=nit -->", replies: [] },
+      {
+        id: "T6",
+        resolved: false,
+        path: "a.ts",
+        line: 5,
+        author: "bengous",
+        body: "quoting <!-- lab-finding severity=nit -->",
+        replies: [],
+      },
     ];
 
     const wakes = wakesOf(7, { ...OPEN, threads });
@@ -58,7 +90,15 @@ describe("wakesOf", () => {
           { id: "C4", author: "bengous-labs-agents", body: "re-checked" },
         ],
       },
-      { id: "T8", resolved: true, path: "a.ts", line: 1, author: "bengous-labs-agents", body: nit, replies: [{ id: "C3", author: "bengous", body: "old" }] },
+      {
+        id: "T8",
+        resolved: true,
+        path: "a.ts",
+        line: 1,
+        author: "bengous-labs-agents",
+        body: nit,
+        replies: [{ id: "C3", author: "bengous", body: "old" }],
+      },
     ];
 
     expect(wakesOf(7, { ...OPEN, threads })).toEqual([
@@ -119,7 +159,9 @@ describe("readingOf", () => {
     const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
 
     expect(readingOf(7, { ...OPEN, draft: true, checks }, new Set([`check:validate:${HEAD}`]))).toEqual({
-      wakes: [{ key: `draft:${HEAD}`, line: "PR #7 is a draft again at c0ffee1: fix or answer the findings, then stop." }],
+      wakes: [
+        { key: `draft:${HEAD}`, line: "PR #7 is a draft again at c0ffee1: fix or answer the findings, then stop." },
+      ],
       ends: false,
     });
   });

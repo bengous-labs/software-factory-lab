@@ -24,7 +24,17 @@ describe("answer", () => {
     await answer(run, "/repo", "PRRT_1", "Rejected: intended");
 
     expect(calls).toEqual([
-      ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", "id=PRRT_1", "-f", `body=Rejected: intended\n\n${AUTHOR_MARK}`],
+      [
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        `query=${REPLY}`,
+        "-f",
+        "id=PRRT_1",
+        "-f",
+        `body=Rejected: intended\n\n${AUTHOR_MARK}`,
+      ],
       ["gh", "api", "graphql", "-f", `query=${RESOLVE}`, "-f", "id=PRRT_1"],
     ]);
   });

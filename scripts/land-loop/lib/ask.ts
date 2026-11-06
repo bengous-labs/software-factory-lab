@@ -4,7 +4,13 @@
  * `PreToolUse` hook refuses by code every tool call but the one that returns the schema's answer.
  */
 
-import { type HookCallback, type Options, query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  type HookCallback,
+  type Options,
+  query,
+  type SDKMessage,
+  type SDKResultMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 
 export interface Question {
   readonly model: string;
@@ -65,7 +71,8 @@ export function modelOf(modelUsage: Readonly<Record<string, { readonly costUSD: 
 
 /** The answer a call's result message carries; `thrown` is what the call threw, if it threw. */
 export function answerOf(result: SDKResultMessage | undefined, thrown: string | null): Answer {
-  if (result === undefined) return { kind: "failed", error: thrown ?? "the call ended without a result", costUsd: null, model: null };
+  if (result === undefined)
+    return { kind: "failed", error: thrown ?? "the call ended without a result", costUsd: null, model: null };
 
   const costUsd = result.total_cost_usd;
   const model = modelOf(result.modelUsage);

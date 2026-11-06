@@ -3,8 +3,8 @@
  * posts from it. The Judge runs with no tool at all; it reads only what the prompt carries.
  */
 
-import type { ReviewDepth } from "../merge-bot/decide.ts";
 import type { Ask } from "../lib/ask.ts";
+import type { ReviewDepth } from "../merge-bot/decide.ts";
 
 export type Severity = "important" | "nit" | "pre_existing";
 
@@ -60,7 +60,9 @@ export interface ReviewThread {
   readonly isResolved: boolean;
   readonly path: string;
   readonly line: number | null;
-  readonly comments: { readonly nodes: readonly { readonly author: { readonly login: string } | null; readonly body: string }[] };
+  readonly comments: {
+    readonly nodes: readonly { readonly author: { readonly login: string } | null; readonly body: string }[];
+  };
 }
 
 /** The Stop hook has the Author answer a fix with `Fixed in <sha>: <what changed>`; any other answer gives a reason. */
@@ -76,9 +78,16 @@ export function rejectedOf(appLogin: string, threads: readonly ReviewThread[]): 
     const answers = replies.filter((reply) => reply.author?.login !== appLogin);
     const last = answers.at(-1);
 
-    if (!thread.isResolved || finding?.author?.login !== appLogin || last === undefined || FIX_REPLY.test(last.body)) return [];
+    if (!thread.isResolved || finding?.author?.login !== appLogin || last === undefined || FIX_REPLY.test(last.body))
+      return [];
 
-    return [{ where: `${thread.path}:${thread.line ?? "?"}`, finding: finding.body.split("\n")[0] ?? "", reply: answers.map((reply) => reply.body).join(" / ") }];
+    return [
+      {
+        where: `${thread.path}:${thread.line ?? "?"}`,
+        finding: finding.body.split("\n")[0] ?? "",
+        reply: answers.map((reply) => reply.body).join(" / "),
+      },
+    ];
   });
 }
 
@@ -107,11 +116,14 @@ export function promptOf(guide: string, diff: string, reviewRound: 1 | 2, reject
 
 /** The findings in the schema's answer, Nits capped; null when it does not read. */
 export function findingsOf(structured: unknown): readonly Finding[] | null {
-  const raw = (structured as {
-    findings?: { file: string; line: number | null; severity: Severity; summary: string; failure_scenario: string }[];
-  } | null)?.findings;
+  const raw = (
+    structured as {
+      findings?: { file: string; line: number | null; severity: Severity; summary: string; failure_scenario: string }[];
+    } | null
+  )?.findings;
 
-  if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null)) return null;
+  if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null))
+    return null;
 
   const findings = raw.map((finding) => ({
     file: finding.file,

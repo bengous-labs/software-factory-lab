@@ -4,8 +4,8 @@
  * schema, answers the `owner` route and review:deep: the safe side.
  */
 
-import type { RoutingAnswer } from "../merge-bot/decide.ts";
 import type { Ask } from "../lib/ask.ts";
+import type { RoutingAnswer } from "../merge-bot/decide.ts";
 
 export const ROUTING_JUDGE_MODEL = "haiku";
 
@@ -56,8 +56,20 @@ export function routingOf(structured: unknown, model: string | null): RoutingAns
   return { land, review, secondRound: secondRound === true, reason: typeof reason === "string" ? reason : "", model };
 }
 
-export async function routingJudge(ask: Ask, cwd: string, stat: string, diff: string, patchDelta: boolean): Promise<RoutingAnswer> {
-  const answer = await ask({ model: ROUTING_JUDGE_MODEL, prompt: promptOf(stat, diff, patchDelta), schema: SCHEMA, cwd, timeoutMs: 180_000 });
+export async function routingJudge(
+  ask: Ask,
+  cwd: string,
+  stat: string,
+  diff: string,
+  patchDelta: boolean,
+): Promise<RoutingAnswer> {
+  const answer = await ask({
+    model: ROUTING_JUDGE_MODEL,
+    prompt: promptOf(stat, diff, patchDelta),
+    schema: SCHEMA,
+    cwd,
+    timeoutMs: 180_000,
+  });
   const routing = answer.kind === "answered" ? routingOf(answer.structured, answer.model) : null;
 
   return (

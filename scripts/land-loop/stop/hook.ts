@@ -13,7 +13,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { checked, run as runCli, type Run } from "../lib/run.ts";
+import { checked, type Run, run as runCli } from "../lib/run.ts";
 import {
   type Action,
   admit,
@@ -79,15 +79,15 @@ function textOf(content: unknown): string {
   if (!Array.isArray(content)) return "";
 
   return content
-    .map((block: unknown) =>
-      typeof block === "object" && block !== null && "text" in block ? String(block.text) : "",
-    )
+    .map((block: unknown) => (typeof block === "object" && block !== null && "text" in block ? String(block.text) : ""))
     .join("");
 }
 
 /** Whether a user turn of the transcript opens with the fork marker. */
 export function hasForkMarker(lines: readonly TranscriptLine[]): boolean {
-  return lines.some((line) => line.type === "user" && textOf(line.message?.content).trimStart().startsWith(FORK_MARKER));
+  return lines.some(
+    (line) => line.type === "user" && textOf(line.message?.content).trimStart().startsWith(FORK_MARKER),
+  );
 }
 
 /** The model of the last assistant message: the Stop input does not carry it. */
@@ -120,7 +120,18 @@ interface ForkResult {
 async function askFork(deps: Deps, input: StopInput, model: string | null, prompt: string): Promise<ForkResult> {
   const started = deps.now();
   // No tool: a fork that re-armed the session's PR watch waited on it until it was killed (#38, #39).
-  const argv = ["claude", "-p", "--resume", input.session_id, "--fork-session", "--tools", "", "--strict-mcp-config", "--output-format", "json"];
+  const argv = [
+    "claude",
+    "-p",
+    "--resume",
+    input.session_id,
+    "--fork-session",
+    "--tools",
+    "",
+    "--strict-mcp-config",
+    "--output-format",
+    "json",
+  ];
   const ran = await deps.run([...argv, ...(model === null ? [] : ["--model", model]), prompt], {
     cwd: input.cwd,
     env: { [FORK_FLAG]: "1" },
@@ -213,7 +224,15 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   const early: Pick<Snapshot, "forkFlag" | "forkMarker" | "branch"> = { forkFlag, forkMarker, branch };
 
   if (forkFlag || forkMarker || branch === null || IGNORED_BRANCH.test(branch)) {
-    const admission = admit({ ...early, stopHookActive: false, head, treeClean: true, ahead: 1, pr: null, armed: false });
+    const admission = admit({
+      ...early,
+      stopHookActive: false,
+      head,
+      treeClean: true,
+      ahead: 1,
+      pr: null,
+      armed: false,
+    });
     log({ step: "admit", ...admission });
 
     return { kind: "allow" };
@@ -255,7 +274,16 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   const model = modelOf(transcript);
   const doneJudge = await askFork(deps, input, model, DONE_QUESTION);
   const answer = answerOf(doneJudge.text);
-  log({ step: "done-judge", model, answer, ms: doneJudge.ms, costUsd: doneJudge.costUsd, cacheRead: doneJudge.cacheRead, code: doneJudge.code, text: doneJudge.text.slice(0, 300) });
+  log({
+    step: "done-judge",
+    model,
+    answer,
+    ms: doneJudge.ms,
+    costUsd: doneJudge.costUsd,
+    cacheRead: doneJudge.cacheRead,
+    code: doneJudge.code,
+    text: doneJudge.text.slice(0, 300),
+  });
 
   const failed = doneJudgeFailure(doneJudge.code, doneJudge.text, withArmed.stopHookActive);
 
@@ -265,7 +293,10 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
 
   if (action.kind === "none") return { kind: "allow" };
 
-  await checked(deps.run, ["git", "push", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`], { cwd, timeoutMs: 120_000 });
+  await checked(deps.run, ["git", "push", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`], {
+    cwd,
+    timeoutMs: 120_000,
+  });
 
   let number: number;
 
@@ -273,7 +304,13 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
     const bodyFork = await askFork(deps, input, model, BODY_REQUEST);
     const subject = await gitOut(deps, cwd, ["log", "-1", "--format=%s"]);
     const text = prTextOf(bodyFork.text) ?? { title: subject, body: "" };
-    log({ step: "body-fork", ms: bodyFork.ms, costUsd: bodyFork.costUsd, cacheRead: bodyFork.cacheRead, title: text.title });
+    log({
+      step: "body-fork",
+      ms: bodyFork.ms,
+      costUsd: bodyFork.costUsd,
+      cacheRead: bodyFork.cacheRead,
+      title: text.title,
+    });
 
     const url = await checked(
       deps.run,
@@ -298,7 +335,10 @@ if (import.meta.main) {
   const logFile = join(input.cwd, ".lab", "stop.log");
   mkdirSync(join(input.cwd, ".lab"), { recursive: true });
   const log = (record: object): void =>
-    appendFileSync(logFile, `${JSON.stringify({ at: new Date().toISOString(), session: input.session_id, ...record })}\n`);
+    appendFileSync(
+      logFile,
+      `${JSON.stringify({ at: new Date().toISOString(), session: input.session_id, ...record })}\n`,
+    );
 
   try {
     const outcome = await stop(input, { run: runCli, env: process.env, now: Date.now }, log);

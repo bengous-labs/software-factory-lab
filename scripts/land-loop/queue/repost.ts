@@ -55,16 +55,29 @@ if (import.meta.main) {
 
   if (pr === null) throw new Error(`${ref} names no PR`);
 
-  const head = JSON.parse(await checked(run, ["gh", "api", `repos/${repo}/pulls/${pr}`], { cwd })) as { head: { sha: string } };
+  const head = JSON.parse(await checked(run, ["gh", "api", `repos/${repo}/pulls/${pr}`], { cwd })) as {
+    head: { sha: string };
+  };
   const runs = JSON.parse(
     await checked(run, ["gh", "api", `repos/${repo}/commits/${head.head.sha}/check-runs?per_page=100`], { cwd }),
   ) as { check_runs: CheckRun[] };
 
   for (const name of CHECKS) {
     const green = greenOnHead(runs.check_runs, name, appSlug);
-    const summary = green ? `Green on #${pr}'s head ${head.head.sha.slice(0, 7)}.` : `Not green on #${pr}'s head ${head.head.sha.slice(0, 7)}.`;
-    const body = { name, head_sha: sha, status: "completed", conclusion: green ? "success" : "failure", output: { title: summary, summary } };
-    await checked(run, ["gh", "api", "-X", "POST", `repos/${repo}/check-runs`, "--input", "-"], { cwd, stdin: JSON.stringify(body) });
+    const summary = green
+      ? `Green on #${pr}'s head ${head.head.sha.slice(0, 7)}.`
+      : `Not green on #${pr}'s head ${head.head.sha.slice(0, 7)}.`;
+    const body = {
+      name,
+      head_sha: sha,
+      status: "completed",
+      conclusion: green ? "success" : "failure",
+      output: { title: summary, summary },
+    };
+    await checked(run, ["gh", "api", "-X", "POST", `repos/${repo}/check-runs`, "--input", "-"], {
+      cwd,
+      stdin: JSON.stringify(body),
+    });
     console.log(`repost: ${name} ${green ? "success" : "failure"} on ${sha.slice(0, 7)} for #${pr}`);
   }
 }

@@ -5,7 +5,16 @@ import { join } from "node:path";
 
 import type { Ran, Run, RunOptions } from "../lib/run.ts";
 import { FORK_MARKER } from "./decide.ts";
-import { DONE_QUESTION, doneJudgeFailure, FORK_FLAG, hasForkMarker, modelOf, prTextOf, stop, type StopInput } from "./hook.ts";
+import {
+  DONE_QUESTION,
+  doneJudgeFailure,
+  FORK_FLAG,
+  hasForkMarker,
+  modelOf,
+  prTextOf,
+  stop,
+  type StopInput,
+} from "./hook.ts";
 
 const HEAD = "d".repeat(40);
 
@@ -51,7 +60,10 @@ function input(root: string): StopInput {
     transcript,
     [
       JSON.stringify({ type: "user", message: { content: "add a clear command" } }),
-      JSON.stringify({ type: "assistant", message: { model: "claude-haiku-5-5", content: [{ type: "text", text: "done" }] } }),
+      JSON.stringify({
+        type: "assistant",
+        message: { model: "claude-haiku-5-5", content: [{ type: "text", text: "done" }] },
+      }),
     ].join("\n"),
   );
 
@@ -71,7 +83,11 @@ describe("stop", () => {
     expect(doneJudge?.options.env?.[FORK_FLAG]).toBe("1");
     expect(doneJudge?.argv[(doneJudge?.argv.indexOf("--tools") ?? -2) + 1]).toBe("");
     expect(doneJudge?.argv).toContain("--strict-mcp-config");
-    expect(calls.some((call) => call.argv.join(" ").startsWith("git push --force-with-lease -u origin HEAD:refs/heads/agent/x"))).toBe(true);
+    expect(
+      calls.some((call) =>
+        call.argv.join(" ").startsWith("git push --force-with-lease -u origin HEAD:refs/heads/agent/x"),
+      ),
+    ).toBe(true);
 
     const create = calls.find((call) => call.argv.join(" ").startsWith("gh pr create"));
 
@@ -101,7 +117,9 @@ describe("stop", () => {
 describe("transcript", () => {
   test("a user turn opening with the marker makes the session a fork; the marker elsewhere does not", () => {
     expect(hasForkMarker([{ type: "user", message: { content: `${FORK_MARKER} are you done?` } }])).toBe(true);
-    expect(hasForkMarker([{ type: "user", message: { content: [{ type: "text", text: ` ${FORK_MARKER} q` }] } }])).toBe(true);
+    expect(hasForkMarker([{ type: "user", message: { content: [{ type: "text", text: ` ${FORK_MARKER} q` }] } }])).toBe(
+      true,
+    );
     expect(hasForkMarker([{ type: "user", message: { content: `the spec names ${FORK_MARKER}` } }])).toBe(false);
     expect(hasForkMarker([{ type: "assistant", message: { content: `${FORK_MARKER} q` } }])).toBe(false);
   });

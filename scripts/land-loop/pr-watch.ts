@@ -15,7 +15,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { checked, run, type Run } from "./lib/run.ts";
+import { checked, type Run, run } from "./lib/run.ts";
 import { severityOfBody } from "./review/code-review.ts";
 import { AUTHOR_MARK } from "./thread.ts";
 
@@ -95,16 +95,29 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
 
     if (severity !== "nit" && severity !== "pre_existing") {
       const kind = severity === "important" ? "Finding" : "Comment";
-      wakes.push({ key: `thread:${thread.id}`, line: `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}` });
+      wakes.push({
+        key: `thread:${thread.id}`,
+        line: `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}`,
+      });
     }
 
-    for (const reply of thread.replies.filter((found) => found.author !== APP_LOGIN && !found.body.includes(AUTHOR_MARK))) {
-      wakes.push({ key: `comment:${reply.id}`, line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}` });
+    for (const reply of thread.replies.filter(
+      (found) => found.author !== APP_LOGIN && !found.body.includes(AUTHOR_MARK),
+    )) {
+      wakes.push({
+        key: `comment:${reply.id}`,
+        line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}`,
+      });
     }
   }
 
-  for (const comment of state.comments.filter((found) => found.author !== APP_LOGIN && !found.body.includes(AUTHOR_MARK))) {
-    wakes.push({ key: `comment:${comment.id}`, line: `Comment on PR #${pr} by ${comment.author}: ${flat(comment.body)}` });
+  for (const comment of state.comments.filter(
+    (found) => found.author !== APP_LOGIN && !found.body.includes(AUTHOR_MARK),
+  )) {
+    wakes.push({
+      key: `comment:${comment.id}`,
+      line: `Comment on PR #${pr} by ${comment.author}: ${flat(comment.body)}`,
+    });
   }
 
   if (state.draft) {
@@ -121,7 +134,11 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
  * What one reading prints, each line `seen` does not hold yet, and whether the PR watch ends. A landed
  * or closed PR ends it at once, even for a PR watch armed again after its end line was printed.
  */
-export function readingOf(pr: number, state: PrState, seen: ReadonlySet<string>): { readonly wakes: readonly Wake[]; readonly ends: boolean } {
+export function readingOf(
+  pr: number,
+  state: PrState,
+  seen: ReadonlySet<string>,
+): { readonly wakes: readonly Wake[]; readonly ends: boolean } {
   const end = endOf(pr, state);
   const wakes = end === null ? wakesOf(pr, state) : [{ key: END_KEY, line: end }];
 
@@ -134,11 +151,20 @@ async function read(runner: Run, pr: number): Promise<PrState> {
     await checked(runner, ["gh", "pr", "view", String(pr), "--json", "state,isDraft,headRefOid"], { cwd }),
   ) as { state: PrState["state"]; isDraft: boolean; headRefOid: string };
   const checks = await runner(["gh", "pr", "checks", String(pr), "--json", "name,bucket,link"], { cwd });
-  const repo = (await checked(runner, ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], { cwd })).trim();
+  const repo = (
+    await checked(runner, ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], { cwd })
+  ).trim();
   const [owner, name] = repo.split("/");
   const conversation = await checked(
     runner,
-    ["gh", "api", "--paginate", `repos/${repo}/issues/${pr}/comments?per_page=100`, "--jq", ".[] | {id: (.id | tostring), author: .user.login, body}"],
+    [
+      "gh",
+      "api",
+      "--paginate",
+      `repos/${repo}/issues/${pr}/comments?per_page=100`,
+      "--jq",
+      ".[] | {id: (.id | tostring), author: .user.login, body}",
+    ],
     { cwd },
   );
   const threads = JSON.parse(
@@ -184,7 +210,9 @@ async function read(runner: Run, pr: number): Promise<PrState> {
       line: node.line,
       author: node.comments.nodes[0]?.author?.login ?? "unknown",
       body: node.comments.nodes[0]?.body ?? "",
-      replies: node.comments.nodes.slice(1).map((comment) => ({ id: comment.id, author: comment.author?.login ?? "unknown", body: comment.body })),
+      replies: node.comments.nodes
+        .slice(1)
+        .map((comment) => ({ id: comment.id, author: comment.author?.login ?? "unknown", body: comment.body })),
     })),
     comments: conversation
       .split("\n")

@@ -4,7 +4,9 @@ import { routingRulesOf } from "./routing-rules.ts";
 
 describe("routingRulesOf", () => {
   test("app code and docs under the cap are the model's to judge", () => {
-    expect(routingRulesOf({ paths: ["app/src/commands/add.ts", "docs/usage.md"], lines: 40, messages: ["feat: x"] })).toBeNull();
+    expect(
+      routingRulesOf({ paths: ["app/src/commands/add.ts", "docs/usage.md"], lines: 40, messages: ["feat: x"] }),
+    ).toBeNull();
   });
 
   test("every Routing rule hit answers the owner route and review:deep, with its reason", () => {
@@ -32,13 +34,21 @@ describe("routingRulesOf", () => {
 
 describe("changes to the Land loop's own code", () => {
   test("a change whose only risky paths are scripts/land-loop goes to the owner, with a deep review and no Fable", () => {
-    const routing = routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts", "app/src/cli.ts"], lines: 30, messages: ["fix: x"] });
+    const routing = routingRulesOf({
+      paths: ["scripts/land-loop/pr-watch.ts", "app/src/cli.ts"],
+      lines: 30,
+      messages: ["fix: x"],
+    });
 
     expect(routing).toMatchObject({ land: "owner", review: "deep", needsFable: false });
     expect(routing?.reason).toContain("risky path: scripts/land-loop/pr-watch.ts");
   });
 
   test("a change touching only scripts/land-loop goes to the owner", () => {
-    expect(routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts"], lines: 3, messages: [] })).toMatchObject({ land: "owner", review: "deep", needsFable: false });
+    expect(routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts"], lines: 3, messages: [] })).toMatchObject({
+      land: "owner",
+      review: "deep",
+      needsFable: false,
+    });
   });
 });

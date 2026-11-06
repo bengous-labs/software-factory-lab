@@ -19,8 +19,14 @@ function asking(answer: Answer): { ask: Ask; questions: Question[] } {
 describe("verdictOf", () => {
   test("an explicit ok true or false is a verdict; a missing or non-boolean ok is none", () => {
     const cases: [unknown, { ok: boolean; reason: string } | null][] = [
-      [{ ok: true, reason: "fine" }, { ok: true, reason: "fine" }],
-      [{ ok: false, reason: "bypass" }, { ok: false, reason: "bypass" }],
+      [
+        { ok: true, reason: "fine" },
+        { ok: true, reason: "fine" },
+      ],
+      [
+        { ok: false, reason: "bypass" },
+        { ok: false, reason: "bypass" },
+      ],
       [{ ok: false }, { ok: false, reason: "" }],
       [{ reason: "?" }, null],
       [{ ok: "yes", reason: "?" }, null],
@@ -34,16 +40,33 @@ describe("verdictOf", () => {
 
 describe("principalJudge", () => {
   test("asks the Principal judge's model with the schema, and reads its verdict, model and cost", async () => {
-    const { ask, questions } = asking({ kind: "answered", structured: { ok: true, reason: "fine" }, costUsd: 0.2, model: "claude-fable-5-1" });
+    const { ask, questions } = asking({
+      kind: "answered",
+      structured: { ok: true, reason: "fine" },
+      costUsd: 0.2,
+      model: "claude-fable-5-1",
+    });
     const result = await principalJudge(ask, "/repo", "prompt");
 
-    expect(questions).toEqual([{ model: PRINCIPAL_JUDGE_MODEL, prompt: "prompt", schema: SCHEMA, cwd: "/repo", timeoutMs: 900_000 }]);
-    expect(result).toEqual({ verdict: { ok: true, reason: "fine" }, failure: null, model: "claude-fable-5-1", costUsd: 0.2 });
+    expect(questions).toEqual([
+      { model: PRINCIPAL_JUDGE_MODEL, prompt: "prompt", schema: SCHEMA, cwd: "/repo", timeoutMs: 900_000 },
+    ]);
+    expect(result).toEqual({
+      verdict: { ok: true, reason: "fine" },
+      failure: null,
+      model: "claude-fable-5-1",
+      costUsd: 0.2,
+    });
   });
 
   test("a failed call or an answer outside the schema gives no verdict, with the reason", async () => {
     const failed = asking({ kind: "failed", error: "timed out after 900000 ms", costUsd: null, model: null }).ask;
-    const offSchema = asking({ kind: "answered", structured: { verdict: "ok I guess" }, costUsd: 0.1, model: "claude-fable-5-1" }).ask;
+    const offSchema = asking({
+      kind: "answered",
+      structured: { verdict: "ok I guess" },
+      costUsd: 0.1,
+      model: "claude-fable-5-1",
+    }).ask;
 
     expect(await principalJudge(failed, "/repo", "prompt")).toEqual({
       verdict: null,
