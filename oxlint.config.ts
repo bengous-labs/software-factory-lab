@@ -37,6 +37,9 @@ export default defineConfig({
     // which no annotation here can make readonly.
     "typescript/prefer-readonly-parameter-types": "off",
 
+    // A schema and the type it decodes share one name, which this rule reads as a redeclaration; the
+    // typecheck already refuses a real one.
+    "eslint/no-redeclare": "off",
     // eslint/require-await stays on: this one also flags an async generator that only yields, which a test
     // stream needs to be an AsyncIterable.
     "typescript/require-await": "off",
