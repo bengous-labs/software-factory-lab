@@ -3,3 +3,4 @@ todo.json
 .lab/
 .claude/worktrees/
 .stryker-tmp/
+coverage/
