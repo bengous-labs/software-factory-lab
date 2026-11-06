@@ -1,11 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { $ } from "bun";
 
-import { bashCallOf, commitDirOf, commitDirsOf, refusalFor, simpleCommandsOf } from "./refuse-commit-on-dev.ts";
+import {
+  bashCallOf,
+  cdTargetOf,
+  commitDirOf,
+  commitDirsOf,
+  refusalFor,
+  simpleCommandsOf,
+} from "./refuse-commit-on-dev.ts";
 
 const SCRIPT = join(import.meta.dir, "refuse-commit-on-dev.ts");
 
@@ -61,6 +68,19 @@ describe("commitDirsOf", () => {
     expect(commitDirsOf("git add . && git commit -m x; git -C ../b commit", "/w/a")).toEqual(["/w/a", "/w/b"]);
     expect(commitDirsOf('echo "git commit"', "/w/a")).toEqual([]);
   });
+
+  test("follows each cd before a commit", () => {
+    expect(commitDirsOf("cd ../b && git commit -m x", "/w/a")).toEqual(["/w/b"]);
+    expect(commitDirsOf("cd /w/c && cd sub && git -C .. commit", "/w/a")).toEqual(["/w/c"]);
+    expect(commitDirsOf("cd ~/repo && git commit", "/w/a")).toEqual([join(homedir(), "repo")]);
+    expect(commitDirsOf("cd && git commit", "/w/a")).toEqual([homedir()]);
+  });
+});
+
+describe("cdTargetOf", () => {
+  test("any other command keeps the directory", () => {
+    expect(cdTargetOf(["git", "status"], "/w/a")).toBe("/w/a");
+  });
 });
 
 describe("refusalFor", () => {
@@ -104,10 +124,12 @@ describe("the hook", () => {
     });
   });
 
-  test("denies a commit that -C sends to a checkout on dev", async () => {
-    const ran = await runHook(`git -C ${repo} commit -m work`, tmpdir());
+  test("denies a commit that -C or cd sends to a checkout on dev", async () => {
+    for (const command of [`git -C ${repo} commit -m work`, `cd ${repo} && git commit -m work`]) {
+      const ran = await runHook(command, tmpdir());
 
-    expect(JSON.parse(ran.stdout.toString())).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+      expect(JSON.parse(ran.stdout.toString())).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+    }
   });
 
   test("allows a commit on a feature branch, and any other command on dev", async () => {

@@ -9,6 +9,7 @@
  * Reads the PreToolUse input on stdin; prints the deny decision on stdout.
  */
 
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import { $ } from "bun";
@@ -102,9 +103,33 @@ export function commitDirOf(words: readonly string[], cwd: string): string | nul
   return null;
 }
 
-/** The directories each `git commit` in the Bash `command` runs in, starting from `cwd`. */
+/** The directory a `cd` in `words` moves to from `dir`, or `dir` when `words` is no `cd`. */
+export function cdTargetOf(words: readonly string[], dir: string): string {
+  if (words[0] !== "cd") {
+    return dir;
+  }
+
+  const target = words[1] ?? "~";
+
+  return resolve(dir, target === "~" || target.startsWith("~/") ? homedir() + target.slice(1) : target);
+}
+
+/** The directories each `git commit` in the Bash `command` runs in, starting from `cwd` and following each `cd`. */
 export function commitDirsOf(command: string, cwd: string): readonly string[] {
-  return simpleCommandsOf(command).flatMap((words) => commitDirOf(words, cwd) ?? []);
+  const dirs: string[] = [];
+  let dir = cwd;
+
+  for (const words of simpleCommandsOf(command)) {
+    dir = cdTargetOf(words, dir);
+
+    const commitDir = commitDirOf(words, dir);
+
+    if (commitDir !== null) {
+      dirs.push(commitDir);
+    }
+  }
+
+  return dirs;
 }
 
 /** Why a commit on `branch` is refused, or null when it may go ahead; `branch` is null on a detached HEAD. */
