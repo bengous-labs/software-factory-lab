@@ -33,22 +33,22 @@ export interface RoutingInput {
   readonly messages: readonly string[];
 }
 
-const human = (reason: string): Routing => ({ land: "human", review: "deep", secondRound: true, reason, model: null, needsFable: false });
+const toOwner = (reason: string): Routing => ({ land: "owner", review: "deep", secondRound: true, reason, model: null, needsFable: false });
 
 /** The Routing rules' answer, or null when the change is the model's to judge. */
 export function routingRulesOf({ paths, lines, messages }: RoutingInput): Routing | null {
-  if (paths.length === 0) return human("the change touches no file");
+  if (paths.length === 0) return toOwner("the change touches no file");
 
   const risky = paths.filter((path) => RISKY.some((glob) => glob.match(path)));
   const ownerOnly = risky.filter((path) => !LAND_LOOP.some((glob) => glob.match(path)));
 
-  if (ownerOnly.length > 0) return human(`touches a risky path: ${ownerOnly.slice(0, 3).join(", ")}`);
+  if (ownerOnly.length > 0) return toOwner(`touches a risky path: ${ownerOnly.slice(0, 3).join(", ")}`);
 
   const breaking = messages.find((message) => BREAKING.test(message));
 
-  if (breaking !== undefined) return human(`a breaking commit: ${breaking.split("\n")[0]}`);
+  if (breaking !== undefined) return toOwner(`a breaking commit: ${breaking.split("\n")[0]}`);
 
-  if (lines > LINE_CAP) return human(`${lines} lines changed, past the ${LINE_CAP}-line cap`);
+  if (lines > LINE_CAP) return toOwner(`${lines} lines changed, past the ${LINE_CAP}-line cap`);
 
   if (risky.length > 0) {
     return {

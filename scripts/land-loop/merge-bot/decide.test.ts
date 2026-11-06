@@ -9,10 +9,13 @@ import {
   openImportantOf,
   patchDeltaStart,
   PRINCIPAL_JUDGE_TRIES,
+  recordOfStored,
   risen,
   type Routing,
   type Snapshot,
   type Step,
+  type StoredRecord,
+  storedOfRecord,
 } from "./decide.ts";
 
 const P1 = "patch-1";
@@ -119,24 +122,24 @@ describe("decide", () => {
     });
 
     expect(steps.map((step) => step.kind)).not.toContain("code-review");
-    expect(steps).toContainEqual({ kind: "labels", land: "human", depth: "light" });
+    expect(steps).toContainEqual({ kind: "labels", route: "owner", depth: "light" });
     expect(steps.map((step) => step.kind)).toContain("needs-human");
     expect(steps.map((step) => step.kind)).not.toContain("auto-merge");
   });
 
   test("a landable land:human PR waits for the owner's Land approval, bound to its patch", () => {
-    const human = { ...READY, record: { ...READY.record, reviewedPatch: P1, triage: { [P1]: { ...LIGHT, land: "human" as const } } } };
+    const owner = { ...READY, record: { ...READY.record, reviewedPatch: P1, triage: { [P1]: { ...LIGHT, land: "owner" as const } } } };
 
-    expect(gate(human)).toBe("pending");
-    expect(gate({ ...human, labels: ["land-ok"], landApprovalByOwner: true })).toBe("success");
-    expect(kinds({ ...human, labels: ["land-ok"], landApprovalByOwner: true })).toContain("record");
+    expect(gate(owner)).toBe("pending");
+    expect(gate({ ...owner, labels: ["land-ok"], landApprovalByOwner: true })).toBe("success");
+    expect(kinds({ ...owner, labels: ["land-ok"], landApprovalByOwner: true })).toContain("record");
   });
 
   test("a Land approval label that someone else put, or one given for another patch, is removed", () => {
-    const human = { ...READY, labels: ["land-ok"], record: { ...READY.record, reviewedPatch: P1 } };
+    const owner = { ...READY, labels: ["land-ok"], record: { ...READY.record, reviewedPatch: P1 } };
 
-    expect(kinds({ ...human, landApprovalByOwner: false })).toContain("remove-land-approval");
-    expect(kinds({ ...human, landApprovalByOwner: true, record: { ...human.record, landOkPatch: "patch-0" } })).toContain(
+    expect(kinds({ ...owner, landApprovalByOwner: false })).toContain("remove-land-approval");
+    expect(kinds({ ...owner, landApprovalByOwner: true, record: { ...owner.record, landOkPatch: "patch-0" } })).toContain(
       "remove-land-approval",
     );
   });
@@ -173,8 +176,32 @@ describe("decide", () => {
 
 describe("risen", () => {
   test("labels only rise: a later Routing cannot lower land:human or review:deep", () => {
-    expect(risen(["land:human", "review:deep"], LIGHT)).toEqual({ land: "human", depth: "deep" });
-    expect(risen(["review:none"], LIGHT)).toEqual({ land: "auto", depth: "light" });
+    expect(risen(["land:human", "review:deep"], LIGHT)).toEqual({ route: "owner", depth: "deep" });
+    expect(risen(["review:none"], LIGHT)).toEqual({ route: "auto", depth: "light" });
+  });
+});
+
+describe("the stored record", () => {
+  test("a stored human Land route reads as owner and is stored again as human; every other field is kept", () => {
+    const stored: StoredRecord = {
+      ...EMPTY_RECORD,
+      reviewedPatch: P1,
+      rounds: 1,
+      triage: { [P1]: { ...LIGHT, land: "human" }, "patch-2": { ...LIGHT, land: "auto" } },
+      fableFailures: { [P1]: 1 },
+    };
+    const record = recordOfStored(stored);
+
+    expect(record.triage[P1]?.land).toBe("owner");
+    expect(record.triage["patch-2"]?.land).toBe("auto");
+    expect(record).toMatchObject({ reviewedPatch: P1, rounds: 1, fableFailures: { [P1]: 1 } });
+    expect(storedOfRecord(record)).toEqual(stored);
+  });
+
+  test("a stored Land route that is not auto reads as owner, the safe side", () => {
+    const stored = { ...EMPTY_RECORD, triage: { [P1]: { ...LIGHT, land: "later" } } } as unknown as StoredRecord;
+
+    expect(recordOfStored(stored).triage[P1]?.land).toBe("owner");
   });
 });
 
@@ -199,7 +226,7 @@ describe("patchDeltaStart", () => {
 });
 
 describe("Land approval across a patch change", () => {
-  test("a stale Land approval is removed and its patch cleared in the record, even when a routing ends the run", () => {
+  test("a stale Land approval is removed and its patch cleared in the record, even when a routing ends the decision", () => {
     const snapshot = {
       ...READY,
       labels: ["land-ok"],
@@ -264,7 +291,7 @@ describe("changes to the Land loop's own code and the Principal judge", () => {
 
     const exhausted = { ...landable, record: { ...landable.record, fableFailures: { [P1]: PRINCIPAL_JUDGE_TRIES } } };
 
-    expect(stepsOf(exhausted)).toContainEqual({ kind: "labels", land: "human", depth: "deep" });
+    expect(stepsOf(exhausted)).toContainEqual({ kind: "labels", route: "owner", depth: "deep" });
     expect(gate(exhausted)).toBe("pending");
     expect(kinds(exhausted)).not.toContain("auto-merge");
   });
@@ -285,17 +312,17 @@ describe("changes to the Land loop's own code and the Principal judge", () => {
   test("any other Principal judge verdict raises it to land:human, waiting for the owner", () => {
     const notOk = { ...landable, record: { ...landable.record, fable: { [P1]: { ok: false, reason: "gate bypass" } } } };
 
-    expect(stepsOf(notOk)).toContainEqual({ kind: "labels", land: "human", depth: "deep" });
+    expect(stepsOf(notOk)).toContainEqual({ kind: "labels", route: "owner", depth: "deep" });
     expect(gate(notOk)).toBe("pending");
     expect(kinds(notOk)).not.toContain("auto-merge");
   });
 
   test("a land:human change to the Land loop's own code still gets its Principal judge, then waits for the owner", () => {
-    const human = { ...landable, record: { ...landable.record, triage: { [P1]: { ...LAND_LOOP, land: "human" as const } } } };
+    const owner = { ...landable, record: { ...landable.record, triage: { [P1]: { ...LAND_LOOP, land: "owner" as const } } } };
 
-    expect(stepsOf(human)).toContainEqual({ kind: "principal-judge", patch: P1 });
+    expect(stepsOf(owner)).toContainEqual({ kind: "principal-judge", patch: P1 });
 
-    const judged = { ...human, record: { ...human.record, fable: { [P1]: { ok: true, reason: "fine" } } } };
+    const judged = { ...owner, record: { ...owner.record, fable: { [P1]: { ok: true, reason: "fine" } } } };
 
     expect(gate(judged)).toBe("pending");
     expect(kinds(judged)).not.toContain("auto-merge");
@@ -307,7 +334,7 @@ describe("changes to the Land loop's own code and the Principal judge", () => {
 });
 
 describe("afterPrincipalJudge", () => {
-  test("a run with no verdict adds one failure for its patch and sets no verdict; a verdict is kept and adds none", () => {
+  test("a Principal judge run with no verdict adds one failure for its patch and sets no verdict; a verdict is kept and adds none", () => {
     const once = afterPrincipalJudge(EMPTY_RECORD, P1, null);
     const twice = afterPrincipalJudge(once, P1, null);
 

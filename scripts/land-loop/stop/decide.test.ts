@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { admit, afterGates, answerOf, armReason, decide, type Snapshot } from "./decide.ts";
+import { admit, afterStopChecks, answerOf, armReason, decide, type Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -17,8 +17,8 @@ const SNAPSHOT: Snapshot = {
 };
 
 describe("admit", () => {
-  test("a clean branch with commits dev lacks runs the gates", () => {
-    expect(admit(SNAPSHOT)).toEqual({ kind: "gates" });
+  test("a clean branch with commits dev lacks runs the Stop checks", () => {
+    expect(admit(SNAPSHOT)).toEqual({ kind: "stop-checks" });
   });
 
   test("nothing is published from a fork, a detached HEAD, an ignored branch, a dirty tree, or no new commit", () => {
@@ -48,26 +48,26 @@ describe("admit", () => {
     expect(admit({ ...SNAPSHOT, pr, armed: true }).kind).toBe("none");
   });
 
-  test("a draft PR, or a ready one behind this head, runs the gates again", () => {
-    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({ kind: "gates" });
+  test("a draft PR, or a ready one behind this head, runs the Stop checks again", () => {
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({ kind: "stop-checks" });
     expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40) } })).toEqual({
-      kind: "gates",
+      kind: "stop-checks",
     });
   });
 });
 
-describe("afterGates", () => {
-  test("green gates ask the Done judge", () => {
-    expect(afterGates({ kind: "green" }, false)).toEqual({ kind: "ask-done-judge" });
+describe("afterStopChecks", () => {
+  test("green Stop checks ask the Done judge", () => {
+    expect(afterStopChecks({ kind: "green" }, false)).toEqual({ kind: "ask-done-judge" });
   });
 
-  test("red gates block once with their report, then let the session end", () => {
+  test("red Stop checks block once with their report, then let the session end", () => {
     const red = { kind: "red", report: "1 fail" } as const;
-    const first = afterGates(red, false);
+    const first = afterStopChecks(red, false);
 
     expect(first.kind).toBe("block");
     expect(first.kind === "block" && first.reason).toContain("1 fail");
-    expect(afterGates(red, true).kind).toBe("none");
+    expect(afterStopChecks(red, true).kind).toBe("none");
   });
 });
 

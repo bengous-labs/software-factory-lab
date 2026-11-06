@@ -2,9 +2,10 @@
 
 /**
  * The Stop hook of the Author's session. It reads the session, git and the branch's PR, decides with
- * `decide.ts`, and acts: runs the gates, runs the Done judge, which asks a fork of the session whether
- * the task is finished, then publishes: pushes the branch, opens or readies the PR, and tells the
- * Author to arm its PR watch. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's latency and cost.
+ * `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the session
+ * whether the task is finished, then publishes: pushes the branch, opens or readies the PR, and tells
+ * the Author to arm its PR watch. Every step is appended to `.lab/stop.log` as one JSON line, with the
+ * fork's latency and cost.
  *
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
@@ -16,15 +17,15 @@ import { checked, run as runCli, type Run } from "../lib/run.ts";
 import {
   type Action,
   admit,
-  afterGates,
+  afterStopChecks,
   answerOf,
   armReason,
   decide,
   FORK_MARKER,
-  type Gates,
   IGNORED_BRANCH,
   type PullRequest,
   type Snapshot,
+  type StopChecks,
 } from "./decide.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
@@ -33,7 +34,7 @@ const TRUNK = "dev";
 
 const FORK_TIMEOUT_MS = 180_000;
 
-const GATES_TIMEOUT_MS = 300_000;
+const STOP_CHECKS_TIMEOUT_MS = 300_000;
 
 export const DONE_QUESTION = `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, with no question pending for the Owner? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason.`;
 
@@ -163,12 +164,13 @@ async function prOf(deps: Deps, cwd: string, branch: string): Promise<PullReques
   return pr === undefined ? null : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid };
 }
 
-async function gates(deps: Deps, cwd: string, stateDir: string, head: string): Promise<Gates> {
+async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: string): Promise<StopChecks> {
+  // An on-disk name: existing state files carry it, so it stays.
   const record = join(stateDir, `gates-${head}`);
 
   if (existsSync(record)) return { kind: "green" };
 
-  const ran = await deps.run(["bun", "run", "check"], { cwd, timeoutMs: GATES_TIMEOUT_MS });
+  const ran = await deps.run(["bun", "run", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
 
   if (ran.code !== 0) return { kind: "red", report: `${ran.stdout}\n${ran.stderr}`.trim().slice(-3000) };
 
@@ -243,8 +245,8 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
     return { kind: "block", reason: armReason(admission.pr, `${prWatch} ${admission.pr}`, thread) };
   }
 
-  const next = afterGates(await gates(deps, cwd, stateDir, head), withArmed.stopHookActive);
-  log({ step: "gates", next: next.kind });
+  const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), withArmed.stopHookActive);
+  log({ step: "stop-checks", next: next.kind });
 
   if (next.kind === "none") return { kind: "allow" };
 

@@ -1,16 +1,28 @@
 /**
- * The Merge bot's decision, a pure function over a snapshot of one PR. Each run re-reads the
- * whole state, so an event that arrives twice, late or not at all changes nothing. It returns the
+ * The Merge bot's decision, a pure function over a snapshot of one PR. Each Merge bot run re-reads
+ * the whole state, so an event that arrives twice, late or not at all changes nothing. It returns the
  * steps to take in order; the adapter (`main.ts`) performs them and stops at the first that needs
- * a model's answer (`route`, `code-review`, `principal-judge`), then runs again with that answer in
- * the state record.
+ * a model's answer (`route`, `code-review`, `principal-judge`), then decides again with that answer
+ * in the state record.
  */
 
-export type Land = "auto" | "human";
+/** Who lands a change: `auto`, the Merge bot alone, or `owner`, with a Land approval. */
+export type LandRoute = "auto" | "owner";
+
+/**
+ * The Land route as the `land:*` labels and the state record store it. An external name: open PRs
+ * and existing records carry `human` for `owner`, so the stored value stays; anything but `auto`
+ * reads as `owner`, the safe side.
+ */
+export type StoredLandRoute = "auto" | "human";
+
+export const landRouteOf = (stored: string): LandRoute => (stored === "auto" ? "auto" : "owner");
+
+export const storedLandRouteOf = (route: LandRoute): StoredLandRoute => (route === "auto" ? "auto" : "human");
 
 export type ReviewDepth = "none" | "light" | "deep";
 
-const LAND_RANK: Record<Land, number> = { auto: 0, human: 1 };
+const LAND_ROUTE_RANK: Record<LandRoute, number> = { auto: 0, owner: 1 };
 
 const DEPTH_RANK: Record<ReviewDepth, number> = { none: 0, light: 1, deep: 2 };
 
@@ -25,10 +37,10 @@ export const LAND_GATE = "land-gate";
 
 /**
  * The Routing of one patch. Its keys are the stored record's format, an external name: existing
- * records must still read, so they stay as they are.
+ * records must still read, so they stay as they are. `land` holds the Land route.
  */
 export interface Routing {
-  readonly land: Land;
+  readonly land: LandRoute;
   readonly review: ReviewDepth;
   /** On a Patch delta after a fixed Important: whether the fix is risky enough for Review round 2. */
   readonly secondRound: boolean;
@@ -89,6 +101,25 @@ export const EMPTY_RECORD: StateRecord = {
   dequeued: null,
 };
 
+/** The state record as its comment stores it: each Routing's Land route in its stored value. */
+export type StoredRecord = Omit<StateRecord, "triage"> & {
+  readonly triage: Readonly<Record<string, Omit<Routing, "land"> & { readonly land: StoredLandRoute }>>;
+};
+
+/** The record a comment stores, with each Land route read back from its stored value. */
+export function recordOfStored(stored: StoredRecord): StateRecord {
+  const triage = Object.entries(stored.triage).map(([patch, routing]) => [patch, { ...routing, land: landRouteOf(routing.land) }] as const);
+
+  return { ...stored, triage: Object.fromEntries(triage) };
+}
+
+/** The record as its comment stores it, each Land route in its stored value. */
+export function storedOfRecord(record: StateRecord): StoredRecord {
+  const triage = Object.entries(record.triage).map(([patch, routing]) => [patch, { ...routing, land: storedLandRouteOf(routing.land) }] as const);
+
+  return { ...record, triage: Object.fromEntries(triage) };
+}
+
 export interface Snapshot {
   readonly number: number;
   readonly state: "OPEN" | "CLOSED" | "MERGED";
@@ -143,7 +174,7 @@ export type CheckState =
 
 export type Step =
   | { readonly kind: "route"; readonly patch: string; readonly patchDelta: boolean }
-  | { readonly kind: "labels"; readonly land: Land; readonly depth: ReviewDepth }
+  | { readonly kind: "labels"; readonly route: LandRoute; readonly depth: ReviewDepth }
   | { readonly kind: "code-review"; readonly depth: Exclude<ReviewDepth, "none">; readonly reviewRound: 1 | 2 }
   | { readonly kind: "review-check"; readonly check: CheckState }
   | { readonly kind: "land-gate"; readonly check: CheckState }
@@ -162,12 +193,12 @@ export type Decision =
  * `review:*` labels, read here and quoted in the check summaries below, are external names: open PRs
  * carry them, so the strings stay.
  */
-export function risen(labels: readonly string[], routing: Routing): { land: Land; depth: ReviewDepth } {
-  const onPrLand: Land = labels.includes("land:human") ? "human" : "auto";
+export function risen(labels: readonly string[], routing: Routing): { route: LandRoute; depth: ReviewDepth } {
+  const onPrRoute: LandRoute = labels.includes(`land:${storedLandRouteOf("owner")}`) ? "owner" : "auto";
   const onPrDepth = (["deep", "light", "none"] as const).find((depth) => labels.includes(`review:${depth}`));
 
   return {
-    land: LAND_RANK[onPrLand] > LAND_RANK[routing.land] ? onPrLand : routing.land,
+    route: LAND_ROUTE_RANK[onPrRoute] > LAND_ROUTE_RANK[routing.land] ? onPrRoute : routing.land,
     depth: onPrDepth !== undefined && DEPTH_RANK[onPrDepth] > DEPTH_RANK[routing.review] ? onPrDepth : routing.review,
   };
 }
@@ -207,7 +238,7 @@ export function decide(snapshot: Snapshot): Decision {
 
   if (removeLabel) steps.push({ kind: "remove-land-approval" });
 
-  // Written now: a routing or a Code review below ends this run before the Land gate is reached.
+  // Written now: a routing or a Code review below ends this decision before the Land gate is reached.
   if (next !== record) steps.push({ kind: "record", record: next });
 
   const landApproved = snapshot.landApprovalByOwner && next.landOkPatch === snapshot.patch;
@@ -257,7 +288,7 @@ export function decide(snapshot: Snapshot): Decision {
     }
 
     if (next.rounds >= 2 && routing.secondRound) {
-      steps.push({ kind: "labels", land: "human", depth: labels.depth });
+      steps.push({ kind: "labels", route: "owner", depth: labels.depth });
       steps.push({ kind: "needs-human", reason: "A third review round would be needed: the owner decides." });
     }
   }
@@ -273,7 +304,7 @@ export function decide(snapshot: Snapshot): Decision {
     check: { kind: "success", summary: labels.depth === "none" ? "review:none, nothing to read." : "No Important finding open." },
   });
 
-  let land = next.rounds >= 2 ? "human" : labels.land;
+  let route: LandRoute = next.rounds >= 2 ? "owner" : labels.route;
 
   if (routing.needsFable === true && next.rounds < 2) {
     const verdict = next.fable?.[snapshot.patch];
@@ -285,16 +316,16 @@ export function decide(snapshot: Snapshot): Decision {
     }
 
     // No verdict after PRINCIPAL_JUDGE_TRIES failed runs counts as NOT OK.
-    if (verdict?.ok !== true && land === "auto") {
-      steps.push({ kind: "labels", land: "human", depth: labels.depth });
-      land = "human";
+    if (verdict?.ok !== true && route === "auto") {
+      steps.push({ kind: "labels", route: "owner", depth: labels.depth });
+      route = "owner";
     }
   }
 
   if (snapshot.devRed) return finish(pending("dev is red: landing is on hold."));
 
-  if (land === "auto" || landApproved) {
-    const gate = finish({ kind: "success", summary: land === "auto" ? "Landable, land:auto." : `Landable, with the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).` });
+  if (route === "auto" || landApproved) {
+    const gate = finish({ kind: "success", summary: route === "auto" ? "Landable, land:auto." : `Landable, with the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).` });
 
     if (gate.kind === "steps") return { kind: "steps", steps: [...gate.steps, { kind: "auto-merge" }] };
   }

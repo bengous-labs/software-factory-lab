@@ -1,7 +1,7 @@
 /**
- * The Stop decision of the Author's session, as pure functions over what the hook read. `admit` settles
- * what git and the transcript alone settle; `afterGates` what the gates' result adds; `decide` what
- * the Done judge's answer adds. Each returns the next thing the hook does.
+ * The Stop decision of the Author's session, as pure functions over what the hook read. `admit`
+ * settles what git and the transcript alone settle; `afterStopChecks` what the Stop checks' result
+ * adds; `decide` what the Done judge's answer adds. Each returns the next thing the hook does.
  */
 
 /**
@@ -40,9 +40,9 @@ export interface Snapshot {
 export type Admission =
   | { readonly kind: "none"; readonly reason: string }
   | { readonly kind: "arm"; readonly pr: number }
-  | { readonly kind: "gates" };
+  | { readonly kind: "stop-checks" };
 
-export type Gates = { readonly kind: "green" } | { readonly kind: "red"; readonly report: string };
+export type StopChecks = { readonly kind: "green" } | { readonly kind: "red"; readonly report: string };
 
 export type Next =
   | { readonly kind: "none"; readonly reason: string }
@@ -77,18 +77,18 @@ export function admit(snapshot: Snapshot): Admission {
     return snapshot.armed ? none(`#${pr.number} is ready at ${snapshot.head} already`) : { kind: "arm", pr: pr.number };
   }
 
-  return { kind: "gates" };
+  return { kind: "stop-checks" };
 }
 
-/** Red gates block once, with their report; a second stop on the same failure lets the session end. */
-export function afterGates(gates: Gates, stopHookActive: boolean): Next {
-  if (gates.kind === "green") return { kind: "ask-done-judge" };
+/** Red Stop checks block once, with their report; a second stop on the same failure lets the session end. */
+export function afterStopChecks(stopChecks: StopChecks, stopHookActive: boolean): Next {
+  if (stopChecks.kind === "green") return { kind: "ask-done-judge" };
 
-  if (stopHookActive) return none("the gates are still red after a block: nothing is published");
+  if (stopHookActive) return none("the Stop checks are still red after a block: nothing is published");
 
   return {
     kind: "block",
-    reason: `The gates are red on this head, so nothing was published:\n\n${gates.report}\n\nFix them and commit, then stop.`,
+    reason: `The Stop checks are red on this head, so nothing was published:\n\n${stopChecks.report}\n\nFix them and commit, then stop.`,
   };
 }
 

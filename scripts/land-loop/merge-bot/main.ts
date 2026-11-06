@@ -2,8 +2,9 @@
 
 /**
  * The Merge bot's adapter, run by `.github/workflows/merge-bot.yml` from the default branch with the
- * App's token. For each PR the event names (every open PR on a sweep), it reads a snapshot, asks
- * `decide.ts`, performs the steps, and runs again after a model step, until no model step is left.
+ * App's token. One Merge bot run covers each PR the event names (every open PR on a Sweep): it reads
+ * a snapshot, asks `decide.ts`, performs the steps, and decides again after a model step, until no
+ * model step is left.
  *
  * Reads GITHUB_REPOSITORY, OWNER (the only GitHub login whose PRs are served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
  * RUN_HEAD_SHA, EJECTION_REASON; calls gh and git, and the models through the Agent SDK.
@@ -27,15 +28,19 @@ import {
   LAND_APPROVAL_LABEL,
   LAND_GATE,
   landApprovalCounts,
-  type Land,
+  type LandRoute,
   openImportantOf,
   patchDeltaStart,
   PRINCIPAL_JUDGE_TRIES,
+  recordOfStored,
   REVIEW_CHECK,
   type ReviewDepth,
   type Snapshot,
   type StateRecord,
   type Step,
+  storedLandRouteOf,
+  type StoredRecord,
+  storedOfRecord,
 } from "./decide.ts";
 
 /** The state record's marker. An external name: existing PR records carry it, so the string stays. */
@@ -46,7 +51,8 @@ const MERGE_BOT_STATE_PATTERN = new RegExp(`${MERGE_BOT_STATE_MARKER} (.*) -->`,
 /** The label that hands a PR to the Owner. An external name: open PRs carry it, so the string stays. */
 const NEEDS_OWNER_LABEL = "needs-human";
 
-const MAX_PASSES = 4;
+/** Decisions per Merge bot run. */
+const MAX_DECISIONS = 4;
 
 interface Env {
   readonly repo: string;
@@ -133,11 +139,11 @@ async function recordOf(env: Env, pr: number): Promise<{ id: number | null; reco
 
   const json = MERGE_BOT_STATE_PATTERN.exec(mine.body)?.[1];
 
-  return { id: mine.id, record: json === undefined ? EMPTY_RECORD : { ...EMPTY_RECORD, ...(JSON.parse(json) as StateRecord) } };
+  return { id: mine.id, record: json === undefined ? EMPTY_RECORD : recordOfStored({ ...EMPTY_RECORD, ...(JSON.parse(json) as StoredRecord) }) };
 }
 
 async function writeRecord(env: Env, pr: number, id: number | null, record: StateRecord): Promise<void> {
-  const body = `Merge bot state for this PR. Do not edit.\n\n${MERGE_BOT_STATE_MARKER} ${JSON.stringify(record)} -->`;
+  const body = `Merge bot state for this PR. Do not edit.\n\n${MERGE_BOT_STATE_MARKER} ${JSON.stringify(storedOfRecord(record))} -->`;
 
   if (id === null) await api(env, `repos/${env.repo}/issues/${pr}/comments`, "POST", { body });
   else await api(env, `repos/${env.repo}/issues/comments/${id}`, "PATCH", { body });
@@ -218,8 +224,8 @@ async function setCheck(env: Env, name: string, head: string, check: CheckState)
 }
 
 /** Sets the `land:*` and `review:*` labels. Their names are external: open PRs carry them, so the strings stay. */
-async function setLabels(env: Env, pr: PullJson, land: Land, depth: ReviewDepth): Promise<void> {
-  const wanted = [`land:${land}`, `review:${depth}`];
+async function setLabels(env: Env, pr: PullJson, route: LandRoute, depth: ReviewDepth): Promise<void> {
+  const wanted = [`land:${storedLandRouteOf(route)}`, `review:${depth}`];
   const current = pr.labels.map((label) => label.name);
   const stale = current.filter((name) => /^(land|review):/u.test(name) && !wanted.includes(name));
   const missing = wanted.filter((name) => !current.includes(name));
@@ -302,7 +308,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
   switch (step.kind) {
     case "route": {
       const answer = await route(env, range, record, step.patchDelta);
-      log(`#${pr.number} routing ${step.patch.slice(0, 8)}: land:${answer.land} review:${answer.review} second:${answer.secondRound} by ${answer.model ?? "the Routing rules"} (${answer.reason})`);
+      log(`#${pr.number} routing ${step.patch.slice(0, 8)}: route:${answer.land} review:${answer.review} second:${answer.secondRound} by ${answer.model ?? "the Routing rules"} (${answer.reason})`);
       const next = { ...record, triage: { ...record.triage, [step.patch]: answer } };
       await writeRecord(env, pr.number, recordId, next);
 
@@ -344,7 +350,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
       return next;
     }
     case "labels":
-      await setLabels(env, pr, step.land, step.depth);
+      await setLabels(env, pr, step.route, step.depth);
 
       return record;
     case "review-check":
@@ -373,7 +379,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
       const by = `${result.model ?? PRINCIPAL_JUDGE_MODEL}${result.costUsd === null ? "" : `, $${result.costUsd.toFixed(3)}`}`;
       const next = afterPrincipalJudge(record, step.patch, result.verdict);
       const failures = next.fableFailures?.[step.patch] ?? 0;
-      // The record first: a failed comment must not make the next pass pay for the Principal judge again.
+      // The record first: a failed comment must not make the next decision pay for the Principal judge again.
       await writeRecord(env, pr.number, recordId, next);
       const said =
         result.verdict === null
@@ -396,7 +402,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
 }
 
 async function advance(env: Env, number: number, ejectionReason: string | null, log: (line: string) => void): Promise<void> {
-  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
+  for (let decisions = 0; decisions < MAX_DECISIONS; decisions += 1) {
     const pr = await pullOf(env, number);
 
     if (pr.state !== "open") {
@@ -407,7 +413,7 @@ async function advance(env: Env, number: number, ejectionReason: string | null, 
 
     const range = await rangeOf(env, pr);
     const { id, record: stored } = await recordOf(env, number);
-    const record = ejectionReason !== null && pass === 0 ? { ...stored, dequeued: { head: pr.head.sha, reason: ejectionReason } } : stored;
+    const record = ejectionReason !== null && decisions === 0 ? { ...stored, dequeued: { head: pr.head.sha, reason: ejectionReason } } : stored;
     const threads = await threadsOf(env, number);
     const decision = decide(await snapshotOf(env, pr, range, record, threads));
 

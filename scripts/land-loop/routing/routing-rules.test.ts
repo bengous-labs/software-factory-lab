@@ -7,7 +7,7 @@ describe("routingRulesOf", () => {
     expect(routingRulesOf({ paths: ["app/src/commands/add.ts", "docs/usage.md"], lines: 40, messages: ["feat: x"] })).toBeNull();
   });
 
-  test("every Routing rule hit answers land:human and review:deep, with its reason", () => {
+  test("every Routing rule hit answers the owner route and review:deep, with its reason", () => {
     const cases: [Parameters<typeof routingRulesOf>[0], string][] = [
       [{ paths: [], lines: 0, messages: [] }, "touches no file"],
       [{ paths: ["app/src/store/store.ts"], lines: 3, messages: [] }, "risky path: app/src/store/store.ts"],
@@ -24,7 +24,7 @@ describe("routingRulesOf", () => {
     for (const [input, reason] of cases) {
       const routing = routingRulesOf(input);
 
-      expect(routing?.land).toBe("human");
+      expect(routing?.land).toBe("owner");
       expect(routing?.review).toBe("deep");
       expect(routing?.reason).toContain(reason);
     }
@@ -39,7 +39,7 @@ describe("changes to the Land loop's own code", () => {
   });
 
   test("past the line cap or with a breaking commit, a change to the Land loop's code still goes to the owner", () => {
-    expect(routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts"], lines: 401, messages: [] })?.land).toBe("human");
-    expect(routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts"], lines: 3, messages: ["feat!: x"] })?.land).toBe("human");
+    expect(routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts"], lines: 401, messages: [] })?.land).toBe("owner");
+    expect(routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts"], lines: 3, messages: ["feat!: x"] })?.land).toBe("owner");
   });
 });

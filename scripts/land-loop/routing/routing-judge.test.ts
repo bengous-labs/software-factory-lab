@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { Answer, Ask, Question } from "../lib/ask.ts";
 import { ROUTING_JUDGE_MODEL, routingJudge, routingOf, SCHEMA } from "./routing-judge.ts";
 
-const SAFE = { land: "human", review: "deep", secondRound: true };
+const SAFE = { land: "owner", review: "deep", secondRound: true };
 
 function asking(answer: Answer): { ask: Ask; questions: Question[] } {
   const questions: Question[] = [];
