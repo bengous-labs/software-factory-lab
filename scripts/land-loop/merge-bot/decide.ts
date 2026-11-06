@@ -63,11 +63,13 @@ export function afterPrincipalJudge(
   patch: string,
   verdict: PrincipalJudgeVerdict | null,
 ): StateRecord {
-  if (verdict !== null) return { ...record, fable: { ...(record.fable ?? {}), [patch]: verdict } };
+  if (verdict !== null) {
+    return { ...record, fable: { ...record.fable, [patch]: verdict } };
+  }
 
   return {
     ...record,
-    fableFailures: { ...(record.fableFailures ?? {}), [patch]: (record.fableFailures?.[patch] ?? 0) + 1 },
+    fableFailures: { ...record.fableFailures, [patch]: (record.fableFailures?.[patch] ?? 0) + 1 },
   };
 }
 
@@ -190,7 +192,9 @@ export function openImportantOf(threads: number, record: StateRecord, patch: str
 
 /** The owner's Land approval counts only when it was put after the head it would land was pushed. */
 export function landApprovalCounts(byOwner: boolean, labeledAt: string | null, headPushedAt: string | null): boolean {
-  if (!byOwner || labeledAt === null) return false;
+  if (!byOwner || labeledAt === null) {
+    return false;
+  }
 
   return headPushedAt === null || Date.parse(labeledAt) >= Date.parse(headPushedAt);
 }
@@ -242,11 +246,17 @@ export function landApprovalOf(snapshot: Snapshot, record: StateRecord): { next:
     return { next: record.landOkPatch === null ? record : { ...record, landOkPatch: null }, removeLabel: false };
   }
 
-  if (!snapshot.landApprovalByOwner) return { next: record, removeLabel: true };
+  if (!snapshot.landApprovalByOwner) {
+    return { next: record, removeLabel: true };
+  }
 
-  if (record.landOkPatch === null) return { next: { ...record, landOkPatch: snapshot.patch }, removeLabel: false };
+  if (record.landOkPatch === null) {
+    return { next: { ...record, landOkPatch: snapshot.patch }, removeLabel: false };
+  }
 
-  if (record.landOkPatch !== snapshot.patch) return { next: { ...record, landOkPatch: null }, removeLabel: true };
+  if (record.landOkPatch !== snapshot.patch) {
+    return { next: { ...record, landOkPatch: null }, removeLabel: true };
+  }
 
   return { next: record, removeLabel: false };
 }
@@ -254,8 +264,9 @@ export function landApprovalOf(snapshot: Snapshot, record: StateRecord): { next:
 export function decide(snapshot: Snapshot): Decision {
   const { record } = snapshot;
 
-  if (snapshot.state !== "OPEN")
+  if (snapshot.state !== "OPEN") {
     return { kind: "ignore", reason: `#${snapshot.number} is ${snapshot.state.toLowerCase()}` };
+  }
 
   if (!snapshot.sameRepository || !snapshot.openedByOwner) {
     return { kind: "ignore", reason: `#${snapshot.number} comes from outside the Owner's own branches` };
@@ -264,12 +275,17 @@ export function decide(snapshot: Snapshot): Decision {
   const steps: Step[] = [];
   const { next, removeLabel } = landApprovalOf(snapshot, record);
 
-  if (removeLabel) steps.push({ kind: "remove-land-approval" });
+  if (removeLabel) {
+    steps.push({ kind: "remove-land-approval" });
+  }
 
   // Written now: a routing or a Code review below ends this decision before the Land gate is reached.
-  if (next !== record) steps.push({ kind: "record", record: next });
+  if (next !== record) {
+    steps.push({ kind: "record", record: next });
+  }
 
   const landApproved = snapshot.landApprovalByOwner && next.landOkPatch === snapshot.patch;
+
   const finish = (gate: CheckState): Decision => {
     steps.push({ kind: "land-gate", check: gate });
 
@@ -280,15 +296,21 @@ export function decide(snapshot: Snapshot): Decision {
     return finish({ kind: "failure", summary: `Ejected from the merge queue: ${record.dequeued.reason}` });
   }
 
-  if (snapshot.draft) return finish(pending("Draft: the author's turn."));
+  if (snapshot.draft) {
+    return finish(pending("Draft: the author's turn."));
+  }
 
   if (snapshot.conflicting) {
     return finish({ kind: "failure", summary: "This PR conflicts with dev: rebase it onto origin/dev, then stop." });
   }
 
-  if (snapshot.ci === null) return finish(pending("Waiting for validate."));
+  if (snapshot.ci === null) {
+    return finish(pending("Waiting for validate."));
+  }
 
-  if (snapshot.ci === "failure") return finish(pending("validate is red: the author's turn."));
+  if (snapshot.ci === "failure") {
+    return finish(pending("validate is red: the author's turn."));
+  }
 
   const routing = next.triage[snapshot.patch];
 
@@ -319,8 +341,10 @@ export function decide(snapshot: Snapshot): Decision {
 
     if (routing.secondRound) {
       thirdRoundNeeded = true;
-      steps.push({ kind: "labels", route: "owner", depth: labels.depth });
-      steps.push({ kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." });
+      steps.push(
+        { kind: "labels", route: "owner", depth: labels.depth },
+        { kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." },
+      );
     }
   }
 
@@ -360,7 +384,9 @@ export function decide(snapshot: Snapshot): Decision {
     }
   }
 
-  if (snapshot.devRed) return finish(pending("dev is red: landing is on hold."));
+  if (snapshot.devRed) {
+    return finish(pending("dev is red: landing is on hold."));
+  }
 
   if (route === "auto" || landApproved) {
     const gate = finish({
@@ -371,7 +397,9 @@ export function decide(snapshot: Snapshot): Decision {
           : `Landable, with the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).`,
     });
 
-    if (gate.kind === "steps") return { kind: "steps", steps: [...gate.steps, { kind: "auto-merge" }] };
+    if (gate.kind === "steps") {
+      return { kind: "steps", steps: [...gate.steps, { kind: "auto-merge" }] };
+    }
   }
 
   return finish(pending("Landable, land:human: waiting for the Owner's Land approval."));

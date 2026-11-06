@@ -61,7 +61,7 @@ export interface ReviewThread {
   readonly path: string;
   readonly line: number | null;
   readonly comments: {
-    readonly nodes: readonly { readonly author: { readonly login: string } | null; readonly body: string }[];
+    readonly nodes: ReadonlyArray<{ readonly author: { readonly login: string } | null; readonly body: string }>;
   };
 }
 
@@ -78,8 +78,9 @@ export function rejectedOf(appLogin: string, threads: readonly ReviewThread[]): 
     const answers = replies.filter((reply) => reply.author?.login !== appLogin);
     const last = answers.at(-1);
 
-    if (!thread.isResolved || finding?.author?.login !== appLogin || last === undefined || FIX_REPLY.test(last.body))
+    if (!thread.isResolved || finding?.author?.login !== appLogin || last === undefined || FIX_REPLY.test(last.body)) {
       return [];
+    }
 
     return [
       {
@@ -118,12 +119,19 @@ export function promptOf(guide: string, diff: string, reviewRound: 1 | 2, reject
 export function findingsOf(structured: unknown): readonly Finding[] | null {
   const raw = (
     structured as {
-      findings?: { file: string; line: number | null; severity: Severity; summary: string; failure_scenario: string }[];
+      findings?: Array<{
+        file: string;
+        line: number | null;
+        severity: Severity;
+        summary: string;
+        failure_scenario: string;
+      }>;
     } | null
   )?.findings;
 
-  if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null))
+  if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null)) {
     return null;
+  }
 
   const findings = raw.map((finding) => ({
     file: finding.file,
@@ -132,6 +140,7 @@ export function findingsOf(structured: unknown): readonly Finding[] | null {
     summary: finding.summary,
     failureScenario: finding.failure_scenario,
   }));
+
   const nits = findings.filter((finding) => finding.severity === "nit").slice(0, NIT_CAP);
 
   return [...findings.filter((finding) => finding.severity !== "nit"), ...nits];
@@ -180,7 +189,9 @@ export async function codeReview(
 
   const { costUsd, model } = answer;
 
-  if (answer.kind === "failed") return { findings: null, costUsd, model, ms, error: answer.error };
+  if (answer.kind === "failed") {
+    return { findings: null, costUsd, model, ms, error: answer.error };
+  }
 
   const findings = findingsOf(answer.structured);
 

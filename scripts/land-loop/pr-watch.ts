@@ -15,7 +15,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { checked, type Run, run } from "./lib/run.ts";
+import { checked, run } from "./lib/run.ts";
+import type { Run } from "./lib/run.ts";
 import { severityOfBody } from "./review/code-review.ts";
 import { AUTHOR_MARK } from "./thread.ts";
 
@@ -65,13 +66,17 @@ export interface Wake {
 /** The key that keeps the end line from being printed twice. */
 export const END_KEY = "end";
 
-const flat = (body: string): string => body.replace(/\s+/gu, " ").slice(0, 400);
+const flat = (body: string): string => body.replaceAll(/\s+/gu, " ").slice(0, 400);
 
 /** The end line of a landed or closed PR; null while it is open. */
 export function endOf(pr: number, state: PrState): string | null {
-  if (state.state === "MERGED") return `PR #${pr} landed. Stop watching.`;
+  if (state.state === "MERGED") {
+    return `PR #${pr} landed. Stop watching.`;
+  }
 
-  if (state.state === "CLOSED") return `PR #${pr} closed. Stop watching.`;
+  if (state.state === "CLOSED") {
+    return `PR #${pr} closed. Stop watching.`;
+  }
 
   return null;
 }
@@ -80,7 +85,9 @@ export function endOf(pr: number, state: PrState): string | null {
 export function wakesOf(pr: number, state: PrState): readonly Wake[] {
   const short = state.head.slice(0, 7);
 
-  if (state.state !== "OPEN") return [];
+  if (state.state !== "OPEN") {
+    return [];
+  }
 
   const wakes: Wake[] = state.checks
     .filter((check) => check.bucket === "fail")
@@ -147,14 +154,19 @@ export function readingOf(
 
 async function read(runner: Run, pr: number): Promise<PrState> {
   const cwd = process.cwd();
+
   const view = JSON.parse(
     await checked(runner, ["gh", "pr", "view", String(pr), "--json", "state,isDraft,headRefOid"], { cwd }),
   ) as { state: PrState["state"]; isDraft: boolean; headRefOid: string };
+
   const checks = await runner(["gh", "pr", "checks", String(pr), "--json", "name,bucket,link"], { cwd });
+
   const repo = (
     await checked(runner, ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], { cwd })
   ).trim();
+
   const [owner, name] = repo.split("/");
+
   const conversation = await checked(
     runner,
     [
@@ -167,6 +179,7 @@ async function read(runner: Run, pr: number): Promise<PrState> {
     ],
     { cwd },
   );
+
   const threads = JSON.parse(
     await checked(
       runner,
@@ -184,13 +197,13 @@ async function read(runner: Run, pr: number): Promise<PrState> {
       repository: {
         pullRequest: {
           reviewThreads: {
-            nodes: {
+            nodes: Array<{
               id: string;
               isResolved: boolean;
               path: string;
               line: number | null;
-              comments: { nodes: { id: string; author: { login: string } | null; body: string }[] };
-            }[];
+              comments: { nodes: Array<{ id: string; author: { login: string } | null; body: string }> };
+            }>;
           };
         };
       };
@@ -225,7 +238,9 @@ async function read(runner: Run, pr: number): Promise<PrState> {
 if (import.meta.main) {
   const pr = Number(process.argv[2]);
 
-  if (!Number.isInteger(pr)) throw new Error("usage: bun scripts/land-loop/pr-watch.ts <pr>");
+  if (!Number.isInteger(pr)) {
+    throw new TypeError("usage: bun scripts/land-loop/pr-watch.ts <pr>");
+  }
 
   const stateDir = join(process.cwd(), ".lab", "state");
   mkdirSync(stateDir, { recursive: true });
@@ -234,7 +249,9 @@ if (import.meta.main) {
   const seen = new Set<string>(existsSync(seenFile) ? (JSON.parse(readFileSync(seenFile, "utf8")) as string[]) : []);
 
   const print = (key: string, line: string): void => {
-    if (seen.has(key)) return;
+    if (seen.has(key)) {
+      return;
+    }
 
     seen.add(key);
     writeFileSync(seenFile, JSON.stringify([...seen]));
@@ -245,9 +262,13 @@ if (import.meta.main) {
     try {
       const reading = readingOf(pr, await read(run, pr), seen);
 
-      for (const wake of reading.wakes) print(wake.key, wake.line);
+      for (const wake of reading.wakes) {
+        print(wake.key, wake.line);
+      }
 
-      if (reading.ends) process.exit(0);
+      if (reading.ends) {
+        process.exit(0);
+      }
     } catch (error) {
       console.error(`pr-watch: ${error instanceof Error ? error.message : String(error)}`);
     }

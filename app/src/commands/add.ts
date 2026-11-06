@@ -1,4 +1,5 @@
-import { cleanTitle, type Task } from "../task.ts";
+import { cleanTitle } from "../task.ts";
+import type { Task } from "../task.ts";
 
 export function add(tasks: readonly Task[], title: string, createdAt: string): readonly Task[] {
   const trimmed = cleanTitle(title);

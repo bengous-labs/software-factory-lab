@@ -18,7 +18,7 @@ function asking(answer: Answer): { ask: Ask; questions: Question[] } {
 
 describe("verdictOf", () => {
   test("an explicit ok true or false is a verdict; a missing or non-boolean ok is none", () => {
-    const cases: [unknown, { ok: boolean; reason: string } | null][] = [
+    const cases: Array<[unknown, { ok: boolean; reason: string } | null]> = [
       [
         { ok: true, reason: "fine" },
         { ok: true, reason: "fine" },
@@ -34,7 +34,9 @@ describe("verdictOf", () => {
       ["looks fine", null],
     ];
 
-    for (const [structured, verdict] of cases) expect(verdictOf(structured)).toEqual(verdict);
+    for (const [structured, verdict] of cases) {
+      expect(verdictOf(structured)).toEqual(verdict);
+    }
   });
 });
 
@@ -46,6 +48,7 @@ describe("principalJudge", () => {
       costUsd: 0.2,
       model: "claude-fable-5-1",
     });
+
     const result = await principalJudge(ask, "/repo", "prompt");
 
     expect(questions).toEqual([
@@ -61,6 +64,7 @@ describe("principalJudge", () => {
 
   test("a failed call or an answer outside the schema gives no verdict, with the reason", async () => {
     const failed = asking({ kind: "failed", error: "timed out after 900000 ms", costUsd: null, model: null }).ask;
+
     const offSchema = asking({
       kind: "answered",
       structured: { verdict: "ok I guess" },

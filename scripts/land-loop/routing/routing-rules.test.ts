@@ -10,7 +10,7 @@ describe("routingRulesOf", () => {
   });
 
   test("every Routing rule hit answers the owner route and review:deep, with its reason", () => {
-    const cases: [Parameters<typeof routingRulesOf>[0], string][] = [
+    const cases: Array<[Parameters<typeof routingRulesOf>[0], string]> = [
       [{ paths: [], lines: 0, messages: [] }, "touches no file"],
       [{ paths: ["app/src/store/store.ts"], lines: 3, messages: [] }, "risky path: app/src/store/store.ts"],
       [{ paths: [".github/workflows/ci.yml"], lines: 3, messages: [] }, "risky path"],

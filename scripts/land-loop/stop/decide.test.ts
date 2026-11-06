@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { admit, afterStopChecks, answerOf, armReason, decide, type Snapshot } from "./decide.ts";
+import { admit, afterStopChecks, answerOf, armReason, decide } from "./decide.ts";
+import type { Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -22,7 +23,7 @@ describe("admit", () => {
   });
 
   test("nothing is published from a fork, a detached HEAD, an ignored branch, a dirty tree, or no new commit", () => {
-    const cases: [Partial<Snapshot>, string][] = [
+    const cases: Array<[Partial<Snapshot>, string]> = [
       [{ forkFlag: true }, "a fork the hook launched"],
       [{ forkMarker: true }, "a fork, resumed"],
       [{ branch: null }, "HEAD is detached"],
@@ -73,7 +74,7 @@ describe("afterStopChecks", () => {
 
 describe("answerOf", () => {
   test("YES first is yes; NO, a hedge, an empty or a lower-case answer is no", () => {
-    const cases: [string, "yes" | "no"][] = [
+    const cases: Array<[string, "yes" | "no"]> = [
       ["YES, the task is done and tested.", "yes"],
       ["  **YES** done", "yes"],
       ["NO: I asked the Owner which file to change.", "no"],
@@ -83,7 +84,9 @@ describe("answerOf", () => {
       ["YESTERDAY", "no"],
     ];
 
-    for (const [text, answer] of cases) expect(answerOf(text)).toBe(answer);
+    for (const [text, answer] of cases) {
+      expect(answerOf(text)).toBe(answer);
+    }
   });
 });
 

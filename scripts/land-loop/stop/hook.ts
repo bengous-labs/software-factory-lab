@@ -13,20 +13,10 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { checked, type Run, run as runCli } from "../lib/run.ts";
-import {
-  type Action,
-  admit,
-  afterStopChecks,
-  answerOf,
-  armReason,
-  decide,
-  FORK_MARKER,
-  IGNORED_BRANCH,
-  type PullRequest,
-  type Snapshot,
-  type StopChecks,
-} from "./decide.ts";
+import { checked, run as runCli } from "../lib/run.ts";
+import type { Run } from "../lib/run.ts";
+import { admit, afterStopChecks, answerOf, armReason, decide, FORK_MARKER, IGNORED_BRANCH } from "./decide.ts";
+import type { Action, PullRequest, Snapshot, StopChecks } from "./decide.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
 
@@ -59,7 +49,9 @@ interface TranscriptLine {
 }
 
 function linesOf(path: string): TranscriptLine[] {
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) {
+    return [];
+  }
 
   return readFileSync(path, "utf8")
     .split("\n")
@@ -74,9 +66,13 @@ function linesOf(path: string): TranscriptLine[] {
 }
 
 function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
 
-  if (!Array.isArray(content)) return "";
+  if (!Array.isArray(content)) {
+    return "";
+  }
 
   return content
     .map((block: unknown) => (typeof block === "object" && block !== null && "text" in block ? String(block.text) : ""))
@@ -95,7 +91,9 @@ export function modelOf(lines: readonly TranscriptLine[]): string | null {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const model = lines[index]?.message?.model;
 
-    if (lines[index]?.type === "assistant" && typeof model === "string" && model !== "<synthetic>") return model;
+    if (lines[index]?.type === "assistant" && typeof model === "string" && model !== "<synthetic>") {
+      return model;
+    }
   }
 
   return null;
@@ -119,6 +117,7 @@ interface ForkResult {
 
 async function askFork(deps: Deps, input: StopInput, model: string | null, prompt: string): Promise<ForkResult> {
   const started = deps.now();
+
   // No tool: a fork that re-armed the session's PR watch waited on it until it was killed (#38, #39).
   const argv = [
     "claude",
@@ -132,11 +131,13 @@ async function askFork(deps: Deps, input: StopInput, model: string | null, promp
     "--output-format",
     "json",
   ];
+
   const ran = await deps.run([...argv, ...(model === null ? [] : ["--model", model]), prompt], {
     cwd: input.cwd,
     env: { [FORK_FLAG]: "1" },
     timeoutMs: FORK_TIMEOUT_MS,
   });
+
   const ms = deps.now() - started;
 
   try {
@@ -169,7 +170,8 @@ async function prOf(deps: Deps, cwd: string, branch: string): Promise<PullReques
       ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,isDraft,headRefOid"],
       { cwd },
     ),
-  ) as { number: number; isDraft: boolean; headRefOid: string }[];
+  ) as Array<{ number: number; isDraft: boolean; headRefOid: string }>;
+
   const pr = listed[0];
 
   return pr === undefined ? null : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid };
@@ -179,11 +181,15 @@ async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: strin
   // An on-disk name: existing state files carry it, so it stays.
   const record = join(stateDir, `gates-${head}`);
 
-  if (existsSync(record)) return { kind: "green" };
+  if (existsSync(record)) {
+    return { kind: "green" };
+  }
 
   const ran = await deps.run(["bun", "run", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
 
-  if (ran.code !== 0) return { kind: "red", report: `${ran.stdout}\n${ran.stderr}`.trim().slice(-3000) };
+  if (ran.code !== 0) {
+    return { kind: "red", report: `${ran.stdout}\n${ran.stderr}`.trim().slice(-3000) };
+  }
 
   writeFileSync(record, "green\n");
 
@@ -198,9 +204,13 @@ export type Outcome = { readonly kind: "allow" } | { readonly kind: "block"; rea
  * session end.
  */
 export function doneJudgeFailure(code: number, text: string, stopHookActive: boolean): Outcome | null {
-  if (code === 0 && text.trim() !== "") return null;
+  if (code === 0 && text.trim() !== "") {
+    return null;
+  }
 
-  if (stopHookActive) return { kind: "allow" };
+  if (stopHookActive) {
+    return { kind: "allow" };
+  }
 
   return {
     kind: "block",
@@ -233,12 +243,14 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
       pr: null,
       armed: false,
     });
+
     log({ step: "admit", ...admission });
 
     return { kind: "allow" };
   }
 
   await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
+
   const snapshot: Snapshot = {
     ...early,
     stopHookActive: input.stop_hook_active === true,
@@ -248,6 +260,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
     pr: IGNORED_BRANCH.test(branch) ? null : await prOf(deps, cwd, branch),
     armed: false,
   };
+
   const armedFile = (pr: number): string => join(stateDir, `armed-${pr}-${head}`);
   const withArmed = { ...snapshot, armed: snapshot.pr !== null && existsSync(armedFile(snapshot.pr.number)) };
   const prWatch = `bun ${join(root, "scripts", "land-loop", "pr-watch.ts")}`;
@@ -256,7 +269,9 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   const admission = admit(withArmed);
   log({ step: "admit", branch, head, pr: withArmed.pr?.number ?? null, ...admission });
 
-  if (admission.kind === "none") return { kind: "allow" };
+  if (admission.kind === "none") {
+    return { kind: "allow" };
+  }
 
   if (admission.kind === "arm") {
     writeFileSync(armedFile(admission.pr), "asked\n");
@@ -267,9 +282,13 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), withArmed.stopHookActive);
   log({ step: "stop-checks", next: next.kind });
 
-  if (next.kind === "none") return { kind: "allow" };
+  if (next.kind === "none") {
+    return { kind: "allow" };
+  }
 
-  if (next.kind === "block") return { kind: "block", reason: next.reason };
+  if (next.kind === "block") {
+    return { kind: "block", reason: next.reason };
+  }
 
   const model = modelOf(transcript);
   const doneJudge = await askFork(deps, input, model, DONE_QUESTION);
@@ -287,11 +306,15 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
 
   const failed = doneJudgeFailure(doneJudge.code, doneJudge.text, withArmed.stopHookActive);
 
-  if (failed !== null) return failed;
+  if (failed !== null) {
+    return failed;
+  }
 
   const action: Action = decide(withArmed.pr, answer);
 
-  if (action.kind === "none") return { kind: "allow" };
+  if (action.kind === "none") {
+    return { kind: "allow" };
+  }
 
   await checked(deps.run, ["git", "push", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`], {
     cwd,
@@ -317,11 +340,14 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
       ["gh", "pr", "create", "--base", TRUNK, "--head", branch, "--title", text.title, "--body-file", "-"],
       { cwd, stdin: text.body === "" ? "(no body)" : text.body },
     );
+
     number = Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
   } else {
     number = action.pr;
 
-    if (action.ready) await checked(deps.run, ["gh", "pr", "ready", String(number)], { cwd });
+    if (action.ready) {
+      await checked(deps.run, ["gh", "pr", "ready", String(number)], { cwd });
+    }
   }
 
   log({ step: "published", action: action.kind, pr: number, head });
@@ -334,16 +360,20 @@ if (import.meta.main) {
   const input = JSON.parse(await Bun.stdin.text()) as StopInput;
   const logFile = join(input.cwd, ".lab", "stop.log");
   mkdirSync(join(input.cwd, ".lab"), { recursive: true });
-  const log = (record: object): void =>
+
+  const log = (record: object): void => {
     appendFileSync(
       logFile,
       `${JSON.stringify({ at: new Date().toISOString(), session: input.session_id, ...record })}\n`,
     );
+  };
 
   try {
     const outcome = await stop(input, { run: runCli, env: process.env, now: Date.now }, log);
 
-    if (outcome.kind === "block") console.log(JSON.stringify({ decision: "block", reason: outcome.reason }));
+    if (outcome.kind === "block") {
+      console.log(JSON.stringify({ decision: "block", reason: outcome.reason }));
+    }
   } catch (error) {
     log({ step: "error", message: error instanceof Error ? error.message : String(error) });
     console.error(`stop hook: ${error instanceof Error ? error.message : String(error)}`);

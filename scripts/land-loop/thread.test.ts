@@ -15,6 +15,7 @@ describe("argsOf", () => {
 describe("answer", () => {
   test("replies in the thread, then resolves that same thread", async () => {
     const calls: string[][] = [];
+
     const run: Run = async (argv) => {
       calls.push([...argv]);
 
@@ -41,6 +42,7 @@ describe("answer", () => {
 
   test("a failed reply resolves nothing", async () => {
     const calls: string[][] = [];
+
     const run: Run = async (argv) => {
       calls.push([...argv]);
 

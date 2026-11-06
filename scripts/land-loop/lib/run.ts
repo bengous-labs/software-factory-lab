@@ -24,6 +24,7 @@ export const run: Run = async (argv, options) => {
   });
 
   let timedOut = false;
+
   const timer =
     options.timeoutMs === undefined
       ? undefined

@@ -45,7 +45,9 @@ export function promptOf(stat: string, diff: string, patchDelta: boolean): strin
 
 /** The Routing answer the schema's answer carries, given by `model`, or null when it does not read. */
 export function routingOf(structured: unknown, model: string | null): RoutingAnswer | null {
-  if (typeof structured !== "object" || structured === null) return null;
+  if (typeof structured !== "object" || structured === null) {
+    return null;
+  }
 
   const { land, review, second_round: secondRound, reason } = structured as Record<string, unknown>;
 
@@ -70,6 +72,7 @@ export async function routingJudge(
     cwd,
     timeoutMs: 180_000,
   });
+
   const routing = answer.kind === "answered" ? routingOf(answer.structured, answer.model) : null;
 
   return (

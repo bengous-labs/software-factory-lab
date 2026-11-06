@@ -10,10 +10,10 @@ import {
   NIT_CAP,
   promptOf,
   rejectedOf,
-  type ReviewThread,
   SCHEMA,
   severityOfBody,
 } from "./code-review.ts";
+import type { ReviewThread } from "./code-review.ts";
 
 const out = (findings: object[]): object => ({ findings });
 
@@ -68,6 +68,7 @@ describe("codeReview", () => {
       costUsd: 0.02,
       model: "claude-opus-5-5",
     });
+
     const result = await codeReview(ask, "/repo", "deep", "the prompt", () => 0);
 
     expect(questions).toEqual([
@@ -101,6 +102,7 @@ describe("codeReview", () => {
       costUsd: 0.01,
       model: "claude-sonnet-5-5",
     });
+
     const result = await codeReview(ask, "/repo", "light", "p", () => 0);
 
     expect(result.findings).toBeNull();
@@ -131,8 +133,9 @@ describe("promptOf", () => {
 
 describe("rejectedOf", () => {
   const APP = "bengous-labs-agents";
+
   const thread = (
-    replies: readonly (readonly [string, string])[],
+    replies: ReadonlyArray<readonly [string, string]>,
     { isResolved = true, by = APP } = {},
   ): ReviewThread => ({
     isResolved,
@@ -147,7 +150,7 @@ describe("rejectedOf", () => {
   });
 
   test("a resolved finding counts as rejected only when the Author's reply gives a reason, never when it reports a fix", () => {
-    const rows: [string, boolean][] = [
+    const rows: Array<[string, boolean]> = [
       [`Fixed in c2a404d: every event keys on the PR number.\n\n${AUTHOR_MARK}`, false],
       ["Fixed in #46 (7988824): ask takes the stream as a parameter.", false],
       ["fixed in abc", false],
@@ -156,8 +159,9 @@ describe("rejectedOf", () => {
       ["Checked, and partly rejected: no code after the record step reassigns next.", true],
     ];
 
-    for (const [reply, rejected] of rows)
+    for (const [reply, rejected] of rows) {
       expect(rejectedOf(APP, [thread([["bengous", reply]])])).toHaveLength(rejected ? 1 : 0);
+    }
   });
 
   test("the Author's last reply decides, the App's own replies aside", () => {

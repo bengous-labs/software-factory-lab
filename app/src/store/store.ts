@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import { type Task, TaskError } from "../task.ts";
+import { TaskError } from "../task.ts";
+import type { Task } from "../task.ts";
 
 /** The version of the file format; a file of another version is refused, never guessed at. */
 export const FORMAT_VERSION = 2;
@@ -16,13 +17,17 @@ interface StoreFile {
 }
 
 function hasValidCreatedAt(createdAt: unknown, version: number): boolean {
-  if (version === 1) return createdAt === undefined;
+  if (version === 1) {
+    return createdAt === undefined;
+  }
 
   return createdAt === undefined || (typeof createdAt === "string" && ISO_TIMESTAMP.test(createdAt));
 }
 
 function isTask(value: unknown, version: number): value is Task {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
 
   const record = value as Record<string, unknown>;
 
@@ -37,7 +42,9 @@ function isTask(value: unknown, version: number): value is Task {
 export function parse(text: string, path: string): readonly Task[] {
   const data: unknown = JSON.parse(text);
 
-  if (typeof data !== "object" || data === null) throw new TaskError(`${path}: not an object`);
+  if (typeof data !== "object" || data === null) {
+    throw new TaskError(`${path}: not an object`);
+  }
 
   const file = data as Partial<StoreFile>;
 

@@ -4,13 +4,8 @@
  * `PreToolUse` hook refuses by code every tool call but the one that returns the schema's answer.
  */
 
-import {
-  type HookCallback,
-  type Options,
-  query,
-  type SDKMessage,
-  type SDKResultMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { HookCallback, Options, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 
 export interface Question {
   readonly model: string;
@@ -36,7 +31,9 @@ export function toolDecision(toolName: string): "allow" | "deny" {
 }
 
 export const refuseTools: HookCallback = async (input) => {
-  if (input.hook_event_name !== "PreToolUse") return {};
+  if (input.hook_event_name !== "PreToolUse") {
+    return {};
+  }
 
   const decision = toolDecision(input.tool_name);
 
@@ -71,18 +68,25 @@ export function modelOf(modelUsage: Readonly<Record<string, { readonly costUSD: 
 
 /** The answer a call's result message carries; `thrown` is what the call threw, if it threw. */
 export function answerOf(result: SDKResultMessage | undefined, thrown: string | null): Answer {
-  if (result === undefined)
+  if (result === undefined) {
     return { kind: "failed", error: thrown ?? "the call ended without a result", costUsd: null, model: null };
+  }
 
   const costUsd = result.total_cost_usd;
   const model = modelOf(result.modelUsage);
   const failed = (error: string): Answer => ({ kind: "failed", error, costUsd, model });
 
-  if (result.subtype !== "success") return failed(`${result.subtype}: ${result.errors.join("; ")}`);
+  if (result.subtype !== "success") {
+    return failed(`${result.subtype}: ${result.errors.join("; ")}`);
+  }
 
-  if (result.is_error) return failed(result.result || "the result is flagged as an error");
+  if (result.is_error) {
+    return failed(result.result || "the result is flagged as an error");
+  }
 
-  if (result.structured_output === undefined) return failed("the result carries no structured output");
+  if (result.structured_output === undefined) {
+    return failed("the result carries no structured output");
+  }
 
   return { kind: "answered", structured: result.structured_output, costUsd, model };
 }
@@ -94,13 +98,17 @@ export type Stream = (call: { readonly prompt: string; readonly options: Options
 export function askWith(stream: Stream): Ask {
   return async (question) => {
     const abortController = new AbortController();
-    const timer = setTimeout(() => abortController.abort(), question.timeoutMs);
+    const timer = setTimeout(() => {
+      abortController.abort();
+    }, question.timeoutMs);
     let result: SDKResultMessage | undefined;
     let thrown: string | null = null;
 
     try {
       for await (const message of stream({ prompt: question.prompt, options: optionsOf(question, abortController) })) {
-        if (message.type === "result") result = message;
+        if (message.type === "result") {
+          result = message;
+        }
       }
     } catch (error) {
       thrown = error instanceof Error ? error.message : String(error);

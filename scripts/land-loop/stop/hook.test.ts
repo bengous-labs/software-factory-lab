@@ -5,16 +5,8 @@ import { join } from "node:path";
 
 import type { Ran, Run, RunOptions } from "../lib/run.ts";
 import { FORK_MARKER } from "./decide.ts";
-import {
-  DONE_QUESTION,
-  doneJudgeFailure,
-  FORK_FLAG,
-  hasForkMarker,
-  modelOf,
-  prTextOf,
-  stop,
-  type StopInput,
-} from "./hook.ts";
+import { DONE_QUESTION, doneJudgeFailure, FORK_FLAG, hasForkMarker, modelOf, prTextOf, stop } from "./hook.ts";
+import type { StopInput } from "./hook.ts";
 
 const HEAD = "d".repeat(40);
 
@@ -33,14 +25,38 @@ function world(doneJudgeAnswer: string): { run: Run; calls: Call[]; root: string
     calls.push({ argv, options });
     const line = argv.join(" ");
 
-    if (line === "git rev-parse --show-toplevel") return ok(`${root}\n`);
-    if (line === "git symbolic-ref --short -q HEAD") return ok("agent/x\n");
-    if (line === "git rev-parse HEAD") return ok(`${HEAD}\n`);
-    if (line === "git status --porcelain") return ok("");
-    if (line.startsWith("git rev-list --count")) return ok("1\n");
-    if (line.startsWith("git log -1")) return ok("feat: x\n");
-    if (line.startsWith("gh pr list")) return ok("[]");
-    if (line.startsWith("gh pr create")) return ok("https://github.com/o/r/pull/12\n");
+    if (line === "git rev-parse --show-toplevel") {
+      return ok(`${root}\n`);
+    }
+
+    if (line === "git symbolic-ref --short -q HEAD") {
+      return ok("agent/x\n");
+    }
+
+    if (line === "git rev-parse HEAD") {
+      return ok(`${HEAD}\n`);
+    }
+
+    if (line === "git status --porcelain") {
+      return ok("");
+    }
+
+    if (line.startsWith("git rev-list --count")) {
+      return ok("1\n");
+    }
+
+    if (line.startsWith("git log -1")) {
+      return ok("feat: x\n");
+    }
+
+    if (line.startsWith("gh pr list")) {
+      return ok("[]");
+    }
+
+    if (line.startsWith("gh pr create")) {
+      return ok("https://github.com/o/r/pull/12\n");
+    }
+
     if (argv[0] === "claude") {
       const prompt = argv.at(-1) ?? "";
       const result = prompt === DONE_QUESTION ? doneJudgeAnswer : "feat: x\n\nBody text.";

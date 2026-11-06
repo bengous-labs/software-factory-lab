@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { END_KEY, endOf, type PrState, readingOf, wakesOf } from "./pr-watch.ts";
+import { END_KEY, endOf, readingOf, wakesOf } from "./pr-watch.ts";
+import type { PrState } from "./pr-watch.ts";
 import { AUTHOR_MARK } from "./thread.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
@@ -76,6 +77,7 @@ describe("wakesOf", () => {
 
   test("a reply in an open thread prints, a Nit thread included, keyed by its comment id; the author's own marked reply does not", () => {
     const nit = "**Nit**: n <!-- lab-finding severity=nit -->";
+
     const threads = [
       {
         id: "T7",

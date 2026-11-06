@@ -52,12 +52,13 @@ export interface PrincipalJudgeRun {
 export async function principalJudge(ask: Ask, cwd: string, prompt: string): Promise<PrincipalJudgeRun> {
   const answer = await ask({ model: PRINCIPAL_JUDGE_MODEL, prompt, schema: SCHEMA, cwd, timeoutMs: 900_000 });
   const verdict = answer.kind === "answered" ? verdictOf(answer.structured) : null;
+
   const failure =
-    verdict !== null
-      ? null
-      : answer.kind === "answered"
+    verdict === null
+      ? answer.kind === "answered"
         ? "The Principal judge answered outside the schema."
-        : `The Principal judge failed: ${answer.error.slice(0, 200)}`;
+        : `The Principal judge failed: ${answer.error.slice(0, 200)}`
+      : null;
 
   return { verdict, failure, model: answer.model, costUsd: answer.costUsd };
 }

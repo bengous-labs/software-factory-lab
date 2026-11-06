@@ -81,7 +81,7 @@ describe("store", () => {
   test("a creation date that is not a string is refused", () => {
     const text = JSON.stringify({
       version: FORMAT_VERSION,
-      tasks: [{ id: 1, title: "a", done: false, createdAt: 20261105 }],
+      tasks: [{ id: 1, title: "a", done: false, createdAt: 20_261_105 }],
     });
 
     expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");

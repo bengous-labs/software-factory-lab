@@ -7,7 +7,8 @@
  *   bun scripts/land-loop/thread.ts <thread-id> "<reply>"
  */
 
-import { checked, type Run, run } from "./lib/run.ts";
+import { checked, run } from "./lib/run.ts";
+import type { Run } from "./lib/run.ts";
 
 export const REPLY =
   "mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}";
@@ -23,7 +24,9 @@ export const USAGE = 'usage: bun scripts/land-loop/thread.ts <thread-id> "<reply
 export function argsOf(argv: readonly string[]): { id: string; body: string } | null {
   const [id, body] = argv;
 
-  if (id === undefined || id.trim() === "" || body === undefined || body.trim() === "") return null;
+  if (id === undefined || id.trim() === "" || body === undefined || body.trim() === "") {
+    return null;
+  }
 
   return { id, body };
 }
@@ -41,7 +44,9 @@ export async function answer(runner: Run, cwd: string, id: string, body: string)
 if (import.meta.main) {
   const args = argsOf(process.argv.slice(2));
 
-  if (args === null) throw new Error(USAGE);
+  if (args === null) {
+    throw new Error(USAGE);
+  }
 
   await answer(run, process.cwd(), args.id, args.body);
   console.log(`replied to ${args.id} and resolved it`);

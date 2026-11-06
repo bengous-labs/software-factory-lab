@@ -2,18 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import type { Options, PreToolUseHookInput, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 
-import {
-  type Answer,
-  answerOf,
-  askWith,
-  modelOf,
-  optionsOf,
-  type Question,
-  refuseTools,
-  type Stream,
-  STRUCTURED_OUTPUT,
-  toolDecision,
-} from "./ask.ts";
+import { answerOf, askWith, modelOf, optionsOf, refuseTools, STRUCTURED_OUTPUT, toolDecision } from "./ask.ts";
+import type { Answer, Question, Stream } from "./ask.ts";
 
 const HAIKU = "claude-haiku-5-5";
 
@@ -30,7 +20,7 @@ const preToolUse = (toolName: string): PreToolUseHookInput => ({
 });
 
 const decisionOf = async (toolName: string): Promise<unknown> =>
-  (await refuseTools(preToolUse(toolName), "t1", { signal: new AbortController().signal })) as unknown;
+  await refuseTools(preToolUse(toolName), "t1", { signal: new AbortController().signal });
 
 function result(fields: Record<string, unknown>): SDKResultMessage {
   return {
@@ -151,13 +141,15 @@ describe("answerOf", () => {
 describe("askWith", () => {
   const untilAborted = (options: Options): Promise<never> =>
     new Promise((_, reject) =>
-      options.abortController?.signal.addEventListener("abort", () => reject(new Error("aborted by the caller"))),
+      options.abortController?.signal.addEventListener("abort", () => {
+        reject(new Error("aborted by the caller"));
+      }),
     );
 
   const streamOf = (
     body: (options: Options) => AsyncGenerator<SDKMessage>,
-  ): { stream: Stream; calls: { prompt: string; options: Options }[] } => {
-    const calls: { prompt: string; options: Options }[] = [];
+  ): { stream: Stream; calls: Array<{ prompt: string; options: Options }> } => {
+    const calls: Array<{ prompt: string; options: Options }> = [];
 
     return {
       stream: (call) => {
@@ -240,6 +232,7 @@ describe("askWith", () => {
 
   test("a call that ends in time is not aborted", async () => {
     let signal: AbortSignal | undefined;
+
     const { stream } = streamOf(async function* (options) {
       signal = options.abortController?.signal;
       yield result({ structured_output: {} });

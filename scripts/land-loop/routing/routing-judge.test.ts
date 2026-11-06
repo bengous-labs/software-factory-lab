@@ -46,6 +46,7 @@ describe("routingJudge", () => {
       costUsd: 0.003,
       model: "claude-haiku-5-5",
     });
+
     const routing = await routingJudge(ask, "/repo", "1 file changed", "+docs", false);
 
     expect(questions).toHaveLength(1);
@@ -67,6 +68,7 @@ describe("routingJudge", () => {
       costUsd: 0.001,
       model: "claude-haiku-5-5",
     });
+
     const routing = await routingJudge(ask, "/repo", "s", "p", true);
 
     expect(routing).toEqual(expect.objectContaining({ ...SAFE, model: "claude-haiku-5-5" }));

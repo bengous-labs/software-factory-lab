@@ -12,12 +12,9 @@ import {
   recordOfJson,
   recordOfStored,
   risen,
-  type RoutingAnswer,
-  type Snapshot,
-  type Step,
   storedOfRecord,
-  type StoredRecord,
 } from "./decide.ts";
+import type { RoutingAnswer, Snapshot, Step, StoredRecord } from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -49,7 +46,9 @@ const READY: Snapshot = {
 function stepsOf(snapshot: Snapshot): readonly Step[] {
   const decision = decide(snapshot);
 
-  if (decision.kind !== "steps") throw new Error(`ignored: ${decision.reason}`);
+  if (decision.kind !== "steps") {
+    throw new Error(`ignored: ${decision.reason}`);
+  }
 
   return decision.steps;
 }
@@ -176,110 +175,111 @@ describe("Review rounds", () => {
 
   // Rounds run, the patch the last one read (P1 is this one), Routing answer, open Important; then the
   // Review round asked, the Owner asked, the Principal judge asked, and the Land gate (null: a model step ends the decision first).
-  const rows: [string, number, string | null, RoutingAnswer, number, 1 | 2 | null, boolean, boolean, string | null][] =
+  const rows: Array<
+    [string, number, string | null, RoutingAnswer, number, 1 | 2 | null, boolean, boolean, string | null]
+  > = [
+    ["no Review round yet: Review round 1", 0, null, LIGHT, 0, 1, false, false, null],
+    ["a Nit-only Review round 1, then a risky push: Review round 2", 1, "patch-0", RISKY, 0, 2, false, false, null],
     [
-      ["no Review round yet: Review round 1", 0, null, LIGHT, 0, 1, false, false, null],
-      ["a Nit-only Review round 1, then a risky push: Review round 2", 1, "patch-0", RISKY, 0, 2, false, false, null],
-      [
-        "a Nit-only Review round 1, then a push that needs no review: landable on its Land route",
-        1,
-        "patch-0",
-        LIGHT,
-        0,
-        null,
-        false,
-        false,
-        "success",
-      ],
-      [
-        "an Important in Review round 1, then its risky fix: Review round 2, its thread still open",
-        1,
-        "patch-0",
-        RISKY,
-        1,
-        2,
-        false,
-        false,
-        null,
-      ],
-      [
-        "an Important in Review round 1, then a fix that needs no review, resolved: landable",
-        1,
-        "patch-0",
-        LIGHT,
-        0,
-        null,
-        false,
-        false,
-        "success",
-      ],
-      [
-        "two Review rounds, then a patch that needs another: the Owner, never a third",
-        2,
-        "patch-0",
-        RISKY,
-        0,
-        null,
-        true,
-        false,
-        "pending",
-      ],
-      [
-        "two Review rounds, then a patch that needs none: it stays on its Land route",
-        2,
-        "patch-0",
-        LIGHT,
-        0,
-        null,
-        false,
-        false,
-        "success",
-      ],
-      [
-        "two Review rounds, the last on this patch, no Important open: landable on its Land route",
-        2,
-        P1,
-        LIGHT,
-        0,
-        null,
-        false,
-        false,
-        "success",
-      ],
-      [
-        "two Review rounds with no Important on the Land loop's own code: the Principal judge runs",
-        2,
-        P1,
-        LAND_LOOP,
-        0,
-        null,
-        false,
-        true,
-        null,
-      ],
-      [
-        "two Review rounds on the Land loop's own code, then a patch that needs none: the Principal judge runs",
-        2,
-        "patch-0",
-        { ...LAND_LOOP, secondRound: false },
-        0,
-        null,
-        false,
-        true,
-        null,
-      ],
-      [
-        "two Review rounds on the Land loop's own code, then a patch that needs another: the Owner, no Principal judge",
-        2,
-        "patch-0",
-        LAND_LOOP,
-        0,
-        null,
-        true,
-        false,
-        "pending",
-      ],
-    ];
+      "a Nit-only Review round 1, then a push that needs no review: landable on its Land route",
+      1,
+      "patch-0",
+      LIGHT,
+      0,
+      null,
+      false,
+      false,
+      "success",
+    ],
+    [
+      "an Important in Review round 1, then its risky fix: Review round 2, its thread still open",
+      1,
+      "patch-0",
+      RISKY,
+      1,
+      2,
+      false,
+      false,
+      null,
+    ],
+    [
+      "an Important in Review round 1, then a fix that needs no review, resolved: landable",
+      1,
+      "patch-0",
+      LIGHT,
+      0,
+      null,
+      false,
+      false,
+      "success",
+    ],
+    [
+      "two Review rounds, then a patch that needs another: the Owner, never a third",
+      2,
+      "patch-0",
+      RISKY,
+      0,
+      null,
+      true,
+      false,
+      "pending",
+    ],
+    [
+      "two Review rounds, then a patch that needs none: it stays on its Land route",
+      2,
+      "patch-0",
+      LIGHT,
+      0,
+      null,
+      false,
+      false,
+      "success",
+    ],
+    [
+      "two Review rounds, the last on this patch, no Important open: landable on its Land route",
+      2,
+      P1,
+      LIGHT,
+      0,
+      null,
+      false,
+      false,
+      "success",
+    ],
+    [
+      "two Review rounds with no Important on the Land loop's own code: the Principal judge runs",
+      2,
+      P1,
+      LAND_LOOP,
+      0,
+      null,
+      false,
+      true,
+      null,
+    ],
+    [
+      "two Review rounds on the Land loop's own code, then a patch that needs none: the Principal judge runs",
+      2,
+      "patch-0",
+      { ...LAND_LOOP, secondRound: false },
+      0,
+      null,
+      false,
+      true,
+      null,
+    ],
+    [
+      "two Review rounds on the Land loop's own code, then a patch that needs another: the Owner, no Principal judge",
+      2,
+      "patch-0",
+      LAND_LOOP,
+      0,
+      null,
+      true,
+      false,
+      "pending",
+    ],
+  ];
 
   for (const [
     name,
@@ -300,6 +300,7 @@ describe("Review rounds", () => {
         reviewedHead: reviewedPatch === null ? null : "h0",
         triage: { [P1]: routing },
       };
+
       const snapshot = { ...READY, openImportant, record };
       const steps = stepsOf(snapshot);
       const review = steps.find((step) => step.kind === "code-review");
@@ -335,6 +336,7 @@ describe("the stored record", () => {
       triage: { [P1]: { ...LIGHT, land: "human" }, "patch-2": { ...LIGHT, land: "auto" } },
       fableFailures: { [P1]: 1 },
     };
+
     const record = recordOfStored(stored);
 
     expect(record.triage[P1]?.land).toBe("owner");
@@ -357,6 +359,7 @@ describe("the stored record", () => {
     const record = recordOfJson(
       JSON.stringify({ reviewRounds: 1, reviewedPatch: P1, triage: { [P1]: { ...LIGHT, land: "human" } } }),
     );
+
     const stored = storedOfRecord(record);
 
     expect(stored.reviewRounds).toBe(1);
@@ -368,8 +371,9 @@ describe("conflictingOf", () => {
   test("only GitHub's dirty state is a conflict; unknown, blocked, clean and a missing field are not", () => {
     expect(conflictingOf("dirty")).toBe(true);
 
-    for (const state of ["unknown", "blocked", "clean", "behind", null, undefined])
+    for (const state of ["unknown", "blocked", "clean", "behind", null, undefined]) {
       expect(conflictingOf(state)).toBe(false);
+    }
   });
 });
 
@@ -393,6 +397,7 @@ describe("Land approval across a patch change", () => {
       landApprovalByOwner: true,
       record: { ...EMPTY_RECORD, landOkPatch: "patch-0" },
     };
+
     const steps = stepsOf(snapshot);
 
     expect(steps.map((step) => step.kind)).toEqual(["remove-land-approval", "record", "route"]);
@@ -436,6 +441,7 @@ describe("changes to the Land loop's own code and the Principal judge", () => {
     model: null,
     needsFable: true,
   };
+
   const landable = {
     ...READY,
     record: { ...EMPTY_RECORD, reviewedPatch: P1, reviewRounds: 1, triage: { [P1]: LAND_LOOP } },
@@ -447,7 +453,7 @@ describe("changes to the Land loop's own code and the Principal judge", () => {
   });
 
   test("a Principal judge run with no verdict is asked again, up to PRINCIPAL_JUDGE_TRIES times per patch, then counts as NOT OK", () => {
-    const cases: [number, boolean][] = [
+    const cases: Array<[number, boolean]> = [
       [0, true],
       [PRINCIPAL_JUDGE_TRIES - 1, true],
       [PRINCIPAL_JUDGE_TRIES, false],
@@ -534,6 +540,7 @@ describe("afterPrincipalJudge", () => {
       model: null,
       needsFable: true,
     };
+
     const record = afterPrincipalJudge(
       afterPrincipalJudge({ ...EMPTY_RECORD, reviewedPatch: P1, triage: { [P1]: LAND_LOOP } }, P1, null),
       P1,

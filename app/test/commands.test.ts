@@ -5,7 +5,8 @@ import { count } from "../src/commands/count.ts";
 import { done } from "../src/commands/done.ts";
 import { list } from "../src/commands/list.ts";
 import { remove } from "../src/commands/remove.ts";
-import { type Task, TaskError } from "../src/task.ts";
+import { TaskError } from "../src/task.ts";
+import type { Task } from "../src/task.ts";
 
 const TASKS: readonly Task[] = [
   { id: 1, title: "write the spec", done: true },

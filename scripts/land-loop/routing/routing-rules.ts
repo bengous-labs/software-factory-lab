@@ -42,17 +42,25 @@ const toOwner = (reason: string): RoutingAnswer => ({
 
 /** The Routing rules' answer, or null when the change is the model's to judge. */
 export function routingRulesOf({ paths, lines, messages }: RoutingInput): RoutingAnswer | null {
-  if (paths.length === 0) return toOwner("the change touches no file");
+  if (paths.length === 0) {
+    return toOwner("the change touches no file");
+  }
 
   const risky = paths.filter((path) => RISKY.some((glob) => glob.match(path)));
 
-  if (risky.length > 0) return toOwner(`touches a risky path: ${risky.slice(0, 3).join(", ")}`);
+  if (risky.length > 0) {
+    return toOwner(`touches a risky path: ${risky.slice(0, 3).join(", ")}`);
+  }
 
   const breaking = messages.find((message) => BREAKING.test(message));
 
-  if (breaking !== undefined) return toOwner(`a breaking commit: ${breaking.split("\n")[0]}`);
+  if (breaking !== undefined) {
+    return toOwner(`a breaking commit: ${breaking.split("\n")[0]}`);
+  }
 
-  if (lines > LINE_CAP) return toOwner(`${lines} lines changed, past the ${LINE_CAP}-line cap`);
+  if (lines > LINE_CAP) {
+    return toOwner(`${lines} lines changed, past the ${LINE_CAP}-line cap`);
+  }
 
   return null;
 }
