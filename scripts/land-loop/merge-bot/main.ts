@@ -2,9 +2,9 @@
 
 /**
  * The Merge bot's adapter, run by `.github/workflows/merge-bot.yml` from the default branch with the
- * App's token. One Merge bot run covers each PR the event names (every open PR on a Sweep): it reads
- * a snapshot, asks `decide.ts`, performs the steps, and decides again after a model step, until no
- * model step is left.
+ * App's token. Each start makes one Merge bot run for the PR the event names, or, on a Sweep, one for
+ * every open PR. A Merge bot run reads a snapshot of its PR, asks `decide.ts`, performs the steps, and
+ * decides again after a model step, until no model step is left.
  *
  * Reads GITHUB_REPOSITORY, OWNER (the only GitHub login whose PRs are served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
  * RUN_HEAD_SHA, EJECTION_REASON; calls gh and git, and the models through the Agent SDK.
@@ -48,7 +48,7 @@ const MERGE_BOT_STATE_MARKER = "<!-- lab-conductor-state";
 
 const MERGE_BOT_STATE_PATTERN = new RegExp(`${MERGE_BOT_STATE_MARKER} (.*) -->`, "su");
 
-/** The label that hands a PR to the Owner. An external name: open PRs carry it, so the string stays. */
+/** The label that sends the change to the Owner. An external name: open PRs carry it, so the string stays. */
 const NEEDS_OWNER_LABEL = "needs-human";
 
 /** Decisions per Merge bot run. */
@@ -361,7 +361,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
       await setCheck(env, LAND_GATE, pr.head.sha, step.check);
 
       return record;
-    case "needs-human":
+    case "needs-owner":
       await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: [NEEDS_OWNER_LABEL] });
 
       return record;

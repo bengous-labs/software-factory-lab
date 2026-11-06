@@ -2,12 +2,12 @@
 
 /**
  * The author's PR watch, armed with Monitor on its PR: every 30 s it reads the PR and prints one line
- * per event the author acts on: a failing check, a new open Important finding, a new comment in an open
- * thread or in the PR's conversation, the PR moved to draft. The App's own Nit and Pre-existing findings
- * and its conversation comments (state record, verdicts) print nothing; nor do the author's own replies,
+ * per Wake: a failing check, a new open Important finding, a new comment in an open thread or in the
+ * PR's conversation, the PR moved to draft. The App's own Nit and Pre-existing findings and its
+ * conversation comments (state record, verdicts) print nothing; nor do the author's own replies,
  * which `thread.ts` marks, since an author and a human reviewer can post under one gh identity.
- * It exits when the PR is landed or closed. What it printed is kept in `.lab/state/watch-<pr>.json`,
- * so a PR watch armed again after an expiry repeats nothing.
+ * When the PR is landed or closed, it prints its end line and exits. What it printed is kept in
+ * `.lab/state/watch-<pr>.json`, so a PR watch armed again after an expiry repeats nothing.
  *
  *   bun scripts/land-loop/pr-watch.ts <pr>
  */
@@ -62,15 +62,25 @@ export interface Wake {
   readonly line: string;
 }
 
+/** The key that keeps the end line from being printed twice. */
+export const END_KEY = "end";
+
 const flat = (body: string): string => body.replace(/\s+/gu, " ").slice(0, 400);
 
-/** The Wakes of one reading, each with the key that keeps it from being printed twice. */
+/** The end line of a landed or closed PR; null while it is open. */
+export function endOf(pr: number, state: PrState): string | null {
+  if (state.state === "MERGED") return `PR #${pr} landed. Stop watching.`;
+
+  if (state.state === "CLOSED") return `PR #${pr} closed. Stop watching.`;
+
+  return null;
+}
+
+/** The Wakes of one reading of an open PR, each with the key that keeps it from being printed twice. */
 export function wakesOf(pr: number, state: PrState): readonly Wake[] {
   const short = state.head.slice(0, 7);
 
-  if (state.state === "MERGED") return [{ key: "end", line: `PR #${pr} landed. Stop watching.` }];
-
-  if (state.state === "CLOSED") return [{ key: "end", line: `PR #${pr} closed. Stop watching.` }];
+  if (state.state !== "OPEN") return [];
 
   const wakes: Wake[] = state.checks
     .filter((check) => check.bucket === "fail")
@@ -184,17 +194,24 @@ if (import.meta.main) {
   const seenFile = join(stateDir, `watch-${pr}.json`);
   const seen = new Set<string>(existsSync(seenFile) ? (JSON.parse(readFileSync(seenFile, "utf8")) as string[]) : []);
 
+  const print = (key: string, line: string): boolean => {
+    if (seen.has(key)) return false;
+
+    seen.add(key);
+    writeFileSync(seenFile, JSON.stringify([...seen]));
+    console.log(line);
+
+    return true;
+  };
+
   for (;;) {
     try {
-      for (const wake of wakesOf(pr, await read(run, pr))) {
-        if (seen.has(wake.key)) continue;
+      const state = await read(run, pr);
+      const end = endOf(pr, state);
 
-        seen.add(wake.key);
-        writeFileSync(seenFile, JSON.stringify([...seen]));
-        console.log(wake.line);
+      if (end !== null && print(END_KEY, end)) process.exit(0);
 
-        if (wake.key === "end") process.exit(0);
-      }
+      for (const wake of wakesOf(pr, state)) print(wake.key, wake.line);
     } catch (error) {
       console.error(`pr-watch: ${error instanceof Error ? error.message : String(error)}`);
     }

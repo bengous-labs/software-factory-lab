@@ -11,7 +11,7 @@ import {
   PRINCIPAL_JUDGE_TRIES,
   recordOfStored,
   risen,
-  type Routing,
+  type RoutingAnswer,
   type Snapshot,
   type Step,
   type StoredRecord,
@@ -20,7 +20,7 @@ import {
 
 const P1 = "patch-1";
 
-const LIGHT: Routing = { land: "auto", review: "light", secondRound: false, reason: "ordinary code", model: "claude-haiku-5-5" };
+const LIGHT: RoutingAnswer = { land: "auto", review: "light", secondRound: false, reason: "ordinary code", model: "claude-haiku-5-5" };
 
 const READY: Snapshot = {
   number: 9,
@@ -69,7 +69,7 @@ describe("decide", () => {
     }
   });
 
-  test("a ready PR with green CI and a patch with no Routing is routed first", () => {
+  test("a ready PR with green CI and a patch with no Routing answer is routed first", () => {
     expect(stepsOf({ ...READY, record: EMPTY_RECORD })).toEqual([{ kind: "route", patch: P1, patchDelta: false }]);
   });
 
@@ -96,7 +96,7 @@ describe("decide", () => {
     expect(gate({ ...READY, record: { ...READY.record, reviewedPatch: P1, rounds: 0 } })).toBe("success");
   });
 
-  test("after one Review round, a fix is reviewed again only when the Routing judges it risky", () => {
+  test("after one Review round, a fix is reviewed again only when the Routing answer finds it risky", () => {
     const record = { ...READY.record, reviewedPatch: "patch-0", rounds: 1 };
 
     expect(kinds({ ...READY, record })).not.toContain("code-review");
@@ -105,7 +105,7 @@ describe("decide", () => {
     ).toContainEqual({ kind: "code-review", depth: "light", reviewRound: 2 });
   });
 
-  test("after a review with no Important, a new patch is read again only when the Routing of its Patch delta asks", () => {
+  test("after a review with no Important, a new patch is read again only when the Routing answer of its Patch delta asks", () => {
     const record = { ...READY.record, reviewedPatch: "patch-0", rounds: 0 };
 
     expect(kinds({ ...READY, record })).not.toContain("code-review");
@@ -123,7 +123,7 @@ describe("decide", () => {
 
     expect(steps.map((step) => step.kind)).not.toContain("code-review");
     expect(steps).toContainEqual({ kind: "labels", route: "owner", depth: "light" });
-    expect(steps.map((step) => step.kind)).toContain("needs-human");
+    expect(steps.map((step) => step.kind)).toContain("needs-owner");
     expect(steps.map((step) => step.kind)).not.toContain("auto-merge");
   });
 
@@ -175,7 +175,7 @@ describe("decide", () => {
 });
 
 describe("risen", () => {
-  test("labels only rise: a later Routing cannot lower land:human or review:deep", () => {
+  test("labels only rise: a later Routing answer cannot lower land:human or review:deep", () => {
     expect(risen(["land:human", "review:deep"], LIGHT)).toEqual({ route: "owner", depth: "deep" });
     expect(risen(["review:none"], LIGHT)).toEqual({ route: "auto", depth: "light" });
   });
@@ -268,7 +268,7 @@ describe("landApprovalCounts", () => {
 });
 
 describe("changes to the Land loop's own code and the Principal judge", () => {
-  const LAND_LOOP: Routing = { land: "auto", review: "deep", secondRound: true, reason: "land loop", model: null, needsFable: true };
+  const LAND_LOOP: RoutingAnswer = { land: "auto", review: "deep", secondRound: true, reason: "land loop", model: null, needsFable: true };
   const landable = { ...READY, record: { ...EMPTY_RECORD, reviewedPatch: P1, triage: { [P1]: LAND_LOOP } } };
 
   test("a landable change to the Land loop's own code asks the Principal judge before the Land gate can turn green", () => {
@@ -350,7 +350,7 @@ describe("afterPrincipalJudge", () => {
   });
 
   test("two failed runs on a patch end the retries: decide then asks the Principal judge no more", () => {
-    const LAND_LOOP: Routing = { land: "auto", review: "deep", secondRound: true, reason: "land loop", model: null, needsFable: true };
+    const LAND_LOOP: RoutingAnswer = { land: "auto", review: "deep", secondRound: true, reason: "land loop", model: null, needsFable: true };
     const record = afterPrincipalJudge(afterPrincipalJudge({ ...EMPTY_RECORD, reviewedPatch: P1, triage: { [P1]: LAND_LOOP } }, P1, null), P1, null);
 
     expect(kinds({ ...READY, record })).not.toContain("principal-judge");

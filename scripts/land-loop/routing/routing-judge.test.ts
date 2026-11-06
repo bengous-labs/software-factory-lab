@@ -19,7 +19,7 @@ function asking(answer: Answer): { ask: Ask; questions: Question[] } {
 }
 
 describe("routingOf", () => {
-  test("the schema's answer reads into a Routing that carries the exact model that gave it", () => {
+  test("the schema's answer reads into a Routing answer that carries the exact model that gave it", () => {
     expect(routingOf({ land: "auto", review: "light", second_round: false, reason: "small" }, "claude-haiku-5-5")).toEqual({
       land: "auto",
       review: "light",
@@ -37,7 +37,7 @@ describe("routingOf", () => {
 });
 
 describe("routingJudge", () => {
-  test("Haiku gets the schema and the change, and its answer is the Routing", async () => {
+  test("Haiku gets the schema and the change, and its answer is the Routing answer", async () => {
     const { ask, questions } = asking({
       kind: "answered",
       structured: { land: "auto", review: "none", second_round: false, reason: "docs" },

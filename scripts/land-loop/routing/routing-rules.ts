@@ -5,7 +5,7 @@
  * land without the owner once the Principal judge answers OK on top of the deep review.
  */
 
-import type { Routing } from "../merge-bot/decide.ts";
+import type { RoutingAnswer } from "../merge-bot/decide.ts";
 
 export const LAND_LOOP = ["scripts/land-loop/**"].map((glob) => new Bun.Glob(glob));
 
@@ -33,10 +33,10 @@ export interface RoutingInput {
   readonly messages: readonly string[];
 }
 
-const toOwner = (reason: string): Routing => ({ land: "owner", review: "deep", secondRound: true, reason, model: null, needsFable: false });
+const toOwner = (reason: string): RoutingAnswer => ({ land: "owner", review: "deep", secondRound: true, reason, model: null, needsFable: false });
 
 /** The Routing rules' answer, or null when the change is the model's to judge. */
-export function routingRulesOf({ paths, lines, messages }: RoutingInput): Routing | null {
+export function routingRulesOf({ paths, lines, messages }: RoutingInput): RoutingAnswer | null {
   if (paths.length === 0) return toOwner("the change touches no file");
 
   const risky = paths.filter((path) => RISKY.some((glob) => glob.match(path)));

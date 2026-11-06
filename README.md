@@ -1,6 +1,6 @@
 # software-factory-lab
 
-Prototype lab for an agent-driven Land loop: agents write the code, hooks and GitHub workflows open, review and judge each pull request, and GitHub's merge queue merges it with a merge commit.
+Prototype lab for an agent-driven Land loop: agents write the code, the Stop hook and GitHub workflows carry each pull request through the Land loop, with Judges for the questions code cannot answer, and GitHub's merge queue merges it with a merge commit.
 
 The app under `app/` is a small task CLI that gives the agents something to change; see `docs/usage.md`.
 

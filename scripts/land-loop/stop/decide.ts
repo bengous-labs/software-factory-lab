@@ -106,13 +106,13 @@ export function decide(pr: PullRequest | null, answer: Answer): Action {
 }
 
 /** What the hook tells the author once its PR is ready: arm the PR watch, then stop. */
-export function armReason(pr: number, watchCommand: string, threadCommand: string): string {
+export function armReason(pr: number, prWatchCommand: string, threadCommand: string): string {
   return [
     `PR #${pr} is ready for review. The Stop hook pushed your branch; you do not push, open or ready anything yourself.`,
     "",
     "Arm the PR watch on it now with Monitor, with the longest timeout:",
     "",
-    `    ${watchCommand}`,
+    `    ${prWatchCommand}`,
     "",
     "Each line it prints is a failing check, an Important finding or a human comment, or a change of state of the PR. Nit and Pre-existing findings never block: leave them.",
     "",

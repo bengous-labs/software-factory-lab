@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { AUTHOR_MARK } from "./thread.ts";
-import { wakesOf, type PrState } from "./pr-watch.ts";
+import { endOf, type PrState, wakesOf } from "./pr-watch.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
@@ -84,10 +84,18 @@ describe("wakesOf", () => {
     ]);
   });
 
-  test("a landed or closed PR ends the PR watch, whatever else it carries", () => {
-    expect(wakesOf(7, { ...OPEN, state: "MERGED", draft: true })).toEqual([
-      { key: "end", line: "PR #7 landed. Stop watching." },
-    ]);
-    expect(wakesOf(7, { ...OPEN, state: "CLOSED" })[0]?.key).toBe("end");
+  test("a landed or closed PR gives no Wake, whatever else it carries", () => {
+    const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
+
+    expect(wakesOf(7, { ...OPEN, state: "MERGED", draft: true, checks })).toEqual([]);
+    expect(wakesOf(7, { ...OPEN, state: "CLOSED", draft: true, checks })).toEqual([]);
+  });
+});
+
+describe("endOf", () => {
+  test("a landed or closed PR ends the PR watch with its end line; an open one does not", () => {
+    expect(endOf(7, { ...OPEN, state: "MERGED", draft: true })).toBe("PR #7 landed. Stop watching.");
+    expect(endOf(7, { ...OPEN, state: "CLOSED" })).toBe("PR #7 closed. Stop watching.");
+    expect(endOf(7, OPEN)).toBeNull();
   });
 });

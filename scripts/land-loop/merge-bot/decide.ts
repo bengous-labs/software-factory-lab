@@ -36,10 +36,10 @@ export const REVIEW_CHECK = "agent-review";
 export const LAND_GATE = "land-gate";
 
 /**
- * The Routing of one patch. Its keys are the stored record's format, an external name: existing
+ * The Routing answer of one patch. Its keys are the stored record's format, an external name: existing
  * records must still read, so they stay as they are. `land` holds the Land route.
  */
-export interface Routing {
+export interface RoutingAnswer {
   readonly land: LandRoute;
   readonly review: ReviewDepth;
   /** On a Patch delta after a fixed Important: whether the fix is risky enough for Review round 2. */
@@ -69,7 +69,7 @@ export interface PrincipalJudgeVerdict {
 /**
  * The record the App keeps in one comment per PR. Its keys are the stored record's format, an
  * external name: existing records must still read, so they stay as they are. `triage` holds the
- * Routing, `rounds` the Review rounds, `dequeued` the Ejection, `fable` the Principal judge.
+ * Routing answers, `rounds` the Review rounds, `dequeued` the Ejection, `fable` the Principal judge.
  */
 export interface StateRecord {
   /** The patch the last Code review read, or null before any review. */
@@ -78,8 +78,8 @@ export interface StateRecord {
   readonly reviewedHead: string | null;
   /** Review rounds that posted at least one Important. */
   readonly rounds: number;
-  /** The Routing of each patch, keyed by patch identity. */
-  readonly triage: Readonly<Record<string, Routing>>;
+  /** The Routing answer of each patch, keyed by patch identity. */
+  readonly triage: Readonly<Record<string, RoutingAnswer>>;
   /** The patch the owner's Land approval was given for. */
   readonly landOkPatch: string | null;
   /** The Ejection of the PR from the merge queue at this head, for this reason. */
@@ -101,9 +101,9 @@ export const EMPTY_RECORD: StateRecord = {
   dequeued: null,
 };
 
-/** The state record as its comment stores it: each Routing's Land route in its stored value. */
+/** The state record as its comment stores it: each Routing answer's Land route in its stored value. */
 export type StoredRecord = Omit<StateRecord, "triage"> & {
-  readonly triage: Readonly<Record<string, Omit<Routing, "land"> & { readonly land: StoredLandRoute }>>;
+  readonly triage: Readonly<Record<string, Omit<RoutingAnswer, "land"> & { readonly land: StoredLandRoute }>>;
 };
 
 /** The record a comment stores, with each Land route read back from its stored value. */
@@ -178,7 +178,7 @@ export type Step =
   | { readonly kind: "code-review"; readonly depth: Exclude<ReviewDepth, "none">; readonly reviewRound: 1 | 2 }
   | { readonly kind: "review-check"; readonly check: CheckState }
   | { readonly kind: "land-gate"; readonly check: CheckState }
-  | { readonly kind: "needs-human"; readonly reason: string }
+  | { readonly kind: "needs-owner"; readonly reason: string }
   | { readonly kind: "record"; readonly record: StateRecord }
   | { readonly kind: "remove-land-approval" }
   | { readonly kind: "principal-judge"; readonly patch: string }
@@ -189,11 +189,11 @@ export type Decision =
   | { readonly kind: "steps"; readonly steps: readonly Step[] };
 
 /**
- * Labels only rise: the higher of what is on the PR and what the Routing answers. The `land:*` and
+ * Labels only rise: the higher of what is on the PR and what the Routing answer says. The `land:*` and
  * `review:*` labels, read here and quoted in the check summaries below, are external names: open PRs
  * carry them, so the strings stay.
  */
-export function risen(labels: readonly string[], routing: Routing): { route: LandRoute; depth: ReviewDepth } {
+export function risen(labels: readonly string[], routing: RoutingAnswer): { route: LandRoute; depth: ReviewDepth } {
   const onPrRoute: LandRoute = labels.includes(`land:${storedLandRouteOf("owner")}`) ? "owner" : "auto";
   const onPrDepth = (["deep", "light", "none"] as const).find((depth) => labels.includes(`review:${depth}`));
 
@@ -280,7 +280,7 @@ export function decide(snapshot: Snapshot): Decision {
       return { kind: "steps", steps };
     }
 
-    // A later patch is read again only when the Routing of its Patch delta asks for it.
+    // A later patch is read again only when the Routing answer of its Patch delta asks for it.
     if (next.rounds < 2 && routing.secondRound) {
       steps.push({ kind: "code-review", depth: labels.depth, reviewRound: next.rounds === 0 ? 1 : 2 });
 
@@ -289,7 +289,7 @@ export function decide(snapshot: Snapshot): Decision {
 
     if (next.rounds >= 2 && routing.secondRound) {
       steps.push({ kind: "labels", route: "owner", depth: labels.depth });
-      steps.push({ kind: "needs-human", reason: "A third review round would be needed: the owner decides." });
+      steps.push({ kind: "needs-owner", reason: "A third review round would be needed: the owner decides." });
     }
   }
 
