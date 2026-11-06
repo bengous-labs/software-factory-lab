@@ -1,13 +1,11 @@
 /**
  * The Routing rules: what sends a change to the deepest review whatever a model says of it, and who
  * lands it. The GitHub workflows, the session hooks and settings, the task file's format and the build
- * config always go to the owner. A change whose only risky paths are the Land loop's own scripts may
- * land without the owner once the Principal judge answers OK on top of the deep review.
+ * config always go to the owner. So do the Land loop's own scripts, like any other risky path: the
+ * judges read only the diff, so no route lands a risky path without the owner.
  */
 
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
-
-export const LAND_LOOP = ["scripts/land-loop/**"].map((glob) => new Bun.Glob(glob));
 
 export const RISKY = [
   ".github/**",
@@ -40,26 +38,14 @@ export function routingRulesOf({ paths, lines, messages }: RoutingInput): Routin
   if (paths.length === 0) return toOwner("the change touches no file");
 
   const risky = paths.filter((path) => RISKY.some((glob) => glob.match(path)));
-  const ownerOnly = risky.filter((path) => !LAND_LOOP.some((glob) => glob.match(path)));
 
-  if (ownerOnly.length > 0) return toOwner(`touches a risky path: ${ownerOnly.slice(0, 3).join(", ")}`);
+  if (risky.length > 0) return toOwner(`touches a risky path: ${risky.slice(0, 3).join(", ")}`);
 
   const breaking = messages.find((message) => BREAKING.test(message));
 
   if (breaking !== undefined) return toOwner(`a breaking commit: ${breaking.split("\n")[0]}`);
 
   if (lines > LINE_CAP) return toOwner(`${lines} lines changed, past the ${LINE_CAP}-line cap`);
-
-  if (risky.length > 0) {
-    return {
-      land: "auto",
-      review: "deep",
-      secondRound: true,
-      reason: `touches the Land loop's own code only: ${risky.slice(0, 3).join(", ")}; lands after a deep review and a Principal judge OK`,
-      model: null,
-      needsFable: true,
-    };
-  }
 
   return null;
 }

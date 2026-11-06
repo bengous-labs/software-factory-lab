@@ -13,8 +13,7 @@ describe("routingRulesOf", () => {
       [{ paths: ["app/src/store/store.ts"], lines: 3, messages: [] }, "risky path: app/src/store/store.ts"],
       [{ paths: [".github/workflows/ci.yml"], lines: 3, messages: [] }, "risky path"],
       [{ paths: ["scripts/lab/verification.sh"], lines: 3, messages: [] }, "risky path"],
-      [{ paths: ["scripts/land-loop/pr-watch.ts", ".github/workflows/merge-bot.yml"], lines: 3, messages: [] }, "risky path: .github"],
-      [{ paths: ["scripts/land-loop/pr-watch.ts", ".claude/settings.json"], lines: 3, messages: [] }, "risky path: .claude"],
+      [{ paths: [".claude/settings.json"], lines: 3, messages: [] }, "risky path: .claude"],
       [{ paths: ["AGENTS.md"], lines: 3, messages: [] }, "risky path"],
       [{ paths: ["app/src/cli.ts"], lines: 3, messages: ["feat!: drop list"] }, "a breaking commit"],
       [{ paths: ["app/src/cli.ts"], lines: 3, messages: ["feat: x\n\nBREAKING CHANGE: y"] }, "a breaking commit"],
@@ -32,14 +31,14 @@ describe("routingRulesOf", () => {
 });
 
 describe("changes to the Land loop's own code", () => {
-  test("a change whose only risky paths are scripts/land-loop lands as land:auto after a deep review and a Principal judge OK", () => {
+  test("a change whose only risky paths are scripts/land-loop goes to the owner, with a deep review and no Fable", () => {
     const routing = routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts", "app/src/cli.ts"], lines: 30, messages: ["fix: x"] });
 
-    expect(routing).toMatchObject({ land: "auto", review: "deep", needsFable: true });
+    expect(routing).toMatchObject({ land: "owner", review: "deep", needsFable: false });
+    expect(routing?.reason).toContain("risky path: scripts/land-loop/pr-watch.ts");
   });
 
-  test("past the line cap or with a breaking commit, a change to the Land loop's code still goes to the owner", () => {
-    expect(routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts"], lines: 401, messages: [] })?.land).toBe("owner");
-    expect(routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts"], lines: 3, messages: ["feat!: x"] })?.land).toBe("owner");
+  test("a change touching only scripts/land-loop goes to the owner", () => {
+    expect(routingRulesOf({ paths: ["scripts/land-loop/pr-watch.ts"], lines: 3, messages: [] })).toMatchObject({ land: "owner", review: "deep", needsFable: false });
   });
 });
