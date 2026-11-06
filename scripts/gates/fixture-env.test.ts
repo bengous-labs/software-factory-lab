@@ -1,11 +1,28 @@
-import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, realpathSync } from "node:fs";
+import { afterAll, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { $ } from "bun";
 
 import { fixtureEnv } from "./fixture-env.ts";
+
+const created: string[] = [];
+
+/** A new empty directory, removed once the tests end. */
+function scratch(prefix: string): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+
+  created.push(dir);
+
+  return dir;
+}
+
+afterAll(() => {
+  for (const dir of created) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("drops every GIT_ variable and keeps the others", () => {
   expect(
@@ -14,8 +31,8 @@ test("drops every GIT_ variable and keeps the others", () => {
 });
 
 test("a fixture's git ignores an inherited GIT_DIR and stays in the fixture", async () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "fixture-env-")));
-  const decoy = join(mkdtempSync(join(tmpdir(), "fixture-env-decoy-")), "repo.git");
+  const root = scratch("fixture-env-");
+  const decoy = join(scratch("fixture-env-decoy-"), "repo.git");
   const env = fixtureEnv({ ...process.env, GIT_DIR: decoy });
 
   await $`git init -q`.cwd(root).env(env);
@@ -26,8 +43,8 @@ test("a fixture's git ignores an inherited GIT_DIR and stays in the fixture", as
 });
 
 test("without it, the same git init writes to the GIT_DIR it inherits", async () => {
-  const root = mkdtempSync(join(tmpdir(), "fixture-env-"));
-  const decoy = join(mkdtempSync(join(tmpdir(), "fixture-env-decoy-")), "repo.git");
+  const root = scratch("fixture-env-");
+  const decoy = join(scratch("fixture-env-decoy-"), "repo.git");
 
   await $`git init -q`.cwd(root).env({ ...fixtureEnv(process.env), GIT_DIR: decoy });
 
