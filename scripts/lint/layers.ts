@@ -208,32 +208,24 @@ function memberOf(identifier: Reference["identifier"]): string | null {
 
 /**
  * The I/O global `identifier` reaches, or null. A reference in a type loads no code and reaches none;
- * `Bun` and the global objects read whole are refused, as they can reach any member.
+ * `Bun` read whole is refused, as it can reach any member, and so is a global object, whatever follows it.
  */
 function ioGlobalOf(identifier: Reference["identifier"]): string | null {
   if (identifier.parent.type === "TSQualifiedName" || identifier.parent.type === "TSTypeQuery") {
     return null;
   }
 
-  if (IO_GLOBALS.includes(identifier.name)) {
+  if (IO_GLOBALS.includes(identifier.name) || GLOBAL_OBJECTS.includes(identifier.name)) {
     return identifier.name;
+  }
+
+  if (identifier.name !== "Bun") {
+    return null;
   }
 
   const member = memberOf(identifier);
 
-  if (identifier.name === "Bun") {
-    return member !== null && BUN_PURE_MEMBERS.includes(member) ? null : `Bun${member === null ? "" : `.${member}`}`;
-  }
-
-  if (!GLOBAL_OBJECTS.includes(identifier.name)) {
-    return null;
-  }
-
-  if (member === null) {
-    return identifier.name;
-  }
-
-  return IO_GLOBALS.includes(member) || member === "Bun" ? `${identifier.name}.${member}` : null;
+  return member !== null && BUN_PURE_MEMBERS.includes(member) ? null : `Bun${member === null ? "" : `.${member}`}`;
 }
 
 /** Whether a call loads a module as `require(…)` or `import.meta.require(…)` does. */

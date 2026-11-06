@@ -162,6 +162,11 @@ const SOURCES = {
     "export const viaSelf = self.fetch;",
     "export const whole = globalThis;",
     "export const clone = globalThis.structuredClone;",
+    "export const deep = globalThis.globalThis.process.env;",
+    'export const chained = self.globalThis.fetch("u");',
+    "export type Global = typeof globalThis;",
+    "export const viaGlobal = global.process;",
+    "export const viaWindow = window.fetch;",
   ].join("\n"),
   "scripts/land-loop/merge-bot/decide.ts": [
     "export function shadow(process: number): number {",
@@ -171,9 +176,11 @@ const SOURCES = {
     'export const fetched = fetch("a");',
   ].join("\n"),
   "scripts/land-loop/pr-watch.ts": 'import { x } from "./thread.ts";\nexport const y = x;\n',
-  "scripts/land-loop/thread.ts": 'export const x = 1;\nBun.spawn(["ls"]);\n',
+  "scripts/land-loop/thread.ts":
+    'export const x = 1;\nBun.spawn(["ls"]);\nexport const env = globalThis.process.env;\n',
   "scripts/land-loop/new.ts": "export const z = 1;\n",
-  "scripts/land-loop/lib/run.ts": 'export const run = 1;\nBun.spawn(["ls"]);\n',
+  "scripts/land-loop/lib/run.ts":
+    'export const run = 1;\nBun.spawn(["ls"]);\nexport const env = self.globalThis.process.env;\n',
 } as const;
 
 type SourceName = keyof typeof SOURCES;
@@ -238,8 +245,11 @@ describe("local/layers through oxlint", () => {
     expect(lines("scripts/land-loop/queue/decide.ts")).toEqual([1, 2, 3, 4, 6]);
   });
 
-  test("reports every Bun member but Glob, and the I/O globals read off globalThis or self, never a type", () => {
-    expect(lines("scripts/land-loop/routing/routing-rules.ts")).toEqual([4, 5, 6, 7]);
+  test("reports every Bun member but Glob, and globalThis, self, global and window whatever follows, never a type", () => {
+    expect(lines("scripts/land-loop/routing/routing-rules.ts")).toEqual([4, 5, 6, 7, 8, 9, 10, 12, 13]);
+    expect(messages).toContain(
+      "`scripts/land-loop/routing/routing-rules.ts` (domain) uses `globalThis`, I/O that only infra, entry, tooling, test may do. The entry point does the I/O and passes the result, or the code goes behind a port. Do not change the map or the rule: they belong to the Owner.",
+    );
   });
 
   test("reports Bun.spawn, Bun.sleep, fetch, process and Bun read whole in the domain, and leaves Bun.Glob", () => {
