@@ -228,11 +228,9 @@ describe("prStateOf", () => {
   test("what gh prints outside its schema throws, naming the command", () => {
     const draft = JSON.stringify({ headRefOid: HEAD, isDraft: false, state: "DRAFT" });
 
-    expect(() => prStateOf(draft, "", "", threads([]))).toThrow(
-      'gh pr view: Expected "OPEN" | "MERGED" | "CLOSED", got "DRAFT"',
-    );
+    expect(() => prStateOf(draft, "", "", threads([]))).toThrow('gh pr view: Expected "OPEN" | "MERGED" | "CLOSED"');
     expect(() => prStateOf(view, "", JSON.stringify({ id: 11, author: "a", body: "b" }), threads([]))).toThrow(
-      'a conversation comment: Expected string, got 11\n  at ["id"]',
+      'a conversation comment: Expected string\n  at ["id"]',
     );
     expect(() => prStateOf(view, "", "", JSON.stringify({ data: null }))).toThrow("the review threads query: ");
   });

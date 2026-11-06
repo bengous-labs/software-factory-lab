@@ -38,7 +38,7 @@ export function promptOf(guide: string, diff: string): string {
 /** The verdict SCHEMA describes, decoded from the call's structured output. */
 export const VerdictAnswer = Schema.Struct({ ok: Schema.Boolean, reason: Schema.String });
 
-const decodeVerdict = Schema.decodeUnknownResult(VerdictAnswer, { reportInput: true });
+const decodeVerdict = Schema.decodeUnknownResult(VerdictAnswer);
 
 /** A verdict, or the reason the Principal judge gave none. */
 export interface PrincipalJudgeRun {

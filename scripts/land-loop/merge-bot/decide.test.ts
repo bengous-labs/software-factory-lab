@@ -367,7 +367,7 @@ describe("the stored record", () => {
 
   test("a record outside its schema is refused, naming the field", () => {
     expect(() => recordOfJson(JSON.stringify({ reviewRounds: "1" }))).toThrow(
-      'the Merge bot state record: Expected number, got "1"\n  at ["reviewRounds"]',
+      'the Merge bot state record: Expected number\n  at ["reviewRounds"]',
     );
     expect(() => recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, review: "skim" } } }))).toThrow(
       `at ["triage"]["${P1}"]["review"]`,

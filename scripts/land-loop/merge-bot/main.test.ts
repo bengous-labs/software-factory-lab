@@ -95,10 +95,10 @@ describe("the GitHub answers the Merge bot reads", () => {
 
   test("an answer outside the schema is refused, naming the endpoint and the field", () => {
     expect(() => decodeJson(Pull, "gh api repos/o/r/pulls/12", JSON.stringify({ ...PULL, state: "merged" }))).toThrow(
-      'gh api repos/o/r/pulls/12: Expected "open" | "closed", got "merged"\n  at ["state"]',
+      'gh api repos/o/r/pulls/12: Expected "open" | "closed"\n  at ["state"]',
     );
     expect(() =>
       decodeJson(IssueComments, "comments", JSON.stringify([{ id: "1", user: { login: "a" }, body: "b" }])),
-    ).toThrow('Expected number, got "1"\n  at [0]["id"]');
+    ).toThrow('Expected number\n  at [0]["id"]');
   });
 });

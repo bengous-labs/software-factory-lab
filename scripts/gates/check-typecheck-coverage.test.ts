@@ -29,9 +29,7 @@ describe("filesOf", () => {
     expect(() => filesOf(JSON.stringify({ compilerOptions: {} }))).toThrow(
       'tsgo --showConfig: Missing key\n  at ["files"]',
     );
-    expect(() => filesOf(JSON.stringify({ files: ["./a.ts", 7] }))).toThrow(
-      'Expected string, got 7\n  at ["files"][1]',
-    );
+    expect(() => filesOf(JSON.stringify({ files: ["./a.ts", 7] }))).toThrow('Expected string\n  at ["files"][1]');
   });
 });
 

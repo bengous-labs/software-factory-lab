@@ -37,7 +37,7 @@ export function filePathOf(stdin: string): string | null {
 
 /** The `[fmt].ignorePatterns` of a `bunfig.toml`. */
 export function formatIgnorePatterns(bunfig: string): readonly string[] {
-  const decoded = Schema.decodeUnknownResult(Bunfig, { reportInput: true })(Bun.TOML.parse(bunfig));
+  const decoded = Schema.decodeUnknownResult(Bunfig)(Bun.TOML.parse(bunfig));
 
   if (Result.isFailure(decoded)) {
     throw new Error(`bunfig.toml: ${decoded.failure.message}`, { cause: decoded.failure });

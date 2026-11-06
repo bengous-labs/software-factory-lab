@@ -17,7 +17,7 @@ describe("decodeJson", () => {
 
   test("JSON outside the schema throws, naming its source and the path that failed", () => {
     expect(() => decodeJson(Pr, "gh pr view", '{"number": "7"}')).toThrow(
-      'gh pr view: Expected number, got "7"\n  at ["number"]',
+      'gh pr view: Expected number\n  at ["number"]',
     );
   });
 });

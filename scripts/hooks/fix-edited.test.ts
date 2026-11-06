@@ -23,9 +23,9 @@ describe("filePathOf", () => {
   });
 
   test("refuses an input that is not a tool call's", () => {
-    expect(() => filePathOf("null")).toThrow("the PostToolUse input: Expected object, got null");
+    expect(() => filePathOf("null")).toThrow("the PostToolUse input: Expected object");
     expect(() => filePathOf(JSON.stringify({ tool_input: { file_path: 7 } }))).toThrow(
-      'Expected string, got 7\n  at ["tool_input"]["file_path"]',
+      'Expected string\n  at ["tool_input"]["file_path"]',
     );
   });
 });
@@ -38,7 +38,7 @@ describe("formatIgnorePatterns", () => {
 
   test("refuses a list that holds anything but patterns", () => {
     expect(() => formatIgnorePatterns("[fmt]\nignorePatterns = [7]\n")).toThrow(
-      'bunfig.toml: Expected string, got 7\n  at ["fmt"]["ignorePatterns"][0]',
+      'bunfig.toml: Expected string\n  at ["fmt"]["ignorePatterns"][0]',
     );
   });
 

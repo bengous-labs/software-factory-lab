@@ -121,7 +121,7 @@ export const ForkOutput = Schema.Struct({
   usage: Schema.optionalKey(Schema.Struct({ cache_read_input_tokens: Schema.optionalKey(Schema.Finite) })),
 });
 
-const decodeForkOutput = Schema.decodeResult(Schema.fromJsonString(ForkOutput), { reportInput: true });
+const decodeForkOutput = Schema.decodeResult(Schema.fromJsonString(ForkOutput));
 
 /** `unreadable` says why the fork's output did not read: such a fork gave no answer. */
 export interface ForkResult {

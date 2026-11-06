@@ -132,7 +132,7 @@ export const ReviewAnswer = Schema.Struct({
 
 export type ReviewAnswer = typeof ReviewAnswer.Type;
 
-const decodeReviewAnswer = Schema.decodeUnknownResult(ReviewAnswer, { reportInput: true });
+const decodeReviewAnswer = Schema.decodeUnknownResult(ReviewAnswer);
 
 /** The findings of the answer, Nits capped. */
 export function findingsOf(answer: ReviewAnswer): readonly Finding[] {

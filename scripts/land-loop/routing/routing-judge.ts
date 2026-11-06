@@ -55,7 +55,7 @@ export const RoutingJudgeAnswer = Schema.Struct({
 
 export type RoutingJudgeAnswer = typeof RoutingJudgeAnswer.Type;
 
-const decodeRoutingJudgeAnswer = Schema.decodeUnknownResult(RoutingJudgeAnswer, { reportInput: true });
+const decodeRoutingJudgeAnswer = Schema.decodeUnknownResult(RoutingJudgeAnswer);
 
 /** The Routing answer the judge's answer carries, given by `model`. */
 export function routingOf(answer: RoutingJudgeAnswer, model: string | null): RoutingAnswer {

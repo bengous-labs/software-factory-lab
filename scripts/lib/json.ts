@@ -6,7 +6,7 @@ export function decodeJson<S extends Schema.ConstraintDecoder<unknown>>(
   source: string,
   text: string,
 ): S["Type"] {
-  const decoded = Schema.decodeResult(Schema.fromJsonString(schema), { reportInput: true })(text);
+  const decoded = Schema.decodeResult(Schema.fromJsonString(schema))(text);
 
   if (Result.isFailure(decoded)) {
     throw new Error(`${source}: ${decoded.failure.message}`, { cause: decoded.failure });

@@ -202,7 +202,7 @@ describe("transcript", () => {
       `${JSON.stringify({ type: "user" })}\n${JSON.stringify({ type: "user", message: { content: 7 } })}\n`,
     );
 
-    expect(() => linesOf(path)).toThrow(`${path} line 2: Expected string | array, got 7\n  at ["message"]["content"]`);
+    expect(() => linesOf(path)).toThrow(`${path} line 2: Expected string | array\n  at ["message"]["content"]`);
   });
 
   test("the PR text is the fork's first line as title, the rest as body", () => {
@@ -229,11 +229,9 @@ describe("forkResultOf", () => {
       costUsd: null,
       cacheRead: null,
       code: 124,
-      unreadable: 'Expected a valid JSON string, got ""',
+      unreadable: "Expected a valid JSON string",
     });
-    expect(forkResultOf(JSON.stringify({ result: 7 }), 0, 9).unreadable).toBe(
-      'Expected string, got 7\n  at ["result"]',
-    );
+    expect(forkResultOf(JSON.stringify({ result: 7 }), 0, 9).unreadable).toBe('Expected string\n  at ["result"]');
   });
 });
 

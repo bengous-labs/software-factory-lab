@@ -109,7 +109,7 @@ describe("routingJudge", () => {
 
     expect(routing).toMatchObject(SAFE);
     expect(routing.reason).toBe(
-      'the Routing judge failed: its answer does not read: Expected "auto" | "owner", got "soon"\n  at ["land"]',
+      'the Routing judge failed: its answer does not read: Expected "auto" | "owner"\n  at ["land"]',
     );
   });
 });

@@ -32,7 +32,7 @@ describe("store", () => {
   test("the versions just below and above the readable ones are refused", () => {
     for (const version of [0, 3]) {
       expect(() => parse(JSON.stringify({ version, tasks: [] }), "f.json")).toThrow(
-        `f.json: Expected 1 | 2, got ${version}\n  at ["version"]`,
+        `f.json: Expected 1 | 2\n  at ["version"]`,
       );
     }
   });
@@ -77,7 +77,7 @@ describe("store", () => {
       tasks: [{ id: 1, title: "a", done: false, createdAt: "yesterday" }],
     });
 
-    expect(() => parse(text, "f.json")).toThrow('Expected an ISO timestamp, got "yesterday"');
+    expect(() => parse(text, "f.json")).toThrow("Expected an ISO timestamp");
   });
 
   test("a creation date that is not a string is refused", () => {
@@ -86,7 +86,7 @@ describe("store", () => {
       tasks: [{ id: 1, title: "a", done: false, createdAt: 20_261_105 }],
     });
 
-    expect(() => parse(text, "f.json")).toThrow("Expected string, got 20261105");
+    expect(() => parse(text, "f.json")).toThrow("Expected string");
   });
 
   test("a task missing a field is refused", () => {
