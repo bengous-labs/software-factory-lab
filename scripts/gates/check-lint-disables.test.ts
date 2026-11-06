@@ -71,21 +71,36 @@ describe("findUnsuppressible", () => {
     ]);
   });
 
+  test("reports a suppression that names no rule, with or without a reason", () => {
+    for (const text of [
+      `// ${OX}lint-disable-next-line -- the reason`,
+      `/* ${OX}lint-disable */`,
+      `// ${ES}lint-disable-line`,
+    ]) {
+      expect(findUnsuppressible("a.ts", text)).toEqual([{ path: "a.ts", line: 1, text }]);
+    }
+  });
+
   test("leaves a justified suppression of another rule, and a mention of the rule outside a directive", () => {
     expect(findUnsuppressible("a.ts", `${JUSTIFIED}\n// local/layers keeps the domain pure\n`)).toEqual([]);
   });
 });
 
-test("the gate fails on a suppression of local/layers, whatever its reason", async () => {
+test("the gate fails on a suppression of local/layers or of every rule, whatever its reason", async () => {
   const root = mkdtempSync(join(tmpdir(), "lint-disables-"));
+  const everyRule = `// ${OX}lint-disable-next-line -- the reason`;
 
   await $`git init -q`.cwd(root);
   writeFileSync(join(root, "a.ts"), `${LAYERS_JUSTIFIED}\nconst a = 1;\n`);
+  writeFileSync(join(root, "b.ts"), `${everyRule}\nconst b = 1;\n`);
+  writeFileSync(join(root, "c.ts"), `${JUSTIFIED}\nconst c = 1;\n`);
 
   const refused = await $`bun ${SCRIPT}`.cwd(root).nothrow().quiet();
 
   expect(refused.exitCode).toBe(1);
   expect(refused.stderr.toString()).toContain(`a.ts:1: ${LAYERS_JUSTIFIED}`);
+  expect(refused.stderr.toString()).toContain(`b.ts:1: ${everyRule}`);
+  expect(refused.stderr.toString()).not.toContain("c.ts");
   expect(refused.stderr.toString()).toContain("which no reason allows");
 });
 

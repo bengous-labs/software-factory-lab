@@ -6,7 +6,7 @@
  *
  *   // oxlint-disable-next-line some-rule -- the reason this one is unavoidable
  *
- * A suppression of a rule in `UNSUPPRESSIBLE` is refused whatever its reason.
+ * A suppression of a rule in `UNSUPPRESSIBLE`, or of every rule, is refused whatever its reason.
  *
  * Reads every file of the working tree under the current directory: the tracked ones, and the
  * untracked ones no ignore rule covers.
@@ -27,6 +27,9 @@ const JUSTIFIED = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b.*\s--\s+\S/u;
 // The layer map belongs to the Owner: a layer violation is fixed in the import, never silenced.
 const UNSUPPRESSIBLE = ["local/layers"];
 
+// A directive that names no rule suppresses every rule, the unsuppressible ones included.
+const EVERY_RULE = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\s*(?:--|\*\/|$)/u;
+
 export interface Offence {
   readonly path: string;
   readonly line: number;
@@ -46,7 +49,11 @@ export function findOffences(path: string, contents: string): Offence[] {
 }
 
 export function findUnsuppressible(path: string, contents: string): Offence[] {
-  return offencesWhere(path, contents, (text) => UNSUPPRESSIBLE.some((rule) => text.includes(rule)));
+  return offencesWhere(
+    path,
+    contents,
+    (text) => EVERY_RULE.test(text) || UNSUPPRESSIBLE.some((rule) => text.includes(rule)),
+  );
 }
 
 export function isCandidate(path: string): boolean {
@@ -90,13 +97,15 @@ if (import.meta.main) {
   }
 
   if (unsuppressible.length > 0) {
-    console.error(`${unsuppressible.length} suppression(s) of ${UNSUPPRESSIBLE.join(", ")}, which no reason allows:\n`);
+    console.error(
+      `${unsuppressible.length} suppression(s) of ${UNSUPPRESSIBLE.join(", ")} or of every rule, which no reason allows:\n`,
+    );
 
     for (const offence of unsuppressible) {
       console.error(`  ${offence.path}:${offence.line}: ${offence.text}`);
     }
 
-    console.error("\nRemove the suppression and fix the import.");
+    console.error("\nRemove the suppression and fix the code.");
   }
 
   if (offences.length > 0 || unsuppressible.length > 0) {
