@@ -6,13 +6,16 @@
  *
  *   // oxlint-disable-next-line some-rule -- the reason this one is unavoidable
  *
- * A suppression of a rule in `UNSUPPRESSIBLE`, or of every rule, is refused whatever its reason.
+ * A suppression of a rule in `UNSUPPRESSIBLE` (`local/layers` and the budget rules), in any spelling
+ * oxlint reads, or of every rule, is refused whatever its reason.
  *
  * Reads every file of the working tree under the current directory: the tracked ones, and the
  * untracked ones no ignore rule covers.
  */
 
 import { $ } from "bun";
+
+import { BUDGETS } from "../lint/exceptions.ts";
 
 const EXCLUDED_PREFIXES = ["node_modules/", "scripts/vendor/anti-slop/"];
 
@@ -24,11 +27,40 @@ const DIRECTIVE = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b/u;
 // The reason counts only after the directive: a ` -- ` before it is code, such as a decrement.
 const JUSTIFIED = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b.*\s--\s+\S/u;
 
-// The layer map belongs to the Owner: a layer violation is fixed in the import, never silenced.
-const UNSUPPRESSIBLE = ["local/layers"];
+// The layer map and the budget exceptions belong to the Owner: a violation is fixed, never silenced.
+const UNSUPPRESSIBLE = ["local/layers", ...Object.keys(BUDGETS)];
 
-// A directive that names no rule suppresses every rule, the unsuppressible ones included.
-const EVERY_RULE = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\s*(?:--|\*\/|$)/u;
+// The rule list runs from the directive to its reason, the end of a block comment, or the end of the line.
+const RULE_LIST = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b(?<rules>.*?)(?:\s--(?:\s|$)|\*\/|$)/u;
+
+const WRAPPED = /^(?<plugin>[\w@/-]+)\((?<rule>[\w/-]+)\)$/u;
+
+/** A rule as the config names it: oxlint also reads `plugin(rule)`, and a bare name as a rule of `eslint`. */
+export function ruleIdOf(spelling: string): string {
+  const wrapped = WRAPPED.exec(spelling)?.groups;
+
+  if (wrapped?.plugin !== undefined && wrapped.rule !== undefined) {
+    return `${wrapped.plugin}/${wrapped.rule}`;
+  }
+
+  return spelling.includes("/") ? spelling : `eslint/${spelling}`;
+}
+
+/** The rules a directive line suppresses, none listed meaning every rule; the reason is not read. */
+export function suppressedRules(text: string): string[] {
+  const rules = RULE_LIST.exec(text)?.groups?.rules ?? "";
+
+  return rules
+    .split(/[\s,]+/u)
+    .filter((spelling) => spelling !== "")
+    .map((spelling) => ruleIdOf(spelling));
+}
+
+function suppressesUnsuppressible(text: string): boolean {
+  const rules = suppressedRules(text);
+
+  return rules.length === 0 || rules.some((rule) => UNSUPPRESSIBLE.includes(rule));
+}
 
 export interface Offence {
   readonly path: string;
@@ -49,11 +81,7 @@ export function findOffences(path: string, contents: string): Offence[] {
 }
 
 export function findUnsuppressible(path: string, contents: string): Offence[] {
-  return offencesWhere(
-    path,
-    contents,
-    (text) => EVERY_RULE.test(text) || UNSUPPRESSIBLE.some((rule) => text.includes(rule)),
-  );
+  return offencesWhere(path, contents, suppressesUnsuppressible);
 }
 
 export function isCandidate(path: string): boolean {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { $ } from "bun";
 
-import { findOffences, findUnsuppressible, isCandidate } from "./check-lint-disables.ts";
+import { findOffences, findUnsuppressible, isCandidate, suppressedRules } from "./check-lint-disables.ts";
 import { fixtureEnv } from "./fixture-env.ts";
 
 const SCRIPT = join(import.meta.dir, "check-lint-disables.ts");
@@ -86,6 +86,41 @@ describe("findUnsuppressible", () => {
 
   test("leaves a justified suppression of another rule, and a mention of the rule outside a directive", () => {
     expect(findUnsuppressible("a.ts", `${JUSTIFIED}\n// local/layers keeps the domain pure\n`)).toEqual([]);
+  });
+
+  test("leaves a suppression whose reason, not its rule list, names local/layers", () => {
+    expect(
+      findUnsuppressible("a.ts", `// ${OX}lint-disable-next-line eslint/no-console -- unrelated to local/layers`),
+    ).toEqual([]);
+  });
+
+  test("reports local/layers and the budget rules in every spelling oxlint reads, and inside a list", () => {
+    for (const rules of [
+      "local(layers)",
+      "eslint/max-params",
+      "max-params",
+      "eslint(max-params)",
+      "complexity/complexity",
+      "complexity(complexity)",
+      "no-console, local/layers",
+    ]) {
+      const text = `// ${OX}lint-disable-next-line ${rules} -- the reason`;
+
+      expect({ rules, found: findUnsuppressible("a.ts", text).length }).toEqual({ rules, found: 1 });
+    }
+  });
+});
+
+describe("suppressedRules", () => {
+  test("reads the rule list up to the reason or the end of a block comment, in the config's spelling", () => {
+    expect(suppressedRules(`// ${OX}lint-disable-next-line no-console, local(layers) -- see local/x`)).toEqual([
+      "eslint/no-console",
+      "local/layers",
+    ]);
+    expect(suppressedRules(`/* ${ES}lint-disable typescript/no-explicit-any */`)).toEqual([
+      "typescript/no-explicit-any",
+    ]);
+    expect(suppressedRules(`// ${OX}lint-disable-line -- why`)).toEqual([]);
   });
 });
 
