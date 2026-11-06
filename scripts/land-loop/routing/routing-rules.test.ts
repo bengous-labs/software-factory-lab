@@ -55,9 +55,62 @@ describe("changes to the Land loop's own code", () => {
   });
 });
 
+describe("a change to a gate's config", () => {
+  test("a change touching only bunfig.toml goes to the owner", () => {
+    expect(routingRulesOf({ paths: ["bunfig.toml"], lines: 1, messages: [] })?.land).toBe("owner");
+  });
+
+  test("a change touching only oxlint.config.ts goes to the owner", () => {
+    expect(routingRulesOf({ paths: ["oxlint.config.ts"], lines: 1, messages: [] })?.land).toBe("owner");
+  });
+
+  test("a change touching only oxlint.style.config.ts goes to the owner", () => {
+    expect(routingRulesOf({ paths: ["oxlint.style.config.ts"], lines: 1, messages: [] })?.land).toBe("owner");
+  });
+
+  test("a change touching only .oxfmtrc.jsonc goes to the owner", () => {
+    expect(routingRulesOf({ paths: [".oxfmtrc.jsonc"], lines: 1, messages: [] })?.land).toBe("owner");
+  });
+
+  test("a change touching only stryker.config.ts goes to the owner", () => {
+    expect(routingRulesOf({ paths: ["stryker.config.ts"], lines: 1, messages: [] })?.land).toBe("owner");
+  });
+
+  test("a change touching only knip.jsonc goes to the owner", () => {
+    expect(routingRulesOf({ paths: ["knip.jsonc"], lines: 1, messages: [] })?.land).toBe("owner");
+  });
+
+  test("a change touching only knip.json goes to the owner", () => {
+    expect(routingRulesOf({ paths: ["knip.json"], lines: 1, messages: [] })?.land).toBe("owner");
+  });
+
+  test("a change touching only .mcp.json goes to the owner", () => {
+    expect(routingRulesOf({ paths: [".mcp.json"], lines: 1, messages: [] })?.land).toBe("owner");
+  });
+
+  test("a config of the same name outside the root is the model's to judge", () => {
+    expect(routingRulesOf({ paths: ["app/bunfig.toml", "app/oxlint.config.ts"], lines: 1, messages: [] })).toBeNull();
+  });
+});
+
 const RISKY_DIRECTORIES = [".github", "scripts", ".claude", "app/src/store"];
 
-const RISKY_FILES = ["REVIEW.md", "AGENTS.md", "CLAUDE.md", "package.json", "bun.lock", "mise.toml", "tsconfig.json"];
+const RISKY_FILES = [
+  "REVIEW.md",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "package.json",
+  "bun.lock",
+  "mise.toml",
+  "tsconfig.json",
+  "bunfig.toml",
+  "oxlint.config.ts",
+  "oxlint.style.config.ts",
+  ".oxfmtrc.jsonc",
+  "stryker.config.ts",
+  "knip.jsonc",
+  ".mcp.json",
+];
 
 const SEGMENT = fc.stringMatching(/^[\w.-]{1,12}$/u).filter((segment) => segment !== "." && segment !== "..");
 
