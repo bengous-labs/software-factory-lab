@@ -10,9 +10,12 @@ export const FORMAT_VERSION = 2;
 /** Versions read as they are; a version 1 task has no createdAt. A save always writes FORMAT_VERSION. */
 const READABLE_VERSIONS = [1, FORMAT_VERSION] as const;
 
+/** A task as the file stores it: a key the Task type does not name is kept, so a save writes it back. */
+const StoredTask = Schema.StructWithRest(Task, [Schema.Record(Schema.String, Schema.Json)]);
+
 const StoreFile = Schema.Struct({
   version: Schema.Literals(READABLE_VERSIONS),
-  tasks: Schema.Array(Task),
+  tasks: Schema.Array(StoredTask),
 }).check(
   Schema.makeFilter((file) =>
     file.version === 1

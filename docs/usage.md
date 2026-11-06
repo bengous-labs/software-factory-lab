@@ -69,7 +69,7 @@ The file has no `tasks` array, or a task lacks a field or holds one of the wrong
 }
 ```
 
-A key the format does not name is dropped when the file is read, and so from the file on the next save.
+A task may carry other keys, such as a hand-added `priority`; `todo` keeps them when it saves the file.
 
 ## Two task lists
 

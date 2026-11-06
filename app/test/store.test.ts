@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -115,6 +115,25 @@ describe("store", () => {
       { id: 3, title: "ship", done: false },
     ]);
     expect(parse(serialize(tasks), "f.json")).toEqual(tasks);
+  });
+
+  test("a key the format does not name survives a load and a save unchanged", () => {
+    const file = { version: 2, tasks: [{ id: 1, title: "a", done: false, priority: "high", tags: ["x"] }] };
+    const text = `${JSON.stringify(file, null, 2)}\n`;
+
+    expect(serialize(parse(text, "f.json"))).toBe(text);
+  });
+
+  test("a key the format does not name survives a command that rewrites its task", () => {
+    const path = tempFile();
+    writeFileSync(path, JSON.stringify({ version: 2, tasks: [{ id: 1, title: "a", done: false, priority: "high" }] }));
+
+    run(["done", "1"], path);
+
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      version: 2,
+      tasks: [{ id: 1, title: "a", done: true, priority: "high" }],
+    });
   });
 
   test("the file carries its format version", () => {
