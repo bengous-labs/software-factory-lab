@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,8 @@ import { FORMAT_VERSION, load, parse, save, serialize } from "../src/store/store
 import { TaskError } from "../src/task.ts";
 
 const tempFile = (): string => join(mkdtempSync(join(tmpdir(), "todo-")), "todo.json");
+
+const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
 
 describe("store", () => {
   test("a missing file holds no task", () => {
@@ -30,7 +32,7 @@ describe("store", () => {
   test("the versions just below and above the readable ones are refused", () => {
     for (const version of [0, 3]) {
       expect(() => parse(JSON.stringify({ version, tasks: [] }), "f.json")).toThrow(
-        `format version ${version}, expected 1 or 2`,
+        `f.json: Expected 1 | 2, got ${version}\n  at ["version"]`,
       );
     }
   });
@@ -66,7 +68,7 @@ describe("store", () => {
       tasks: [{ id: 1, title: "a", done: false, createdAt: "2026-11-05T09:00:00.000Z" }],
     });
 
-    expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");
+    expect(() => parse(text, "f.json")).toThrow('a version 1 task has no createdAt\n  at ["tasks"][0]["createdAt"]');
   });
 
   test("a creation date that is not an ISO timestamp is refused", () => {
@@ -75,7 +77,7 @@ describe("store", () => {
       tasks: [{ id: 1, title: "a", done: false, createdAt: "yesterday" }],
     });
 
-    expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");
+    expect(() => parse(text, "f.json")).toThrow('Expected an ISO timestamp, got "yesterday"');
   });
 
   test("a creation date that is not a string is refused", () => {
@@ -84,13 +86,35 @@ describe("store", () => {
       tasks: [{ id: 1, title: "a", done: false, createdAt: 20_261_105 }],
     });
 
-    expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");
+    expect(() => parse(text, "f.json")).toThrow("Expected string, got 20261105");
   });
 
   test("a task missing a field is refused", () => {
     const text = JSON.stringify({ version: FORMAT_VERSION, tasks: [{ id: 1 }] });
 
-    expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");
+    expect(() => parse(text, "f.json")).toThrow('Missing key\n  at ["tasks"][0]["title"]');
+  });
+
+  test("a file that is not JSON, or not an object, is refused with its path", () => {
+    expect(() => parse("{ version: 2", "f.json")).toThrow(TaskError);
+    expect(() => parse("{ version: 2", "f.json")).toThrow("f.json: ");
+    expect(() => parse("[]", "f.json")).toThrow(TaskError);
+  });
+
+  test("a version 2 file in the current format reads back byte for byte", () => {
+    const text = fixture("tasks-v2.json");
+
+    expect(serialize(parse(text, "tasks-v2.json"))).toBe(text);
+  });
+
+  test("a version 1 file in the current format reads, and saves as version 2 with the same tasks", () => {
+    const tasks = parse(fixture("tasks-v1.json"), "tasks-v1.json");
+
+    expect(tasks).toEqual([
+      { id: 1, title: "write tests", done: true },
+      { id: 3, title: "ship", done: false },
+    ]);
+    expect(parse(serialize(tasks), "f.json")).toEqual(tasks);
   });
 
   test("the file carries its format version", () => {

@@ -1,9 +1,18 @@
-export interface Task {
-  readonly id: number;
-  readonly title: string;
-  readonly done: boolean;
-  readonly createdAt?: string;
-}
+import { Schema } from "effect";
+
+/** When a task was added, as `Date.prototype.toISOString` writes it. */
+export const CreatedAt = Schema.String.check(
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u, { expected: "an ISO timestamp" }),
+);
+
+export const Task = Schema.Struct({
+  id: Schema.Number,
+  title: Schema.String,
+  done: Schema.Boolean,
+  createdAt: Schema.optionalKey(CreatedAt),
+});
+
+export type Task = typeof Task.Type;
 
 export class TaskError extends Error {}
 
