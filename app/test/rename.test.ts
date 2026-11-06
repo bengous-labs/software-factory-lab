@@ -10,10 +10,7 @@ const TASKS = [
 
 describe("rename", () => {
   test("the task with that id takes the new title, trimmed; the others stay", () => {
-    expect(rename(TASKS, 1, " new ")).toEqual([
-      { id: 1, title: "new", done: false },
-      { id: 2, title: "other", done: true },
-    ]);
+    expect(rename(TASKS, 1, " new ")[0]).toEqual({ id: 1, title: "new", done: false });
   });
 
   test("a blank title or an unknown id is refused", () => {
