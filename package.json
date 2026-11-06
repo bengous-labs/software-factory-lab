@@ -18,6 +18,7 @@
     "oxlint-tsgolint": "7.0.2006"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.318"
+    "@anthropic-ai/claude-agent-sdk": "0.3.318",
+    "effect": "4.1.2"
   }
 }
