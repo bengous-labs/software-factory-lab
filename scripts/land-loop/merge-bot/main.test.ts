@@ -9,6 +9,7 @@ import {
   CommitPulls,
   IssueComments,
   IssueEvents,
+  landApprovalByOwnerOf,
   ListedPrs,
   Pull,
   ReviewThreads,
@@ -95,6 +96,42 @@ describe("the GitHub answers the Merge bot reads", () => {
     expect(decodeJson(ReviewThreads, "threads", JSON.stringify(answer))).toEqual(answer);
   });
 
+  test("GitHub's null user, actor and App read, and a deleted user's event leaves the Land approval as it was", () => {
+    const events = decodeJson(
+      IssueEvents,
+      "events",
+      JSON.stringify([
+        { event: "labeled", label: { name: "land-ok" }, actor: { login: "owner" }, created_at: "2026-11-05T11:00:00Z" },
+        { event: "head_ref_force_pushed", actor: null, created_at: "2026-11-05T11:05:00Z" },
+        { event: "unlabeled", label: null, actor: null, created_at: "2026-11-05T11:06:00Z" },
+      ]),
+    );
+
+    expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T10:00:00Z")).toBe(true);
+    expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T12:00:00Z")).toBe(false);
+    expect(landApprovalByOwnerOf(events, "someone", "2026-11-05T10:00:00Z")).toBe(false);
+
+    const byGhost = decodeJson(
+      IssueEvents,
+      "events",
+      JSON.stringify([
+        { event: "labeled", label: { name: "land-ok" }, actor: null, created_at: "2026-11-05T11:00:00Z" },
+      ]),
+    );
+
+    expect(landApprovalByOwnerOf(byGhost, "owner", null)).toBe(false);
+
+    const runs = JSON.stringify({
+      check_runs: [{ name: "validate", status: "completed", conclusion: "success", app: null }],
+    });
+
+    expect(decodeJson(CheckRuns, "runs", runs).check_runs[0]?.app).toBeNull();
+    expect(decodeJson(Pull, "pull", JSON.stringify({ ...PULL, user: null })).user).toBeNull();
+    expect(decodeJson(IssueComments, "comments", JSON.stringify([{ id: 1, user: null, body: "b" }]))).toEqual([
+      { id: 1, user: null, body: "b" },
+    ]);
+  });
+
   test("an answer outside the schema is refused, naming the endpoint and the field", () => {
     expect(() => decodeJson(Pull, "gh api repos/o/r/pulls/12", JSON.stringify({ ...PULL, state: "merged" }))).toThrow(
       'gh api repos/o/r/pulls/12: Expected "open" | "closed"\n  at ["state"]',
@@ -107,7 +144,7 @@ describe("the GitHub answers the Merge bot reads", () => {
   test("every other endpoint's answer outside its schema is refused", () => {
     const refused: ReadonlyArray<[Schema.ConstraintDecoder<unknown>, Schema.Json]> = [
       [CheckRuns, { check_runs: [{ name: "validate", status: "completed", conclusion: null }] }],
-      [IssueEvents, [{ event: "labeled", label: null, actor: { login: "a" }, created_at: "t" }]],
+      [IssueEvents, [{ event: "labeled", label: { name: "land-ok" }, actor: { login: "a" } }]],
       [CheckSuites, { check_suites: [{ created_at: null }] }],
       [WorkflowRuns, { workflow_runs: null }],
       [CommitPulls, [{ number: "3", state: "open" }]],

@@ -221,6 +221,14 @@ describe("prStateOf", () => {
     });
   });
 
+  test("a conversation comment by a deleted user reads, its author unknown", () => {
+    const conversation = JSON.stringify({ id: "13", author: null, body: "old" });
+
+    expect(prStateOf(view, "", conversation, threads([])).comments).toEqual([
+      { id: "13", author: "unknown", body: "old" },
+    ]);
+  });
+
   test("no checks printed is no check", () => {
     expect(prStateOf(view, "", "", threads([])).checks).toEqual([]);
   });

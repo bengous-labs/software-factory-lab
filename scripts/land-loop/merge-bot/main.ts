@@ -122,7 +122,7 @@ export const Pull = Schema.Struct({
   draft: Schema.Boolean,
   mergeable: Schema.NullOr(Schema.Boolean),
   mergeable_state: Schema.String,
-  user: Schema.Struct({ login: Schema.String }),
+  user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
   labels: Schema.Array(Schema.Struct({ name: Schema.String })),
   head: Schema.Struct({
     sha: Schema.String,
@@ -158,7 +158,9 @@ export const ReviewThreads = Schema.Struct({
 });
 
 /** `repos/<repo>/issues/<n>/comments`, as far as the Merge bot reads it. */
-export const IssueComments = Schema.Array(Schema.Struct({ id: Schema.Finite, user: Login, body: Schema.String }));
+export const IssueComments = Schema.Array(
+  Schema.Struct({ id: Schema.Finite, user: Schema.NullOr(Login), body: Schema.String }),
+);
 
 /** `repos/<repo>/commits/<sha>/check-runs`, as far as the Merge bot reads it. */
 export const CheckRuns = Schema.Struct({
@@ -167,7 +169,7 @@ export const CheckRuns = Schema.Struct({
       name: Schema.String,
       status: Schema.String,
       conclusion: Schema.NullOr(Schema.String),
-      app: Schema.Struct({ slug: Schema.String }),
+      app: Schema.NullOr(Schema.Struct({ slug: Schema.String })),
     }),
   ),
 });
@@ -176,11 +178,22 @@ export const CheckRuns = Schema.Struct({
 export const IssueEvents = Schema.Array(
   Schema.Struct({
     event: Schema.String,
-    label: Schema.optionalKey(Schema.Struct({ name: Schema.String })),
-    actor: Login,
+    label: Schema.optionalKey(Schema.NullOr(Schema.Struct({ name: Schema.String }))),
+    actor: Schema.NullOr(Login),
     created_at: Schema.String,
   }),
 );
+
+/** Whether the last Land approval label put on the PR was put by `owner` after its head was pushed. */
+export function landApprovalByOwnerOf(
+  events: typeof IssueEvents.Type,
+  owner: string,
+  headPushedAt: string | null,
+): boolean {
+  const last = events.filter((event) => event.event === "labeled" && event.label?.name === LAND_APPROVAL_LABEL).at(-1);
+
+  return landApprovalCounts(last?.actor?.login === owner, last?.created_at ?? null, headPushedAt);
+}
 
 /** `repos/<repo>/commits/<sha>/check-suites`, as far as the Merge bot reads it. */
 export const CheckSuites = Schema.Struct({ check_suites: Schema.Array(Schema.Struct({ created_at: Schema.String })) });
@@ -228,7 +241,7 @@ async function recordOf(env: Env, pr: number): Promise<{ id: number | null; reco
   const comments = await api(env, IssueComments, `repos/${env.repo}/issues/${pr}/comments?per_page=100`);
 
   const mine = comments.find(
-    (comment) => comment.user.login === env.appLogin && comment.body.includes(MERGE_BOT_STATE_MARKER),
+    (comment) => comment.user?.login === env.appLogin && comment.body.includes(MERGE_BOT_STATE_MARKER),
   );
 
   if (mine === undefined) {
@@ -288,22 +301,18 @@ async function snapshotOf(
 ): Promise<Snapshot> {
   const runs = await api(env, CheckRuns, `repos/${env.repo}/commits/${pr.head.sha}/check-runs?check_name=validate`);
 
-  const validate = runs.check_runs.find((check) => check.app.slug === "github-actions");
+  const validate = runs.check_runs.find((check) => check.app?.slug === "github-actions");
   const labels = pr.labels.map((label) => label.name);
   let landApprovalByOwner = false;
 
   if (labels.includes(LAND_APPROVAL_LABEL)) {
     const events = await api(env, IssueEvents, `repos/${env.repo}/issues/${pr.number}/events?per_page=100`);
 
-    const last = events
-      .filter((event) => event.event === "labeled" && event.label?.name === LAND_APPROVAL_LABEL)
-      .at(-1);
-
     // The head's first check suite is created when it is pushed: a Land approval put before that was given for another head.
     const suites = await api(env, CheckSuites, `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`);
 
     const pushedAt = suites.check_suites.map((suite) => suite.created_at).toSorted()[0] ?? null;
-    landApprovalByOwner = landApprovalCounts(last?.actor.login === env.owner, last?.created_at ?? null, pushedAt);
+    landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, pushedAt);
   }
 
   const devRuns = await api(
@@ -316,7 +325,7 @@ async function snapshotOf(
     number: pr.number,
     state: pr.merged ? "MERGED" : pr.state === "open" ? "OPEN" : "CLOSED",
     sameRepository: pr.head.repo?.full_name === env.repo,
-    openedByOwner: pr.user.login === env.owner,
+    openedByOwner: pr.user?.login === env.owner,
     draft: pr.draft,
     head: pr.head.sha,
     patch: await patchOf(env, range),

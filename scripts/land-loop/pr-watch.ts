@@ -33,10 +33,18 @@ export const Check = Schema.Struct({ name: Schema.String, bucket: Schema.String,
 
 export type Check = typeof Check.Type;
 
-/** One conversation comment as the `--jq` filter of `read` prints it. */
-export const Comment = Schema.Struct({ id: Schema.String, author: Schema.String, body: Schema.String });
+export interface Comment {
+  readonly id: string;
+  readonly author: string;
+  readonly body: string;
+}
 
-export type Comment = typeof Comment.Type;
+/** One conversation comment as the `--jq` filter of `read` prints it; a deleted user's has a null author. */
+const ConversationComment = Schema.Struct({
+  id: Schema.String,
+  author: Schema.NullOr(Schema.String),
+  body: Schema.String,
+});
 
 export interface Thread {
   readonly id: string;
@@ -215,9 +223,9 @@ export function prStateOf(view: string, checks: string, conversation: string, th
       .split("\n")
       .filter((line) => line !== "")
       .map((line) => {
-        const comment = decodeJson(Comment, "a conversation comment", line);
+        const comment = decodeJson(ConversationComment, "a conversation comment", line);
 
-        return { ...comment, author: comment.author.replace(/\[bot\]$/u, "") };
+        return { ...comment, author: comment.author?.replace(/\[bot\]$/u, "") ?? "unknown" };
       }),
   };
 }

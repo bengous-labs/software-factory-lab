@@ -27,7 +27,7 @@ const CheckRun = Schema.Struct({
   name: Schema.String,
   status: Schema.String,
   conclusion: Schema.NullOr(Schema.String),
-  app: Schema.Struct({ slug: Schema.String }),
+  app: Schema.NullOr(Schema.Struct({ slug: Schema.String })),
   completed_at: Schema.NullOr(Schema.String),
 });
 
@@ -42,7 +42,7 @@ export const CheckRuns = Schema.Struct({ check_runs: Schema.Array(CheckRun) });
 /** The latest completed check of that name the App posted, green or not. */
 export function greenOnHead(runs: readonly CheckRun[], name: string, appSlug: string): boolean {
   const mine = runs
-    .filter((check) => check.name === name && check.app.slug === appSlug && check.status === "completed")
+    .filter((check) => check.name === name && check.app?.slug === appSlug && check.status === "completed")
     .toSorted((a, b) => (a.completed_at ?? "").localeCompare(b.completed_at ?? ""));
 
   return mine.at(-1)?.conclusion === "success";

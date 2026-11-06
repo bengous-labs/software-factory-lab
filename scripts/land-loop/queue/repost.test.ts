@@ -34,6 +34,24 @@ describe("greenOnHead", () => {
 });
 
 describe("the GitHub answers this job reads", () => {
+  test("a check run with no App reads, and never counts as the App's", () => {
+    const text = JSON.stringify({
+      check_runs: [
+        {
+          name: "land-gate",
+          status: "completed",
+          conclusion: "success",
+          completed_at: "2026-11-05T11:00:00Z",
+          app: null,
+        },
+      ],
+    });
+
+    expect(greenOnHead(decodeJson(CheckRuns, "check runs", text).check_runs, "land-gate", "bengous-labs-agents")).toBe(
+      false,
+    );
+  });
+
   test("a check run still in progress reads with no conclusion and no completion time", () => {
     const text = JSON.stringify({
       total_count: 1,
