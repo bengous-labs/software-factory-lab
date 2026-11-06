@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { $ } from "bun";
 import { Schema } from "effect";
 
+import { OXLINT } from "../gates/check-exception-ratchet.ts";
 import { decodeJson } from "../lib/json.ts";
 import type { Place } from "./layers.map.ts";
 import { edgeRefusal, globToRegExp, placeOf, resolvedPath } from "./layers.ts";
@@ -120,8 +121,7 @@ describe("edgeRefusal", () => {
 });
 
 // oxlint's RuleTester does not run under Bun, so the rule runs through oxlint itself, from a directory
-// laid out like the repository: the rule places files by their path from the directory oxlint runs in.
-const OXLINT = join(import.meta.dir, "..", "..", "node_modules/oxlint/bin/oxlint");
+// laid out like the repository: the rule places a file outside the repository by its path from there.
 
 const PLUGIN = join(import.meta.dir, "index.ts");
 
@@ -143,6 +143,25 @@ const SOURCES = {
     'const glob = new Bun.Glob("*");',
     "await Bun.sleep(1);",
     "export const all = [run, checked, live, env, bun, glob];",
+  ].join("\n"),
+  "scripts/land-loop/queue/decide.ts": [
+    'import f = require("../lib/run.ts");',
+    'const g = require("../lib/run.ts");',
+    'const h = import.meta.require("../lib/run.ts");',
+    'export {} from "../review/code-review.ts";',
+    'const name = "../lib/run.ts";',
+    "const computed = require(name);",
+    "export const all = [f, g, h, computed];",
+  ].join("\n"),
+  "scripts/land-loop/routing/routing-rules.ts": [
+    'export const matches = (glob: Bun.Glob): boolean => glob.match("x");',
+    "export type Env = typeof process.env;",
+    "export type Fetch = typeof fetch;",
+    "export const token = Bun.env.TOKEN;",
+    "export const env = globalThis.process.env;",
+    "export const viaSelf = self.fetch;",
+    "export const whole = globalThis;",
+    "export const clone = globalThis.structuredClone;",
   ].join("\n"),
   "scripts/land-loop/merge-bot/decide.ts": [
     "export function shadow(process: number): number {",
@@ -212,11 +231,19 @@ const lines = (name: SourceName): number[] => (reported.get(name) ?? []).toSorte
 
 describe("local/layers through oxlint", () => {
   test("reports each value edge to the infra, a mixed import, export from, import() and import types of the infra", () => {
-    expect(lines("scripts/land-loop/stop/decide.ts")).toEqual([1, 2, 5, 6, 8, 9, 10, 11, 12, 13]);
+    expect(lines("scripts/land-loop/stop/decide.ts")).toEqual([1, 2, 5, 6, 8, 9, 10, 11, 12, 13, 15]);
   });
 
-  test("reports Bun.spawn, fetch, process and Bun read whole in the domain, and leaves Bun.Glob and Bun.sleep", () => {
-    for (const global of ["Bun.spawn", "fetch", "process", "Bun"]) {
+  test("reports import = require, require, import.meta.require, export {} from, and a computed require", () => {
+    expect(lines("scripts/land-loop/queue/decide.ts")).toEqual([1, 2, 3, 4, 6]);
+  });
+
+  test("reports every Bun member but Glob, and the I/O globals read off globalThis or self, never a type", () => {
+    expect(lines("scripts/land-loop/routing/routing-rules.ts")).toEqual([4, 5, 6, 7]);
+  });
+
+  test("reports Bun.spawn, Bun.sleep, fetch, process and Bun read whole in the domain, and leaves Bun.Glob", () => {
+    for (const global of ["Bun.spawn", "Bun.sleep", "fetch", "process", "Bun"]) {
       expect(messages).toContain(
         `\`scripts/land-loop/stop/decide.ts\` (domain) uses \`${global}\`, I/O that only infra, entry, tooling, test may do. The entry point does the I/O and passes the result, or the code goes behind a port. Do not change the map or the rule: they belong to the Owner.`,
       );
@@ -231,6 +258,14 @@ describe("local/layers through oxlint", () => {
     expect(lines("scripts/land-loop/pr-watch.ts")).toEqual([1]);
     expect(lines("scripts/land-loop/thread.ts")).toEqual([]);
     expect(lines("scripts/land-loop/lib/run.ts")).toEqual([]);
+  });
+
+  test("places a file of the repository from its root, when oxlint runs from a subdirectory", async () => {
+    const config = join(dir, ".oxlintrc.json");
+    const app = join(import.meta.dir, "..", "..", "app");
+    const ran = await $`${OXLINT} -c ${config} --format=json src/task.ts`.cwd(app).nothrow().quiet();
+
+    expect(decodeJson(OxlintReport, "the oxlint report", ran.stdout.toString()).diagnostics).toEqual([]);
   });
 
   test("reports a file the map does not place", () => {

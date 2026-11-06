@@ -4,11 +4,12 @@ import type { Context, ESTree, Reference, SourceCode } from "@oxlint/plugins";
 import { defineRule } from "@oxlint/plugins";
 
 import {
-  BUN_IO_MEMBERS,
+  BUN_PURE_MEMBERS,
   DOMAIN_EFFECT_MODULES,
   EXTERNAL_IMPORTS,
   EXTERNALS,
   FILES,
+  GLOBAL_OBJECTS,
   IO_GLOBALS,
   IO_LAYERS,
   LAYER_IMPORTS,
@@ -171,12 +172,18 @@ function importedName(part: ImportSpecifierNode): string {
 
 function exportEdge(node: ESTree.ExportNamedDeclaration, source: ESTree.StringLiteral): Edge {
   const values = node.exportKind === "type" ? [] : node.specifiers.filter((part) => part.exportKind !== "type");
-  const kind: ImportKind = node.exportKind === "type" || values.length === 0 ? "type" : "value";
+
+  // `export {} from` names nothing, yet loads its module, as a side-effect import does.
+  const kind: ImportKind =
+    node.exportKind === "type" || (node.specifiers.length > 0 && values.length === 0) ? "type" : "value";
 
   return {
     specifier: source.value,
     kind,
-    valueNames: values.map((part) => (part.local.type === "Literal" ? part.local.value : part.local.name)),
+    valueNames:
+      values.length === 0 && kind === "value"
+        ? ["*"]
+        : values.map((part) => (part.local.type === "Literal" ? part.local.value : part.local.name)),
   };
 }
 
@@ -190,23 +197,57 @@ function globalReferences(sourceCode: SourceCode, program: ESTree.Program): Refe
   ];
 }
 
-/** The I/O global `identifier` reaches, or null: `Bun` read whole is refused, as it can reach any member. */
+/** The member `identifier` reads, by name; null when it is read whole or by a computed key. */
+function memberOf(identifier: Reference["identifier"]): string | null {
+  const { parent } = identifier;
+
+  return parent.type === "MemberExpression" && parent.object === identifier && !parent.computed
+    ? parent.property.name
+    : null;
+}
+
+/**
+ * The I/O global `identifier` reaches, or null. A reference in a type loads no code and reaches none;
+ * `Bun` and the global objects read whole are refused, as they can reach any member.
+ */
 function ioGlobalOf(identifier: Reference["identifier"]): string | null {
+  if (identifier.parent.type === "TSQualifiedName" || identifier.parent.type === "TSTypeQuery") {
+    return null;
+  }
+
   if (IO_GLOBALS.includes(identifier.name)) {
     return identifier.name;
   }
 
-  if (identifier.name !== "Bun") {
+  const member = memberOf(identifier);
+
+  if (identifier.name === "Bun") {
+    return member !== null && BUN_PURE_MEMBERS.includes(member) ? null : `Bun${member === null ? "" : `.${member}`}`;
+  }
+
+  if (!GLOBAL_OBJECTS.includes(identifier.name)) {
     return null;
   }
 
-  const { parent } = identifier;
-
-  if (parent.type !== "MemberExpression" || parent.object !== identifier || parent.computed) {
-    return "Bun";
+  if (member === null) {
+    return identifier.name;
   }
 
-  return BUN_IO_MEMBERS.includes(parent.property.name) ? `Bun.${parent.property.name}` : null;
+  return IO_GLOBALS.includes(member) || member === "Bun" ? `${identifier.name}.${member}` : null;
+}
+
+/** Whether a call loads a module as `require(…)` or `import.meta.require(…)` does. */
+function isRequireCall(node: ESTree.CallExpression): boolean {
+  const { callee } = node;
+
+  return (
+    (callee.type === "Identifier" && callee.name === "require") ||
+    (callee.type === "MemberExpression" &&
+      !callee.computed &&
+      callee.property.name === "require" &&
+      callee.object.type === "MetaProperty" &&
+      callee.object.meta.name === "import")
+  );
 }
 
 /** The text of a string literal written with quotes; null for any other expression. */
@@ -214,8 +255,15 @@ function stringLiteralOf(node: ESTree.Expression): string | null {
   return node.type === "Literal" && /^["']/u.test(node.raw ?? "") ? String(node.value) : null;
 }
 
+const slashed = (path: string): string => path.replaceAll("\\", "/");
+
+const REPO_ROOT = posix.join(slashed(import.meta.dirname), "..", "..");
+
+/** The path from the repository root, whatever directory oxlint runs from; a file outside it reads from that directory. */
 function relativePath(context: Context): string {
-  return posix.relative(context.cwd.replaceAll("\\", "/"), context.filename.replaceAll("\\", "/"));
+  const fromRoot = posix.relative(REPO_ROOT, slashed(context.filename));
+
+  return fromRoot.startsWith("../") ? posix.relative(slashed(context.cwd), slashed(context.filename)) : fromRoot;
 }
 
 export const layersRule = defineRule({
@@ -240,6 +288,20 @@ export const layersRule = defineRule({
 
       if (message !== null) {
         context.report({ node, message });
+      }
+    };
+
+    /** A module loaded at run time, by `import()` or a `require`: only a string literal can be placed. */
+    const checkLoaded = (node: ESTree.Node, source: ESTree.Expression | null): void => {
+      const specifier = source === null ? null : stringLiteralOf(source);
+
+      if (specifier === null) {
+        context.report({
+          node,
+          message: `\`${path}\` loads a computed specifier, which the layer map cannot place. Load a string literal. ${OWNER}`,
+        });
+      } else {
+        check(node, { specifier, kind: "value", valueNames: ["*"] });
       }
     };
 
@@ -273,15 +335,22 @@ export const layersRule = defineRule({
         });
       },
       ImportExpression(node) {
-        const specifier = stringLiteralOf(node.source);
+        checkLoaded(node, node.source);
+      },
+      CallExpression(node) {
+        const [loaded] = node.arguments;
 
-        if (specifier === null) {
-          context.report({
-            node,
-            message: `\`${path}\` imports a computed specifier, which the layer map cannot place. Import a string literal. ${OWNER}`,
+        if (isRequireCall(node)) {
+          checkLoaded(node, loaded === undefined || loaded.type === "SpreadElement" ? null : loaded);
+        }
+      },
+      TSImportEqualsDeclaration(node) {
+        if (node.moduleReference.type === "TSExternalModuleReference") {
+          check(node, {
+            specifier: node.moduleReference.expression.value,
+            kind: node.importKind === "type" ? "type" : "value",
+            valueNames: ["*"],
           });
-        } else {
-          check(node, { specifier, kind: "value", valueNames: ["*"] });
         }
       },
       TSImportType(node) {

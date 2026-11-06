@@ -104,8 +104,11 @@ export const DOMAIN_EFFECT_MODULES: readonly string[] = ["Schema", "Data", "Opti
 
 export const IO_GLOBALS: readonly string[] = ["fetch", "process"];
 
-/** `Bun.Glob` and the other members stay open to every layer. */
-export const BUN_IO_MEMBERS: readonly string[] = ["spawn", "spawnSync", "file", "write", "$"];
+/** The members of `Bun` every layer may use; any other (`spawn`, `file`, `write`, `env`, `stdout`, …) is I/O. */
+export const BUN_PURE_MEMBERS: readonly string[] = ["Glob"];
 
-/** The layers that may use `IO_GLOBALS` and `BUN_IO_MEMBERS`. */
+/** The global objects that reach `IO_GLOBALS` and `Bun` as members. */
+export const GLOBAL_OBJECTS: readonly string[] = ["globalThis", "self"];
+
+/** The layers that may use `IO_GLOBALS`, `Bun` and the global objects whole. */
 export const IO_LAYERS: readonly Layer[] = ["infra", "entry", "tooling", "test"];
