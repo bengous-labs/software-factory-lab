@@ -62,12 +62,10 @@ export default defineConfig({
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
-    // The boundaries narrow `unknown` with typeof guards until they are decoded by a schema; these four
-    // rules condemn that idiom, so they stay off until each boundary goes through a schema decoder.
-    "anti-slop/no-runtime-typeof": "off",
-    "anti-slop/no-unknown-parameters": "off",
-    "anti-slop/no-unsafe-dictionary-type": "off",
-    "anti-slop/no-unknown-returns": "off",
+    "anti-slop/no-runtime-typeof": "error",
+    "anti-slop/no-unknown-parameters": "error",
+    "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-unknown-returns": "error",
   },
   // extends does not carry ignorePatterns.
   ignorePatterns: IGNORE_PATTERNS,
