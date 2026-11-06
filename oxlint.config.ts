@@ -7,7 +7,10 @@ export default defineConfig({
   categories: { correctness: "error", suspicious: "error", pedantic: "error" },
   plugins: ["typescript", "unicorn", "oxc", "import"],
   options: { typeAware: true },
+  jsPlugins: [{ name: "local", specifier: `${import.meta.dirname}/scripts/lint/index.ts` }],
   rules: {
+    "local/layers": "error",
+
     // Owner decision: no size limit; complexity is limited instead.
     "eslint/max-lines": "off",
     "eslint/max-lines-per-function": "off",

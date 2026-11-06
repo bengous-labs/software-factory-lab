@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { $ } from "bun";
 
-import { findOffences, isCandidate } from "./check-lint-disables.ts";
+import { findOffences, findUnsuppressible, isCandidate } from "./check-lint-disables.ts";
 
 const SCRIPT = join(import.meta.dir, "check-lint-disables.ts");
 
@@ -19,6 +19,8 @@ const JUSTIFIED = `${BARE} -- the reason`;
 const ES = "es";
 
 const BARE_ESLINT = `// ${ES}lint-disable no-console`;
+
+const LAYERS_JUSTIFIED = `// ${OX}lint-disable-next-line local/layers -- the reason`;
 
 describe("isCandidate", () => {
   test("accepts every linted extension", () => {
@@ -60,6 +62,31 @@ describe("findOffences", () => {
   test("reports the eslint spelling too", () => {
     expect(findOffences("a.js", BARE_ESLINT)).toHaveLength(1);
   });
+});
+
+describe("findUnsuppressible", () => {
+  test("reports a suppression of local/layers even with a reason", () => {
+    expect(findUnsuppressible("a.ts", `const x = 1;\n${LAYERS_JUSTIFIED}\n`)).toEqual([
+      { path: "a.ts", line: 2, text: LAYERS_JUSTIFIED },
+    ]);
+  });
+
+  test("leaves a justified suppression of another rule, and a mention of the rule outside a directive", () => {
+    expect(findUnsuppressible("a.ts", `${JUSTIFIED}\n// local/layers keeps the domain pure\n`)).toEqual([]);
+  });
+});
+
+test("the gate fails on a suppression of local/layers, whatever its reason", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lint-disables-"));
+
+  await $`git init -q`.cwd(root);
+  writeFileSync(join(root, "a.ts"), `${LAYERS_JUSTIFIED}\nconst a = 1;\n`);
+
+  const refused = await $`bun ${SCRIPT}`.cwd(root).nothrow().quiet();
+
+  expect(refused.exitCode).toBe(1);
+  expect(refused.stderr.toString()).toContain(`a.ts:1: ${LAYERS_JUSTIFIED}`);
+  expect(refused.stderr.toString()).toContain("which no reason allows");
 });
 
 test("the gate fails on a working tree file whose suppression has no reason, and passes once it has one", async () => {
