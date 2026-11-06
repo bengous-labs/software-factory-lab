@@ -10,7 +10,7 @@
  * Reads the PostToolUse input on stdin.
  */
 
-import { extname, isAbsolute, join, relative } from "node:path";
+import { extname, isAbsolute, join, relative, sep } from "node:path";
 
 import { $ } from "bun";
 
@@ -51,7 +51,7 @@ export function formatIgnorePatterns(bunfig: string): string[] {
 export function candidateOf(root: string, filePath: string, ignorePatterns: readonly string[]): string | null {
   const path = relative(root, filePath);
 
-  if (path === "" || path.startsWith("..") || isAbsolute(path) || !FORMATTED.has(extname(path))) {
+  if (path === "" || path.split(sep)[0] === ".." || isAbsolute(path) || !FORMATTED.has(extname(path))) {
     return null;
   }
 

@@ -39,6 +39,7 @@ describe("candidateOf", () => {
   test("a file under the root with a formatted extension is a candidate, as a path relative to the root", () => {
     expect(candidateOf("/repo", "/repo/app/src/a.ts", [])).toBe("app/src/a.ts");
     expect(candidateOf("/repo", "/repo/docs/usage.md", [])).toBe("docs/usage.md");
+    expect(candidateOf("/repo", "/repo/..drafts/a.ts", [])).toBe("..drafts/a.ts");
   });
 
   test("a file outside the root, of another extension, or matched by an ignore pattern is not", () => {

@@ -36,7 +36,11 @@ export function filesOf(shown: unknown): string[] {
 
 if (import.meta.main) {
   const root = process.cwd();
-  const tracked = (await $`git ls-files -z -- ${["*.ts", "*.tsx"]}`.text()).split("\0").filter((path) => path !== "");
+
+  const tracked = (await $`git ls-files -z -- ${["*.ts", "*.tsx", "*.mts", "*.cts"]}`.text())
+    .split("\0")
+    .filter((path) => path !== "");
+
   const shown: unknown = await $`${TSGO} --showConfig`.json();
   const missing = uncovered(root, tracked, filesOf(shown));
 

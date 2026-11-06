@@ -22,7 +22,15 @@ const BARE_ESLINT = `// ${ES}lint-disable no-console`;
 
 describe("isCandidate", () => {
   test("accepts every linted extension", () => {
-    for (const path of ["scripts/a.ts", "scripts/a.tsx", "scripts/a.js", "scripts/a.mjs", "scripts/a.cjs"]) {
+    for (const path of [
+      "scripts/a.ts",
+      "scripts/a.tsx",
+      "scripts/a.mts",
+      "scripts/a.cts",
+      "scripts/a.js",
+      "scripts/a.mjs",
+      "scripts/a.cjs",
+    ]) {
       expect(isCandidate(path)).toBe(true);
     }
   });
@@ -41,6 +49,12 @@ describe("findOffences", () => {
 
   test("accepts a directive that says why", () => {
     expect(findOffences("a.ts", JUSTIFIED)).toEqual([]);
+  });
+
+  test("reports a directive whose only ` -- ` comes before it, as in a decrement", () => {
+    const decrement = `let n = a -- b; ${BARE}`;
+
+    expect(findOffences("a.ts", decrement)).toEqual([{ path: "a.ts", line: 1, text: decrement }]);
   });
 
   test("reports the eslint spelling too", () => {

@@ -14,12 +14,13 @@ import { $ } from "bun";
 
 const EXCLUDED_PREFIXES = ["node_modules/", "scripts/vendor/anti-slop/"];
 
-const CHECKED_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs", ".cjs"];
+const CHECKED_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 
 // oxlint honours the eslint- spelling too, so both are gated.
 const DIRECTIVE = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b/u;
 
-const JUSTIFIED = /\s--\s+\S/u;
+// The reason counts only after the directive: a ` -- ` before it is code, such as a decrement.
+const JUSTIFIED = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b.*\s--\s+\S/u;
 
 export interface Offence {
   readonly path: string;
