@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Answer, Ask, Question } from "../lib/ask.ts";
-import { commentOf, findingsOf, MODEL, NIT_CAP, promptOf, review, SCHEMA, severityOfBody } from "./findings.ts";
+import { codeReview, commentOf, findingsOf, MODEL, NIT_CAP, promptOf, SCHEMA, severityOfBody } from "./code-review.ts";
 
 const out = (findings: object[]): object => ({ findings });
 
@@ -31,7 +31,7 @@ describe("findingsOf", () => {
   });
 });
 
-describe("review", () => {
+describe("codeReview", () => {
   const asking = (answer: Answer): { ask: Ask; questions: Question[] } => {
     const questions: Question[] = [];
 
@@ -45,9 +45,9 @@ describe("review", () => {
     };
   };
 
-  test("the level picks the model, the schema goes with the prompt, and the answer reads into findings", async () => {
+  test("the Review depth picks the model, the schema goes with the prompt, and the answer reads into findings", async () => {
     const { ask, questions } = asking({ kind: "answered", structured: out([finding("important", "a")]), costUsd: 0.02, model: "claude-opus-5-5" });
-    const result = await review(ask, "/repo", "deep", "the prompt", () => 0);
+    const result = await codeReview(ask, "/repo", "deep", "the prompt", () => 0);
 
     expect(questions).toEqual([{ model: MODEL.deep, prompt: "the prompt", schema: SCHEMA, cwd: "/repo", timeoutMs: 900_000 }]);
     expect(result).toEqual({
@@ -62,12 +62,12 @@ describe("review", () => {
   test("a failed call gives no findings, with its cost, its model and its error", async () => {
     const { ask } = asking({ kind: "failed", error: "timed out after 900000 ms", costUsd: null, model: null });
 
-    expect(await review(ask, "/repo", "light", "p", () => 0)).toEqual({ findings: null, costUsd: null, model: null, ms: 0, error: "timed out after 900000 ms" });
+    expect(await codeReview(ask, "/repo", "light", "p", () => 0)).toEqual({ findings: null, costUsd: null, model: null, ms: 0, error: "timed out after 900000 ms" });
   });
 
   test("an answer that does not read gives no findings, and says so", async () => {
     const { ask } = asking({ kind: "answered", structured: { verdict: "fine" }, costUsd: 0.01, model: "claude-sonnet-5-5" });
-    const result = await review(ask, "/repo", "light", "p", () => 0);
+    const result = await codeReview(ask, "/repo", "light", "p", () => 0);
 
     expect(result.findings).toBeNull();
     expect(result.error).toBe("the answer does not read");
@@ -75,7 +75,7 @@ describe("review", () => {
 });
 
 describe("comments", () => {
-  test("a posted finding names its severity and carries the marker the conductor reads back", () => {
+  test("a posted finding names its severity and carries the marker the Merge bot reads back", () => {
     const body = commentOf({ file: "a.ts", line: 1, severity: "important", summary: "s", failureScenario: "f" });
 
     expect(body.startsWith("**Important**: s")).toBe(true);
@@ -85,7 +85,7 @@ describe("comments", () => {
 });
 
 describe("promptOf", () => {
-  test("round 2 hunts nothing new and carries the author's rejections", () => {
+  test("review round 2 hunts nothing new and carries the author's rejections", () => {
     const prompt = promptOf("guide", "diff", 2, [{ where: "a.ts:1", finding: "x", reply: "intended" }]);
 
     expect(prompt).toContain("hunt for nothing new");

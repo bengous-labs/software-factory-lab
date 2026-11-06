@@ -2,9 +2,9 @@
 
 /**
  * The author's answer to a review finding: replies in the thread with the text given, then resolves
- * it. The watcher prints each finding with the thread id this takes.
+ * it. The PR watch prints each finding with the thread id this takes.
  *
- *   bun scripts/harness/thread.ts <thread-id> "<reply>"
+ *   bun scripts/land-loop/thread.ts <thread-id> "<reply>"
  */
 
 import { checked, run, type Run } from "./lib/run.ts";
@@ -13,10 +13,10 @@ export const REPLY = "mutation($id:ID!,$body:String!){addPullRequestReviewThread
 
 export const RESOLVE = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}";
 
-/** Marks a reply as the author's own, so the author's watcher does not print it back. */
+/** Marks a reply as the author's own, so the author's PR watch does not print it back. */
 export const AUTHOR_MARK = "<!-- lab-author-reply -->";
 
-export const USAGE = 'usage: bun scripts/harness/thread.ts <thread-id> "<reply>"';
+export const USAGE = 'usage: bun scripts/land-loop/thread.ts <thread-id> "<reply>"';
 
 /** The thread id and the reply, or null when either is missing or blank. */
 export function argsOf(argv: readonly string[]): { id: string; body: string } | null {

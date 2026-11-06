@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 
 /**
- * The conductor's adapter, run by `.github/workflows/conductor.yml` from the default branch with the
- * App's token. For each PR the event names (every open PR on a sweep), it reads a snapshot, asks
- * `decide.ts`, performs the steps, and runs again after a model step, until no model step is left.
+ * The Merge bot's adapter, run by `.github/workflows/merge-bot.yml` from the default branch with the
+ * App's token. Each start makes one Merge bot run for the PR the event names, or, on a Sweep, one for
+ * every open PR. A Merge bot run reads a snapshot of its PR, asks `decide.ts`, performs the steps, and
+ * decides again after a model step, until no model step is left.
  *
- * Reads GITHUB_REPOSITORY, OWNER (the only author served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
- * RUN_HEAD_SHA, DEQUEUE_REASON; calls gh and git, and the models through the Agent SDK.
+ * Reads GITHUB_REPOSITORY, OWNER (the only GitHub login whose PRs are served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
+ * RUN_HEAD_SHA, EJECTION_REASON; calls gh and git, and the models through the Agent SDK.
  */
 
 import { readFileSync } from "node:fs";
@@ -14,15 +15,44 @@ import { join } from "node:path";
 
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
-import { commentOf, EFFORT, type Finding, MODEL, promptOf as reviewPrompt, review, severityOfBody, type RejectedThread } from "../review/findings.ts";
-import { fable, promptOf as fablePrompt } from "../review/fable.ts";
-import { floorOf } from "../triage/floor.ts";
-import { judge } from "../triage/judge.ts";
-import { afterFable, type CheckState, conflictingOf, decide, deltaStart, EMPTY_RECORD, FABLE_TRIES, landOkCounts, openImportantOf, type Land, type Level, type Snapshot, type StateRecord, type Step } from "./decide.ts";
+import { codeReview, commentOf, EFFORT, type Finding, MODEL, promptOf as codeReviewPrompt, severityOfBody, type RejectedThread } from "../review/code-review.ts";
+import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf as principalJudgePrompt } from "../review/principal-judge.ts";
+import { routingJudge } from "../routing/routing-judge.ts";
+import { routingRulesOf } from "../routing/routing-rules.ts";
+import {
+  afterPrincipalJudge,
+  type CheckState,
+  conflictingOf,
+  decide,
+  EMPTY_RECORD,
+  LAND_APPROVAL_LABEL,
+  LAND_GATE,
+  landApprovalCounts,
+  type LandRoute,
+  openImportantOf,
+  patchDeltaStart,
+  PRINCIPAL_JUDGE_TRIES,
+  recordOfStored,
+  REVIEW_CHECK,
+  type ReviewDepth,
+  type Snapshot,
+  type StateRecord,
+  type Step,
+  storedLandRouteOf,
+  type StoredRecord,
+  storedOfRecord,
+} from "./decide.ts";
 
-const STATE_MARKER = "<!-- lab-conductor-state";
+/** The state record's marker. An external name: existing PR records carry it, so the string stays. */
+const MERGE_BOT_STATE_MARKER = "<!-- lab-conductor-state";
 
-const MAX_PASSES = 4;
+const MERGE_BOT_STATE_PATTERN = new RegExp(`${MERGE_BOT_STATE_MARKER} (.*) -->`, "su");
+
+/** The label that sends the change to the Owner. An external name: open PRs carry it, so the string stays. */
+const NEEDS_OWNER_LABEL = "needs-human";
+
+/** Decisions per Merge bot run. */
+const MAX_DECISIONS = 4;
 
 interface Env {
   readonly repo: string;
@@ -103,17 +133,17 @@ async function pullOf(env: Env, number: number): Promise<PullJson> {
 
 async function recordOf(env: Env, pr: number): Promise<{ id: number | null; record: StateRecord }> {
   const comments = await api<{ id: number; user: { login: string }; body: string }[]>(env, `repos/${env.repo}/issues/${pr}/comments?per_page=100`);
-  const mine = comments.find((comment) => comment.user.login === env.appLogin && comment.body.includes(STATE_MARKER));
+  const mine = comments.find((comment) => comment.user.login === env.appLogin && comment.body.includes(MERGE_BOT_STATE_MARKER));
 
   if (mine === undefined) return { id: null, record: EMPTY_RECORD };
 
-  const json = /<!-- lab-conductor-state (.*) -->/su.exec(mine.body)?.[1];
+  const json = MERGE_BOT_STATE_PATTERN.exec(mine.body)?.[1];
 
-  return { id: mine.id, record: json === undefined ? EMPTY_RECORD : { ...EMPTY_RECORD, ...(JSON.parse(json) as StateRecord) } };
+  return { id: mine.id, record: json === undefined ? EMPTY_RECORD : recordOfStored({ ...EMPTY_RECORD, ...(JSON.parse(json) as StoredRecord) }) };
 }
 
 async function writeRecord(env: Env, pr: number, id: number | null, record: StateRecord): Promise<void> {
-  const body = `Conductor state for this PR, kept by the harness. Do not edit.\n\n${STATE_MARKER} ${JSON.stringify(record)} -->`;
+  const body = `Merge bot state for this PR. Do not edit.\n\n${MERGE_BOT_STATE_MARKER} ${JSON.stringify(storedOfRecord(record))} -->`;
 
   if (id === null) await api(env, `repos/${env.repo}/issues/${pr}/comments`, "POST", { body });
   else await api(env, `repos/${env.repo}/issues/comments/${id}`, "PATCH", { body });
@@ -147,15 +177,15 @@ async function snapshotOf(env: Env, pr: PullJson, range: Range, record: StateRec
   );
   const validate = runs.check_runs.find((check) => check.app.slug === "github-actions");
   const labels = pr.labels.map((label) => label.name);
-  let landOkByOwner = false;
+  let landApprovalByOwner = false;
 
-  if (labels.includes("land-ok")) {
+  if (labels.includes(LAND_APPROVAL_LABEL)) {
     const events = await api<{ event: string; label?: { name: string }; actor: { login: string }; created_at: string }[]>(env, `repos/${env.repo}/issues/${pr.number}/events?per_page=100`);
-    const last = events.filter((event) => event.event === "labeled" && event.label?.name === "land-ok").at(-1);
-    // The head's first check suite is created when it is pushed: a land-ok put before that was given for another head.
+    const last = events.filter((event) => event.event === "labeled" && event.label?.name === LAND_APPROVAL_LABEL).at(-1);
+    // The head's first check suite is created when it is pushed: a Land approval put before that was given for another head.
     const suites = await api<{ check_suites: { created_at: string }[] }>(env, `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`);
     const pushedAt = suites.check_suites.map((suite) => suite.created_at).sort()[0] ?? null;
-    landOkByOwner = landOkCounts(last?.actor.login === env.owner, last?.created_at ?? null, pushedAt);
+    landApprovalByOwner = landApprovalCounts(last?.actor.login === env.owner, last?.created_at ?? null, pushedAt);
   }
 
   const devRuns = await api<{ workflow_runs: { conclusion: string | null }[] }>(env, `repos/${env.repo}/actions/runs?branch=dev&event=push&status=completed&per_page=1`);
@@ -164,13 +194,13 @@ async function snapshotOf(env: Env, pr: PullJson, range: Range, record: StateRec
     number: pr.number,
     state: pr.merged ? "MERGED" : pr.state === "open" ? "OPEN" : "CLOSED",
     sameRepository: pr.head.repo?.full_name === env.repo,
-    ownAuthor: pr.user.login === env.owner,
+    openedByOwner: pr.user.login === env.owner,
     draft: pr.draft,
     head: pr.head.sha,
     patch: await patchOf(env, range),
     ci: validate?.status !== "completed" ? null : validate.conclusion === "success" ? "success" : "failure",
     labels,
-    landOkByOwner,
+    landApprovalByOwner,
     openImportant: openImportantOf(
       threads.filter(
         (thread) => !thread.isResolved && thread.comments.nodes[0]?.author?.login === bare(env.appLogin) && severityOfBody(thread.comments.nodes[0]?.body ?? "") === "important",
@@ -193,8 +223,9 @@ async function setCheck(env: Env, name: string, head: string, check: CheckState)
   await api(env, `repos/${env.repo}/check-runs`, "POST", body);
 }
 
-async function setLabels(env: Env, pr: PullJson, land: Land, level: Level): Promise<void> {
-  const wanted = [`land:${land}`, `review:${level}`];
+/** Sets the `land:*` and `review:*` labels. Their names are external: open PRs carry them, so the strings stay. */
+async function setLabels(env: Env, pr: PullJson, route: LandRoute, depth: ReviewDepth): Promise<void> {
+  const wanted = [`land:${storedLandRouteOf(route)}`, `review:${depth}`];
   const current = pr.labels.map((label) => label.name);
   const stale = current.filter((name) => /^(land|review):/u.test(name) && !wanted.includes(name));
   const missing = wanted.filter((name) => !current.includes(name));
@@ -205,36 +236,36 @@ async function setLabels(env: Env, pr: PullJson, land: Land, level: Level): Prom
 }
 
 /**
- * Where a delta starts: the head the last review read, while it is still an ancestor of this head.
- * A rebase leaves it out of the PR's history, and the delta is then the whole PR again.
+ * Where a Patch delta starts: the head the last review read, while it is still an ancestor of this head.
+ * A rebase leaves it out of the PR's history, and the Patch delta is then the whole PR again.
  */
-async function deltaBase(env: Env, range: Range, record: StateRecord): Promise<string> {
+async function patchDeltaBase(env: Env, range: Range, record: StateRecord): Promise<string> {
   if (record.reviewedHead === null) return range.base;
 
   const ancestor = await run(["git", "merge-base", "--is-ancestor", record.reviewedHead, range.head], { cwd: env.cwd });
 
-  return deltaStart(range.base, record.reviewedHead, ancestor.code);
+  return patchDeltaStart(range.base, record.reviewedHead, ancestor.code);
 }
 
-async function triage(env: Env, range: Range, record: StateRecord, delta: boolean) {
-  const from = delta ? await deltaBase(env, range, record) : range.base;
+async function route(env: Env, range: Range, record: StateRecord, patchDelta: boolean) {
+  const from = patchDelta ? await patchDeltaBase(env, range, record) : range.base;
   const paths = (await git(env, ["diff", "--name-only", `${range.base}..${range.head}`])).split("\n").filter((path) => path !== "");
   const numstat = await git(env, ["diff", "--numstat", `${range.base}..${range.head}`]);
   const lines = numstat.split("\n").reduce((sum, row) => sum + row.split("\t").slice(0, 2).reduce((acc, n) => acc + (Number(n) || 0), 0), 0);
   const messages = (await git(env, ["log", "--format=%B%x00", `${range.base}..${range.head}`])).split("\0").map((message) => message.trim()).filter((message) => message !== "");
-  const floor = floorOf({ paths, lines, messages });
+  const rules = routingRulesOf({ paths, lines, messages });
   const asked = async () =>
-    judge(ask, env.cwd, await git(env, ["diff", "--stat", `${from}..${range.head}`]), await git(env, ["diff", `${from}..${range.head}`]), delta);
+    routingJudge(ask, env.cwd, await git(env, ["diff", "--stat", `${from}..${range.head}`]), await git(env, ["diff", `${from}..${range.head}`]), patchDelta);
 
-  if (floor === null) return asked();
+  if (rules === null) return asked();
 
-  if (!delta) return floor;
+  if (!patchDelta) return rules;
 
-  // The floor holds the labels of the whole PR; whether this delta is read again is the delta's own question.
-  const deltaPaths = (await git(env, ["diff", "--name-only", `${from}..${range.head}`])).split("\n").filter((path) => path !== "");
-  const deltaFloor = floorOf({ paths: deltaPaths, lines: 0, messages: [] });
+  // The Routing rules hold the labels of the whole PR; whether this Patch delta is read again is its own question.
+  const patchDeltaPaths = (await git(env, ["diff", "--name-only", `${from}..${range.head}`])).split("\n").filter((path) => path !== "");
+  const patchDeltaRules = routingRulesOf({ paths: patchDeltaPaths, lines: 0, messages: [] });
 
-  return { ...floor, secondRound: deltaFloor !== null || (await asked()).secondRound };
+  return { ...rules, secondRound: patchDeltaRules !== null || (await asked()).secondRound };
 }
 
 function rejectedOf(env: Env, threads: readonly ThreadJson[]): RejectedThread[] {
@@ -248,9 +279,9 @@ function rejectedOf(env: Env, threads: readonly ThreadJson[]): RejectedThread[] 
 }
 
 /** Posts the review; answers how many Important findings went out with no thread to resolve. */
-async function postFindings(env: Env, pr: PullJson, findings: readonly Finding[], round: 1 | 2, by: string, costUsd: number | null): Promise<number> {
+async function postFindings(env: Env, pr: PullJson, findings: readonly Finding[], reviewRound: 1 | 2, by: string, costUsd: number | null): Promise<number> {
   const counts = (["important", "nit", "pre_existing"] as const).map((severity) => `${findings.filter((found) => found.severity === severity).length} ${severity}`).join(", ");
-  const body = `Review round ${round} (${by}): ${counts}.${costUsd === null ? "" : ` Estimated cost $${costUsd.toFixed(3)}.`}`;
+  const body = `Review round ${reviewRound} (${by}): ${counts}.${costUsd === null ? "" : ` Estimated cost $${costUsd.toFixed(3)}.`}`;
   const inline = findings.filter((finding) => finding.line !== null);
   const loose = findings.filter((finding) => finding.line === null);
   const withLoose = loose.length === 0 ? body : `${body}\n\n${loose.map((finding) => `- \`${finding.file}\`: ${commentOf(finding)}`).join("\n")}`;
@@ -275,32 +306,32 @@ async function postFindings(env: Env, pr: PullJson, findings: readonly Finding[]
 
 async function perform(env: Env, pr: PullJson, range: Range, recordId: number | null, record: StateRecord, threads: readonly ThreadJson[], step: Step, log: (line: string) => void): Promise<StateRecord | null> {
   switch (step.kind) {
-    case "triage": {
-      const answer = await triage(env, range, record, step.delta);
-      log(`#${pr.number} triage ${step.patch.slice(0, 8)}: land:${answer.land} review:${answer.review} second:${answer.secondRound} by ${answer.model ?? "the floor"} (${answer.reason})`);
+    case "route": {
+      const answer = await route(env, range, record, step.patchDelta);
+      log(`#${pr.number} routing ${step.patch.slice(0, 8)}: route:${answer.land} review:${answer.review} second:${answer.secondRound} by ${answer.model ?? "the Routing rules"} (${answer.reason})`);
       const next = { ...record, triage: { ...record.triage, [step.patch]: answer } };
       await writeRecord(env, pr.number, recordId, next);
 
       return next;
     }
-    case "review": {
-      const from = step.round === 2 ? await deltaBase(env, range, record) : range.base;
+    case "code-review": {
+      const from = step.reviewRound === 2 ? await patchDeltaBase(env, range, record) : range.base;
       const guide = readFileSync(join(env.cwd, "REVIEW.md"), "utf8");
-      const prompt = reviewPrompt(guide, await git(env, ["diff", `${from}..${range.head}`]), step.round, rejectedOf(env, threads));
-      let result = await review(ask, env.cwd, step.level, prompt, Date.now);
+      const prompt = codeReviewPrompt(guide, await git(env, ["diff", `${from}..${range.head}`]), step.reviewRound, rejectedOf(env, threads));
+      let result = await codeReview(ask, env.cwd, step.depth, prompt, Date.now);
 
-      if (result.findings === null) result = await review(ask, env.cwd, step.level, prompt, Date.now);
+      if (result.findings === null) result = await codeReview(ask, env.cwd, step.depth, prompt, Date.now);
 
-      log(`#${pr.number} review round ${step.round} at ${step.level} (${result.model ?? MODEL[step.level]}, effort ${EFFORT}): ${result.error ?? "answered"}, ${result.ms} ms, $${result.costUsd ?? "?"}, ${result.findings?.length ?? "no"} findings`);
+      log(`#${pr.number} review round ${step.reviewRound} at ${step.depth} (${result.model ?? MODEL[step.depth]}, effort ${EFFORT}): ${result.error ?? "answered"}, ${result.ms} ms, $${result.costUsd ?? "?"}, ${result.findings?.length ?? "no"} findings`);
 
       if (result.findings === null) {
-        await setCheck(env, "agent-review", pr.head.sha, { kind: "failure", summary: "The review failed twice." });
-        await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: ["needs-human"] });
+        await setCheck(env, REVIEW_CHECK, pr.head.sha, { kind: "failure", summary: "The Code review failed twice." });
+        await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: [NEEDS_OWNER_LABEL] });
 
         return null;
       }
 
-      const unthreaded = await postFindings(env, pr, result.findings, step.round, `${step.level}: ${result.model ?? MODEL[step.level]}, effort ${EFFORT}`, result.costUsd);
+      const unthreaded = await postFindings(env, pr, result.findings, step.reviewRound, `${step.depth}: ${result.model ?? MODEL[step.depth]}, effort ${EFFORT}`, result.costUsd);
       const important = result.findings.some((finding) => finding.severity === "important");
       const reviewedPatch = await patchOf(env, range);
       const next = {
@@ -319,43 +350,43 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
       return next;
     }
     case "labels":
-      await setLabels(env, pr, step.land, step.review);
+      await setLabels(env, pr, step.route, step.depth);
 
       return record;
-    case "agent-review":
-      await setCheck(env, "agent-review", pr.head.sha, step.check);
+    case "review-check":
+      await setCheck(env, REVIEW_CHECK, pr.head.sha, step.check);
 
       return record;
     case "land-gate":
-      await setCheck(env, "land-gate", pr.head.sha, step.check);
+      await setCheck(env, LAND_GATE, pr.head.sha, step.check);
 
       return record;
-    case "needs-human":
-      await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: ["needs-human"] });
+    case "needs-owner":
+      await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: [NEEDS_OWNER_LABEL] });
 
       return record;
     case "record":
       await writeRecord(env, pr.number, recordId, step.record);
 
       return step.record;
-    case "remove-land-ok":
-      await api(env, `repos/${env.repo}/issues/${pr.number}/labels/land-ok`, "DELETE");
+    case "remove-land-approval":
+      await api(env, `repos/${env.repo}/issues/${pr.number}/labels/${LAND_APPROVAL_LABEL}`, "DELETE");
 
       return record;
-    case "fable": {
+    case "principal-judge": {
       const guide = readFileSync(join(env.cwd, "REVIEW.md"), "utf8");
-      const result = await fable(ask, env.cwd, fablePrompt(guide, await git(env, ["diff", `${range.base}..${range.head}`])));
-      const by = `${result.model ?? "Fable"}${result.costUsd === null ? "" : `, $${result.costUsd.toFixed(3)}`}`;
-      const next = afterFable(record, step.patch, result.verdict);
+      const result = await principalJudge(ask, env.cwd, principalJudgePrompt(guide, await git(env, ["diff", `${range.base}..${range.head}`])));
+      const by = `${result.model ?? PRINCIPAL_JUDGE_MODEL}${result.costUsd === null ? "" : `, $${result.costUsd.toFixed(3)}`}`;
+      const next = afterPrincipalJudge(record, step.patch, result.verdict);
       const failures = next.fableFailures?.[step.patch] ?? 0;
-      // The record first: a failed comment must not make the next pass pay for Fable again.
+      // The record first: a failed comment must not make the next decision pay for the Principal judge again.
       await writeRecord(env, pr.number, recordId, next);
       const said =
         result.verdict === null
-          ? `no verdict (${result.failure}), run ${failures} of ${FABLE_TRIES}${failures >= FABLE_TRIES ? ", so the owner decides" : ", asked again"}.`
+          ? `no verdict (${result.failure}), run ${failures} of ${PRINCIPAL_JUDGE_TRIES}${failures >= PRINCIPAL_JUDGE_TRIES ? ", so the owner decides" : ", asked again"}.`
           : `${result.verdict.ok ? "OK" : "NOT OK"}. ${result.verdict.reason}`;
-      log(`#${pr.number} fable ${step.patch.slice(0, 8)} by ${by}: ${said}`);
-      await api(env, `repos/${env.repo}/issues/${pr.number}/comments`, "POST", { body: `Fable review (${by}): ${said}` });
+      log(`#${pr.number} principal judge ${step.patch.slice(0, 8)} by ${by}: ${said}`);
+      await api(env, `repos/${env.repo}/issues/${pr.number}/comments`, "POST", { body: `Principal judge (${by}): ${said}` });
 
       return next;
     }
@@ -370,8 +401,8 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
   }
 }
 
-async function conduct(env: Env, number: number, dequeueReason: string | null, log: (line: string) => void): Promise<void> {
-  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
+async function advance(env: Env, number: number, ejectionReason: string | null, log: (line: string) => void): Promise<void> {
+  for (let decisions = 0; decisions < MAX_DECISIONS; decisions += 1) {
     const pr = await pullOf(env, number);
 
     if (pr.state !== "open") {
@@ -382,7 +413,7 @@ async function conduct(env: Env, number: number, dequeueReason: string | null, l
 
     const range = await rangeOf(env, pr);
     const { id, record: stored } = await recordOf(env, number);
-    const record = dequeueReason !== null && pass === 0 ? { ...stored, dequeued: { head: pr.head.sha, reason: dequeueReason } } : stored;
+    const record = ejectionReason !== null && decisions === 0 ? { ...stored, dequeued: { head: pr.head.sha, reason: ejectionReason } } : stored;
     const threads = await threadsOf(env, number);
     const decision = decide(await snapshotOf(env, pr, range, record, threads));
 
@@ -403,7 +434,7 @@ async function conduct(env: Env, number: number, dequeueReason: string | null, l
 
       if (current === null) return;
 
-      if (step.kind === "triage" || step.kind === "review" || step.kind === "fable") modelRan = true;
+      if (step.kind === "route" || step.kind === "code-review" || step.kind === "principal-judge") modelRan = true;
     }
 
     if (!modelRan) return;
@@ -430,10 +461,9 @@ async function numbersOf(env: Env): Promise<number[]> {
 
 if (import.meta.main) {
   const env: Env = { repo: required("GITHUB_REPOSITORY"), owner: required("OWNER"), appLogin: required("APP_LOGIN"), cwd: process.cwd() };
-  const reason = process.env["DEQUEUE_REASON"];
+  const reason = process.env["EJECTION_REASON"];
 
   for (const number of await numbersOf(env)) {
-    await conduct(env, number, reason === undefined || reason === "" ? null : reason, (line) => console.log(`conductor: ${line}`));
+    await advance(env, number, reason === undefined || reason === "" ? null : reason, (line) => console.log(`merge-bot: ${line}`));
   }
 }
-

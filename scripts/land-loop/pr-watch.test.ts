@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
 import { AUTHOR_MARK } from "./thread.ts";
-import { eventsOf, type PrState } from "./watch.ts";
+import { endOf, type PrState, wakesOf } from "./pr-watch.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
 const OPEN: PrState = { state: "OPEN", draft: false, head: HEAD, checks: [], threads: [], comments: [] };
 
-describe("eventsOf", () => {
+describe("wakesOf", () => {
   test("a quiet ready PR prints nothing", () => {
-    expect(eventsOf(7, OPEN)).toEqual([]);
+    expect(wakesOf(7, OPEN)).toEqual([]);
   });
 
   test("a failing check prints once per head; a passing or pending one prints nothing", () => {
@@ -19,12 +19,12 @@ describe("eventsOf", () => {
       { name: "agent-review", bucket: "pass", link: "" },
     ];
 
-    expect(eventsOf(7, { ...OPEN, checks })).toEqual([
+    expect(wakesOf(7, { ...OPEN, checks })).toEqual([
       { key: `check:validate:${HEAD}`, line: "Check validate failed on c0ffee1: https://ci/1" },
     ]);
   });
 
-  test("an open Important finding or human comment prints with its thread id; a resolved one, a Nit or a Pre-existing prints nothing", () => {
+  test("an open Important finding prints as a Finding and a human thread as a Comment, with its thread id; a resolved one, a Nit or a Pre-existing prints nothing", () => {
     const threads = [
       { id: "T1", resolved: false, path: "app/src/cli.ts", line: 12, author: "bengous-labs-agents", body: "**Important**: off\n\n<!-- lab-finding severity=important -->", replies: [] },
       { id: "T2", resolved: true, path: "a.ts", line: 1, author: "x", body: "old", replies: [] },
@@ -34,8 +34,12 @@ describe("eventsOf", () => {
       { id: "T6", resolved: false, path: "a.ts", line: 5, author: "bengous", body: "quoting <!-- lab-finding severity=nit -->", replies: [] },
     ];
 
-    expect(eventsOf(7, { ...OPEN, threads }).map((event) => event.key)).toEqual(["thread:T1", "thread:T5", "thread:T6"]);
-    expect(eventsOf(7, { ...OPEN, threads })[0]?.line).toStartWith("Finding T1 on app/src/cli.ts:12 by bengous-labs-agents: **Important**: off");
+    const wakes = wakesOf(7, { ...OPEN, threads });
+
+    expect(wakes.map((wake) => wake.key)).toEqual(["thread:T1", "thread:T5", "thread:T6"]);
+    expect(wakes[0]?.line).toStartWith("Finding T1 on app/src/cli.ts:12 by bengous-labs-agents: **Important**: off");
+    expect(wakes[1]?.line).toBe("Comment T5 on a.ts:4 by bengous: why this name?");
+    expect(wakes[2]?.line).toStartWith("Comment T6 on a.ts:5 by bengous: quoting");
   });
 
   test("a reply in an open thread prints, a Nit thread included, keyed by its comment id; the author's own marked reply does not", () => {
@@ -57,7 +61,7 @@ describe("eventsOf", () => {
       { id: "T8", resolved: true, path: "a.ts", line: 1, author: "bengous-labs-agents", body: nit, replies: [{ id: "C3", author: "bengous", body: "old" }] },
     ];
 
-    expect(eventsOf(7, { ...OPEN, threads })).toEqual([
+    expect(wakesOf(7, { ...OPEN, threads })).toEqual([
       { key: "comment:C1", line: "Reply in T7 on a.ts:9 by bengous: please fix this one anyway" },
     ]);
   });
@@ -65,25 +69,33 @@ describe("eventsOf", () => {
   test("a conversation comment prints, except the App's own and the author's marked ones", () => {
     const comments = [
       { id: "11", author: "bengous", body: "rename the command to reopen" },
-      { id: "12", author: "bengous-labs-agents", body: "Conductor state for this PR" },
+      { id: "12", author: "bengous-labs-agents", body: "Merge bot state for this PR" },
       { id: "13", author: "bengous", body: `done\n\n${AUTHOR_MARK}` },
     ];
 
-    expect(eventsOf(7, { ...OPEN, comments })).toEqual([
+    expect(wakesOf(7, { ...OPEN, comments })).toEqual([
       { key: "comment:11", line: "Comment on PR #7 by bengous: rename the command to reopen" },
     ]);
   });
 
   test("a draft PR says it is the author's turn, once per head", () => {
-    expect(eventsOf(7, { ...OPEN, draft: true })).toEqual([
+    expect(wakesOf(7, { ...OPEN, draft: true })).toEqual([
       { key: `draft:${HEAD}`, line: "PR #7 is a draft again at c0ffee1: fix or answer the findings, then stop." },
     ]);
   });
 
-  test("a merged or closed PR ends the watch, whatever else it carries", () => {
-    expect(eventsOf(7, { ...OPEN, state: "MERGED", draft: true })).toEqual([
-      { key: "end", line: "PR #7 merged. Stop watching." },
-    ]);
-    expect(eventsOf(7, { ...OPEN, state: "CLOSED" })[0]?.key).toBe("end");
+  test("a landed or closed PR gives no Wake, whatever else it carries", () => {
+    const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
+
+    expect(wakesOf(7, { ...OPEN, state: "MERGED", draft: true, checks })).toEqual([]);
+    expect(wakesOf(7, { ...OPEN, state: "CLOSED", draft: true, checks })).toEqual([]);
+  });
+});
+
+describe("endOf", () => {
+  test("a landed or closed PR ends the PR watch with its end line; an open one does not", () => {
+    expect(endOf(7, { ...OPEN, state: "MERGED", draft: true })).toBe("PR #7 landed. Stop watching.");
+    expect(endOf(7, { ...OPEN, state: "CLOSED" })).toBe("PR #7 closed. Stop watching.");
+    expect(endOf(7, OPEN)).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 # Review guide
 
-The CI reviewer reads this guide in its prompt. It sets the bar for this repository.
+The Code review reads this guide in its prompt. It sets the bar for this repository.
 
 ## What Important means here
 

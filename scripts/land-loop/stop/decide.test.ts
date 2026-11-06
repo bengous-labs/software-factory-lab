@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { admit, afterGates, answerOf, armReason, decide, type Snapshot } from "./decide.ts";
+import { admit, afterStopChecks, answerOf, armReason, decide, type Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -17,18 +17,18 @@ const SNAPSHOT: Snapshot = {
 };
 
 describe("admit", () => {
-  test("a clean branch with commits dev lacks runs the gates", () => {
-    expect(admit(SNAPSHOT)).toEqual({ kind: "gates" });
+  test("a clean branch with commits dev lacks runs the Stop checks", () => {
+    expect(admit(SNAPSHOT)).toEqual({ kind: "stop-checks" });
   });
 
-  test("nothing is handed over from a fork, a detached HEAD, an ignored branch, a dirty tree, or no new commit", () => {
+  test("nothing is published from a fork, a detached HEAD, an ignored branch, a dirty tree, or no new commit", () => {
     const cases: [Partial<Snapshot>, string][] = [
       [{ forkFlag: true }, "a fork the hook launched"],
       [{ forkMarker: true }, "a fork, resumed"],
       [{ branch: null }, "HEAD is detached"],
-      [{ branch: "dev" }, "dev is never handed over"],
-      [{ branch: "main" }, "main is never handed over"],
-      [{ branch: "lab/q1-docs" }, "lab/q1-docs is never handed over"],
+      [{ branch: "dev" }, "dev is never published"],
+      [{ branch: "main" }, "main is never published"],
+      [{ branch: "lab/q1-docs" }, "lab/q1-docs is never published"],
       [{ ahead: 0 }, "has no commit that dev lacks"],
       [{ treeClean: false }, "uncommitted changes"],
     ];
@@ -41,33 +41,33 @@ describe("admit", () => {
     }
   });
 
-  test("a ready PR at this head asks for the watcher once, then leaves the session alone", () => {
+  test("a ready PR at this head asks for the PR watch once, then leaves the session alone", () => {
     const pr = { number: 7, draft: false, headSha: HEAD };
 
     expect(admit({ ...SNAPSHOT, pr })).toEqual({ kind: "arm", pr: 7 });
     expect(admit({ ...SNAPSHOT, pr, armed: true }).kind).toBe("none");
   });
 
-  test("a draft PR, or a ready one behind this head, runs the gates again", () => {
-    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({ kind: "gates" });
+  test("a draft PR, or a ready one behind this head, runs the Stop checks again", () => {
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({ kind: "stop-checks" });
     expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40) } })).toEqual({
-      kind: "gates",
+      kind: "stop-checks",
     });
   });
 });
 
-describe("afterGates", () => {
-  test("green gates ask the fork", () => {
-    expect(afterGates({ kind: "green" }, false)).toEqual({ kind: "ask-fork" });
+describe("afterStopChecks", () => {
+  test("green Stop checks ask the Done judge", () => {
+    expect(afterStopChecks({ kind: "green" }, false)).toEqual({ kind: "ask-done-judge" });
   });
 
-  test("red gates block once with their report, then let the session end", () => {
+  test("red Stop checks block once with their report, then let the session end", () => {
     const red = { kind: "red", report: "1 fail" } as const;
-    const first = afterGates(red, false);
+    const first = afterStopChecks(red, false);
 
     expect(first.kind).toBe("block");
     expect(first.kind === "block" && first.reason).toContain("1 fail");
-    expect(afterGates(red, true).kind).toBe("none");
+    expect(afterStopChecks(red, true).kind).toBe("none");
   });
 });
 
@@ -76,7 +76,7 @@ describe("answerOf", () => {
     const cases: [string, "yes" | "no"][] = [
       ["YES, the task is done and tested.", "yes"],
       ["  **YES** done", "yes"],
-      ["NO: I asked the user which file to change.", "no"],
+      ["NO: I asked the Owner which file to change.", "no"],
       ["I think YES", "no"],
       ["yes", "no"],
       ["", "no"],
@@ -88,7 +88,7 @@ describe("answerOf", () => {
 });
 
 describe("decide", () => {
-  test("no from the fork changes nothing", () => {
+  test("no from the Done judge changes nothing", () => {
     expect(decide(null, "no").kind).toBe("none");
   });
 
@@ -100,14 +100,14 @@ describe("decide", () => {
 });
 
 describe("armReason", () => {
-  test("names the PR, the watch command and the thread command, and asks for no question", () => {
-    const reason = armReason(12, "bun /r/scripts/harness/watch.ts 12", "bun /r/scripts/harness/thread.ts");
+  test("names the PR, the PR watch command and the thread command, and asks for no question", () => {
+    const reason = armReason(12, "bun /r/scripts/land-loop/pr-watch.ts 12", "bun /r/scripts/land-loop/thread.ts");
 
     expect(reason).toContain("PR #12 is ready");
-    expect(reason).toContain("    bun /r/scripts/harness/watch.ts 12");
-    expect(reason).toContain('`bun /r/scripts/harness/thread.ts <thread-id> "Fixed in <sha>: <what changed>"`');
-    expect(reason).toContain('`bun /r/scripts/harness/thread.ts <thread-id> "<your reason>"`');
+    expect(reason).toContain("    bun /r/scripts/land-loop/pr-watch.ts 12");
+    expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "Fixed in <sha>: <what changed>"`');
+    expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "<your reason>"`');
     expect(reason).toContain("Nit and Pre-existing findings never block");
-    expect(reason).toContain("Never ask the user a question");
+    expect(reason).toContain("Never ask the Owner a question");
   });
 });

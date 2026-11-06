@@ -1,22 +1,22 @@
 #!/usr/bin/env bun
 
 /**
- * The author's watcher, armed with Monitor on its PR: every 30 s it reads the PR and prints one line
- * per event the author acts on: a failing check, a new open Important finding, a new comment in an open
- * thread or in the PR's conversation, the PR moved to draft. The App's own Nit and Pre-existing findings
- * and its conversation comments (state record, verdicts) print nothing; nor do the author's own replies,
+ * The author's PR watch, armed with Monitor on its PR: every 30 s it reads the PR and prints one line
+ * per Wake: a failing check, a new open Important finding, a new comment in an open thread or in the
+ * PR's conversation, the PR moved to draft. The App's own Nit and Pre-existing findings and its
+ * conversation comments (state record, verdicts) print nothing; nor do the author's own replies,
  * which `thread.ts` marks, since an author and a human reviewer can post under one gh identity.
- * It exits when the PR is merged or closed. What it printed is kept in `.lab/state/watch-<pr>.json`,
- * so a watcher armed again after an expiry repeats nothing.
+ * When the PR is landed or closed, it prints its end line and exits. What it printed is kept in
+ * `.lab/state/watch-<pr>.json`, so a PR watch armed again after an expiry repeats nothing.
  *
- *   bun scripts/harness/watch.ts <pr>
+ *   bun scripts/land-loop/pr-watch.ts <pr>
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { checked, run, type Run } from "./lib/run.ts";
-import { severityOfBody } from "./review/findings.ts";
+import { severityOfBody } from "./review/code-review.ts";
 import { AUTHOR_MARK } from "./thread.ts";
 
 const POLL_MS = 30_000;
@@ -57,22 +57,32 @@ export interface PrState {
   readonly comments: readonly Comment[];
 }
 
-export interface Event {
+export interface Wake {
   readonly key: string;
   readonly line: string;
 }
 
+/** The key that keeps the end line from being printed twice. */
+export const END_KEY = "end";
+
 const flat = (body: string): string => body.replace(/\s+/gu, " ").slice(0, 400);
 
-/** The events of one reading, each with the key that keeps it from being printed twice. */
-export function eventsOf(pr: number, state: PrState): readonly Event[] {
+/** The end line of a landed or closed PR; null while it is open. */
+export function endOf(pr: number, state: PrState): string | null {
+  if (state.state === "MERGED") return `PR #${pr} landed. Stop watching.`;
+
+  if (state.state === "CLOSED") return `PR #${pr} closed. Stop watching.`;
+
+  return null;
+}
+
+/** The Wakes of one reading of an open PR, each with the key that keeps it from being printed twice. */
+export function wakesOf(pr: number, state: PrState): readonly Wake[] {
   const short = state.head.slice(0, 7);
 
-  if (state.state === "MERGED") return [{ key: "end", line: `PR #${pr} merged. Stop watching.` }];
+  if (state.state !== "OPEN") return [];
 
-  if (state.state === "CLOSED") return [{ key: "end", line: `PR #${pr} closed. Stop watching.` }];
-
-  const events: Event[] = state.checks
+  const wakes: Wake[] = state.checks
     .filter((check) => check.bucket === "fail")
     .map((check) => ({
       key: `check:${check.name}:${state.head}`,
@@ -84,26 +94,27 @@ export function eventsOf(pr: number, state: PrState): readonly Event[] {
     const where = thread.line === null ? thread.path : `${thread.path}:${thread.line}`;
 
     if (severity !== "nit" && severity !== "pre_existing") {
-      events.push({ key: `thread:${thread.id}`, line: `Finding ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}` });
+      const kind = severity === "important" ? "Finding" : "Comment";
+      wakes.push({ key: `thread:${thread.id}`, line: `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}` });
     }
 
     for (const reply of thread.replies.filter((found) => found.author !== APP_LOGIN && !found.body.includes(AUTHOR_MARK))) {
-      events.push({ key: `comment:${reply.id}`, line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}` });
+      wakes.push({ key: `comment:${reply.id}`, line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}` });
     }
   }
 
   for (const comment of state.comments.filter((found) => found.author !== APP_LOGIN && !found.body.includes(AUTHOR_MARK))) {
-    events.push({ key: `comment:${comment.id}`, line: `Comment on PR #${pr} by ${comment.author}: ${flat(comment.body)}` });
+    wakes.push({ key: `comment:${comment.id}`, line: `Comment on PR #${pr} by ${comment.author}: ${flat(comment.body)}` });
   }
 
   if (state.draft) {
-    events.push({
+    wakes.push({
       key: `draft:${state.head}`,
       line: `PR #${pr} is a draft again at ${short}: fix or answer the findings, then stop.`,
     });
   }
 
-  return events;
+  return wakes;
 }
 
 async function read(runner: Run, pr: number): Promise<PrState> {
@@ -175,26 +186,34 @@ async function read(runner: Run, pr: number): Promise<PrState> {
 if (import.meta.main) {
   const pr = Number(process.argv[2]);
 
-  if (!Number.isInteger(pr)) throw new Error("usage: bun scripts/harness/watch.ts <pr>");
+  if (!Number.isInteger(pr)) throw new Error("usage: bun scripts/land-loop/pr-watch.ts <pr>");
 
   const stateDir = join(process.cwd(), ".lab", "state");
   mkdirSync(stateDir, { recursive: true });
+  // An on-disk name: existing state files carry it, so it stays.
   const seenFile = join(stateDir, `watch-${pr}.json`);
   const seen = new Set<string>(existsSync(seenFile) ? (JSON.parse(readFileSync(seenFile, "utf8")) as string[]) : []);
 
+  const print = (key: string, line: string): boolean => {
+    if (seen.has(key)) return false;
+
+    seen.add(key);
+    writeFileSync(seenFile, JSON.stringify([...seen]));
+    console.log(line);
+
+    return true;
+  };
+
   for (;;) {
     try {
-      for (const event of eventsOf(pr, await read(run, pr))) {
-        if (seen.has(event.key)) continue;
+      const state = await read(run, pr);
+      const end = endOf(pr, state);
 
-        seen.add(event.key);
-        writeFileSync(seenFile, JSON.stringify([...seen]));
-        console.log(event.line);
+      if (end !== null && print(END_KEY, end)) process.exit(0);
 
-        if (event.key === "end") process.exit(0);
-      }
+      for (const wake of wakesOf(pr, state)) print(wake.key, wake.line);
     } catch (error) {
-      console.error(`watch: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`pr-watch: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     await Bun.sleep(POLL_MS);
