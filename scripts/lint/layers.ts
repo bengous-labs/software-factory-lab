@@ -106,7 +106,13 @@ function externalRefusal(importer: string, from: Place, edge: Edge, external: Ex
       );
 }
 
-function localRefusal(importer: string, from: Place, target: string, to: Place, kind: ImportKind): string | null {
+function localRefusal(importer: string, from: Place, target: string, kind: ImportKind): string | null {
+  const to = placeOf(target);
+
+  if (to === null) {
+    return `\`${importer}\` imports \`${target}\`, which no layer of the map holds. Import a module the map allows to its layer. ${OWNER}`;
+  }
+
   const reachable =
     PACKAGE_IMPORTS[from.package].includes(to.package) &&
     (LAYER_IMPORTS[from.layer].includes(to.layer) || (kind === "type" && TYPE_ONLY_IMPORTS.includes(to.layer)));
@@ -128,13 +134,7 @@ export function edgeRefusal(importer: string, from: Place, edge: Edge): string |
     return `\`${importer}\` imports \`${edge.specifier}\`, a specifier the layer map does not know. Import a module the map allows to its layer. ${OWNER}`;
   }
 
-  const to = placeOf(target);
-
-  if (to === null) {
-    return `\`${importer}\` imports \`${target}\`, which no layer of the map holds. Import a module the map allows to its layer. ${OWNER}`;
-  }
-
-  return localRefusal(importer, from, target, to, edge.kind);
+  return localRefusal(importer, from, target, edge.kind);
 }
 
 export const unplacedMessage = (path: string): string =>
