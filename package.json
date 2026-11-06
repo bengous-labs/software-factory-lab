@@ -14,7 +14,9 @@
     "@oxlint/plugins": "1.92.0",
     "@types/bun": "1.4.4",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "knip": "6.44.1",
     "oxlint": "1.92.0",
+    "oxlint-plugin-complexity": "4.1.0",
     "oxlint-tsgolint": "7.0.2006"
   },
   "dependencies": {
