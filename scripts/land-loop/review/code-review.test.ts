@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Answer, Ask, Question } from "../lib/ask.ts";
-import { codeReview, commentOf, findingsOf, MODEL, NIT_CAP, promptOf, SCHEMA, severityOfBody } from "./code-review.ts";
+import { AUTHOR_MARK } from "../thread.ts";
+import { codeReview, commentOf, findingsOf, MODEL, NIT_CAP, promptOf, rejectedOf, type ReviewThread, SCHEMA, severityOfBody } from "./code-review.ts";
 
 const out = (findings: object[]): object => ({ findings });
 
@@ -85,11 +86,54 @@ describe("comments", () => {
 });
 
 describe("promptOf", () => {
-  test("review round 2 hunts nothing new and carries the author's rejections", () => {
+  test("review round 2 reads only the patch delta, whatever review round 1 found, and carries the author's rejections", () => {
     const prompt = promptOf("guide", "diff", 2, [{ where: "a.ts:1", finding: "x", reply: "intended" }]);
 
-    expect(prompt).toContain("hunt for nothing new");
+    expect(prompt).toContain("only the patch delta since review round 1");
+    expect(prompt).not.toContain("found an Important");
     expect(prompt).toContain("Author: intended");
     expect(promptOf("guide", "diff", 1, [])).not.toContain("round 2");
+  });
+});
+
+describe("rejectedOf", () => {
+  const APP = "bengous-labs-agents";
+  const thread = (replies: readonly (readonly [string, string])[], { isResolved = true, by = APP } = {}): ReviewThread => ({
+    isResolved,
+    path: "a.ts",
+    line: 3,
+    comments: { nodes: [{ author: { login: by }, body: "**Important**: off by one\n\nwhy" }, ...replies.map(([login, body]) => ({ author: { login }, body }))] },
+  });
+
+  test("a resolved finding counts as rejected only when the Author's reply gives a reason, never when it reports a fix", () => {
+    const rows: [string, boolean][] = [
+      [`Fixed in c2a404d: every event keys on the PR number.\n\n${AUTHOR_MARK}`, false],
+      ["Fixed in #46 (7988824): ask takes the stream as a parameter.", false],
+      ["fixed in abc", false],
+      ["Rejected: the issue asked for no new test.", true],
+      ["Partly rejected, partly fixed in 15b3bee. The single-PR endpoint is already read.", true],
+      ["Checked, and partly rejected: no code after the record step reassigns next.", true],
+    ];
+
+    for (const [reply, rejected] of rows) expect(rejectedOf(APP, [thread([["bengous", reply]])])).toHaveLength(rejected ? 1 : 0);
+  });
+
+  test("the Author's last reply decides, the App's own replies aside", () => {
+    expect(rejectedOf(APP, [thread([["bengous", "Rejected: intended"], [APP, "re-checked"]])])).toHaveLength(1);
+    expect(rejectedOf(APP, [thread([["bengous", "Fixed in abc: done"], [APP, "re-checked"]])])).toHaveLength(0);
+    expect(rejectedOf(APP, [thread([["bengous", "Rejected: intended"], ["bengous", "Fixed in abc: done after all"]])])).toHaveLength(0);
+    expect(rejectedOf(APP, [thread([["bengous", "Fixed in abc: done"], ["bengous", "Rejected after all: the old line was right"]])])).toHaveLength(1);
+  });
+
+  test("an open thread, a thread a human opened and a thread with no reply are never rejections", () => {
+    expect(rejectedOf(APP, [thread([["bengous", "Rejected: intended"]], { isResolved: false })])).toEqual([]);
+    expect(rejectedOf(APP, [thread([["bengous", "Rejected: intended"]], { by: "bengous" })])).toEqual([]);
+    expect(rejectedOf(APP, [thread([])])).toEqual([]);
+  });
+
+  test("a rejection carries its place, the finding's first line and the Author's replies", () => {
+    expect(rejectedOf(APP, [thread([["bengous", "Rejected: intended"], [APP, "noted"]])])).toEqual([
+      { where: "a.ts:3", finding: "**Important**: off by one", reply: "Rejected: intended" },
+    ]);
   });
 });

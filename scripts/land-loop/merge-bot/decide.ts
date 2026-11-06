@@ -42,7 +42,10 @@ export const LAND_GATE = "land-gate";
 export interface RoutingAnswer {
   readonly land: LandRoute;
   readonly review: ReviewDepth;
-  /** On a Patch delta after a fixed Important: whether the fix is risky enough for Review round 2. */
+  /**
+   * On a Patch delta: whether it is risky enough to be read again. After Review round 1 it runs Review
+   * round 2; after Review round 2 it sends the change to the Owner, since a third never runs.
+   */
   readonly secondRound: boolean;
   readonly reason: string;
   /** The model asked, exact when it answered; null when the Routing rules decided. */
@@ -69,15 +72,15 @@ export interface PrincipalJudgeVerdict {
 /**
  * The record the App keeps in one comment per PR. Its keys are the stored record's format, an
  * external name: existing records must still read, so they stay as they are. `triage` holds the
- * Routing answers, `rounds` the Review rounds, `dequeued` the Ejection, `fable` the Principal judge.
+ * Routing answers, `dequeued` the Ejection, `fable` the Principal judge.
  */
 export interface StateRecord {
   /** The patch the last Code review read, or null before any review. */
   readonly reviewedPatch: string | null;
-  /** The head that review read, from which the Patch delta of Review round 2 is diffed. */
+  /** The head that review read, from which the Patch delta of the next Review round is diffed. */
   readonly reviewedHead: string | null;
-  /** Review rounds that posted at least one Important. */
-  readonly rounds: number;
+  /** The Review rounds run on the change, whether they posted findings or not: 0, 1 or 2. */
+  readonly reviewRounds: number;
   /** The Routing answer of each patch, keyed by patch identity. */
   readonly triage: Readonly<Record<string, RoutingAnswer>>;
   /** The patch the owner's Land approval was given for. */
@@ -95,22 +98,38 @@ export interface StateRecord {
 export const EMPTY_RECORD: StateRecord = {
   reviewedPatch: null,
   reviewedHead: null,
-  rounds: 0,
+  reviewRounds: 0,
   triage: {},
   landOkPatch: null,
   dequeued: null,
 };
 
 /** The state record as its comment stores it: each Routing answer's Land route in its stored value. */
-export type StoredRecord = Omit<StateRecord, "triage"> & {
+export type StoredRecord = Omit<StateRecord, "triage" | "reviewRounds"> & {
   readonly triage: Readonly<Record<string, Omit<RoutingAnswer, "land"> & { readonly land: StoredLandRoute }>>;
+  readonly reviewRounds?: number;
+  readonly rounds?: number;
 };
 
 /** The record a comment stores, with each Land route read back from its stored value. */
 export function recordOfStored(stored: StoredRecord): StateRecord {
+  const { rounds, reviewRounds, ...rest } = stored;
   const triage = Object.entries(stored.triage).map(([patch, routing]) => [patch, { ...routing, land: landRouteOf(routing.land) }] as const);
 
-  return { ...stored, triage: Object.fromEntries(triage) };
+  return {
+    ...rest,
+    // Open PRs carry records with no `reviewRounds`, whose `rounds` counts only the Review rounds that
+    // posted an Important: a floor of the Review rounds run, and a reviewed patch means one ran at least.
+    reviewRounds: reviewRounds ?? Math.max(rounds ?? 0, stored.reviewedPatch === null ? 0 : 1),
+    triage: Object.fromEntries(triage),
+  };
+}
+
+/** The record its comment's JSON holds, each field it lacks read as in a record with no review yet. */
+export function recordOfJson(json: string): StateRecord {
+  const noReview: StoredRecord = { reviewedPatch: null, reviewedHead: null, triage: {}, landOkPatch: null, dequeued: null };
+
+  return recordOfStored({ ...noReview, ...(JSON.parse(json) as Partial<StoredRecord>) });
 }
 
 /** The record as its comment stores it, each Land route in its stored value. */
@@ -273,23 +292,26 @@ export function decide(snapshot: Snapshot): Decision {
   const labels = risen(snapshot.labels, routing);
   steps.push({ kind: "labels", ...labels });
 
+  let thirdRoundNeeded = false;
+
   if (next.reviewedPatch !== snapshot.patch && labels.depth !== "none") {
-    if (next.reviewedPatch === null) {
+    if (next.reviewRounds === 0) {
       steps.push({ kind: "code-review", depth: labels.depth, reviewRound: 1 });
 
       return { kind: "steps", steps };
     }
 
     // A later patch is read again only when the Routing answer of its Patch delta asks for it.
-    if (next.rounds < 2 && routing.secondRound) {
-      steps.push({ kind: "code-review", depth: labels.depth, reviewRound: next.rounds === 0 ? 1 : 2 });
+    if (routing.secondRound && next.reviewRounds === 1) {
+      steps.push({ kind: "code-review", depth: labels.depth, reviewRound: 2 });
 
       return { kind: "steps", steps };
     }
 
-    if (next.rounds >= 2 && routing.secondRound) {
+    if (routing.secondRound) {
+      thirdRoundNeeded = true;
       steps.push({ kind: "labels", route: "owner", depth: labels.depth });
-      steps.push({ kind: "needs-owner", reason: "A third review round would be needed: the owner decides." });
+      steps.push({ kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." });
     }
   }
 
@@ -304,9 +326,10 @@ export function decide(snapshot: Snapshot): Decision {
     check: { kind: "success", summary: labels.depth === "none" ? "review:none, nothing to read." : "No Important finding open." },
   });
 
-  let route: LandRoute = next.rounds >= 2 ? "owner" : labels.route;
+  let route: LandRoute = thirdRoundNeeded ? "owner" : labels.route;
 
-  if (routing.needsFable === true && next.rounds < 2) {
+  // Not when a third Review round is needed: no Code review read the risky Patch delta it would judge.
+  if (routing.needsFable === true && !thirdRoundNeeded) {
     const verdict = next.fable?.[snapshot.patch];
 
     if (verdict === undefined && (next.fableFailures?.[snapshot.patch] ?? 0) < PRINCIPAL_JUDGE_TRIES) {

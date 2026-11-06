@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
-import { codeReview, commentOf, EFFORT, type Finding, MODEL, promptOf as codeReviewPrompt, severityOfBody, type RejectedThread } from "../review/code-review.ts";
+import { codeReview, commentOf, EFFORT, type Finding, MODEL, promptOf as codeReviewPrompt, rejectedOf, type ReviewThread, severityOfBody } from "../review/code-review.ts";
 import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf as principalJudgePrompt } from "../review/principal-judge.ts";
 import { routingJudge } from "../routing/routing-judge.ts";
 import { routingRulesOf } from "../routing/routing-rules.ts";
@@ -32,14 +32,13 @@ import {
   openImportantOf,
   patchDeltaStart,
   PRINCIPAL_JUDGE_TRIES,
-  recordOfStored,
+  recordOfJson,
   REVIEW_CHECK,
   type ReviewDepth,
   type Snapshot,
   type StateRecord,
   type Step,
   storedLandRouteOf,
-  type StoredRecord,
   storedOfRecord,
 } from "./decide.ts";
 
@@ -97,12 +96,8 @@ interface PullJson {
   base: { ref: string };
 }
 
-interface ThreadJson {
+interface ThreadJson extends ReviewThread {
   id: string;
-  isResolved: boolean;
-  path: string;
-  line: number | null;
-  comments: { nodes: { author: { login: string } | null; body: string }[] };
 }
 
 async function threadsOf(env: Env, pr: number): Promise<ThreadJson[]> {
@@ -139,7 +134,7 @@ async function recordOf(env: Env, pr: number): Promise<{ id: number | null; reco
 
   const json = MERGE_BOT_STATE_PATTERN.exec(mine.body)?.[1];
 
-  return { id: mine.id, record: json === undefined ? EMPTY_RECORD : recordOfStored({ ...EMPTY_RECORD, ...(JSON.parse(json) as StoredRecord) }) };
+  return { id: mine.id, record: json === undefined ? EMPTY_RECORD : recordOfJson(json) };
 }
 
 async function writeRecord(env: Env, pr: number, id: number | null, record: StateRecord): Promise<void> {
@@ -268,16 +263,6 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
   return { ...rules, secondRound: patchDeltaRules !== null || (await asked()).secondRound };
 }
 
-function rejectedOf(env: Env, threads: readonly ThreadJson[]): RejectedThread[] {
-  return threads
-    .filter((thread) => thread.isResolved && thread.comments.nodes[0]?.author?.login === bare(env.appLogin) && thread.comments.nodes.length > 1)
-    .map((thread) => ({
-      where: `${thread.path}:${thread.line ?? "?"}`,
-      finding: (thread.comments.nodes[0]?.body ?? "").split("\n")[0] ?? "",
-      reply: thread.comments.nodes.slice(1).map((comment) => comment.body).join(" / "),
-    }));
-}
-
 /** Posts the review; answers how many Important findings went out with no thread to resolve. */
 async function postFindings(env: Env, pr: PullJson, findings: readonly Finding[], reviewRound: 1 | 2, by: string, costUsd: number | null): Promise<number> {
   const counts = (["important", "nit", "pre_existing"] as const).map((severity) => `${findings.filter((found) => found.severity === severity).length} ${severity}`).join(", ");
@@ -317,7 +302,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
     case "code-review": {
       const from = step.reviewRound === 2 ? await patchDeltaBase(env, range, record) : range.base;
       const guide = readFileSync(join(env.cwd, "REVIEW.md"), "utf8");
-      const prompt = codeReviewPrompt(guide, await git(env, ["diff", `${from}..${range.head}`]), step.reviewRound, rejectedOf(env, threads));
+      const prompt = codeReviewPrompt(guide, await git(env, ["diff", `${from}..${range.head}`]), step.reviewRound, rejectedOf(bare(env.appLogin), threads));
       let result = await codeReview(ask, env.cwd, step.depth, prompt, Date.now);
 
       if (result.findings === null) result = await codeReview(ask, env.cwd, step.depth, prompt, Date.now);
@@ -338,7 +323,7 @@ async function perform(env: Env, pr: PullJson, range: Range, recordId: number | 
         ...record,
         reviewedPatch,
         reviewedHead: range.head,
-        rounds: record.rounds + (important ? 1 : 0),
+        reviewRounds: step.reviewRound,
         bodyImportant: { ...(record.bodyImportant ?? {}), [reviewedPatch]: unthreaded },
       };
       await writeRecord(env, pr.number, recordId, next);
