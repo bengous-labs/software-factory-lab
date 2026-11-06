@@ -56,3 +56,7 @@ Strings stored outside the code keep their spelling when the code's vocabulary c
 ## Effect
 
 The code uses Effect for schemas and results. Before writing Effect code, read `node_modules/effect/AGENTS.md`. Search `node_modules/effect/src` for what that guide does not cover.
+
+## Agent SDK
+
+The Judges call Claude Code through `@anthropic-ai/claude-agent-sdk`. Before writing Agent SDK code, read its types in `node_modules/@anthropic-ai/claude-agent-sdk/`: `sdk.d.ts` holds `query`, its `Options` and the messages it streams, and `sdk-tools.d.ts` the input and output of each built-in tool. The guide is https://code.claude.com/docs/en/agent-sdk/typescript.
