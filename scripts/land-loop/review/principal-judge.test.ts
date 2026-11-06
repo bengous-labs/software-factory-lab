@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+import { Result, Schema } from "effect";
+
 import type { Answer, Ask, Question } from "../lib/ask.ts";
-import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf, SCHEMA, verdictOf } from "./principal-judge.ts";
+import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf, SCHEMA, VerdictAnswer } from "./principal-judge.ts";
 
 interface Asked {
   readonly ask: Ask;
@@ -21,26 +23,15 @@ function asking(answer: Answer): Asked {
   };
 }
 
-describe("verdictOf", () => {
-  test("an explicit ok true or false is a verdict; a missing or non-boolean ok is none", () => {
-    const cases: Array<[unknown, { ok: boolean; reason: string } | null]> = [
-      [
-        { ok: true, reason: "fine" },
-        { ok: true, reason: "fine" },
-      ],
-      [
-        { ok: false, reason: "bypass" },
-        { ok: false, reason: "bypass" },
-      ],
-      [{ ok: false }, { ok: false, reason: "" }],
-      [{ reason: "?" }, null],
-      [{ ok: "yes", reason: "?" }, null],
-      [null, null],
-      ["looks fine", null],
-    ];
+describe("VerdictAnswer", () => {
+  test("an explicit ok true or false with its reason is a verdict; anything else is none", () => {
+    const decode = Schema.decodeUnknownResult(VerdictAnswer);
 
-    for (const [structured, verdict] of cases) {
-      expect(verdictOf(structured)).toEqual(verdict);
+    expect(decode({ ok: true, reason: "fine" })).toEqual(Result.succeed({ ok: true, reason: "fine" }));
+    expect(decode({ ok: false, reason: "bypass" })).toEqual(Result.succeed({ ok: false, reason: "bypass" }));
+
+    for (const structured of [{ ok: false }, { reason: "?" }, { ok: "yes", reason: "?" }, null, "looks fine"]) {
+      expect(Result.isFailure(decode(structured))).toBe(true);
     }
   });
 });
@@ -85,7 +76,7 @@ describe("principalJudge", () => {
     });
     expect(await principalJudge(offSchema, "/repo", "prompt")).toMatchObject({
       verdict: null,
-      failure: "The Principal judge answered outside the schema.",
+      failure: 'The Principal judge answered outside the schema: Missing key\n  at ["ok"]',
       costUsd: 0.1,
     });
   });

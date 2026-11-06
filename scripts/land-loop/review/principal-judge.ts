@@ -6,6 +6,8 @@
  * patch, before it sends the change to the owner.
  */
 
+import { Result, Schema } from "effect";
+
 import type { Ask } from "../lib/ask.ts";
 import type { PrincipalJudgeVerdict } from "../merge-bot/decide.ts";
 
@@ -33,16 +35,10 @@ export function promptOf(guide: string, diff: string): string {
   ].join("\n");
 }
 
-/** The verdict in the schema's answer: an explicit ok true or false, else null. */
-export function verdictOf(structured: unknown): PrincipalJudgeVerdict | null {
-  if (typeof structured !== "object" || structured === null || !("ok" in structured)) {
-    return null;
-  }
+/** The verdict SCHEMA describes, decoded from the call's structured output. */
+export const VerdictAnswer = Schema.Struct({ ok: Schema.Boolean, reason: Schema.String });
 
-  const reason = "reason" in structured && typeof structured.reason === "string" ? structured.reason : "";
-
-  return typeof structured.ok === "boolean" ? { ok: structured.ok, reason } : null;
-}
+const decodeVerdict = Schema.decodeUnknownResult(VerdictAnswer, { reportInput: true });
 
 /** A verdict, or the reason the Principal judge gave none. */
 export interface PrincipalJudgeRun {
@@ -54,14 +50,19 @@ export interface PrincipalJudgeRun {
 
 export async function principalJudge(ask: Ask, cwd: string, prompt: string): Promise<PrincipalJudgeRun> {
   const answer = await ask({ model: PRINCIPAL_JUDGE_MODEL, prompt, schema: SCHEMA, cwd, timeoutMs: 900_000 });
-  const verdict = answer.kind === "answered" ? verdictOf(answer.structured) : null;
+  const { model, costUsd } = answer;
 
-  const failure =
-    verdict === null
-      ? answer.kind === "answered"
-        ? "The Principal judge answered outside the schema."
-        : `The Principal judge failed: ${answer.error.slice(0, 200)}`
-      : null;
+  if (answer.kind === "failed") {
+    return { verdict: null, failure: `The Principal judge failed: ${answer.error.slice(0, 200)}`, model, costUsd };
+  }
 
-  return { verdict, failure, model: answer.model, costUsd: answer.costUsd };
+  const verdict = decodeVerdict(answer.structured);
+
+  if (Result.isFailure(verdict)) {
+    const failure = `The Principal judge answered outside the schema: ${verdict.failure.message.slice(0, 200)}`;
+
+    return { verdict: null, failure, model, costUsd };
+  }
+
+  return { verdict: verdict.success, failure: null, model, costUsd };
 }

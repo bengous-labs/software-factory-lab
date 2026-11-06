@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+import { Result, Schema } from "effect";
+
 import type { Answer, Ask, Question } from "../lib/ask.ts";
-import { ROUTING_JUDGE_MODEL, routingJudge, routingOf, SCHEMA } from "./routing-judge.ts";
+import { ROUTING_JUDGE_MODEL, routingJudge, RoutingJudgeAnswer, routingOf, SCHEMA } from "./routing-judge.ts";
 
 const SAFE = { land: "owner", review: "deep", secondRound: true };
 
@@ -37,9 +39,17 @@ describe("routingOf", () => {
   });
 
   test("an answer outside the schema does not read", () => {
-    expect(routingOf({ land: "maybe", review: "light", second_round: false, reason: "" }, null)).toBeNull();
-    expect(routingOf(null, null)).toBeNull();
-    expect(routingOf("auto", null)).toBeNull();
+    const refused = [
+      { land: "maybe", review: "light", second_round: false, reason: "" },
+      { land: "auto", review: "light", reason: "" },
+      { land: "auto", review: "light", second_round: "no", reason: "" },
+      null,
+      "auto",
+    ];
+
+    for (const structured of refused) {
+      expect(Result.isFailure(Schema.decodeUnknownResult(RoutingJudgeAnswer)(structured))).toBe(true);
+    }
   });
 });
 
@@ -95,6 +105,11 @@ describe("routingJudge", () => {
       model: "claude-haiku-5-5",
     });
 
-    expect(await routingJudge(ask, "/repo", "s", "p", false)).toMatchObject(SAFE);
+    const routing = await routingJudge(ask, "/repo", "s", "p", false);
+
+    expect(routing).toMatchObject(SAFE);
+    expect(routing.reason).toBe(
+      'the Routing judge failed: its answer does not read: Expected "auto" | "owner", got "soon"\n  at ["land"]',
+    );
   });
 });

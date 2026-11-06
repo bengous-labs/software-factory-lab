@@ -4,6 +4,8 @@
  * schema, answers the `owner` route and review:deep: the safe side.
  */
 
+import { Result, Schema } from "effect";
+
 import type { Ask } from "../lib/ask.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
 
@@ -43,22 +45,21 @@ export function promptOf(stat: string, diff: string, patchDelta: boolean): strin
   ].join("\n");
 }
 
-/** The Routing answer the schema's answer carries, given by `model`, or null when it does not read. */
-export function routingOf(structured: unknown, model: string | null): RoutingAnswer | null {
-  if (typeof structured !== "object" || structured === null) {
-    return null;
-  }
+/** The answer SCHEMA describes, decoded from the call's structured output. */
+export const RoutingJudgeAnswer = Schema.Struct({
+  land: Schema.Literals(["auto", "owner"]),
+  review: Schema.Literals(["none", "light", "deep"]),
+  second_round: Schema.Boolean,
+  reason: Schema.String,
+});
 
-  const land = "land" in structured ? structured.land : undefined;
-  const review = "review" in structured ? structured.review : undefined;
-  const secondRound = "second_round" in structured ? structured.second_round : undefined;
-  const reason = "reason" in structured ? structured.reason : undefined;
+export type RoutingJudgeAnswer = typeof RoutingJudgeAnswer.Type;
 
-  if ((land !== "auto" && land !== "owner") || (review !== "none" && review !== "light" && review !== "deep")) {
-    return null;
-  }
+const decodeRoutingJudgeAnswer = Schema.decodeUnknownResult(RoutingJudgeAnswer, { reportInput: true });
 
-  return { land, review, secondRound: secondRound === true, reason: typeof reason === "string" ? reason : "", model };
+/** The Routing answer the judge's answer carries, given by `model`. */
+export function routingOf(answer: RoutingJudgeAnswer, model: string | null): RoutingAnswer {
+  return { land: answer.land, review: answer.review, secondRound: answer.second_round, reason: answer.reason, model };
 }
 
 export async function routingJudge(
@@ -76,15 +77,21 @@ export async function routingJudge(
     timeoutMs: 180_000,
   });
 
-  const routing = answer.kind === "answered" ? routingOf(answer.structured, answer.model) : null;
+  const safeSide = (why: string): RoutingAnswer => ({
+    land: "owner",
+    review: "deep",
+    secondRound: true,
+    reason: `the Routing judge failed: ${why.slice(0, 200)}`,
+    model: answer.model ?? ROUTING_JUDGE_MODEL,
+  });
 
-  return (
-    routing ?? {
-      land: "owner",
-      review: "deep",
-      secondRound: true,
-      reason: `the Routing judge failed: ${(answer.kind === "failed" ? answer.error : "its answer does not read").slice(0, 200)}`,
-      model: answer.model ?? ROUTING_JUDGE_MODEL,
-    }
-  );
+  if (answer.kind === "failed") {
+    return safeSide(answer.error);
+  }
+
+  const decoded = decodeRoutingJudgeAnswer(answer.structured);
+
+  return Result.isFailure(decoded)
+    ? safeSide(`its answer does not read: ${decoded.failure.message}`)
+    : routingOf(decoded.success, answer.model);
 }

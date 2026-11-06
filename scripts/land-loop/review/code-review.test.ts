@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { Result, Schema } from "effect";
+
 import type { Answer, Ask, Question } from "../lib/ask.ts";
 import { AUTHOR_MARK } from "../thread.ts";
 import {
@@ -10,14 +12,15 @@ import {
   NIT_CAP,
   promptOf,
   rejectedOf,
+  ReviewAnswer,
   SCHEMA,
   severityOfBody,
 } from "./code-review.ts";
-import type { ReviewThread } from "./code-review.ts";
+import type { ReviewThread, Severity } from "./code-review.ts";
 
-const out = (findings: readonly unknown[]) => ({ findings });
+const out = (findings: ReviewAnswer["findings"]): ReviewAnswer => ({ findings });
 
-const finding = (severity: string, summary: string) => ({
+const finding = (severity: Severity, summary: string) => ({
   file: "app/src/cli.ts",
   line: 3,
   severity,
@@ -53,15 +56,23 @@ describe("findingsOf", () => {
       ]),
     );
 
-    expect(findings?.filter((found) => found.severity === "nit")).toHaveLength(NIT_CAP);
-    expect(findings?.map((found) => found.severity)).toEqual(["important", "pre_existing", "nit", "nit", "nit"]);
+    expect(findings.filter((found) => found.severity === "nit")).toHaveLength(NIT_CAP);
+    expect(findings.map((found) => found.severity)).toEqual(["important", "pre_existing", "nit", "nit", "nit"]);
   });
 
-  test("an answer without a findings array does not read", () => {
-    expect(findingsOf({ result: "looks good" })).toBeNull();
-    expect(findingsOf(null)).toBeNull();
-    expect(findingsOf("not an object")).toBeNull();
-    expect(findingsOf({ findings: [null] })).toBeNull();
+  test("an answer outside the schema does not read", () => {
+    const refused = [
+      { result: "looks good" },
+      null,
+      "not an object",
+      { findings: [null] },
+      { findings: [{ ...finding("nit", "n"), severity: "minor" }] },
+      { findings: [{ ...finding("nit", "n"), line: 2.5 }] },
+    ];
+
+    for (const structured of refused) {
+      expect(Result.isFailure(Schema.decodeUnknownResult(ReviewAnswer)(structured))).toBe(true);
+    }
   });
 });
 
@@ -111,7 +122,7 @@ describe("codeReview", () => {
     const result = await codeReview(ask, "/repo", "light", "p", () => 0);
 
     expect(result.findings).toBeNull();
-    expect(result.error).toBe("the answer does not read");
+    expect(result.error).toBe('the answer does not read: Missing key\n  at ["findings"]');
   });
 });
 
