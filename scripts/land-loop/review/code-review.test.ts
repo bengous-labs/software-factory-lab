@@ -15,15 +15,33 @@ import {
 } from "./code-review.ts";
 import type { ReviewThread } from "./code-review.ts";
 
-const out = (findings: object[]): object => ({ findings });
+const out = (findings: readonly unknown[]) => ({ findings });
 
-const finding = (severity: string, summary: string): object => ({
+const finding = (severity: string, summary: string) => ({
   file: "app/src/cli.ts",
   line: 3,
   severity,
   summary,
   failure_scenario: "todo done 0 marks nothing",
 });
+
+interface Asked {
+  readonly ask: Ask;
+  readonly questions: readonly Question[];
+}
+
+function asking(answer: Answer): Asked {
+  const questions: Question[] = [];
+
+  return {
+    ask: (question) => {
+      questions.push(question);
+
+      return Promise.resolve(answer);
+    },
+    questions,
+  };
+}
 
 describe("findingsOf", () => {
   test("the schema's answer reads into findings, Nits capped by REVIEW.md, Important and Pre-existing kept", () => {
@@ -48,19 +66,6 @@ describe("findingsOf", () => {
 });
 
 describe("codeReview", () => {
-  const asking = (answer: Answer): { ask: Ask; questions: Question[] } => {
-    const questions: Question[] = [];
-
-    return {
-      ask: async (question) => {
-        questions.push(question);
-
-        return answer;
-      },
-      questions,
-    };
-  };
-
   test("the Review depth picks the model, the schema goes with the prompt, and the answer reads into findings", async () => {
     const { ask, questions } = asking({
       kind: "answered",

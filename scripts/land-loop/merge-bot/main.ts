@@ -75,18 +75,19 @@ function required(name: string): string {
 }
 
 const gh = (env: Env, args: readonly string[], stdin?: string): Promise<string> =>
-  checked(run, ["gh", ...args], { cwd: env.cwd, ...(stdin === undefined ? {} : { stdin }) });
+  checked(run, ["gh", ...args], stdin === undefined ? { cwd: env.cwd } : { cwd: env.cwd, stdin });
 
 const git = async (env: Env, args: readonly string[]): Promise<string> =>
   (await checked(run, ["git", ...args], { cwd: env.cwd })).trim();
 
-const api = async <T>(env: Env, path: string, method = "GET", body?: object): Promise<T> => {
+const api = async <T>(env: Env, path: string, method = "GET", body?: Readonly<Record<string, unknown>>): Promise<T> => {
   const out = await gh(
     env,
     ["api", "-X", method, path, ...(body === undefined ? [] : ["--input", "-"])],
     body === undefined ? undefined : JSON.stringify(body),
   );
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh prints the JSON of the endpoint the caller names, and the caller types it as T.
   return (out.trim() === "" ? {} : JSON.parse(out)) as T;
 };
 
@@ -226,7 +227,7 @@ async function snapshotOf(
       `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`,
     );
 
-    const pushedAt = suites.check_suites.map((suite) => suite.created_at).sort()[0] ?? null;
+    const pushedAt = suites.check_suites.map((suite) => suite.created_at).toSorted()[0] ?? null;
     landApprovalByOwner = landApprovalCounts(last?.actor.login === env.owner, last?.created_at ?? null, pushedAt);
   }
 
@@ -251,7 +252,7 @@ async function snapshotOf(
         (thread) =>
           !thread.isResolved &&
           thread.comments.nodes[0]?.author?.login === bare(env.appLogin) &&
-          severityOfBody(thread.comments.nodes[0]?.body ?? "") === "important",
+          severityOfBody(thread.comments.nodes[0].body) === "important",
       ).length,
       record,
       await patchOf(env, range),
@@ -274,8 +275,8 @@ async function setCheck(env: Env, name: string, head: string, check: CheckState)
 }
 
 /** Sets the `land:*` and `review:*` labels. Their names are external: open PRs carry them, so the strings stay. */
-async function setLabels(env: Env, pr: PullJson, route: LandRoute, depth: ReviewDepth): Promise<void> {
-  const wanted = [`land:${storedLandRouteOf(route)}`, `review:${depth}`];
+async function setLabels(env: Env, pr: PullJson, landRoute: LandRoute, depth: ReviewDepth): Promise<void> {
+  const wanted = [`land:${storedLandRouteOf(landRoute)}`, `review:${depth}`];
   const current = pr.labels.map((label) => label.name);
   const stale = current.filter((name) => /^(land|review):/u.test(name) && !wanted.includes(name));
   const missing = wanted.filter((name) => !current.includes(name));
@@ -408,6 +409,7 @@ async function postFindings(
   }
 }
 
+// oxlint-disable-next-line typescript/consistent-return -- the switch covers every Step kind, so no path reaches the end.
 async function perform(
   env: Env,
   pr: PullJson,
@@ -644,6 +646,7 @@ async function numbersOf(env: Env): Promise<number[]> {
     return listed.filter((found) => found.state === "open").map((found) => found.number);
   }
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh pr list --json number prints a list of { number }.
   const open = JSON.parse(
     await gh(env, ["pr", "list", "--repo", env.repo, "--state", "open", "--json", "number"]),
   ) as Array<{

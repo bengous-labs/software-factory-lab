@@ -30,20 +30,22 @@ export function toolDecision(toolName: string): "allow" | "deny" {
   return toolName === STRUCTURED_OUTPUT ? "allow" : "deny";
 }
 
-export const refuseTools: HookCallback = async (input) => {
+export const refuseTools: HookCallback = (input) => {
   if (input.hook_event_name !== "PreToolUse") {
-    return {};
+    return Promise.resolve({});
   }
 
-  const decision = toolDecision(input.tool_name);
+  if (toolDecision(input.tool_name) === "allow") {
+    return Promise.resolve({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } });
+  }
 
-  return {
+  return Promise.resolve({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: decision,
-      ...(decision === "deny" ? { permissionDecisionReason: "this call runs with no tool" } : {}),
+      permissionDecision: "deny",
+      permissionDecisionReason: "this call runs with no tool",
     },
-  };
+  });
 };
 
 export function optionsOf(question: Question, abortController: AbortController): Options {
@@ -63,7 +65,7 @@ export function optionsOf(question: Question, abortController: AbortController):
 
 /** The exact model of a call: the one that cost the most, when several ran. */
 export function modelOf(modelUsage: Readonly<Record<string, { readonly costUSD: number }>>): string | null {
-  return Object.entries(modelUsage).sort((a, b) => b[1].costUSD - a[1].costUSD)[0]?.[0] ?? null;
+  return Object.entries(modelUsage).toSorted((a, b) => b[1].costUSD - a[1].costUSD)[0]?.[0] ?? null;
 }
 
 /** The answer a call's result message carries; `thrown` is what the call threw, if it threw. */
@@ -98,9 +100,11 @@ export type Stream = (call: { readonly prompt: string; readonly options: Options
 export function askWith(stream: Stream): Ask {
   return async (question) => {
     const abortController = new AbortController();
+
     const timer = setTimeout(() => {
       abortController.abort();
     }, question.timeoutMs);
+
     let result: SDKResultMessage | undefined;
     let thrown: string | null = null;
 

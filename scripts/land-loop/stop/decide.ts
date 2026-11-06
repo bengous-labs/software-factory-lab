@@ -56,7 +56,7 @@ export type Action =
   | { readonly kind: "open" }
   | { readonly kind: "push"; readonly pr: number; readonly ready: boolean };
 
-const none = (reason: string): { kind: "none"; reason: string } => ({ kind: "none", reason });
+const none = (reason: string): Extract<Admission, { kind: "none" }> => ({ kind: "none", reason });
 
 export function admit(snapshot: Snapshot): Admission {
   if (snapshot.forkFlag) {

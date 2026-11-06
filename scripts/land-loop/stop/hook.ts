@@ -58,6 +58,7 @@ function linesOf(path: string): TranscriptLine[] {
     .filter((line) => line.trim() !== "")
     .flatMap((line) => {
       try {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: each transcript line is a JSON message, and TranscriptLine reads only optional fields.
         return [JSON.parse(line) as TranscriptLine];
       } catch {
         return [];
@@ -141,6 +142,7 @@ async function askFork(deps: Deps, input: StopInput, model: string | null, promp
   const ms = deps.now() - started;
 
   try {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: claude -p --output-format json prints its result object, every field read here optional.
     const out = JSON.parse(ran.stdout) as {
       result?: string;
       total_cost_usd?: number;
@@ -164,6 +166,7 @@ async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise
 }
 
 async function prOf(deps: Deps, cwd: string, branch: string): Promise<PullRequest | null> {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh pr list prints a list of the fields named by --json.
   const listed = JSON.parse(
     await checked(
       deps.run,
@@ -219,7 +222,13 @@ export function doneJudgeFailure(code: number, text: string, stopHookActive: boo
 }
 
 /** Reads, decides and acts; returns what Claude Code is told. `log` gets one record per step. */
-export async function stop(input: StopInput, deps: Deps, log: (record: object) => void): Promise<Outcome> {
+/** One `.lab/stop.log` record: the step it logs, and that step's fields. */
+export interface StopLogRecord {
+  readonly step: string;
+  readonly [field: string]: unknown;
+}
+
+export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRecord) => void): Promise<Outcome> {
   const { cwd } = input;
   const root = await gitOut(deps, cwd, ["rev-parse", "--show-toplevel"]);
   const stateDir = join(root, ".lab", "state");
@@ -357,11 +366,12 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
 }
 
 if (import.meta.main) {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: Claude Code writes the Stop input on stdin as JSON.
   const input = JSON.parse(await Bun.stdin.text()) as StopInput;
   const logFile = join(input.cwd, ".lab", "stop.log");
   mkdirSync(join(input.cwd, ".lab"), { recursive: true });
 
-  const log = (record: object): void => {
+  const log = (record: StopLogRecord): void => {
     appendFileSync(
       logFile,
       `${JSON.stringify({ at: new Date().toISOString(), session: input.session_id, ...record })}\n`,

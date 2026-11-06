@@ -37,8 +37,10 @@ export default defineConfig({
     // which no annotation here can make readonly.
     "typescript/prefer-readonly-parameter-types": "off",
 
-    // Duplicates of rules already on: typescript/require-await and eslint/no-negated-condition.
-    "eslint/require-await": "off",
+    // eslint/require-await stays on: this one also flags an async generator that only yields, which a test
+    // stream needs to be an AsyncIterable.
+    "typescript/require-await": "off",
+    // A duplicate of eslint/no-negated-condition, on in the style config.
     "unicorn/no-negated-condition": "off",
     // The awaits in loops here are sequential on purpose: polling, one decision after another, steps that
     // must run in order, and one PR at a time so two runs never write the same state record.

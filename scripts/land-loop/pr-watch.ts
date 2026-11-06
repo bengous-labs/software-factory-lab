@@ -141,11 +141,12 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
  * What one reading prints, each line `seen` does not hold yet, and whether the PR watch ends. A landed
  * or closed PR ends it at once, even for a PR watch armed again after its end line was printed.
  */
-export function readingOf(
-  pr: number,
-  state: PrState,
-  seen: ReadonlySet<string>,
-): { readonly wakes: readonly Wake[]; readonly ends: boolean } {
+export interface Reading {
+  readonly wakes: readonly Wake[];
+  readonly ends: boolean;
+}
+
+export function readingOf(pr: number, state: PrState, seen: ReadonlySet<string>): Reading {
   const end = endOf(pr, state);
   const wakes = end === null ? wakesOf(pr, state) : [{ key: END_KEY, line: end }];
 
@@ -155,6 +156,7 @@ export function readingOf(
 async function read(runner: Run, pr: number): Promise<PrState> {
   const cwd = process.cwd();
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh pr view prints the JSON fields named by --json.
   const view = JSON.parse(
     await checked(runner, ["gh", "pr", "view", String(pr), "--json", "state,isDraft,headRefOid"], { cwd }),
   ) as { state: PrState["state"]; isDraft: boolean; headRefOid: string };
@@ -180,6 +182,7 @@ async function read(runner: Run, pr: number): Promise<PrState> {
     { cwd },
   );
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: GitHub answers this GraphQL query with the shape it selects.
   const threads = JSON.parse(
     await checked(
       runner,
@@ -215,6 +218,7 @@ async function read(runner: Run, pr: number): Promise<PrState> {
     draft: view.isDraft,
     head: view.headRefOid,
     // `gh pr checks` exits 8 while checks are pending and 1 when one fails; its JSON is printed either way.
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh pr checks prints a list of the fields named by --json.
     checks: checks.stdout.trim() === "" ? [] : (JSON.parse(checks.stdout) as Check[]),
     threads: threads.data.repository.pullRequest.reviewThreads.nodes.map((node) => ({
       id: node.id,
@@ -230,8 +234,12 @@ async function read(runner: Run, pr: number): Promise<PrState> {
     comments: conversation
       .split("\n")
       .filter((line) => line !== "")
-      .map((line) => JSON.parse(line) as Comment)
-      .map((comment) => ({ ...comment, author: comment.author.replace(/\[bot\]$/u, "") })),
+      .map((line) => {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: the --jq filter above prints one Comment per line.
+        const comment = JSON.parse(line) as Comment;
+
+        return { ...comment, author: comment.author.replace(/\[bot\]$/u, "") };
+      }),
   };
 }
 
@@ -246,7 +254,11 @@ if (import.meta.main) {
   mkdirSync(stateDir, { recursive: true });
   // An on-disk name: existing state files carry it, so it stays.
   const seenFile = join(stateDir, `watch-${pr}.json`);
-  const seen = new Set<string>(existsSync(seenFile) ? (JSON.parse(readFileSync(seenFile, "utf8")) as string[]) : []);
+
+  const seen = new Set<string>(
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: print below writes this file as a JSON list of keys.
+    existsSync(seenFile) ? (JSON.parse(readFileSync(seenFile, "utf8")) as string[]) : [],
+  );
 
   const print = (key: string, line: string): void => {
     if (seen.has(key)) {

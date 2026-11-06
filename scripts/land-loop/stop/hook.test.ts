@@ -15,13 +15,20 @@ interface Call {
   readonly options: RunOptions;
 }
 
+const ok = (stdout: string): Promise<Ran> => Promise.resolve({ code: 0, stdout, stderr: "" });
+
+interface World {
+  readonly run: Run;
+  readonly calls: readonly Call[];
+  readonly root: string;
+}
+
 /** A fake of git, gh, bun and claude for the Author's session on `agent/x`, one commit ahead, no PR. */
-function world(doneJudgeAnswer: string): { run: Run; calls: Call[]; root: string } {
+function world(doneJudgeAnswer: string): World {
   const root = mkdtempSync(join(tmpdir(), "stop-"));
   const calls: Call[] = [];
-  const ok = (stdout: string): Ran => ({ code: 0, stdout, stderr: "" });
 
-  const run: Run = async (argv, options) => {
+  const run: Run = (argv, options) => {
     calls.push({ argv, options });
     const line = argv.join(" ");
 
@@ -94,10 +101,11 @@ describe("stop", () => {
     const doneJudge = calls.find((call) => call.argv[0] === "claude" && call.argv.at(-1) === DONE_QUESTION);
 
     expect(doneJudge?.argv).toEqual(
+      // oxlint-disable-next-line typescript/no-unsafe-argument -- bun-types types every asymmetric matcher as any.
       expect.arrayContaining(["-p", "--resume", "S1", "--fork-session", "--tools", "", "--model", "claude-haiku-5-5"]),
     );
     expect(doneJudge?.options.env?.[FORK_FLAG]).toBe("1");
-    expect(doneJudge?.argv[(doneJudge?.argv.indexOf("--tools") ?? -2) + 1]).toBe("");
+    expect(doneJudge?.argv[doneJudge.argv.indexOf("--tools") + 1]).toBe("");
     expect(doneJudge?.argv).toContain("--strict-mcp-config");
     expect(
       calls.some((call) =>
@@ -107,6 +115,7 @@ describe("stop", () => {
 
     const create = calls.find((call) => call.argv.join(" ").startsWith("gh pr create"));
 
+    // oxlint-disable-next-line typescript/no-unsafe-argument -- bun-types types every asymmetric matcher as any.
     expect(create?.argv).toEqual(expect.arrayContaining(["--base", "dev", "--title", "feat: x"]));
     expect(create?.options.stdin).toBe("Body text.");
     expect(outcome.kind).toBe("block");

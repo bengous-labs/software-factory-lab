@@ -5,14 +5,19 @@ import { ROUTING_JUDGE_MODEL, routingJudge, routingOf, SCHEMA } from "./routing-
 
 const SAFE = { land: "owner", review: "deep", secondRound: true };
 
-function asking(answer: Answer): { ask: Ask; questions: Question[] } {
+interface Asked {
+  readonly ask: Ask;
+  readonly questions: readonly Question[];
+}
+
+function asking(answer: Answer): Asked {
   const questions: Question[] = [];
 
   return {
-    ask: async (question) => {
+    ask: (question) => {
       questions.push(question);
 
-      return answer;
+      return Promise.resolve(answer);
     },
     questions,
   };
@@ -50,7 +55,8 @@ describe("routingJudge", () => {
     const routing = await routingJudge(ask, "/repo", "1 file changed", "+docs", false);
 
     expect(questions).toHaveLength(1);
-    expect(questions[0]).toEqual(expect.objectContaining({ model: ROUTING_JUDGE_MODEL, schema: SCHEMA, cwd: "/repo" }));
+    expect(questions[0]).toMatchObject({ model: ROUTING_JUDGE_MODEL, cwd: "/repo" });
+    expect(questions[0]?.schema).toEqual(SCHEMA);
     expect(questions[0]?.prompt).toContain("+docs");
     expect(routing).toEqual({
       land: "auto",
@@ -71,16 +77,14 @@ describe("routingJudge", () => {
 
     const routing = await routingJudge(ask, "/repo", "s", "p", true);
 
-    expect(routing).toEqual(expect.objectContaining({ ...SAFE, model: "claude-haiku-5-5" }));
+    expect(routing).toMatchObject({ ...SAFE, model: "claude-haiku-5-5" });
     expect(routing.reason).toBe("the Routing judge failed: error_during_execution: overloaded");
   });
 
   test("a call with no result is named after the model asked, never the Routing rules", async () => {
     const { ask } = asking({ kind: "failed", error: "timed out after 180000 ms", costUsd: null, model: null });
 
-    expect(await routingJudge(ask, "/repo", "s", "p", false)).toEqual(
-      expect.objectContaining({ ...SAFE, model: ROUTING_JUDGE_MODEL }),
-    );
+    expect(await routingJudge(ask, "/repo", "s", "p", false)).toMatchObject({ ...SAFE, model: ROUTING_JUDGE_MODEL });
   });
 
   test("an answer that does not read answers the safe side", async () => {
@@ -91,6 +95,6 @@ describe("routingJudge", () => {
       model: "claude-haiku-5-5",
     });
 
-    expect(await routingJudge(ask, "/repo", "s", "p", false)).toEqual(expect.objectContaining(SAFE));
+    expect(await routingJudge(ask, "/repo", "s", "p", false)).toMatchObject(SAFE);
   });
 });

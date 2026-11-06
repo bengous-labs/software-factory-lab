@@ -115,19 +115,20 @@ export function promptOf(guide: string, diff: string, reviewRound: 1 | 2, reject
   ].join("\n");
 }
 
+interface SchemaAnswer {
+  readonly findings?: Array<{
+    readonly file: string;
+    readonly line: number | null;
+    readonly severity: Severity;
+    readonly summary: string;
+    readonly failure_scenario: string;
+  }>;
+}
+
 /** The findings in the schema's answer, Nits capped; null when it does not read. */
 export function findingsOf(structured: unknown): readonly Finding[] | null {
-  const raw = (
-    structured as {
-      findings?: Array<{
-        file: string;
-        line: number | null;
-        severity: Severity;
-        summary: string;
-        failure_scenario: string;
-      }>;
-    } | null
-  )?.findings;
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: the SDK checked structured against SCHEMA; the checks below refuse what is not a list of objects.
+  const raw = (structured as SchemaAnswer | null)?.findings;
 
   if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null)) {
     return null;
@@ -159,7 +160,9 @@ export function markerOf(severity: Severity): string {
 }
 
 export function severityOfBody(body: string): Severity | null {
-  return (FINDING_MARKER_PATTERN.exec(body)?.[1] as Severity | undefined) ?? null;
+  const severity = FINDING_MARKER_PATTERN.exec(body)?.[1];
+
+  return severity === "important" || severity === "nit" || severity === "pre_existing" ? severity : null;
 }
 
 export function commentOf(finding: Finding): string {

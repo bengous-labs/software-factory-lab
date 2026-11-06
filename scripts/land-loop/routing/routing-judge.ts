@@ -49,7 +49,10 @@ export function routingOf(structured: unknown, model: string | null): RoutingAns
     return null;
   }
 
-  const { land, review, second_round: secondRound, reason } = structured as Record<string, unknown>;
+  const land = "land" in structured ? structured.land : undefined;
+  const review = "review" in structured ? structured.review : undefined;
+  const secondRound = "second_round" in structured ? structured.second_round : undefined;
+  const reason = "reason" in structured ? structured.reason : undefined;
 
   if ((land !== "auto" && land !== "owner") || (review !== "none" && review !== "light" && review !== "deep")) {
     return null;

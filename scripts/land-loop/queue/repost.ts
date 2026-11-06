@@ -32,7 +32,7 @@ interface CheckRun {
 export function greenOnHead(runs: readonly CheckRun[], name: string, appSlug: string): boolean {
   const mine = runs
     .filter((check) => check.name === name && check.app.slug === appSlug && check.status === "completed")
-    .sort((a, b) => (a.completed_at ?? "").localeCompare(b.completed_at ?? ""));
+    .toSorted((a, b) => (a.completed_at ?? "").localeCompare(b.completed_at ?? ""));
 
   return mine.at(-1)?.conclusion === "success";
 }
@@ -59,10 +59,12 @@ if (import.meta.main) {
     throw new Error(`${ref} names no PR`);
   }
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh api prints the pull request this endpoint names.
   const head = JSON.parse(await checked(run, ["gh", "api", `repos/${repo}/pulls/${pr}`], { cwd })) as {
     head: { sha: string };
   };
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh api prints the check runs of the head this endpoint names.
   const runs = JSON.parse(
     await checked(run, ["gh", "api", `repos/${repo}/commits/${head.head.sha}/check-runs?per_page=100`], { cwd }),
   ) as { check_runs: CheckRun[] };

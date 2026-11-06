@@ -17,7 +17,7 @@ const USAGE =
 
 /** Runs one command against the store at `path` and returns what to print. */
 export function run(argv: readonly string[], path: string): string {
-  const [command, ...rest] = argv;
+  const [command = "", ...rest] = argv;
 
   switch (command) {
     case "add": {

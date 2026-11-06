@@ -138,6 +138,7 @@ export function recordOfJson(json: string): StateRecord {
     dequeued: null,
   };
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: the Merge bot wrote this JSON with storedOfRecord.
   return recordOfStored({ ...noReview, ...(JSON.parse(json) as Partial<StoredRecord>) });
 }
 
@@ -224,7 +225,12 @@ export type Decision =
  * `review:*` labels, read here and quoted in the check summaries below, are external names: open PRs
  * carry them, so the strings stay.
  */
-export function risen(labels: readonly string[], routing: RoutingAnswer): { route: LandRoute; depth: ReviewDepth } {
+export interface RisenLabels {
+  readonly route: LandRoute;
+  readonly depth: ReviewDepth;
+}
+
+export function risen(labels: readonly string[], routing: RoutingAnswer): RisenLabels {
   const onPrRoute: LandRoute = labels.includes(`land:${storedLandRouteOf("owner")}`) ? "owner" : "auto";
   const onPrDepth = (["deep", "light", "none"] as const).find((depth) => labels.includes(`review:${depth}`));
 
@@ -241,7 +247,12 @@ const pending = (summary: string): CheckState => ({ kind: "pending", summary });
  * whether the label goes. A label someone else put goes; one given for another patch goes and clears
  * its patch; a patch left in the record without the label is cleared, so a new Land approval counts.
  */
-export function landApprovalOf(snapshot: Snapshot, record: StateRecord): { next: StateRecord; removeLabel: boolean } {
+export interface LandApproval {
+  readonly next: StateRecord;
+  readonly removeLabel: boolean;
+}
+
+export function landApprovalOf(snapshot: Snapshot, record: StateRecord): LandApproval {
   if (!snapshot.labels.includes(LAND_APPROVAL_LABEL)) {
     return { next: record.landOkPatch === null ? record : { ...record, landOkPatch: null }, removeLabel: false };
   }

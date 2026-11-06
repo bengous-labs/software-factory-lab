@@ -11,15 +11,15 @@ describe("prOfRef", () => {
   });
 });
 
-describe("greenOnHead", () => {
-  const check = (name: string, conclusion: string, slug: string, at: string) => ({
-    name,
-    status: "completed",
-    conclusion,
-    app: { slug },
-    completed_at: at,
-  });
+const check = (name: string, conclusion: string, slug: string, at: string) => ({
+  name,
+  status: "completed",
+  conclusion,
+  app: { slug },
+  completed_at: at,
+});
 
+describe("greenOnHead", () => {
   test("the App's latest completed check of that name decides; another App's check of the same name does not count", () => {
     const runs = [
       check("land-gate", "failure", "bengous-labs-agents", "2026-11-05T10:00:00Z"),

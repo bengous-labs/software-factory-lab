@@ -3,14 +3,19 @@ import { describe, expect, test } from "bun:test";
 import type { Answer, Ask, Question } from "../lib/ask.ts";
 import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf, SCHEMA, verdictOf } from "./principal-judge.ts";
 
-function asking(answer: Answer): { ask: Ask; questions: Question[] } {
+interface Asked {
+  readonly ask: Ask;
+  readonly questions: readonly Question[];
+}
+
+function asking(answer: Answer): Asked {
   const questions: Question[] = [];
 
   return {
-    ask: async (question) => {
+    ask: (question) => {
       questions.push(question);
 
-      return answer;
+      return Promise.resolve(answer);
     },
     questions,
   };

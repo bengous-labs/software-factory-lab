@@ -346,6 +346,7 @@ describe("the stored record", () => {
   });
 
   test("a stored Land route that is not auto reads as owner, the safe side", () => {
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions, typescript/no-unsafe-type-assertion -- SAFETY: a stored Land route the type cannot hold is the case under test.
     const stored = { ...EMPTY_RECORD, triage: { [P1]: { ...LIGHT, land: "later" } } } as unknown as StoredRecord;
 
     expect(recordOfStored(stored).triage[P1]?.land).toBe("owner");

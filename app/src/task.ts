@@ -17,7 +17,7 @@ export function cleanTitle(title: string): string {
     throw new TaskError("a task needs a title");
   }
 
-  if ([...trimmed].length > MAX_TITLE_LENGTH) {
+  if (Array.from(trimmed).length > MAX_TITLE_LENGTH) {
     throw new TaskError(`a title takes at most ${MAX_TITLE_LENGTH} characters`);
   }
 

@@ -19,10 +19,11 @@ const preToolUse = (toolName: string): PreToolUseHookInput => ({
   cwd: "/repo",
 });
 
-const decisionOf = async (toolName: string): Promise<unknown> =>
-  await refuseTools(preToolUse(toolName), "t1", { signal: new AbortController().signal });
+const decisionOf = (toolName: string): Promise<unknown> =>
+  refuseTools(preToolUse(toolName), "t1", { signal: new AbortController().signal });
 
 function result(fields: Record<string, unknown>): SDKResultMessage {
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions, typescript/no-unsafe-type-assertion -- SAFETY: a test fixture holding only the fields answerOf reads.
   return {
     type: "result",
     subtype: "success",
@@ -32,6 +33,33 @@ function result(fields: Record<string, unknown>): SDKResultMessage {
     modelUsage: { [HAIKU]: { costUSD: 0.01 } },
     ...fields,
   } as unknown as SDKResultMessage;
+}
+
+const failedWith = (error: string): Answer => ({ kind: "failed", error, costUsd: 0.01, model: HAIKU });
+
+const untilAborted = (options: Options): Promise<never> =>
+  new Promise((_, reject) => {
+    options.abortController?.signal.addEventListener("abort", () => {
+      reject(new Error("aborted by the caller"));
+    });
+  });
+
+interface RecordedStream {
+  readonly stream: Stream;
+  readonly calls: ReadonlyArray<{ readonly prompt: string; readonly options: Options }>;
+}
+
+function streamOf(body: (options: Options) => AsyncGenerator<SDKMessage>): RecordedStream {
+  const calls: Array<{ prompt: string; options: Options }> = [];
+
+  return {
+    stream: (call) => {
+      calls.push(call);
+
+      return body(call.options);
+    },
+    calls,
+  };
 }
 
 describe("tools", () => {
@@ -68,18 +96,16 @@ describe("tools", () => {
   test("the options list no tool, load no setting, deny every prompt, and block a failing guard", () => {
     const options = optionsOf(QUESTION, new AbortController());
 
-    expect(options).toEqual(
-      expect.objectContaining({
-        model: "haiku",
-        cwd: "/repo",
-        tools: [],
-        strictMcpConfig: true,
-        settingSources: [],
-        persistSession: false,
-        permissionMode: "dontAsk",
-        outputFormat: { type: "json_schema", schema: { type: "object" } },
-      }),
-    );
+    expect(options).toMatchObject({
+      model: "haiku",
+      cwd: "/repo",
+      tools: [],
+      strictMcpConfig: true,
+      settingSources: [],
+      persistSession: false,
+      permissionMode: "dontAsk",
+    });
+    expect(options.outputFormat).toEqual({ type: "json_schema", schema: { type: "object" } });
     expect(options.hooks?.PreToolUse).toEqual([{ hooks: [refuseTools], onFailure: "block" }]);
     expect(options.canUseTool).toBeUndefined();
     expect(options.allowedTools).toBeUndefined();
@@ -115,11 +141,9 @@ describe("answerOf", () => {
   });
 
   test("a success flagged as an error, or with no structured output, fails", () => {
-    const failed = (error: string): Answer => ({ kind: "failed", error, costUsd: 0.01, model: HAIKU });
-
-    expect(answerOf(result({ is_error: true, result: "API Error: 529" }), null)).toEqual(failed("API Error: 529"));
-    expect(answerOf(result({ is_error: true }), null)).toEqual(failed("the result is flagged as an error"));
-    expect(answerOf(result({}), null)).toEqual(failed("the result carries no structured output"));
+    expect(answerOf(result({ is_error: true, result: "API Error: 529" }), null)).toEqual(failedWith("API Error: 529"));
+    expect(answerOf(result({ is_error: true }), null)).toEqual(failedWith("the result is flagged as an error"));
+    expect(answerOf(result({}), null)).toEqual(failedWith("the result carries no structured output"));
   });
 
   test("a call that ends without a result fails with what it threw, and names no model", () => {
@@ -139,28 +163,6 @@ describe("answerOf", () => {
 });
 
 describe("askWith", () => {
-  const untilAborted = (options: Options): Promise<never> =>
-    new Promise((_, reject) =>
-      options.abortController?.signal.addEventListener("abort", () => {
-        reject(new Error("aborted by the caller"));
-      }),
-    );
-
-  const streamOf = (
-    body: (options: Options) => AsyncGenerator<SDKMessage>,
-  ): { stream: Stream; calls: Array<{ prompt: string; options: Options }> } => {
-    const calls: Array<{ prompt: string; options: Options }> = [];
-
-    return {
-      stream: (call) => {
-        calls.push(call);
-
-        return body(call.options);
-      },
-      calls,
-    };
-  };
-
   test("the stream gets the question's prompt and options, and its result is the answer", async () => {
     const { stream, calls } = streamOf(async function* () {
       yield result({ structured_output: { ok: true } });
@@ -173,9 +175,7 @@ describe("askWith", () => {
       model: HAIKU,
     });
     expect(calls[0]?.prompt).toBe("p");
-    expect(calls[0]?.options).toEqual(
-      expect.objectContaining({ model: "haiku", tools: [], permissionMode: "dontAsk" }),
-    );
+    expect(calls[0]?.options).toMatchObject({ model: "haiku", tools: [], permissionMode: "dontAsk" });
   });
 
   test("an error result followed by a throw answers with the result's error, not the throw", async () => {
