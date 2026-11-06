@@ -7,8 +7,9 @@
     "lint": "oxlint -c oxlint.config.ts --deny-warnings --format=unix",
     "format:check": "bun fmt --check .",
     "gates": "bun scripts/gates/check-lint-disables.ts && bun scripts/gates/check-typecheck-coverage.ts && bun scripts/gates/check-exception-ratchet.ts",
+    "knip": "knip",
     "test": "bun test",
-    "check": "bun run typecheck && bun run lint && bun run format:check && bun run gates && bun test"
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run gates && bun run knip && bun test"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.92.0",

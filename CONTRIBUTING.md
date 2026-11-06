@@ -16,7 +16,7 @@ Run the checks before you commit:
 bun check
 ```
 
-`check` runs the typecheck (`bun run typecheck`), the lint (`bun run lint`), the format check (`bun run format:check`), the gates on lint suppressions, typecheck coverage and budget exceptions (`bun run gates`), and then the tests (`bun test`). It must pass. `bun fmt` formats the files the format check reads.
+`check` runs the typecheck (`bun run typecheck`), the lint (`bun run lint`), the format check (`bun run format:check`), the gates on lint suppressions, typecheck coverage and budget exceptions (`bun run gates`), the dead code check (`bun run knip`: unused files, exports and dependencies), and then the tests (`bun test`). It must pass. `bun fmt` formats the files the format check reads.
 
 ## Where things live
 

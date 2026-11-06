@@ -157,7 +157,7 @@ const FINDING_MARKER = "lab-finding";
 const FINDING_MARKER_PATTERN = new RegExp(`<!-- ${FINDING_MARKER} severity=(important|nit|pre_existing) -->`, "u");
 
 /** The hidden marker a finding's comment carries, read back to count the open Important threads. */
-export function markerOf(severity: Severity): string {
+function markerOf(severity: Severity): string {
   return `<!-- ${FINDING_MARKER} severity=${severity} -->`;
 }
 

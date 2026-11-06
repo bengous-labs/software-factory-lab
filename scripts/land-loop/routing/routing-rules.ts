@@ -7,7 +7,7 @@
 
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
 
-export const RISKY = [
+const RISKY = [
   ".github/**",
   "scripts/**",
   ".claude/**",
@@ -21,7 +21,7 @@ export const RISKY = [
   "tsconfig.json",
 ].map((glob) => new Bun.Glob(glob));
 
-export const LINE_CAP = 400;
+const LINE_CAP = 400;
 
 const BREAKING = /^\w+(\([^)]*\))?!:|BREAKING CHANGE/mu;
 

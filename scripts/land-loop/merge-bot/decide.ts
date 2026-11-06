@@ -20,7 +20,7 @@ export type LandRoute = "auto" | "owner";
  */
 export type StoredLandRoute = "auto" | "human";
 
-export const landRouteOf = (stored: string): LandRoute => (stored === "auto" ? "auto" : "owner");
+const landRouteOf = (stored: string): LandRoute => (stored === "auto" ? "auto" : "owner");
 
 export const storedLandRouteOf = (route: LandRoute): StoredLandRoute => (route === "auto" ? "auto" : "human");
 
@@ -282,12 +282,12 @@ const pending = (summary: string): CheckState => ({ kind: "pending", summary });
  * whether the label goes. A label someone else put goes; one given for another patch goes and clears
  * its patch; a patch left in the record without the label is cleared, so a new Land approval counts.
  */
-export interface LandApproval {
+interface LandApproval {
   readonly next: StateRecord;
   readonly removeLabel: boolean;
 }
 
-export function landApprovalOf(snapshot: Snapshot, record: StateRecord): LandApproval {
+function landApprovalOf(snapshot: Snapshot, record: StateRecord): LandApproval {
   if (!snapshot.labels.includes(LAND_APPROVAL_LABEL)) {
     return { next: record.landOkPatch === null ? record : { ...record, landOkPatch: null }, removeLabel: false };
   }

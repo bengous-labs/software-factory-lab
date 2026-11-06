@@ -12,7 +12,7 @@ export const BUDGETS = {
   "eslint/max-params": ["error", { max: 4 }],
 } satisfies DummyRuleMap;
 
-export type BudgetRule = keyof typeof BUDGETS;
+type BudgetRule = keyof typeof BUDGETS;
 
 export interface Exception {
   readonly file: string;

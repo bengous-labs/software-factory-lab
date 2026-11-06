@@ -49,7 +49,7 @@ export function placeOf(path: string): Place | null {
   return MATCHERS.find(([matcher]) => matcher.test(path))?.[1] ?? null;
 }
 
-export function externalOf(specifier: string): External | null {
+function externalOf(specifier: string): External | null {
   const found = EXTERNALS.find(([name]) =>
     name.endsWith("/") || name.endsWith(":") ? specifier.startsWith(name) : specifier === name,
   );
@@ -68,7 +68,7 @@ export function resolvedPath(importer: string, specifier: string): string | null
   return path.startsWith("../") ? null : path;
 }
 
-export type ImportKind = "type" | "value";
+type ImportKind = "type" | "value";
 
 /** One import edge: what it names, and the names it takes, `*` for a whole module or a side effect. */
 export interface Edge {
@@ -137,10 +137,10 @@ export function edgeRefusal(importer: string, from: Place, edge: Edge): string |
   return localRefusal(importer, from, target, edge.kind);
 }
 
-export const unplacedMessage = (path: string): string =>
+const unplacedMessage = (path: string): string =>
   `\`${path}\` is in no layer of \`scripts/lint/layers.map.ts\`. Put the file in a directory the map classifies. ${OWNER}`;
 
-export const ioGlobalMessage = (path: string, from: Place, global: string): string =>
+const ioGlobalMessage = (path: string, from: Place, global: string): string =>
   `\`${path}\` (${from.layer}) uses \`${global}\`, I/O that only ${IO_LAYERS.join(", ")} may do. The entry point does the I/O and passes the result, or the code goes behind a port. ${OWNER}`;
 
 type ImportSpecifierNode = ESTree.ImportDeclaration["specifiers"][number];
