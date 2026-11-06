@@ -105,29 +105,20 @@ export const EMPTY_RECORD: StateRecord = {
 };
 
 /** The state record as its comment stores it: each Routing answer's Land route in its stored value. */
-export type StoredRecord = Omit<StateRecord, "triage" | "reviewRounds"> & {
+export type StoredRecord = Omit<StateRecord, "triage"> & {
   readonly triage: Readonly<Record<string, Omit<RoutingAnswer, "land"> & { readonly land: StoredLandRoute }>>;
-  readonly reviewRounds?: number;
-  readonly rounds?: number;
 };
 
 /** The record a comment stores, with each Land route read back from its stored value. */
 export function recordOfStored(stored: StoredRecord): StateRecord {
-  const { rounds, reviewRounds, ...rest } = stored;
   const triage = Object.entries(stored.triage).map(([patch, routing]) => [patch, { ...routing, land: landRouteOf(routing.land) }] as const);
 
-  return {
-    ...rest,
-    // Open PRs carry records with no `reviewRounds`, whose `rounds` counts only the Review rounds that
-    // posted an Important: a floor of the Review rounds run, and a reviewed patch means one ran at least.
-    reviewRounds: reviewRounds ?? Math.max(rounds ?? 0, stored.reviewedPatch === null ? 0 : 1),
-    triage: Object.fromEntries(triage),
-  };
+  return { ...stored, triage: Object.fromEntries(triage) };
 }
 
 /** The record its comment's JSON holds, each field it lacks read as in a record with no review yet. */
 export function recordOfJson(json: string): StateRecord {
-  const noReview: StoredRecord = { reviewedPatch: null, reviewedHead: null, triage: {}, landOkPatch: null, dequeued: null };
+  const noReview: StoredRecord = { reviewedPatch: null, reviewedHead: null, reviewRounds: 0, triage: {}, landOkPatch: null, dequeued: null };
 
   return recordOfStored({ ...noReview, ...(JSON.parse(json) as Partial<StoredRecord>) });
 }

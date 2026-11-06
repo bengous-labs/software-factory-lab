@@ -221,31 +221,10 @@ describe("the stored record", () => {
     expect(recordOfJson("{}")).toEqual(EMPTY_RECORD);
   });
 
-  test("a record with no reviewRounds reads them from rounds, which counted only the Review rounds that posted an Important", () => {
-    const cases: [object, number][] = [
-      [{ rounds: 0, reviewedPatch: null }, 0],
-      [{ rounds: 0, reviewedPatch: "patch-0" }, 1],
-      [{ rounds: 1, reviewedPatch: "patch-0" }, 1],
-      [{ rounds: 2, reviewedPatch: "patch-0" }, 2],
-      [{ reviewRounds: 2, rounds: 0, reviewedPatch: "patch-0" }, 2],
-    ];
-
-    for (const [stored, reviewRounds] of cases) expect(recordOfJson(JSON.stringify(stored)).reviewRounds).toBe(reviewRounds);
-  });
-
-  test("on an old record, a risky push after a Nit-only review gets Review round 2, and one after two Important rounds goes to the Owner", () => {
-    const old = (rounds: number): string =>
-      JSON.stringify({ reviewedPatch: "patch-0", reviewedHead: "h0", rounds, triage: { [P1]: { ...LIGHT, secondRound: true } }, landOkPatch: null, dequeued: null });
-
-    expect(stepsOf({ ...READY, record: recordOfJson(old(0)) })).toContainEqual({ kind: "code-review", depth: "light", reviewRound: 2 });
-    expect(kinds({ ...READY, record: recordOfJson(old(2)) })).toContain("needs-owner");
-  });
-
-  test("a record is stored with reviewRounds and without rounds, and reads back the same", () => {
-    const record = recordOfJson(JSON.stringify({ rounds: 1, reviewedPatch: P1, triage: { [P1]: { ...LIGHT, land: "human" } } }));
+  test("a record is stored with its reviewRounds, and reads back the same", () => {
+    const record = recordOfJson(JSON.stringify({ reviewRounds: 1, reviewedPatch: P1, triage: { [P1]: { ...LIGHT, land: "human" } } }));
     const stored = storedOfRecord(record);
 
-    expect(stored).not.toHaveProperty("rounds");
     expect(stored.reviewRounds).toBe(1);
     expect(recordOfJson(JSON.stringify(stored))).toEqual(record);
   });

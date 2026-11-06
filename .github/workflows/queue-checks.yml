@@ -33,9 +33,7 @@ jobs:
         uses: jdx/mise-action@v5.2.5
 
       - name: Re-post the App's checks on the queue's commit
-        # The second path is for the transition: the fallback goes with the next change to this file.
-        run: |
-          if [ -f scripts/land-loop/queue/repost.ts ]; then bun scripts/land-loop/queue/repost.ts; else bun scripts/harness/queue/repost.ts; fi
+        run: bun scripts/land-loop/queue/repost.ts
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
