@@ -3,8 +3,8 @@
  * posts from it. The Judge runs with no tool at all; it reads only what the prompt carries.
  */
 
-import type { ReviewDepth } from "../merge-bot/decide.ts";
 import type { Ask } from "../lib/ask.ts";
+import type { ReviewDepth } from "../merge-bot/decide.ts";
 
 export type Severity = "important" | "nit" | "pre_existing";
 
@@ -60,7 +60,9 @@ export interface ReviewThread {
   readonly isResolved: boolean;
   readonly path: string;
   readonly line: number | null;
-  readonly comments: { readonly nodes: readonly { readonly author: { readonly login: string } | null; readonly body: string }[] };
+  readonly comments: {
+    readonly nodes: ReadonlyArray<{ readonly author: { readonly login: string } | null; readonly body: string }>;
+  };
 }
 
 /** The Stop hook has the Author answer a fix with `Fixed in <sha>: <what changed>`; any other answer gives a reason. */
@@ -76,9 +78,17 @@ export function rejectedOf(appLogin: string, threads: readonly ReviewThread[]): 
     const answers = replies.filter((reply) => reply.author?.login !== appLogin);
     const last = answers.at(-1);
 
-    if (!thread.isResolved || finding?.author?.login !== appLogin || last === undefined || FIX_REPLY.test(last.body)) return [];
+    if (!thread.isResolved || finding?.author?.login !== appLogin || last === undefined || FIX_REPLY.test(last.body)) {
+      return [];
+    }
 
-    return [{ where: `${thread.path}:${thread.line ?? "?"}`, finding: finding.body.split("\n")[0] ?? "", reply: answers.map((reply) => reply.body).join(" / ") }];
+    return [
+      {
+        where: `${thread.path}:${thread.line ?? "?"}`,
+        finding: finding.body.split("\n")[0] ?? "",
+        reply: answers.map((reply) => reply.body).join(" / "),
+      },
+    ];
   });
 }
 
@@ -105,13 +115,24 @@ export function promptOf(guide: string, diff: string, reviewRound: 1 | 2, reject
   ].join("\n");
 }
 
+interface SchemaAnswer {
+  readonly findings?: Array<{
+    readonly file: string;
+    readonly line: number | null;
+    readonly severity: Severity;
+    readonly summary: string;
+    readonly failure_scenario: string;
+  }>;
+}
+
 /** The findings in the schema's answer, Nits capped; null when it does not read. */
 export function findingsOf(structured: unknown): readonly Finding[] | null {
-  const raw = (structured as {
-    findings?: { file: string; line: number | null; severity: Severity; summary: string; failure_scenario: string }[];
-  } | null)?.findings;
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: the SDK checked structured against SCHEMA; the checks below refuse what is not a list of objects.
+  const raw = (structured as SchemaAnswer | null)?.findings;
 
-  if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null)) return null;
+  if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null)) {
+    return null;
+  }
 
   const findings = raw.map((finding) => ({
     file: finding.file,
@@ -120,6 +141,7 @@ export function findingsOf(structured: unknown): readonly Finding[] | null {
     summary: finding.summary,
     failureScenario: finding.failure_scenario,
   }));
+
   const nits = findings.filter((finding) => finding.severity === "nit").slice(0, NIT_CAP);
 
   return [...findings.filter((finding) => finding.severity !== "nit"), ...nits];
@@ -138,7 +160,9 @@ export function markerOf(severity: Severity): string {
 }
 
 export function severityOfBody(body: string): Severity | null {
-  return (FINDING_MARKER_PATTERN.exec(body)?.[1] as Severity | undefined) ?? null;
+  const severity = FINDING_MARKER_PATTERN.exec(body)?.[1];
+
+  return severity === "important" || severity === "nit" || severity === "pre_existing" ? severity : null;
 }
 
 export function commentOf(finding: Finding): string {
@@ -168,7 +192,9 @@ export async function codeReview(
 
   const { costUsd, model } = answer;
 
-  if (answer.kind === "failed") return { findings: null, costUsd, model, ms, error: answer.error };
+  if (answer.kind === "failed") {
+    return { findings: null, costUsd, model, ms, error: answer.error };
+  }
 
   const findings = findingsOf(answer.structured);
 

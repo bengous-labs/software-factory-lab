@@ -32,7 +32,7 @@ interface CheckRun {
 export function greenOnHead(runs: readonly CheckRun[], name: string, appSlug: string): boolean {
   const mine = runs
     .filter((check) => check.name === name && check.app.slug === appSlug && check.status === "completed")
-    .sort((a, b) => (a.completed_at ?? "").localeCompare(b.completed_at ?? ""));
+    .toSorted((a, b) => (a.completed_at ?? "").localeCompare(b.completed_at ?? ""));
 
   return mine.at(-1)?.conclusion === "success";
 }
@@ -40,7 +40,9 @@ export function greenOnHead(runs: readonly CheckRun[], name: string, appSlug: st
 function required(name: string): string {
   const value = process.env[name];
 
-  if (value === undefined || value === "") throw new Error(`${name} is unset`);
+  if (value === undefined || value === "") {
+    throw new Error(`${name} is unset`);
+  }
 
   return value;
 }
@@ -53,18 +55,39 @@ if (import.meta.main) {
   const cwd = process.cwd();
   const pr = prOfRef(ref);
 
-  if (pr === null) throw new Error(`${ref} names no PR`);
+  if (pr === null) {
+    throw new Error(`${ref} names no PR`);
+  }
 
-  const head = JSON.parse(await checked(run, ["gh", "api", `repos/${repo}/pulls/${pr}`], { cwd })) as { head: { sha: string } };
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh api prints the pull request this endpoint names.
+  const head = JSON.parse(await checked(run, ["gh", "api", `repos/${repo}/pulls/${pr}`], { cwd })) as {
+    head: { sha: string };
+  };
+
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh api prints the check runs of the head this endpoint names.
   const runs = JSON.parse(
     await checked(run, ["gh", "api", `repos/${repo}/commits/${head.head.sha}/check-runs?per_page=100`], { cwd }),
   ) as { check_runs: CheckRun[] };
 
   for (const name of CHECKS) {
     const green = greenOnHead(runs.check_runs, name, appSlug);
-    const summary = green ? `Green on #${pr}'s head ${head.head.sha.slice(0, 7)}.` : `Not green on #${pr}'s head ${head.head.sha.slice(0, 7)}.`;
-    const body = { name, head_sha: sha, status: "completed", conclusion: green ? "success" : "failure", output: { title: summary, summary } };
-    await checked(run, ["gh", "api", "-X", "POST", `repos/${repo}/check-runs`, "--input", "-"], { cwd, stdin: JSON.stringify(body) });
+
+    const summary = green
+      ? `Green on #${pr}'s head ${head.head.sha.slice(0, 7)}.`
+      : `Not green on #${pr}'s head ${head.head.sha.slice(0, 7)}.`;
+
+    const body = {
+      name,
+      head_sha: sha,
+      status: "completed",
+      conclusion: green ? "success" : "failure",
+      output: { title: summary, summary },
+    };
+
+    await checked(run, ["gh", "api", "-X", "POST", `repos/${repo}/check-runs`, "--input", "-"], {
+      cwd,
+      stdin: JSON.stringify(body),
+    });
     console.log(`repost: ${name} ${green ? "success" : "failure"} on ${sha.slice(0, 7)} for #${pr}`);
   }
 }

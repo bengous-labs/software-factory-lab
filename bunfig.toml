@@ -1,2 +1,7 @@
 [test]
 pathIgnorePatterns = [".claude/worktrees/**"]
+
+[fmt]
+printWidth = 120
+sortImports = true
+ignorePatterns = ["scripts/vendor/anti-slop/**"]

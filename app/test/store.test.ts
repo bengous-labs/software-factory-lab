@@ -45,10 +45,10 @@ describe("store", () => {
 
   test("a loaded version 1 file is saved as version 2, its tasks still without a date", () => {
     const text = JSON.stringify({ version: 1, tasks: [{ id: 1, title: "a", done: false }] });
-    const saved = JSON.parse(serialize(parse(text, "f.json")));
+    const saved: unknown = JSON.parse(serialize(parse(text, "f.json")));
 
     expect(saved).toEqual({ version: 2, tasks: [{ id: 1, title: "a", done: false }] });
-    expect(saved.tasks[0]).not.toHaveProperty("createdAt");
+    expect(saved).not.toHaveProperty(["tasks", 0, "createdAt"]);
   });
 
   test("a version 2 task keeps its creation date through a save and a load", () => {
@@ -81,7 +81,7 @@ describe("store", () => {
   test("a creation date that is not a string is refused", () => {
     const text = JSON.stringify({
       version: FORMAT_VERSION,
-      tasks: [{ id: 1, title: "a", done: false, createdAt: 20261105 }],
+      tasks: [{ id: 1, title: "a", done: false, createdAt: 20_261_105 }],
     });
 
     expect(() => parse(text, "f.json")).toThrow("tasks is not a list of tasks");
@@ -113,7 +113,7 @@ describe("cli", () => {
 
     run(["add", "a"], path);
 
-    expect(load(path)[0]?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(load(path)[0]?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
   });
 
   test("count prints the open tasks, done ones left out", () => {

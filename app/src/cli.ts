@@ -17,7 +17,7 @@ const USAGE =
 
 /** Runs one command against the store at `path` and returns what to print. */
 export function run(argv: readonly string[], path: string): string {
-  const [command, ...rest] = argv;
+  const [command = "", ...rest] = argv;
 
   switch (command) {
     case "add": {
@@ -26,19 +26,27 @@ export function run(argv: readonly string[], path: string): string {
 
       return `added #${tasks.at(-1)?.id}`;
     }
-    case "list":
+
+    case "list": {
       return list(load(path), { all: rest.includes("--all"), done: rest.includes("--done") });
-    case "count":
+    }
+
+    case "count": {
       return count(load(path));
+    }
+
     case "done": {
       const id = Number(rest[0]);
 
-      if (!Number.isInteger(id)) throw new TaskError(`not a task id: ${String(rest[0])}`);
+      if (!Number.isInteger(id)) {
+        throw new TaskError(`not a task id: ${String(rest[0])}`);
+      }
 
       save(path, done(load(path), id));
 
       return `done #${id}`;
     }
+
     case "clear": {
       const tasks = load(path);
       const kept = clear(tasks);
@@ -46,37 +54,50 @@ export function run(argv: readonly string[], path: string): string {
 
       return `cleared ${tasks.length - kept.length}`;
     }
+
     case "rename": {
       const id = Number(rest[0]);
 
-      if (!Number.isInteger(id)) throw new TaskError(`not a task id: ${String(rest[0])}`);
+      if (!Number.isInteger(id)) {
+        throw new TaskError(`not a task id: ${String(rest[0])}`);
+      }
 
       save(path, rename(load(path), id, rest.slice(1).join(" ")));
 
       return `renamed #${id}`;
     }
+
     case "remove": {
       const id = Number(rest[0]);
 
-      if (!Number.isInteger(id)) throw new TaskError(`not a task id: ${String(rest[0])}`);
+      if (!Number.isInteger(id)) {
+        throw new TaskError(`not a task id: ${String(rest[0])}`);
+      }
 
       save(path, remove(load(path), id));
 
       return `removed #${id}`;
     }
-    case "search":
+
+    case "search": {
       return search(load(path), rest.join(" "));
+    }
+
     case "undone": {
       const id = Number(rest[0]);
 
-      if (!Number.isInteger(id)) throw new TaskError(`not a task id: ${String(rest[0])}`);
+      if (!Number.isInteger(id)) {
+        throw new TaskError(`not a task id: ${String(rest[0])}`);
+      }
 
       save(path, undone(load(path), id));
 
       return `undone #${id}`;
     }
-    default:
+
+    default: {
       throw new TaskError(USAGE);
+    }
   }
 }
 
@@ -84,7 +105,9 @@ if (import.meta.main) {
   try {
     console.log(run(process.argv.slice(2), process.env["TODO_FILE"] ?? "todo.json"));
   } catch (error) {
-    if (!(error instanceof TaskError)) throw error;
+    if (!(error instanceof TaskError)) {
+      throw error;
+    }
 
     console.error(`todo: ${error.message}`);
     process.exit(1);

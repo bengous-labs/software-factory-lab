@@ -58,10 +58,19 @@ export interface RoutingAnswer {
 export const PRINCIPAL_JUDGE_TRIES = 2;
 
 /** The record after one Principal judge run on `patch`: its verdict, or one more failure when it gave none. */
-export function afterPrincipalJudge(record: StateRecord, patch: string, verdict: PrincipalJudgeVerdict | null): StateRecord {
-  if (verdict !== null) return { ...record, fable: { ...(record.fable ?? {}), [patch]: verdict } };
+export function afterPrincipalJudge(
+  record: StateRecord,
+  patch: string,
+  verdict: PrincipalJudgeVerdict | null,
+): StateRecord {
+  if (verdict !== null) {
+    return { ...record, fable: { ...record.fable, [patch]: verdict } };
+  }
 
-  return { ...record, fableFailures: { ...(record.fableFailures ?? {}), [patch]: (record.fableFailures?.[patch] ?? 0) + 1 } };
+  return {
+    ...record,
+    fableFailures: { ...record.fableFailures, [patch]: (record.fableFailures?.[patch] ?? 0) + 1 },
+  };
 }
 
 export interface PrincipalJudgeVerdict {
@@ -111,21 +120,33 @@ export type StoredRecord = Omit<StateRecord, "triage"> & {
 
 /** The record a comment stores, with each Land route read back from its stored value. */
 export function recordOfStored(stored: StoredRecord): StateRecord {
-  const triage = Object.entries(stored.triage).map(([patch, routing]) => [patch, { ...routing, land: landRouteOf(routing.land) }] as const);
+  const triage = Object.entries(stored.triage).map(
+    ([patch, routing]) => [patch, { ...routing, land: landRouteOf(routing.land) }] as const,
+  );
 
   return { ...stored, triage: Object.fromEntries(triage) };
 }
 
 /** The record its comment's JSON holds, each field it lacks read as in a record with no review yet. */
 export function recordOfJson(json: string): StateRecord {
-  const noReview: StoredRecord = { reviewedPatch: null, reviewedHead: null, reviewRounds: 0, triage: {}, landOkPatch: null, dequeued: null };
+  const noReview: StoredRecord = {
+    reviewedPatch: null,
+    reviewedHead: null,
+    reviewRounds: 0,
+    triage: {},
+    landOkPatch: null,
+    dequeued: null,
+  };
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: the Merge bot wrote this JSON with storedOfRecord.
   return recordOfStored({ ...noReview, ...(JSON.parse(json) as Partial<StoredRecord>) });
 }
 
 /** The record as its comment stores it, each Land route in its stored value. */
 export function storedOfRecord(record: StateRecord): StoredRecord {
-  const triage = Object.entries(record.triage).map(([patch, routing]) => [patch, { ...routing, land: storedLandRouteOf(routing.land) }] as const);
+  const triage = Object.entries(record.triage).map(
+    ([patch, routing]) => [patch, { ...routing, land: storedLandRouteOf(routing.land) }] as const,
+  );
 
   return { ...record, triage: Object.fromEntries(triage) };
 }
@@ -172,7 +193,9 @@ export function openImportantOf(threads: number, record: StateRecord, patch: str
 
 /** The owner's Land approval counts only when it was put after the head it would land was pushed. */
 export function landApprovalCounts(byOwner: boolean, labeledAt: string | null, headPushedAt: string | null): boolean {
-  if (!byOwner || labeledAt === null) return false;
+  if (!byOwner || labeledAt === null) {
+    return false;
+  }
 
   return headPushedAt === null || Date.parse(labeledAt) >= Date.parse(headPushedAt);
 }
@@ -195,15 +218,19 @@ export type Step =
   | { readonly kind: "auto-merge" };
 
 export type Decision =
-  | { readonly kind: "ignore"; readonly reason: string }
-  | { readonly kind: "steps"; readonly steps: readonly Step[] };
+  { readonly kind: "ignore"; readonly reason: string } | { readonly kind: "steps"; readonly steps: readonly Step[] };
 
 /**
  * Labels only rise: the higher of what is on the PR and what the Routing answer says. The `land:*` and
  * `review:*` labels, read here and quoted in the check summaries below, are external names: open PRs
  * carry them, so the strings stay.
  */
-export function risen(labels: readonly string[], routing: RoutingAnswer): { route: LandRoute; depth: ReviewDepth } {
+export interface RisenLabels {
+  readonly route: LandRoute;
+  readonly depth: ReviewDepth;
+}
+
+export function risen(labels: readonly string[], routing: RoutingAnswer): RisenLabels {
   const onPrRoute: LandRoute = labels.includes(`land:${storedLandRouteOf("owner")}`) ? "owner" : "auto";
   const onPrDepth = (["deep", "light", "none"] as const).find((depth) => labels.includes(`review:${depth}`));
 
@@ -220,16 +247,27 @@ const pending = (summary: string): CheckState => ({ kind: "pending", summary });
  * whether the label goes. A label someone else put goes; one given for another patch goes and clears
  * its patch; a patch left in the record without the label is cleared, so a new Land approval counts.
  */
-export function landApprovalOf(snapshot: Snapshot, record: StateRecord): { next: StateRecord; removeLabel: boolean } {
+export interface LandApproval {
+  readonly next: StateRecord;
+  readonly removeLabel: boolean;
+}
+
+export function landApprovalOf(snapshot: Snapshot, record: StateRecord): LandApproval {
   if (!snapshot.labels.includes(LAND_APPROVAL_LABEL)) {
     return { next: record.landOkPatch === null ? record : { ...record, landOkPatch: null }, removeLabel: false };
   }
 
-  if (!snapshot.landApprovalByOwner) return { next: record, removeLabel: true };
+  if (!snapshot.landApprovalByOwner) {
+    return { next: record, removeLabel: true };
+  }
 
-  if (record.landOkPatch === null) return { next: { ...record, landOkPatch: snapshot.patch }, removeLabel: false };
+  if (record.landOkPatch === null) {
+    return { next: { ...record, landOkPatch: snapshot.patch }, removeLabel: false };
+  }
 
-  if (record.landOkPatch !== snapshot.patch) return { next: { ...record, landOkPatch: null }, removeLabel: true };
+  if (record.landOkPatch !== snapshot.patch) {
+    return { next: { ...record, landOkPatch: null }, removeLabel: true };
+  }
 
   return { next: record, removeLabel: false };
 }
@@ -237,7 +275,9 @@ export function landApprovalOf(snapshot: Snapshot, record: StateRecord): { next:
 export function decide(snapshot: Snapshot): Decision {
   const { record } = snapshot;
 
-  if (snapshot.state !== "OPEN") return { kind: "ignore", reason: `#${snapshot.number} is ${snapshot.state.toLowerCase()}` };
+  if (snapshot.state !== "OPEN") {
+    return { kind: "ignore", reason: `#${snapshot.number} is ${snapshot.state.toLowerCase()}` };
+  }
 
   if (!snapshot.sameRepository || !snapshot.openedByOwner) {
     return { kind: "ignore", reason: `#${snapshot.number} comes from outside the Owner's own branches` };
@@ -246,12 +286,17 @@ export function decide(snapshot: Snapshot): Decision {
   const steps: Step[] = [];
   const { next, removeLabel } = landApprovalOf(snapshot, record);
 
-  if (removeLabel) steps.push({ kind: "remove-land-approval" });
+  if (removeLabel) {
+    steps.push({ kind: "remove-land-approval" });
+  }
 
   // Written now: a routing or a Code review below ends this decision before the Land gate is reached.
-  if (next !== record) steps.push({ kind: "record", record: next });
+  if (next !== record) {
+    steps.push({ kind: "record", record: next });
+  }
 
   const landApproved = snapshot.landApprovalByOwner && next.landOkPatch === snapshot.patch;
+
   const finish = (gate: CheckState): Decision => {
     steps.push({ kind: "land-gate", check: gate });
 
@@ -262,15 +307,21 @@ export function decide(snapshot: Snapshot): Decision {
     return finish({ kind: "failure", summary: `Ejected from the merge queue: ${record.dequeued.reason}` });
   }
 
-  if (snapshot.draft) return finish(pending("Draft: the author's turn."));
+  if (snapshot.draft) {
+    return finish(pending("Draft: the author's turn."));
+  }
 
   if (snapshot.conflicting) {
     return finish({ kind: "failure", summary: "This PR conflicts with dev: rebase it onto origin/dev, then stop." });
   }
 
-  if (snapshot.ci === null) return finish(pending("Waiting for validate."));
+  if (snapshot.ci === null) {
+    return finish(pending("Waiting for validate."));
+  }
 
-  if (snapshot.ci === "failure") return finish(pending("validate is red: the author's turn."));
+  if (snapshot.ci === "failure") {
+    return finish(pending("validate is red: the author's turn."));
+  }
 
   const routing = next.triage[snapshot.patch];
 
@@ -301,20 +352,28 @@ export function decide(snapshot: Snapshot): Decision {
 
     if (routing.secondRound) {
       thirdRoundNeeded = true;
-      steps.push({ kind: "labels", route: "owner", depth: labels.depth });
-      steps.push({ kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." });
+      steps.push(
+        { kind: "labels", route: "owner", depth: labels.depth },
+        { kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." },
+      );
     }
   }
 
   if (snapshot.openImportant > 0) {
-    steps.push({ kind: "review-check", check: { kind: "failure", summary: `${snapshot.openImportant} Important finding(s) open.` } });
+    steps.push({
+      kind: "review-check",
+      check: { kind: "failure", summary: `${snapshot.openImportant} Important finding(s) open.` },
+    });
 
     return finish(pending("Not landable: Important findings are open."));
   }
 
   steps.push({
     kind: "review-check",
-    check: { kind: "success", summary: labels.depth === "none" ? "review:none, nothing to read." : "No Important finding open." },
+    check: {
+      kind: "success",
+      summary: labels.depth === "none" ? "review:none, nothing to read." : "No Important finding open.",
+    },
   });
 
   let route: LandRoute = thirdRoundNeeded ? "owner" : labels.route;
@@ -336,12 +395,22 @@ export function decide(snapshot: Snapshot): Decision {
     }
   }
 
-  if (snapshot.devRed) return finish(pending("dev is red: landing is on hold."));
+  if (snapshot.devRed) {
+    return finish(pending("dev is red: landing is on hold."));
+  }
 
   if (route === "auto" || landApproved) {
-    const gate = finish({ kind: "success", summary: route === "auto" ? "Landable, land:auto." : `Landable, with the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).` });
+    const gate = finish({
+      kind: "success",
+      summary:
+        route === "auto"
+          ? "Landable, land:auto."
+          : `Landable, with the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).`,
+    });
 
-    if (gate.kind === "steps") return { kind: "steps", steps: [...gate.steps, { kind: "auto-merge" }] };
+    if (gate.kind === "steps") {
+      return { kind: "steps", steps: [...gate.steps, { kind: "auto-merge" }] };
+    }
   }
 
   return finish(pending("Landable, land:human: waiting for the Owner's Land approval."));

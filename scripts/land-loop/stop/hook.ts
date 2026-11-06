@@ -13,20 +13,10 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { checked, run as runCli, type Run } from "../lib/run.ts";
-import {
-  type Action,
-  admit,
-  afterStopChecks,
-  answerOf,
-  armReason,
-  decide,
-  FORK_MARKER,
-  IGNORED_BRANCH,
-  type PullRequest,
-  type Snapshot,
-  type StopChecks,
-} from "./decide.ts";
+import { checked, run as runCli } from "../lib/run.ts";
+import type { Run } from "../lib/run.ts";
+import { admit, afterStopChecks, answerOf, armReason, decide, FORK_MARKER, IGNORED_BRANCH } from "./decide.ts";
+import type { Action, PullRequest, Snapshot, StopChecks } from "./decide.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
 
@@ -59,13 +49,16 @@ interface TranscriptLine {
 }
 
 function linesOf(path: string): TranscriptLine[] {
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) {
+    return [];
+  }
 
   return readFileSync(path, "utf8")
     .split("\n")
     .filter((line) => line.trim() !== "")
     .flatMap((line) => {
       try {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: each transcript line is a JSON message, and TranscriptLine reads only optional fields.
         return [JSON.parse(line) as TranscriptLine];
       } catch {
         return [];
@@ -74,20 +67,24 @@ function linesOf(path: string): TranscriptLine[] {
 }
 
 function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
 
-  if (!Array.isArray(content)) return "";
+  if (!Array.isArray(content)) {
+    return "";
+  }
 
   return content
-    .map((block: unknown) =>
-      typeof block === "object" && block !== null && "text" in block ? String(block.text) : "",
-    )
+    .map((block: unknown) => (typeof block === "object" && block !== null && "text" in block ? String(block.text) : ""))
     .join("");
 }
 
 /** Whether a user turn of the transcript opens with the fork marker. */
 export function hasForkMarker(lines: readonly TranscriptLine[]): boolean {
-  return lines.some((line) => line.type === "user" && textOf(line.message?.content).trimStart().startsWith(FORK_MARKER));
+  return lines.some(
+    (line) => line.type === "user" && textOf(line.message?.content).trimStart().startsWith(FORK_MARKER),
+  );
 }
 
 /** The model of the last assistant message: the Stop input does not carry it. */
@@ -95,7 +92,9 @@ export function modelOf(lines: readonly TranscriptLine[]): string | null {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const model = lines[index]?.message?.model;
 
-    if (lines[index]?.type === "assistant" && typeof model === "string" && model !== "<synthetic>") return model;
+    if (lines[index]?.type === "assistant" && typeof model === "string" && model !== "<synthetic>") {
+      return model;
+    }
   }
 
   return null;
@@ -119,16 +118,31 @@ interface ForkResult {
 
 async function askFork(deps: Deps, input: StopInput, model: string | null, prompt: string): Promise<ForkResult> {
   const started = deps.now();
+
   // No tool: a fork that re-armed the session's PR watch waited on it until it was killed (#38, #39).
-  const argv = ["claude", "-p", "--resume", input.session_id, "--fork-session", "--tools", "", "--strict-mcp-config", "--output-format", "json"];
+  const argv = [
+    "claude",
+    "-p",
+    "--resume",
+    input.session_id,
+    "--fork-session",
+    "--tools",
+    "",
+    "--strict-mcp-config",
+    "--output-format",
+    "json",
+  ];
+
   const ran = await deps.run([...argv, ...(model === null ? [] : ["--model", model]), prompt], {
     cwd: input.cwd,
     env: { [FORK_FLAG]: "1" },
     timeoutMs: FORK_TIMEOUT_MS,
   });
+
   const ms = deps.now() - started;
 
   try {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: claude -p --output-format json prints its result object, every field read here optional.
     const out = JSON.parse(ran.stdout) as {
       result?: string;
       total_cost_usd?: number;
@@ -152,13 +166,15 @@ async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise
 }
 
 async function prOf(deps: Deps, cwd: string, branch: string): Promise<PullRequest | null> {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh pr list prints a list of the fields named by --json.
   const listed = JSON.parse(
     await checked(
       deps.run,
       ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,isDraft,headRefOid"],
       { cwd },
     ),
-  ) as { number: number; isDraft: boolean; headRefOid: string }[];
+  ) as Array<{ number: number; isDraft: boolean; headRefOid: string }>;
+
   const pr = listed[0];
 
   return pr === undefined ? null : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid };
@@ -168,11 +184,15 @@ async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: strin
   // An on-disk name: existing state files carry it, so it stays.
   const record = join(stateDir, `gates-${head}`);
 
-  if (existsSync(record)) return { kind: "green" };
+  if (existsSync(record)) {
+    return { kind: "green" };
+  }
 
-  const ran = await deps.run(["bun", "run", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
+  const ran = await deps.run(["bun", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
 
-  if (ran.code !== 0) return { kind: "red", report: `${ran.stdout}\n${ran.stderr}`.trim().slice(-3000) };
+  if (ran.code !== 0) {
+    return { kind: "red", report: `${ran.stdout}\n${ran.stderr}`.trim().slice(-3000) };
+  }
 
   writeFileSync(record, "green\n");
 
@@ -187,9 +207,13 @@ export type Outcome = { readonly kind: "allow" } | { readonly kind: "block"; rea
  * session end.
  */
 export function doneJudgeFailure(code: number, text: string, stopHookActive: boolean): Outcome | null {
-  if (code === 0 && text.trim() !== "") return null;
+  if (code === 0 && text.trim() !== "") {
+    return null;
+  }
 
-  if (stopHookActive) return { kind: "allow" };
+  if (stopHookActive) {
+    return { kind: "allow" };
+  }
 
   return {
     kind: "block",
@@ -198,7 +222,13 @@ export function doneJudgeFailure(code: number, text: string, stopHookActive: boo
 }
 
 /** Reads, decides and acts; returns what Claude Code is told. `log` gets one record per step. */
-export async function stop(input: StopInput, deps: Deps, log: (record: object) => void): Promise<Outcome> {
+/** One `.lab/stop.log` record: the step it logs, and that step's fields. */
+export interface StopLogRecord {
+  readonly step: string;
+  readonly [field: string]: unknown;
+}
+
+export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRecord) => void): Promise<Outcome> {
   const { cwd } = input;
   const root = await gitOut(deps, cwd, ["rev-parse", "--show-toplevel"]);
   const stateDir = join(root, ".lab", "state");
@@ -213,13 +243,23 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   const early: Pick<Snapshot, "forkFlag" | "forkMarker" | "branch"> = { forkFlag, forkMarker, branch };
 
   if (forkFlag || forkMarker || branch === null || IGNORED_BRANCH.test(branch)) {
-    const admission = admit({ ...early, stopHookActive: false, head, treeClean: true, ahead: 1, pr: null, armed: false });
+    const admission = admit({
+      ...early,
+      stopHookActive: false,
+      head,
+      treeClean: true,
+      ahead: 1,
+      pr: null,
+      armed: false,
+    });
+
     log({ step: "admit", ...admission });
 
     return { kind: "allow" };
   }
 
   await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
+
   const snapshot: Snapshot = {
     ...early,
     stopHookActive: input.stop_hook_active === true,
@@ -229,6 +269,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
     pr: IGNORED_BRANCH.test(branch) ? null : await prOf(deps, cwd, branch),
     armed: false,
   };
+
   const armedFile = (pr: number): string => join(stateDir, `armed-${pr}-${head}`);
   const withArmed = { ...snapshot, armed: snapshot.pr !== null && existsSync(armedFile(snapshot.pr.number)) };
   const prWatch = `bun ${join(root, "scripts", "land-loop", "pr-watch.ts")}`;
@@ -237,7 +278,9 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   const admission = admit(withArmed);
   log({ step: "admit", branch, head, pr: withArmed.pr?.number ?? null, ...admission });
 
-  if (admission.kind === "none") return { kind: "allow" };
+  if (admission.kind === "none") {
+    return { kind: "allow" };
+  }
 
   if (admission.kind === "arm") {
     writeFileSync(armedFile(admission.pr), "asked\n");
@@ -248,24 +291,44 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
   const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), withArmed.stopHookActive);
   log({ step: "stop-checks", next: next.kind });
 
-  if (next.kind === "none") return { kind: "allow" };
+  if (next.kind === "none") {
+    return { kind: "allow" };
+  }
 
-  if (next.kind === "block") return { kind: "block", reason: next.reason };
+  if (next.kind === "block") {
+    return { kind: "block", reason: next.reason };
+  }
 
   const model = modelOf(transcript);
   const doneJudge = await askFork(deps, input, model, DONE_QUESTION);
   const answer = answerOf(doneJudge.text);
-  log({ step: "done-judge", model, answer, ms: doneJudge.ms, costUsd: doneJudge.costUsd, cacheRead: doneJudge.cacheRead, code: doneJudge.code, text: doneJudge.text.slice(0, 300) });
+  log({
+    step: "done-judge",
+    model,
+    answer,
+    ms: doneJudge.ms,
+    costUsd: doneJudge.costUsd,
+    cacheRead: doneJudge.cacheRead,
+    code: doneJudge.code,
+    text: doneJudge.text.slice(0, 300),
+  });
 
   const failed = doneJudgeFailure(doneJudge.code, doneJudge.text, withArmed.stopHookActive);
 
-  if (failed !== null) return failed;
+  if (failed !== null) {
+    return failed;
+  }
 
   const action: Action = decide(withArmed.pr, answer);
 
-  if (action.kind === "none") return { kind: "allow" };
+  if (action.kind === "none") {
+    return { kind: "allow" };
+  }
 
-  await checked(deps.run, ["git", "push", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`], { cwd, timeoutMs: 120_000 });
+  await checked(deps.run, ["git", "push", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`], {
+    cwd,
+    timeoutMs: 120_000,
+  });
 
   let number: number;
 
@@ -273,18 +336,27 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
     const bodyFork = await askFork(deps, input, model, BODY_REQUEST);
     const subject = await gitOut(deps, cwd, ["log", "-1", "--format=%s"]);
     const text = prTextOf(bodyFork.text) ?? { title: subject, body: "" };
-    log({ step: "body-fork", ms: bodyFork.ms, costUsd: bodyFork.costUsd, cacheRead: bodyFork.cacheRead, title: text.title });
+    log({
+      step: "body-fork",
+      ms: bodyFork.ms,
+      costUsd: bodyFork.costUsd,
+      cacheRead: bodyFork.cacheRead,
+      title: text.title,
+    });
 
     const url = await checked(
       deps.run,
       ["gh", "pr", "create", "--base", TRUNK, "--head", branch, "--title", text.title, "--body-file", "-"],
       { cwd, stdin: text.body === "" ? "(no body)" : text.body },
     );
+
     number = Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
   } else {
     number = action.pr;
 
-    if (action.ready) await checked(deps.run, ["gh", "pr", "ready", String(number)], { cwd });
+    if (action.ready) {
+      await checked(deps.run, ["gh", "pr", "ready", String(number)], { cwd });
+    }
   }
 
   log({ step: "published", action: action.kind, pr: number, head });
@@ -294,16 +366,24 @@ export async function stop(input: StopInput, deps: Deps, log: (record: object) =
 }
 
 if (import.meta.main) {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: Claude Code writes the Stop input on stdin as JSON.
   const input = JSON.parse(await Bun.stdin.text()) as StopInput;
   const logFile = join(input.cwd, ".lab", "stop.log");
   mkdirSync(join(input.cwd, ".lab"), { recursive: true });
-  const log = (record: object): void =>
-    appendFileSync(logFile, `${JSON.stringify({ at: new Date().toISOString(), session: input.session_id, ...record })}\n`);
+
+  const log = (record: StopLogRecord): void => {
+    appendFileSync(
+      logFile,
+      `${JSON.stringify({ at: new Date().toISOString(), session: input.session_id, ...record })}\n`,
+    );
+  };
 
   try {
     const outcome = await stop(input, { run: runCli, env: process.env, now: Date.now }, log);
 
-    if (outcome.kind === "block") console.log(JSON.stringify({ decision: "block", reason: outcome.reason }));
+    if (outcome.kind === "block") {
+      console.log(JSON.stringify({ decision: "block", reason: outcome.reason }));
+    }
   } catch (error) {
     log({ step: "error", message: error instanceof Error ? error.message : String(error) });
     console.error(`stop hook: ${error instanceof Error ? error.message : String(error)}`);

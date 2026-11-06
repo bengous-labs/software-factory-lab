@@ -4,8 +4,8 @@
  * schema, answers the `owner` route and review:deep: the safe side.
  */
 
-import type { RoutingAnswer } from "../merge-bot/decide.ts";
 import type { Ask } from "../lib/ask.ts";
+import type { RoutingAnswer } from "../merge-bot/decide.ts";
 
 export const ROUTING_JUDGE_MODEL = "haiku";
 
@@ -45,9 +45,14 @@ export function promptOf(stat: string, diff: string, patchDelta: boolean): strin
 
 /** The Routing answer the schema's answer carries, given by `model`, or null when it does not read. */
 export function routingOf(structured: unknown, model: string | null): RoutingAnswer | null {
-  if (typeof structured !== "object" || structured === null) return null;
+  if (typeof structured !== "object" || structured === null) {
+    return null;
+  }
 
-  const { land, review, second_round: secondRound, reason } = structured as Record<string, unknown>;
+  const land = "land" in structured ? structured.land : undefined;
+  const review = "review" in structured ? structured.review : undefined;
+  const secondRound = "second_round" in structured ? structured.second_round : undefined;
+  const reason = "reason" in structured ? structured.reason : undefined;
 
   if ((land !== "auto" && land !== "owner") || (review !== "none" && review !== "light" && review !== "deep")) {
     return null;
@@ -56,8 +61,21 @@ export function routingOf(structured: unknown, model: string | null): RoutingAns
   return { land, review, secondRound: secondRound === true, reason: typeof reason === "string" ? reason : "", model };
 }
 
-export async function routingJudge(ask: Ask, cwd: string, stat: string, diff: string, patchDelta: boolean): Promise<RoutingAnswer> {
-  const answer = await ask({ model: ROUTING_JUDGE_MODEL, prompt: promptOf(stat, diff, patchDelta), schema: SCHEMA, cwd, timeoutMs: 180_000 });
+export async function routingJudge(
+  ask: Ask,
+  cwd: string,
+  stat: string,
+  diff: string,
+  patchDelta: boolean,
+): Promise<RoutingAnswer> {
+  const answer = await ask({
+    model: ROUTING_JUDGE_MODEL,
+    prompt: promptOf(stat, diff, patchDelta),
+    schema: SCHEMA,
+    cwd,
+    timeoutMs: 180_000,
+  });
+
   const routing = answer.kind === "answered" ? routingOf(answer.structured, answer.model) : null;
 
   return (

@@ -16,6 +16,6 @@ A problem the change did not introduce is Pre-existing, whatever its weight. It 
 
 ## Do not report
 
-- Anything `bun run check` enforces: type errors, failing tests.
+- Anything `bun check` enforces: type errors, lint errors, formatting, failing tests.
 - Formatting.
 - `bun.lock`.

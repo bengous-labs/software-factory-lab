@@ -5,7 +5,8 @@ import { count } from "../src/commands/count.ts";
 import { done } from "../src/commands/done.ts";
 import { list } from "../src/commands/list.ts";
 import { remove } from "../src/commands/remove.ts";
-import { type Task, TaskError } from "../src/task.ts";
+import { TaskError } from "../src/task.ts";
+import type { Task } from "../src/task.ts";
 
 const TASKS: readonly Task[] = [
   { id: 1, title: "write the spec", done: true },
@@ -85,9 +86,7 @@ describe("list", () => {
   });
 
   test("every task with --all", () => {
-    expect(list(TASKS, { all: true, done: false })).toBe(
-      "[x] #1 write the spec\n[ ] #3 review the PR",
-    );
+    expect(list(TASKS, { all: true, done: false })).toBe("[x] #1 write the spec\n[ ] #3 review the PR");
   });
 
   test("done tasks only with --done", () => {
@@ -95,9 +94,7 @@ describe("list", () => {
   });
 
   test("--done with --all is refused", () => {
-    expect(() => list(TASKS, { all: true, done: true })).toThrow(
-      "--done and --all cannot be used together",
-    );
+    expect(() => list(TASKS, { all: true, done: true })).toThrow("--done and --all cannot be used together");
   });
 
   test("an empty list says so", () => {

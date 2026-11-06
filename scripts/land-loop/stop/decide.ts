@@ -56,20 +56,32 @@ export type Action =
   | { readonly kind: "open" }
   | { readonly kind: "push"; readonly pr: number; readonly ready: boolean };
 
-const none = (reason: string): { kind: "none"; reason: string } => ({ kind: "none", reason });
+const none = (reason: string): Extract<Admission, { kind: "none" }> => ({ kind: "none", reason });
 
 export function admit(snapshot: Snapshot): Admission {
-  if (snapshot.forkFlag) return none("this session is a fork the hook launched");
+  if (snapshot.forkFlag) {
+    return none("this session is a fork the hook launched");
+  }
 
-  if (snapshot.forkMarker) return none("this session is a fork, resumed");
+  if (snapshot.forkMarker) {
+    return none("this session is a fork, resumed");
+  }
 
-  if (snapshot.branch === null) return none("HEAD is detached");
+  if (snapshot.branch === null) {
+    return none("HEAD is detached");
+  }
 
-  if (IGNORED_BRANCH.test(snapshot.branch)) return none(`${snapshot.branch} is never published`);
+  if (IGNORED_BRANCH.test(snapshot.branch)) {
+    return none(`${snapshot.branch} is never published`);
+  }
 
-  if (snapshot.ahead === 0) return none(`${snapshot.branch} has no commit that dev lacks`);
+  if (snapshot.ahead === 0) {
+    return none(`${snapshot.branch} has no commit that dev lacks`);
+  }
 
-  if (!snapshot.treeClean) return none("the tree has uncommitted changes");
+  if (!snapshot.treeClean) {
+    return none("the tree has uncommitted changes");
+  }
 
   const { pr } = snapshot;
 
@@ -82,9 +94,13 @@ export function admit(snapshot: Snapshot): Admission {
 
 /** Red Stop checks block once, with their report; a second stop on the same failure lets the session end. */
 export function afterStopChecks(stopChecks: StopChecks, stopHookActive: boolean): Next {
-  if (stopChecks.kind === "green") return { kind: "ask-done-judge" };
+  if (stopChecks.kind === "green") {
+    return { kind: "ask-done-judge" };
+  }
 
-  if (stopHookActive) return none("the Stop checks are still red after a block: nothing is published");
+  if (stopHookActive) {
+    return none("the Stop checks are still red after a block: nothing is published");
+  }
 
   return {
     kind: "block",
@@ -98,9 +114,13 @@ export function answerOf(text: string): Answer {
 }
 
 export function decide(pr: PullRequest | null, answer: Answer): Action {
-  if (answer === "no") return none("the Done judge says the task is not finished");
+  if (answer === "no") {
+    return none("the Done judge says the task is not finished");
+  }
 
-  if (pr === null) return { kind: "open" };
+  if (pr === null) {
+    return { kind: "open" };
+  }
 
   return { kind: "push", pr: pr.number, ready: pr.draft };
 }

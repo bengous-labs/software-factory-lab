@@ -5,7 +5,8 @@ import { join } from "node:path";
 
 import type { Ran, Run, RunOptions } from "../lib/run.ts";
 import { FORK_MARKER } from "./decide.ts";
-import { DONE_QUESTION, doneJudgeFailure, FORK_FLAG, hasForkMarker, modelOf, prTextOf, stop, type StopInput } from "./hook.ts";
+import { DONE_QUESTION, doneJudgeFailure, FORK_FLAG, hasForkMarker, modelOf, prTextOf, stop } from "./hook.ts";
+import type { StopInput } from "./hook.ts";
 
 const HEAD = "d".repeat(40);
 
@@ -14,24 +15,55 @@ interface Call {
   readonly options: RunOptions;
 }
 
+const ok = (stdout: string): Promise<Ran> => Promise.resolve({ code: 0, stdout, stderr: "" });
+
+interface World {
+  readonly run: Run;
+  readonly calls: readonly Call[];
+  readonly root: string;
+}
+
 /** A fake of git, gh, bun and claude for the Author's session on `agent/x`, one commit ahead, no PR. */
-function world(doneJudgeAnswer: string): { run: Run; calls: Call[]; root: string } {
+function world(doneJudgeAnswer: string): World {
   const root = mkdtempSync(join(tmpdir(), "stop-"));
   const calls: Call[] = [];
-  const ok = (stdout: string): Ran => ({ code: 0, stdout, stderr: "" });
 
-  const run: Run = async (argv, options) => {
+  const run: Run = (argv, options) => {
     calls.push({ argv, options });
     const line = argv.join(" ");
 
-    if (line === "git rev-parse --show-toplevel") return ok(`${root}\n`);
-    if (line === "git symbolic-ref --short -q HEAD") return ok("agent/x\n");
-    if (line === "git rev-parse HEAD") return ok(`${HEAD}\n`);
-    if (line === "git status --porcelain") return ok("");
-    if (line.startsWith("git rev-list --count")) return ok("1\n");
-    if (line.startsWith("git log -1")) return ok("feat: x\n");
-    if (line.startsWith("gh pr list")) return ok("[]");
-    if (line.startsWith("gh pr create")) return ok("https://github.com/o/r/pull/12\n");
+    if (line === "git rev-parse --show-toplevel") {
+      return ok(`${root}\n`);
+    }
+
+    if (line === "git symbolic-ref --short -q HEAD") {
+      return ok("agent/x\n");
+    }
+
+    if (line === "git rev-parse HEAD") {
+      return ok(`${HEAD}\n`);
+    }
+
+    if (line === "git status --porcelain") {
+      return ok("");
+    }
+
+    if (line.startsWith("git rev-list --count")) {
+      return ok("1\n");
+    }
+
+    if (line.startsWith("git log -1")) {
+      return ok("feat: x\n");
+    }
+
+    if (line.startsWith("gh pr list")) {
+      return ok("[]");
+    }
+
+    if (line.startsWith("gh pr create")) {
+      return ok("https://github.com/o/r/pull/12\n");
+    }
+
     if (argv[0] === "claude") {
       const prompt = argv.at(-1) ?? "";
       const result = prompt === DONE_QUESTION ? doneJudgeAnswer : "feat: x\n\nBody text.";
@@ -51,7 +83,10 @@ function input(root: string): StopInput {
     transcript,
     [
       JSON.stringify({ type: "user", message: { content: "add a clear command" } }),
-      JSON.stringify({ type: "assistant", message: { model: "claude-haiku-5-5", content: [{ type: "text", text: "done" }] } }),
+      JSON.stringify({
+        type: "assistant",
+        message: { model: "claude-haiku-5-5", content: [{ type: "text", text: "done" }] },
+      }),
     ].join("\n"),
   );
 
@@ -66,15 +101,21 @@ describe("stop", () => {
     const doneJudge = calls.find((call) => call.argv[0] === "claude" && call.argv.at(-1) === DONE_QUESTION);
 
     expect(doneJudge?.argv).toEqual(
+      // oxlint-disable-next-line typescript/no-unsafe-argument -- bun-types types every asymmetric matcher as any.
       expect.arrayContaining(["-p", "--resume", "S1", "--fork-session", "--tools", "", "--model", "claude-haiku-5-5"]),
     );
     expect(doneJudge?.options.env?.[FORK_FLAG]).toBe("1");
-    expect(doneJudge?.argv[(doneJudge?.argv.indexOf("--tools") ?? -2) + 1]).toBe("");
+    expect(doneJudge?.argv[doneJudge.argv.indexOf("--tools") + 1]).toBe("");
     expect(doneJudge?.argv).toContain("--strict-mcp-config");
-    expect(calls.some((call) => call.argv.join(" ").startsWith("git push --force-with-lease -u origin HEAD:refs/heads/agent/x"))).toBe(true);
+    expect(
+      calls.some((call) =>
+        call.argv.join(" ").startsWith("git push --force-with-lease -u origin HEAD:refs/heads/agent/x"),
+      ),
+    ).toBe(true);
 
     const create = calls.find((call) => call.argv.join(" ").startsWith("gh pr create"));
 
+    // oxlint-disable-next-line typescript/no-unsafe-argument -- bun-types types every asymmetric matcher as any.
     expect(create?.argv).toEqual(expect.arrayContaining(["--base", "dev", "--title", "feat: x"]));
     expect(create?.options.stdin).toBe("Body text.");
     expect(outcome.kind).toBe("block");
@@ -101,7 +142,9 @@ describe("stop", () => {
 describe("transcript", () => {
   test("a user turn opening with the marker makes the session a fork; the marker elsewhere does not", () => {
     expect(hasForkMarker([{ type: "user", message: { content: `${FORK_MARKER} are you done?` } }])).toBe(true);
-    expect(hasForkMarker([{ type: "user", message: { content: [{ type: "text", text: ` ${FORK_MARKER} q` }] } }])).toBe(true);
+    expect(hasForkMarker([{ type: "user", message: { content: [{ type: "text", text: ` ${FORK_MARKER} q` }] } }])).toBe(
+      true,
+    );
     expect(hasForkMarker([{ type: "user", message: { content: `the spec names ${FORK_MARKER}` } }])).toBe(false);
     expect(hasForkMarker([{ type: "assistant", message: { content: `${FORK_MARKER} q` } }])).toBe(false);
   });

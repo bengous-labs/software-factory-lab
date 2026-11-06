@@ -4,12 +4,18 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsgo --noEmit",
+    "lint": "oxlint -c oxlint.config.ts --deny-warnings --format=unix",
+    "format:check": "bun fmt --check .",
+    "gates": "bun scripts/gates/check-lint-disables.ts && bun scripts/gates/check-typecheck-coverage.ts",
     "test": "bun test",
-    "check": "bun run typecheck && bun test"
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run gates && bun test"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.92.0",
     "@types/bun": "1.4.4",
-    "@typescript/native-preview": "7.0.0-dev.20260707.2"
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "oxlint": "1.92.0",
+    "oxlint-tsgolint": "7.0.2006"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.318"

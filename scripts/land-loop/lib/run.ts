@@ -23,12 +23,13 @@ export const run: Run = async (argv, options) => {
     stderr: "pipe",
   });
 
-  let timedOut = false;
+  const timeout = { fired: false };
+
   const timer =
     options.timeoutMs === undefined
       ? undefined
       : setTimeout(() => {
-          timedOut = true;
+          timeout.fired = true;
           child.kill();
         }, options.timeoutMs);
 
@@ -40,7 +41,7 @@ export const run: Run = async (argv, options) => {
 
   clearTimeout(timer);
 
-  return { code: timedOut ? 124 : code, stdout, stderr };
+  return { code: timeout.fired ? 124 : code, stdout, stderr };
 };
 
 /** Like `run`, but anything other than exit 0 throws with what the command printed. */

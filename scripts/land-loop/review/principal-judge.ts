@@ -6,8 +6,8 @@
  * patch, before it sends the change to the owner.
  */
 
-import type { PrincipalJudgeVerdict } from "../merge-bot/decide.ts";
 import type { Ask } from "../lib/ask.ts";
+import type { PrincipalJudgeVerdict } from "../merge-bot/decide.ts";
 
 export const PRINCIPAL_JUDGE_MODEL = "claude-fable-5-1";
 
@@ -35,10 +35,13 @@ export function promptOf(guide: string, diff: string): string {
 
 /** The verdict in the schema's answer: an explicit ok true or false, else null. */
 export function verdictOf(structured: unknown): PrincipalJudgeVerdict | null {
-  const answer = structured as { ok?: unknown; reason?: unknown } | null;
-  const reason = typeof answer?.reason === "string" ? answer.reason : "";
+  if (typeof structured !== "object" || structured === null || !("ok" in structured)) {
+    return null;
+  }
 
-  return typeof answer?.ok === "boolean" ? { ok: answer.ok, reason } : null;
+  const reason = "reason" in structured && typeof structured.reason === "string" ? structured.reason : "";
+
+  return typeof structured.ok === "boolean" ? { ok: structured.ok, reason } : null;
 }
 
 /** A verdict, or the reason the Principal judge gave none. */
@@ -52,12 +55,13 @@ export interface PrincipalJudgeRun {
 export async function principalJudge(ask: Ask, cwd: string, prompt: string): Promise<PrincipalJudgeRun> {
   const answer = await ask({ model: PRINCIPAL_JUDGE_MODEL, prompt, schema: SCHEMA, cwd, timeoutMs: 900_000 });
   const verdict = answer.kind === "answered" ? verdictOf(answer.structured) : null;
+
   const failure =
-    verdict !== null
-      ? null
-      : answer.kind === "answered"
+    verdict === null
+      ? answer.kind === "answered"
         ? "The Principal judge answered outside the schema."
-        : `The Principal judge failed: ${answer.error.slice(0, 200)}`;
+        : `The Principal judge failed: ${answer.error.slice(0, 200)}`
+      : null;
 
   return { verdict, failure, model: answer.model, costUsd: answer.costUsd };
 }

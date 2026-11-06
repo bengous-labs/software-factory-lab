@@ -13,10 +13,10 @@ bun install
 Run the checks before you commit:
 
 ```bash
-bun run check
+bun check
 ```
 
-`check` runs the typecheck (`bun run typecheck`) and then the tests (`bun test`). It must pass.
+`check` runs the typecheck (`bun run typecheck`), the lint (`bun run lint`), the format check (`bun run format:check`), the gates on lint suppressions and typecheck coverage (`bun run gates`), and then the tests (`bun test`). It must pass. `bun fmt` formats the files the format check reads.
 
 ## Where things live
 
