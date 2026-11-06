@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { Result, Schema } from "effect";
+
 import { decodeJson } from "../../lib/json.ts";
 import {
   CheckRuns,
@@ -100,5 +102,21 @@ describe("the GitHub answers the Merge bot reads", () => {
     expect(() =>
       decodeJson(IssueComments, "comments", JSON.stringify([{ id: "1", user: { login: "a" }, body: "b" }])),
     ).toThrow('Expected number\n  at [0]["id"]');
+  });
+
+  test("every other endpoint's answer outside its schema is refused", () => {
+    const refused: ReadonlyArray<[Schema.ConstraintDecoder<unknown>, Schema.Json]> = [
+      [CheckRuns, { check_runs: [{ name: "validate", status: "completed", conclusion: null }] }],
+      [IssueEvents, [{ event: "labeled", label: null, actor: { login: "a" }, created_at: "t" }]],
+      [CheckSuites, { check_suites: [{ created_at: null }] }],
+      [WorkflowRuns, { workflow_runs: null }],
+      [CommitPulls, [{ number: "3", state: "open" }]],
+      [ListedPrs, [{ id: 3 }]],
+      [ReviewThreads, { data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "T" }] } } } } }],
+    ];
+
+    for (const [schema, answer] of refused) {
+      expect(Result.isFailure(Schema.decodeUnknownResult(schema)(answer))).toBe(true);
+    }
   });
 });

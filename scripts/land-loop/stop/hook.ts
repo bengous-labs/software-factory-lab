@@ -181,7 +181,7 @@ async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise
   return (await checked(deps.run, ["git", ...args], { cwd })).trim();
 }
 
-const ListedPrs = Schema.Array(
+export const ListedPrs = Schema.Array(
   Schema.Struct({ number: Schema.Finite, isDraft: Schema.Boolean, headRefOid: Schema.String }),
 );
 

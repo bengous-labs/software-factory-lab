@@ -233,6 +233,9 @@ describe("prStateOf", () => {
       'a conversation comment: Expected string\n  at ["id"]',
     );
     expect(() => prStateOf(view, "", "", JSON.stringify({ data: null }))).toThrow("the review threads query: ");
+    expect(() => prStateOf(view, JSON.stringify([{ name: "validate", bucket: "fail" }]), "", threads([]))).toThrow(
+      'gh pr checks: Missing key\n  at [0]["link"]',
+    );
   });
 });
 

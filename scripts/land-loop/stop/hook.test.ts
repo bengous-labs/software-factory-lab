@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../lib/run.ts";
 import { FORK_MARKER } from "./decide.ts";
 import {
@@ -12,11 +13,12 @@ import {
   forkResultOf,
   hasForkMarker,
   linesOf,
+  ListedPrs,
   modelOf,
   prTextOf,
   stop,
+  StopInput,
 } from "./hook.ts";
-import type { StopInput } from "./hook.ts";
 
 const HEAD = "d".repeat(40);
 
@@ -247,5 +249,29 @@ describe("doneJudgeFailure", () => {
     expect(blocked?.kind === "block" && blocked.reason).toContain("exited 124");
     expect(doneJudgeFailure(0, "  ", false)?.kind).toBe("block");
     expect(doneJudgeFailure(124, "", true)).toEqual({ kind: "allow" });
+  });
+});
+
+describe("the inputs the Stop hook decodes", () => {
+  test("the Stop input reads, with or without stop_hook_active", () => {
+    const stdin = { session_id: "S1", transcript_path: "/t.jsonl", cwd: "/repo", hook_event_name: "Stop" };
+
+    expect(decodeJson(StopInput, "the Stop input", JSON.stringify(stdin))).toEqual({
+      session_id: "S1",
+      transcript_path: "/t.jsonl",
+      cwd: "/repo",
+    });
+    expect(
+      decodeJson(StopInput, "the Stop input", JSON.stringify({ ...stdin, stop_hook_active: true })).stop_hook_active,
+    ).toBe(true);
+  });
+
+  test("a Stop input, or a gh pr list answer, outside its schema is refused", () => {
+    expect(() => decodeJson(StopInput, "the Stop input", JSON.stringify({ session_id: "S1", cwd: "/repo" }))).toThrow(
+      'the Stop input: Missing key\n  at ["transcript_path"]',
+    );
+    expect(() => decodeJson(ListedPrs, "gh pr list", JSON.stringify([{ number: 1, isDraft: "no" }]))).toThrow(
+      'gh pr list: Expected boolean\n  at [0]["isDraft"]',
+    );
   });
 });

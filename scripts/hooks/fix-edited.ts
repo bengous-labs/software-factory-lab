@@ -4,8 +4,9 @@
  * The PostToolUse hook on Edit and Write. It applies the style config's autofixes, then `bun fmt`, to
  * the file the tool wrote, when that file is one `bun fmt --check .` reads: not ignored by git, and
  * matched by no `[fmt].ignorePatterns` of `bunfig.toml`. That keeps the vendored anti-slop copy,
- * `node_modules` and `.claude/worktrees` out. It prints nothing and exits 0: what a PostToolUse hook
- * prints goes into the agent's context.
+ * `node_modules` and `.claude/worktrees` out. It prints nothing and exits 0, since what a PostToolUse
+ * hook prints goes into the agent's context, unless its input or `bunfig.toml` does not read: it then
+ * throws, naming which.
  *
  * Reads the PostToolUse input on stdin.
  */
