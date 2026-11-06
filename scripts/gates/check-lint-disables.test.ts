@@ -6,8 +6,11 @@ import { join } from "node:path";
 import { $ } from "bun";
 
 import { findOffences, findUnsuppressible, isCandidate } from "./check-lint-disables.ts";
+import { fixtureEnv } from "./fixture-env.ts";
 
 const SCRIPT = join(import.meta.dir, "check-lint-disables.ts");
+
+const FIXTURE_ENV = fixtureEnv(process.env);
 
 // Split so this file never carries a directive its own gate would refuse.
 const OX = "ox";
@@ -90,12 +93,12 @@ test("the gate fails on a suppression of local/layers or of every rule, whatever
   const root = mkdtempSync(join(tmpdir(), "lint-disables-"));
   const everyRule = `// ${OX}lint-disable-next-line -- the reason`;
 
-  await $`git init -q`.cwd(root);
+  await $`git init -q`.cwd(root).env(FIXTURE_ENV);
   writeFileSync(join(root, "a.ts"), `${LAYERS_JUSTIFIED}\nconst a = 1;\n`);
   writeFileSync(join(root, "b.ts"), `${everyRule}\nconst b = 1;\n`);
   writeFileSync(join(root, "c.ts"), `${JUSTIFIED}\nconst c = 1;\n`);
 
-  const refused = await $`bun ${SCRIPT}`.cwd(root).nothrow().quiet();
+  const refused = await $`bun ${SCRIPT}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
 
   expect(refused.exitCode).toBe(1);
   expect(refused.stderr.toString()).toContain(`a.ts:1: ${LAYERS_JUSTIFIED}`);
@@ -107,11 +110,11 @@ test("the gate fails on a suppression of local/layers or of every rule, whatever
 test("the gate fails on a working tree file whose suppression has no reason, and passes once it has one", async () => {
   const root = mkdtempSync(join(tmpdir(), "lint-disables-"));
 
-  await $`git init -q`.cwd(root);
+  await $`git init -q`.cwd(root).env(FIXTURE_ENV);
   writeFileSync(join(root, "a.ts"), `${JUSTIFIED}\nconst a = 1;\n`);
   writeFileSync(join(root, "b.ts"), `const b = 1;\n${BARE}\n`);
 
-  const refused = await $`bun ${SCRIPT}`.cwd(root).nothrow().quiet();
+  const refused = await $`bun ${SCRIPT}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
 
   expect(refused.exitCode).toBe(1);
   expect(refused.stderr.toString()).toContain(`b.ts:2: ${BARE}`);
@@ -119,5 +122,5 @@ test("the gate fails on a working tree file whose suppression has no reason, and
 
   writeFileSync(join(root, "b.ts"), `const b = 1;\n${JUSTIFIED}\n`);
 
-  expect((await $`bun ${SCRIPT}`.cwd(root).nothrow().quiet()).exitCode).toBe(0);
+  expect((await $`bun ${SCRIPT}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet()).exitCode).toBe(0);
 });
