@@ -1,0 +1,7 @@
+{
+  "repo": "https://github.com/dmmulroy/anti-slop",
+  "commit": "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b",
+  "sourcePath": "skills/install-anti-slop/assets/anti-slop",
+  "vendoredAt": "2026-11-06",
+  "excludes": ["effect"]
+}
