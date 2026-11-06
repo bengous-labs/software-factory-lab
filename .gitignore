@@ -2,3 +2,4 @@ node_modules/
 todo.json
 .lab/
 .claude/worktrees/
+.stryker-tmp/

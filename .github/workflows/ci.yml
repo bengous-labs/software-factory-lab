@@ -27,3 +27,37 @@ jobs:
 
       - name: Typecheck, lint, format, gates and test
         run: bun check
+
+  # Mutation testing on the lines a change alters in the modules `stryker.config.ts` lists, or in
+  # their tests (`scripts/ci/mutation.ts`): a pull request's since its base, a merge queue's since the
+  # queue's base, a push's since its `before`. A push whose commit has a green `mutation` check from
+  # the merge queue skips the passes. With nothing to mutate it passes before installing anything.
+  mutation:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PUSH_BEFORE: ${{ github.event.before }}
+      MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0 # the merge-base with the base
+
+      - name: Set up bun via mise
+        uses: jdx/mise-action@v5.2.5
+
+      - name: Scope the mutants to the changed lines
+        id: scope
+        run: bun scripts/ci/mutation.ts github-output
+
+      - name: Install dependencies
+        if: steps.scope.outputs.mutate == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Mutation-test the changed lines
+        if: steps.scope.outputs.mutate == 'true'
+        run: bun scripts/ci/mutation.ts run
