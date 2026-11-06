@@ -1,8 +1,9 @@
 /**
  * The Routing rules: what sends a change to the deepest review whatever a model says of it, and who
- * lands it. The GitHub workflows, the session hooks and settings, the task file's format and the build
- * config always go to the owner. So do the Land loop's own scripts, like any other risky path: the
- * judges read only the diff, so no route lands a risky path without the owner.
+ * lands it. The GitHub workflows, the session hooks and settings, the MCP servers, the task file's
+ * format, the build config and the configs of the gates (lint, format, tests, mutation, dead code) always
+ * go to the owner. So do the Land loop's own scripts, like any other risky path: the judges read only
+ * the diff, so no route lands a risky path without the owner.
  */
 
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
@@ -19,6 +20,12 @@ const RISKY = [
   "bun.lock",
   "mise.toml",
   "tsconfig.json",
+  "bunfig.toml",
+  "oxlint*.config.ts",
+  ".oxfmtrc*",
+  "stryker.config.ts",
+  "knip.json*",
+  ".mcp.json",
 ].map((glob) => new Bun.Glob(glob));
 
 const LINE_CAP = 400;

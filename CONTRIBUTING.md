@@ -16,7 +16,7 @@ Run the checks before you commit:
 bun check
 ```
 
-`check` runs the typecheck (`bun run typecheck`), the lint (`bun run lint`), the format check (`bun run format:check`), the gates on lint suppressions, typecheck coverage and budget exceptions (`bun run gates`), the dead code check (`bun run knip`: unused files, exports and dependencies), and then the tests (`bun test`). It must pass. `bun fmt` formats the files the format check reads.
+`check` runs the typecheck (`bun run typecheck`), the lint (`bun run lint`), the format check (`bun run format:check`), the gates on lint suppressions, typecheck coverage and budget exceptions (`bun run gates`), the dead code check (`bun run knip`: unused files, exports and dependencies), then the tests with their coverage (`bun test --coverage`), and last the coverage floor (`scripts/gates/check-coverage-floor.ts`), which fails when the suite's total line or function coverage falls under the floor it sets. It must pass. `bun fmt` formats the files the format check reads.
 
 CI's `mutation` job mutates each module `stryker.config.ts` lists whose lines or tests your branch changes, and fails on a mutant that survives on a changed line, or one the tests killed on `origin/dev` that survives now. Run it before you push:
 
