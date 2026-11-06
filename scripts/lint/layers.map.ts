@@ -45,6 +45,7 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["scripts/hooks/*.ts", at("tooling", "entry")],
   ["scripts/gates/*.ts", at("tooling", "tooling")],
   ["scripts/lint/*.ts", at("tooling", "tooling")],
+  ["scripts/ci/fast-check-seed.ts", at("tooling", "test")],
   ["scripts/ci/*.ts", at("tooling", "tooling")],
   ["scripts/lab/*.ts", at("tooling", "tooling")],
   ["*.config.ts", at("tooling", "tooling")],

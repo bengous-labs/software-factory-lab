@@ -167,10 +167,10 @@ test("CI's output says whether a listed module or its tests changed", () => {
   expect(githubOutput([])).toBe("mutate=false\n");
 });
 
-test("a pass mutates one module whole, against its own tests alone", () => {
+test("a pass mutates one module whole, against its own tests alone, on the fixed fast-check seed", () => {
   expect(runOptions("app/src/commands/add.ts")).toEqual({
     mutate: ["app/src/commands/add.ts"],
-    commandRunner: { command: "bun test ./app/test/commands.test.ts" },
+    commandRunner: { command: "FAST_CHECK_SEED=20261106 bun test ./app/test/commands.test.ts" },
   });
 });
 

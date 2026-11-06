@@ -411,6 +411,12 @@ function ghCli(args: readonly string[]): Promise<string> {
   return $`gh ${args}`.quiet().text();
 }
 
+/**
+ * The seed `scripts/ci/fast-check-seed.ts` gives every property in a pass, the base's and the head's
+ * alike: a mutant a random input killed at the base would otherwise read as weakened tests.
+ */
+export const FAST_CHECK_SEED = 20_261_106;
+
 /** The `$GITHUB_OUTPUT` line that tells CI whether to install Stryker and run it. */
 export function githubOutput(hunks: readonly Hunk[]): string {
   return `mutate=${hunks.length > 0}\n`;
@@ -420,7 +426,7 @@ export function githubOutput(hunks: readonly Hunk[]): string {
 export function runOptions(module: string, tests: Readonly<Record<string, string>> = TESTS) {
   return {
     mutate: [module],
-    commandRunner: { command: `bun test ./${testFileOf(module, tests)}` },
+    commandRunner: { command: `FAST_CHECK_SEED=${FAST_CHECK_SEED} bun test ./${testFileOf(module, tests)}` },
   };
 }
 

@@ -1,5 +1,6 @@
 [test]
 pathIgnorePatterns = [".claude/worktrees/**"]
+preload = ["./scripts/ci/fast-check-seed.ts"]
 
 [fmt]
 printWidth = 120
