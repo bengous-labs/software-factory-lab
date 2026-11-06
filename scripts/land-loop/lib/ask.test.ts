@@ -9,8 +9,9 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Schema } from "effect";
 
+import type { Answer, Question } from "../ports/ask.ts";
 import { answerOf, askWith, modelOf, optionsOf, refuseTools, STRUCTURED_OUTPUT, toolDecision } from "./ask.ts";
-import type { Answer, Question, Stream } from "./ask.ts";
+import type { Stream } from "./ask.ts";
 
 const HAIKU = "claude-haiku-5-5";
 

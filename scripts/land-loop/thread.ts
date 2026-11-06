@@ -7,16 +7,14 @@
  *   bun scripts/land-loop/thread.ts <thread-id> "<reply>"
  */
 
+import { AUTHOR_MARK } from "./author-mark.ts";
 import { checked, run } from "./lib/run.ts";
-import type { Run } from "./lib/run.ts";
+import type { Run } from "./ports/run.ts";
 
 export const REPLY =
   "mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}";
 
 export const RESOLVE = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}";
-
-/** Marks a reply as the author's own, so the author's PR watch does not print it back. */
-export const AUTHOR_MARK = "<!-- lab-author-reply -->";
 
 export const USAGE = 'usage: bun scripts/land-loop/thread.ts <thread-id> "<reply>"';
 

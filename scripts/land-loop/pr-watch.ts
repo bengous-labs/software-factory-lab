@@ -18,10 +18,10 @@ import { join } from "node:path";
 import { Schema } from "effect";
 
 import { decodeJson } from "../lib/json.ts";
+import { AUTHOR_MARK } from "./author-mark.ts";
 import { checked, run } from "./lib/run.ts";
-import type { Run } from "./lib/run.ts";
+import type { Run } from "./ports/run.ts";
 import { severityOfBody } from "./review/code-review.ts";
-import { AUTHOR_MARK } from "./thread.ts";
 
 const POLL_MS = 30_000;
 

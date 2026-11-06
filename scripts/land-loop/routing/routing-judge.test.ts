@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { Result, Schema } from "effect";
 
-import type { Answer, Ask, Question } from "../lib/ask.ts";
+import type { Answer, Ask, Question } from "../ports/ask.ts";
 import { ROUTING_JUDGE_MODEL, routingJudge, RoutingJudgeAnswer, routingOf, SCHEMA } from "./routing-judge.ts";
 
 const SAFE = { land: "owner", review: "deep", secondRound: true };

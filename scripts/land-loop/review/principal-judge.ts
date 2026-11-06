@@ -8,8 +8,8 @@
 
 import { Result, Schema } from "effect";
 
-import type { Ask } from "../lib/ask.ts";
 import type { PrincipalJudgeVerdict } from "../merge-bot/decide.ts";
+import type { Ask } from "../ports/ask.ts";
 
 export const PRINCIPAL_JUDGE_MODEL = "claude-fable-5-1";
 
