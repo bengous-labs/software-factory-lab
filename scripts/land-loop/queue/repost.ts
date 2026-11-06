@@ -9,6 +9,9 @@
  * Reads GITHUB_REPOSITORY, MERGE_GROUP_HEAD_SHA, MERGE_GROUP_HEAD_REF (`gh-readonly-queue/<base>/pr-<n>-<sha>`), APP_SLUG.
  */
 
+import { Schema } from "effect";
+
+import { decodeJson } from "../../lib/json.ts";
 import { checked, run } from "../lib/run.ts";
 import { LAND_GATE, REVIEW_CHECK } from "../merge-bot/decide.ts";
 
@@ -20,13 +23,21 @@ export function prOfRef(ref: string): number | null {
   return match === null ? null : Number(match[1]);
 }
 
-interface CheckRun {
-  readonly name: string;
-  readonly status: string;
-  readonly conclusion: string | null;
-  readonly app: { readonly slug: string };
-  readonly completed_at: string | null;
-}
+const CheckRun = Schema.Struct({
+  name: Schema.String,
+  status: Schema.String,
+  conclusion: Schema.NullOr(Schema.String),
+  app: Schema.Struct({ slug: Schema.String }),
+  completed_at: Schema.NullOr(Schema.String),
+});
+
+type CheckRun = typeof CheckRun.Type;
+
+/** `repos/<repo>/pulls/<n>`, as far as this job reads it. */
+export const Pull = Schema.Struct({ head: Schema.Struct({ sha: Schema.String }) });
+
+/** `repos/<repo>/commits/<sha>/check-runs`, as far as this job reads it. */
+export const CheckRuns = Schema.Struct({ check_runs: Schema.Array(CheckRun) });
 
 /** The latest completed check of that name the App posted, green or not. */
 export function greenOnHead(runs: readonly CheckRun[], name: string, appSlug: string): boolean {
@@ -59,15 +70,13 @@ if (import.meta.main) {
     throw new Error(`${ref} names no PR`);
   }
 
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh api prints the pull request this endpoint names.
-  const head = JSON.parse(await checked(run, ["gh", "api", `repos/${repo}/pulls/${pr}`], { cwd })) as {
-    head: { sha: string };
-  };
+  const head = decodeJson(Pull, `PR #${pr}`, await checked(run, ["gh", "api", `repos/${repo}/pulls/${pr}`], { cwd }));
 
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh api prints the check runs of the head this endpoint names.
-  const runs = JSON.parse(
+  const runs = decodeJson(
+    CheckRuns,
+    `the check runs of ${head.head.sha}`,
     await checked(run, ["gh", "api", `repos/${repo}/commits/${head.head.sha}/check-runs?per_page=100`], { cwd }),
-  ) as { check_runs: CheckRun[] };
+  );
 
   for (const name of CHECKS) {
     const green = greenOnHead(runs.check_runs, name, appSlug);

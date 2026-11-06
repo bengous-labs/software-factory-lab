@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { greenOnHead, prOfRef } from "./repost.ts";
+import { decodeJson } from "../../lib/json.ts";
+import { CheckRuns, greenOnHead, prOfRef, Pull } from "./repost.ts";
 
 const SHA = "a".repeat(40);
 
@@ -29,5 +30,29 @@ describe("greenOnHead", () => {
 
     expect(greenOnHead(runs, "land-gate", "bengous-labs-agents")).toBe(true);
     expect(greenOnHead(runs, "agent-review", "bengous-labs-agents")).toBe(false);
+  });
+});
+
+describe("the GitHub answers this job reads", () => {
+  test("a check run still in progress reads with no conclusion and no completion time", () => {
+    const text = JSON.stringify({
+      total_count: 1,
+      check_runs: [
+        { id: 1, name: "land-gate", status: "in_progress", conclusion: null, completed_at: null, app: { slug: "a" } },
+      ],
+    });
+
+    expect(decodeJson(CheckRuns, "check runs", text).check_runs).toEqual([
+      { name: "land-gate", status: "in_progress", conclusion: null, completed_at: null, app: { slug: "a" } },
+    ]);
+  });
+
+  test("an answer outside the schema is refused", () => {
+    expect(() => decodeJson(Pull, "PR #12", JSON.stringify({ head: { ref: "x" } }))).toThrow(
+      'PR #12: Missing key\n  at ["head"]["sha"]',
+    );
+    expect(() => decodeJson(CheckRuns, "check runs", JSON.stringify({ check_runs: [{ name: "x" }] }))).toThrow(
+      'check runs: Missing key\n  at ["check_runs"][0]["status"]',
+    );
   });
 });

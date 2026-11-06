@@ -6,6 +6,10 @@
  * in the state record.
  */
 
+import { Schema, Struct } from "effect";
+
+import { decodeJson } from "../../lib/json.ts";
+
 /** Who lands a change: `auto`, the Merge bot alone, or `owner`, with a Land approval. */
 export type LandRoute = "auto" | "owner";
 
@@ -118,10 +122,42 @@ export type StoredRecord = Omit<StateRecord, "triage"> & {
   readonly triage: Readonly<Record<string, Omit<RoutingAnswer, "land"> & { readonly land: StoredLandRoute }>>;
 };
 
+const Verdict = Schema.Struct({ ok: Schema.Boolean, reason: Schema.String });
+
+/** A record as its comment holds it. A Land route reads as any string, so a value but `auto` reads as `owner`. */
+const ReadRecord = Schema.Struct({
+  reviewedPatch: Schema.NullOr(Schema.String),
+  reviewedHead: Schema.NullOr(Schema.String),
+  reviewRounds: Schema.Number,
+  triage: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      land: Schema.String,
+      review: Schema.Literals(["none", "light", "deep"]),
+      secondRound: Schema.Boolean,
+      reason: Schema.String,
+      // Records written before the Routing answer named its model have none.
+      model: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      needsFable: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+  landOkPatch: Schema.NullOr(Schema.String),
+  dequeued: Schema.NullOr(Schema.Struct({ head: Schema.String, reason: Schema.String })),
+  bodyImportant: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
+  fable: Schema.optionalKey(Schema.Record(Schema.String, Verdict)),
+  fableFailures: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
+});
+
+type ReadRecord = typeof ReadRecord.Type;
+
+/** The comment's JSON: older records lack the fields added since they were written. */
+const StoredJson = ReadRecord.mapFields(Struct.map(Schema.optionalKey));
+
 /** The record a comment stores, with each Land route read back from its stored value. */
-export function recordOfStored(stored: StoredRecord): StateRecord {
+export function recordOfStored(stored: ReadRecord): StateRecord {
   const triage = Object.entries(stored.triage).map(
-    ([patch, routing]) => [patch, { ...routing, land: landRouteOf(routing.land) }] as const,
+    ([patch, routing]) =>
+      [patch, { ...routing, land: landRouteOf(routing.land), model: routing.model ?? null }] as const,
   );
 
   return { ...stored, triage: Object.fromEntries(triage) };
@@ -138,8 +174,7 @@ export function recordOfJson(json: string): StateRecord {
     dequeued: null,
   };
 
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: the Merge bot wrote this JSON with storedOfRecord.
-  return recordOfStored({ ...noReview, ...(JSON.parse(json) as Partial<StoredRecord>) });
+  return recordOfStored({ ...noReview, ...decodeJson(StoredJson, "the Merge bot state record", json) });
 }
 
 /** The record as its comment stores it, each Land route in its stored value. */
