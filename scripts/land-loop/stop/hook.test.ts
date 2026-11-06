@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { decodeJson } from "../../lib/json.ts";
-import type { Ran, Run, RunOptions } from "../lib/run.ts";
+import type { Ran, Run, RunOptions } from "../ports/run.ts";
 import { FORK_MARKER } from "./decide.ts";
 import {
   DONE_QUESTION,

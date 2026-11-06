@@ -6,8 +6,11 @@ import { join } from "node:path";
 import { $ } from "bun";
 
 import { filesOf, uncovered } from "./check-typecheck-coverage.ts";
+import { fixtureEnv } from "./fixture-env.ts";
 
 const SCRIPT = join(import.meta.dir, "check-typecheck-coverage.ts");
+
+const FIXTURE_ENV = fixtureEnv(process.env);
 
 describe("uncovered", () => {
   test("a tracked file the config's files leave out is uncovered, a ./ prefix notwithstanding", () => {
@@ -42,9 +45,9 @@ test("the gate fails on tracked .ts and .mts files outside tsconfig.json's inclu
   writeFileSync(join(root, "tools", "b.ts"), "export const b = 1;\n");
   writeFileSync(join(root, "tools", "c.mts"), "export const c = 1;\n");
   writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ include: ["src/**/*.ts"] }));
-  await $`git init -q && git add -A`.cwd(root);
+  await $`git init -q && git add -A`.cwd(root).env(FIXTURE_ENV);
 
-  const refused = await $`bun ${SCRIPT}`.cwd(root).nothrow().quiet();
+  const refused = await $`bun ${SCRIPT}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
 
   expect(refused.exitCode).toBe(1);
   expect(refused.stderr.toString()).toContain("2 tracked TypeScript file(s) outside the typecheck");
@@ -56,5 +59,5 @@ test("the gate fails on tracked .ts and .mts files outside tsconfig.json's inclu
     JSON.stringify({ include: ["src/**/*.ts", "tools/**/*.ts", "tools/**/*.mts"] }),
   );
 
-  expect((await $`bun ${SCRIPT}`.cwd(root).nothrow().quiet()).exitCode).toBe(0);
+  expect((await $`bun ${SCRIPT}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet()).exitCode).toBe(0);
 });

@@ -5,9 +5,12 @@ import { join } from "node:path";
 
 import { $ } from "bun";
 
-import { findOffences, isCandidate } from "./check-lint-disables.ts";
+import { findOffences, findUnsuppressible, isCandidate, suppressedRules } from "./check-lint-disables.ts";
+import { fixtureEnv } from "./fixture-env.ts";
 
 const SCRIPT = join(import.meta.dir, "check-lint-disables.ts");
+
+const FIXTURE_ENV = fixtureEnv(process.env);
 
 // Split so this file never carries a directive its own gate would refuse.
 const OX = "ox";
@@ -19,6 +22,8 @@ const JUSTIFIED = `${BARE} -- the reason`;
 const ES = "es";
 
 const BARE_ESLINT = `// ${ES}lint-disable no-console`;
+
+const LAYERS_JUSTIFIED = `// ${OX}lint-disable-next-line local/layers -- the reason`;
 
 describe("isCandidate", () => {
   test("accepts every linted extension", () => {
@@ -62,14 +67,89 @@ describe("findOffences", () => {
   });
 });
 
+describe("findUnsuppressible", () => {
+  test("reports a suppression of local/layers even with a reason", () => {
+    expect(findUnsuppressible("a.ts", `const x = 1;\n${LAYERS_JUSTIFIED}\n`)).toEqual([
+      { path: "a.ts", line: 2, text: LAYERS_JUSTIFIED },
+    ]);
+  });
+
+  test("reports a suppression that names no rule, with or without a reason", () => {
+    for (const text of [
+      `// ${OX}lint-disable-next-line -- the reason`,
+      `/* ${OX}lint-disable */`,
+      `// ${ES}lint-disable-line`,
+    ]) {
+      expect(findUnsuppressible("a.ts", text)).toEqual([{ path: "a.ts", line: 1, text }]);
+    }
+  });
+
+  test("leaves a justified suppression of another rule, and a mention of the rule outside a directive", () => {
+    expect(findUnsuppressible("a.ts", `${JUSTIFIED}\n// local/layers keeps the domain pure\n`)).toEqual([]);
+  });
+
+  test("leaves a suppression whose reason, not its rule list, names local/layers", () => {
+    expect(
+      findUnsuppressible("a.ts", `// ${OX}lint-disable-next-line eslint/no-console -- unrelated to local/layers`),
+    ).toEqual([]);
+  });
+
+  test("reports local/layers and the budget rules in every spelling oxlint reads, and inside a list", () => {
+    for (const rules of [
+      "local(layers)",
+      "eslint/max-params",
+      "max-params",
+      "eslint(max-params)",
+      "complexity/complexity",
+      "complexity(complexity)",
+      "no-console, local/layers",
+    ]) {
+      const text = `// ${OX}lint-disable-next-line ${rules} -- the reason`;
+
+      expect({ rules, found: findUnsuppressible("a.ts", text).length }).toEqual({ rules, found: 1 });
+    }
+  });
+});
+
+describe("suppressedRules", () => {
+  test("reads the rule list up to the reason or the end of a block comment, in the config's spelling", () => {
+    expect(suppressedRules(`// ${OX}lint-disable-next-line no-console, local(layers) -- see local/x`)).toEqual([
+      "eslint/no-console",
+      "local/layers",
+    ]);
+    expect(suppressedRules(`/* ${ES}lint-disable typescript/no-explicit-any */`)).toEqual([
+      "typescript/no-explicit-any",
+    ]);
+    expect(suppressedRules(`// ${OX}lint-disable-line -- why`)).toEqual([]);
+  });
+});
+
+test("the gate fails on a suppression of local/layers or of every rule, whatever its reason", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lint-disables-"));
+  const everyRule = `// ${OX}lint-disable-next-line -- the reason`;
+
+  await $`git init -q`.cwd(root).env(FIXTURE_ENV);
+  writeFileSync(join(root, "a.ts"), `${LAYERS_JUSTIFIED}\nconst a = 1;\n`);
+  writeFileSync(join(root, "b.ts"), `${everyRule}\nconst b = 1;\n`);
+  writeFileSync(join(root, "c.ts"), `${JUSTIFIED}\nconst c = 1;\n`);
+
+  const refused = await $`bun ${SCRIPT}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
+
+  expect(refused.exitCode).toBe(1);
+  expect(refused.stderr.toString()).toContain(`a.ts:1: ${LAYERS_JUSTIFIED}`);
+  expect(refused.stderr.toString()).toContain(`b.ts:1: ${everyRule}`);
+  expect(refused.stderr.toString()).not.toContain("c.ts");
+  expect(refused.stderr.toString()).toContain("which no reason allows");
+});
+
 test("the gate fails on a working tree file whose suppression has no reason, and passes once it has one", async () => {
   const root = mkdtempSync(join(tmpdir(), "lint-disables-"));
 
-  await $`git init -q`.cwd(root);
+  await $`git init -q`.cwd(root).env(FIXTURE_ENV);
   writeFileSync(join(root, "a.ts"), `${JUSTIFIED}\nconst a = 1;\n`);
   writeFileSync(join(root, "b.ts"), `const b = 1;\n${BARE}\n`);
 
-  const refused = await $`bun ${SCRIPT}`.cwd(root).nothrow().quiet();
+  const refused = await $`bun ${SCRIPT}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
 
   expect(refused.exitCode).toBe(1);
   expect(refused.stderr.toString()).toContain(`b.ts:2: ${BARE}`);
@@ -77,5 +157,5 @@ test("the gate fails on a working tree file whose suppression has no reason, and
 
   writeFileSync(join(root, "b.ts"), `const b = 1;\n${JUSTIFIED}\n`);
 
-  expect((await $`bun ${SCRIPT}`.cwd(root).nothrow().quiet()).exitCode).toBe(0);
+  expect((await $`bun ${SCRIPT}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet()).exitCode).toBe(0);
 });

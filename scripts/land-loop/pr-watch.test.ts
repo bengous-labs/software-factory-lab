@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import { decodeJson } from "../lib/json.ts";
+import { AUTHOR_MARK } from "./author-mark.ts";
 import { END_KEY, endOf, prStateOf, readingOf, SeenKeys, wakesOf } from "./pr-watch.ts";
 import type { PrState } from "./pr-watch.ts";
-import { AUTHOR_MARK } from "./thread.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 

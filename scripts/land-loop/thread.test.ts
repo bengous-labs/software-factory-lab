@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Run } from "./lib/run.ts";
-import { answer, argsOf, AUTHOR_MARK, REPLY, RESOLVE } from "./thread.ts";
+import { AUTHOR_MARK } from "./author-mark.ts";
+import type { Run } from "./ports/run.ts";
+import { answer, argsOf, REPLY, RESOLVE } from "./thread.ts";
 
 describe("argsOf", () => {
   test("a thread id and a reply are read; a missing or blank one is refused", () => {

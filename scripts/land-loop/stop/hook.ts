@@ -17,7 +17,7 @@ import { Predicate, Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import { checked, run as runCli } from "../lib/run.ts";
-import type { Run } from "../lib/run.ts";
+import type { Run } from "../ports/run.ts";
 import { admit, afterStopChecks, answerOf, armReason, decide, FORK_MARKER, IGNORED_BRANCH } from "./decide.ts";
 import type { Action, PullRequest, Snapshot, StopChecks } from "./decide.ts";
 

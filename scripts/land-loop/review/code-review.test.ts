@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import { Result, Schema } from "effect";
 
-import type { Answer, Ask, Question } from "../lib/ask.ts";
-import { AUTHOR_MARK } from "../thread.ts";
+import { AUTHOR_MARK } from "../author-mark.ts";
+import type { Answer, Ask, Question } from "../ports/ask.ts";
 import {
   codeReview,
   commentOf,

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { Result, Schema } from "effect";
 
-import type { Answer, Ask, Question } from "../lib/ask.ts";
+import type { Answer, Ask, Question } from "../ports/ask.ts";
 import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf, SCHEMA, VerdictAnswer } from "./principal-judge.ts";
 
 interface Asked {

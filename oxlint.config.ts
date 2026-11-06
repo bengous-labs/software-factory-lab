@@ -1,13 +1,18 @@
 import { defineConfig } from "oxlint";
 
 import styleConfig, { IGNORE_PATTERNS } from "./oxlint.style.config.ts";
+import { BUDGETS, EXCEPTIONS } from "./scripts/lint/exceptions.ts";
 
 export default defineConfig({
   extends: [styleConfig],
   categories: { correctness: "error", suspicious: "error", pedantic: "error" },
   plugins: ["typescript", "unicorn", "oxc", "import"],
   options: { typeAware: true },
+  jsPlugins: ["oxlint-plugin-complexity", { name: "local", specifier: `${import.meta.dirname}/scripts/lint/index.ts` }],
   rules: {
+    "local/layers": "error",
+
+    ...BUDGETS,
     // Owner decision: no size limit; complexity is limited instead.
     "eslint/max-lines": "off",
     "eslint/max-lines-per-function": "off",
@@ -67,6 +72,8 @@ export default defineConfig({
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-unknown-returns": "error",
   },
+  // check-exception-ratchet.ts holds each of these files to the functions listed.
+  overrides: EXCEPTIONS.map((exception) => ({ files: [exception.file], rules: { [exception.rule]: "off" } })),
   // extends does not carry ignorePatterns.
   ignorePatterns: IGNORE_PATTERNS,
 });
