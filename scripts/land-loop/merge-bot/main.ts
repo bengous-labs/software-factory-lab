@@ -115,7 +115,7 @@ const mutate = (env: Env, query: string, variables: Readonly<Record<string, stri
 
 /** `repos/<repo>/pulls/<n>`, as far as the Merge bot reads it. */
 export const Pull = Schema.Struct({
-  number: Schema.Number,
+  number: Schema.Finite,
   node_id: Schema.String,
   state: Schema.Literals(["open", "closed"]),
   merged: Schema.Boolean,
@@ -140,7 +140,7 @@ const ThreadJson = Schema.Struct({
   id: Schema.String,
   isResolved: Schema.Boolean,
   path: Schema.String,
-  line: Schema.NullOr(Schema.Number),
+  line: Schema.NullOr(Schema.Finite),
   comments: Schema.Struct({
     nodes: Schema.Array(Schema.Struct({ author: Schema.NullOr(Login), body: Schema.String })),
   }),
@@ -158,7 +158,7 @@ export const ReviewThreads = Schema.Struct({
 });
 
 /** `repos/<repo>/issues/<n>/comments`, as far as the Merge bot reads it. */
-export const IssueComments = Schema.Array(Schema.Struct({ id: Schema.Number, user: Login, body: Schema.String }));
+export const IssueComments = Schema.Array(Schema.Struct({ id: Schema.Finite, user: Login, body: Schema.String }));
 
 /** `repos/<repo>/commits/<sha>/check-runs`, as far as the Merge bot reads it. */
 export const CheckRuns = Schema.Struct({
@@ -191,10 +191,10 @@ export const WorkflowRuns = Schema.Struct({
 });
 
 /** `repos/<repo>/commits/<sha>/pulls`, as far as the Merge bot reads it. */
-export const CommitPulls = Schema.Array(Schema.Struct({ number: Schema.Number, state: Schema.String }));
+export const CommitPulls = Schema.Array(Schema.Struct({ number: Schema.Finite, state: Schema.String }));
 
 /** `gh pr list --json number`. */
-export const ListedPrs = Schema.Array(Schema.Struct({ number: Schema.Number }));
+export const ListedPrs = Schema.Array(Schema.Struct({ number: Schema.Finite }));
 
 async function threadsOf(env: Env, pr: number): Promise<readonly ThreadJson[]> {
   const [owner, name] = env.repo.split("/");

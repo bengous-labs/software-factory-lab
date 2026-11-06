@@ -128,7 +128,7 @@ const Verdict = Schema.Struct({ ok: Schema.Boolean, reason: Schema.String });
 const ReadRecord = Schema.Struct({
   reviewedPatch: Schema.NullOr(Schema.String),
   reviewedHead: Schema.NullOr(Schema.String),
-  reviewRounds: Schema.Number,
+  reviewRounds: Schema.Finite,
   triage: Schema.Record(
     Schema.String,
     Schema.Struct({
@@ -143,9 +143,9 @@ const ReadRecord = Schema.Struct({
   ),
   landOkPatch: Schema.NullOr(Schema.String),
   dequeued: Schema.NullOr(Schema.Struct({ head: Schema.String, reason: Schema.String })),
-  bodyImportant: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
+  bodyImportant: Schema.optionalKey(Schema.Record(Schema.String, Schema.Finite)),
   fable: Schema.optionalKey(Schema.Record(Schema.String, Verdict)),
-  fableFailures: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
+  fableFailures: Schema.optionalKey(Schema.Record(Schema.String, Schema.Finite)),
 });
 
 type ReadRecord = typeof ReadRecord.Type;

@@ -172,7 +172,7 @@ const ReviewThreads = Schema.Struct({
               id: Schema.String,
               isResolved: Schema.Boolean,
               path: Schema.String,
-              line: Schema.NullOr(Schema.Number),
+              line: Schema.NullOr(Schema.Finite),
               comments: Schema.Struct({
                 nodes: Schema.Array(Schema.Struct({ id: Schema.String, author: Author, body: Schema.String })),
               }),

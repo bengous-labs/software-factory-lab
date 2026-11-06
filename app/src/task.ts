@@ -6,7 +6,7 @@ export const CreatedAt = Schema.String.check(
 );
 
 export const Task = Schema.Struct({
-  id: Schema.Number,
+  id: Schema.Finite,
   title: Schema.String,
   done: Schema.Boolean,
   createdAt: Schema.optionalKey(CreatedAt),

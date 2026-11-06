@@ -4,7 +4,7 @@ import { Schema } from "effect";
 
 import { decodeJson } from "./json.ts";
 
-const Pr = Schema.Struct({ number: Schema.Number });
+const Pr = Schema.Struct({ number: Schema.Finite });
 
 describe("decodeJson", () => {
   test("decodes JSON text into the schema's type, dropping the keys it does not name", () => {

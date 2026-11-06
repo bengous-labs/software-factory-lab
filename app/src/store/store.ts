@@ -27,7 +27,7 @@ const StoreFile = Schema.Struct({
 
 type StoreFile = typeof StoreFile.Type;
 
-const decodeStoreFile = Schema.decodeUnknownResult(Schema.fromJsonString(StoreFile), { reportInput: true });
+const decodeStoreFile = Schema.decodeResult(Schema.fromJsonString(StoreFile), { reportInput: true });
 
 export function parse(text: string, path: string): readonly Task[] {
   const decoded = decodeStoreFile(text);

@@ -117,11 +117,11 @@ export function prTextOf(text: string): { title: string; body: string } | null {
 /** What `claude -p --output-format json` prints, as far as this hook reads it. */
 export const ForkOutput = Schema.Struct({
   result: Schema.optionalKey(Schema.String),
-  total_cost_usd: Schema.optionalKey(Schema.Number),
-  usage: Schema.optionalKey(Schema.Struct({ cache_read_input_tokens: Schema.optionalKey(Schema.Number) })),
+  total_cost_usd: Schema.optionalKey(Schema.Finite),
+  usage: Schema.optionalKey(Schema.Struct({ cache_read_input_tokens: Schema.optionalKey(Schema.Finite) })),
 });
 
-const decodeForkOutput = Schema.decodeUnknownResult(Schema.fromJsonString(ForkOutput), { reportInput: true });
+const decodeForkOutput = Schema.decodeResult(Schema.fromJsonString(ForkOutput), { reportInput: true });
 
 /** `unreadable` says why the fork's output did not read: such a fork gave no answer. */
 export interface ForkResult {
@@ -182,7 +182,7 @@ async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise
 }
 
 const ListedPrs = Schema.Array(
-  Schema.Struct({ number: Schema.Number, isDraft: Schema.Boolean, headRefOid: Schema.String }),
+  Schema.Struct({ number: Schema.Finite, isDraft: Schema.Boolean, headRefOid: Schema.String }),
 );
 
 async function prOf(deps: Deps, cwd: string, branch: string): Promise<PullRequest | null> {
