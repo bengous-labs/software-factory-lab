@@ -16,6 +16,7 @@
     "@stryker-mutator/core": "10.1.1",
     "@types/bun": "1.4.4",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "fast-check": "4.10.2",
     "knip": "6.44.1",
     "oxlint": "1.92.0",
     "oxlint-plugin-complexity": "4.1.0",

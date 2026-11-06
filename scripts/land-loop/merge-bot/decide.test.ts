@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
+import * as fc from "fast-check";
+
 import {
   afterPrincipalJudge,
   conflictingOf,
   decide,
   EMPTY_RECORD,
+  LAND_APPROVAL_LABEL,
   landApprovalCounts,
   openImportantOf,
   patchDeltaStart,
@@ -14,7 +17,7 @@ import {
   risen,
   storedOfRecord,
 } from "./decide.ts";
-import type { RoutingAnswer, Snapshot, Step, StoredRecord } from "./decide.ts";
+import type { RoutingAnswer, Snapshot, StateRecord, Step, StoredRecord } from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -567,5 +570,180 @@ describe("afterPrincipalJudge", () => {
     );
 
     expect(kinds({ ...READY, record })).not.toContain("principal-judge");
+  });
+});
+
+const PATCH = fc.constantFrom(P1, "patch-2");
+
+const HEAD = fc.constantFrom("h1", "h2");
+
+const ROUTING: fc.Arbitrary<RoutingAnswer> = fc.record(
+  {
+    land: fc.constantFrom("auto", "owner"),
+    review: fc.constantFrom("none", "light", "deep"),
+    secondRound: fc.boolean(),
+    reason: fc.string(),
+    model: fc.option(fc.string(), { nil: null }),
+    needsFable: fc.boolean(),
+  },
+  { requiredKeys: ["land", "review", "secondRound", "reason", "model"] },
+);
+
+/** A state record whose patches are `patch`, so that a snapshot's patch meets its entries. */
+const recordOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<StateRecord> =>
+  fc.record(
+    {
+      reviewedPatch: fc.option(patch, { nil: null }),
+      reviewedHead: fc.option(HEAD, { nil: null }),
+      reviewRounds: fc.integer({ min: 0, max: 2 }),
+      triage: fc.dictionary(patch, ROUTING),
+      landOkPatch: fc.option(patch, { nil: null }),
+      dequeued: fc.option(fc.record({ head: HEAD, reason: fc.string() }), { nil: null }),
+      bodyImportant: fc.dictionary(patch, fc.nat({ max: 3 })),
+      fable: fc.dictionary(patch, fc.record({ ok: fc.boolean(), reason: fc.string() })),
+      fableFailures: fc.dictionary(patch, fc.nat({ max: 3 })),
+    },
+    { requiredKeys: ["reviewedPatch", "reviewedHead", "reviewRounds", "triage", "landOkPatch", "dequeued"] },
+  );
+
+const LABELS = ["land:auto", "land:human", "review:none", "review:light", "review:deep", LAND_APPROVAL_LABEL];
+
+/** Mostly open PRs from the Owner's own branches, the ones `decide` does more than ignore. */
+const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
+  number: fc.nat(),
+  state: fc.oneof({ arbitrary: fc.constant("OPEN"), weight: 8 }, fc.constantFrom("CLOSED", "MERGED")),
+  sameRepository: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
+  openedByOwner: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
+  draft: fc.boolean(),
+  head: HEAD,
+  patch: PATCH,
+  ci: fc.constantFrom("success", "failure", null),
+  labels: fc.subarray(LABELS),
+  landApprovalByOwner: fc.boolean(),
+  openImportant: fc.nat({ max: 2 }),
+  devRed: fc.boolean(),
+  conflicting: fc.boolean(),
+  record: recordOf(PATCH),
+});
+
+const RUNS = { numRuns: 2000 };
+
+const MODEL_STEPS: ReadonlySet<Step["kind"]> = new Set(["route", "code-review", "principal-judge"]);
+
+const REVIEW_RANK: Readonly<Record<RoutingAnswer["review"], number>> = { none: 0, light: 1, deep: 2 };
+
+describe("the Merge bot's invariants", () => {
+  test("risen: the route is owner exactly when the PR carries land:human or the answer says owner", () => {
+    fc.assert(
+      fc.property(fc.subarray(LABELS), ROUTING, (labels, routing) => {
+        const expected = labels.includes("land:human") || routing.land === "owner" ? "owner" : "auto";
+
+        expect(risen(labels, routing).route).toBe(expected);
+      }),
+    );
+  });
+
+  test("risen: the depth is the deepest of the PR's review labels and the answer's", () => {
+    fc.assert(
+      fc.property(fc.subarray(LABELS), ROUTING, (labels, routing) => {
+        const onPr = (["none", "light", "deep"] as const).filter((depth) => labels.includes(`review:${depth}`));
+        const deepest = Math.max(REVIEW_RANK[routing.review], ...onPr.map((depth) => REVIEW_RANK[depth]));
+
+        expect(REVIEW_RANK[risen(labels, routing).depth]).toBe(deepest);
+      }),
+    );
+  });
+
+  test("a state record, stored then read back from its comment's JSON, is the same record", () => {
+    fc.assert(
+      fc.property(recordOf(fc.string()), (record) => {
+        expect(recordOfJson(JSON.stringify(storedOfRecord(record)))).toEqual(record);
+      }),
+    );
+  });
+
+  test("decide ignores exactly the PRs that are not open or not from the Owner's own branches", () => {
+    fc.assert(
+      fc.property(SNAPSHOT, (snapshot) => {
+        const ignored = snapshot.state !== "OPEN" || !snapshot.sameRepository || !snapshot.openedByOwner;
+
+        expect(decide(snapshot).kind).toBe(ignored ? "ignore" : "steps");
+      }),
+      RUNS,
+    );
+  });
+
+  test("a step that waits for a model's answer is the last, and no Land gate is posted before that answer", () => {
+    fc.assert(
+      fc.property(SNAPSHOT, (snapshot) => {
+        const decision = decide(snapshot);
+        const steps = decision.kind === "steps" ? decision.steps : [];
+        const waiting = steps.findIndex((step) => MODEL_STEPS.has(step.kind));
+
+        if (waiting !== -1) {
+          expect(waiting).toBe(steps.length - 1);
+          expect(steps.some((step) => step.kind === "land-gate")).toBe(false);
+        }
+      }),
+      RUNS,
+    );
+  });
+
+  test("at most one Land gate, followed by nothing but an auto-merge", () => {
+    fc.assert(
+      fc.property(SNAPSHOT, (snapshot) => {
+        const decision = decide(snapshot);
+        const steps = decision.kind === "steps" ? decision.steps : [];
+        const gates = steps.flatMap((step, index) => (step.kind === "land-gate" ? [index] : []));
+        const after = gates.length === 0 ? [] : steps.slice((gates[0] ?? 0) + 1).map((step) => step.kind);
+
+        expect(gates.length).toBeLessThanOrEqual(1);
+        expect(after.filter((kind) => kind !== "auto-merge")).toEqual([]);
+      }),
+      RUNS,
+    );
+  });
+
+  test("an auto-merge comes last, after a green Land gate, on a PR that is ready, green, unblocked and routed", () => {
+    fc.assert(
+      fc.property(SNAPSHOT, (snapshot) => {
+        const decision = decide(snapshot);
+        const steps = decision.kind === "steps" ? decision.steps : [];
+        const merge = steps.findIndex((step) => step.kind === "auto-merge");
+
+        if (merge !== -1) {
+          const gateStep = steps[merge - 1];
+
+          expect(merge).toBe(steps.length - 1);
+          expect(gateStep?.kind === "land-gate" ? gateStep.check.kind : undefined).toBe("success");
+          expect(snapshot).toMatchObject({
+            draft: false,
+            ci: "success",
+            openImportant: 0,
+            devRed: false,
+            conflicting: false,
+          });
+          expect(snapshot.record.dequeued?.head).not.toBe(snapshot.head);
+          expect(snapshot.record.triage[snapshot.patch]).toBeDefined();
+        }
+      }),
+      RUNS,
+    );
+  });
+
+  test("without the Owner's Land approval, an auto-merge needs no land:human on the PR and an auto Routing answer", () => {
+    fc.assert(
+      fc.property(SNAPSHOT, (snapshot) => {
+        const decision = decide(snapshot);
+        const merged = decision.kind === "steps" && decision.steps.some((step) => step.kind === "auto-merge");
+        const approved = snapshot.landApprovalByOwner && snapshot.labels.includes(LAND_APPROVAL_LABEL);
+
+        if (merged && !approved) {
+          expect(snapshot.labels).not.toContain("land:human");
+          expect(snapshot.record.triage[snapshot.patch]?.land).toBe("auto");
+        }
+      }),
+      RUNS,
+    );
   });
 });
