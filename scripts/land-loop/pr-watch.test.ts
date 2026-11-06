@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { AUTHOR_MARK } from "./thread.ts";
-import { endOf, type PrState, wakesOf } from "./pr-watch.ts";
+import { END_KEY, endOf, type PrState, readingOf, wakesOf } from "./pr-watch.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
@@ -97,5 +97,30 @@ describe("endOf", () => {
     expect(endOf(7, { ...OPEN, state: "MERGED", draft: true })).toBe("PR #7 landed. Stop watching.");
     expect(endOf(7, { ...OPEN, state: "CLOSED" })).toBe("PR #7 closed. Stop watching.");
     expect(endOf(7, OPEN)).toBeNull();
+  });
+});
+
+describe("readingOf", () => {
+  test("a PR watch armed again after its end line was printed ends at once and prints nothing", () => {
+    expect(readingOf(7, { ...OPEN, state: "MERGED" }, new Set([END_KEY]))).toEqual({ wakes: [], ends: true });
+    expect(readingOf(7, { ...OPEN, state: "CLOSED" }, new Set([END_KEY]))).toEqual({ wakes: [], ends: true });
+  });
+
+  test("a landed PR prints its end line, and only it, then ends", () => {
+    const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
+
+    expect(readingOf(7, { ...OPEN, state: "MERGED", checks }, new Set())).toEqual({
+      wakes: [{ key: END_KEY, line: "PR #7 landed. Stop watching." }],
+      ends: true,
+    });
+  });
+
+  test("an open PR prints only the Wakes not printed yet, and goes on", () => {
+    const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
+
+    expect(readingOf(7, { ...OPEN, draft: true, checks }, new Set([`check:validate:${HEAD}`]))).toEqual({
+      wakes: [{ key: `draft:${HEAD}`, line: "PR #7 is a draft again at c0ffee1: fix or answer the findings, then stop." }],
+      ends: false,
+    });
   });
 });

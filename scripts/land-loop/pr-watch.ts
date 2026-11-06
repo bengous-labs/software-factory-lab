@@ -117,6 +117,17 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
   return wakes;
 }
 
+/**
+ * What one reading prints, each line `seen` does not hold yet, and whether the PR watch ends. A landed
+ * or closed PR ends it at once, even for a PR watch armed again after its end line was printed.
+ */
+export function readingOf(pr: number, state: PrState, seen: ReadonlySet<string>): { readonly wakes: readonly Wake[]; readonly ends: boolean } {
+  const end = endOf(pr, state);
+  const wakes = end === null ? wakesOf(pr, state) : [{ key: END_KEY, line: end }];
+
+  return { wakes: wakes.filter((wake) => !seen.has(wake.key)), ends: end !== null };
+}
+
 async function read(runner: Run, pr: number): Promise<PrState> {
   const cwd = process.cwd();
   const view = JSON.parse(
@@ -194,24 +205,21 @@ if (import.meta.main) {
   const seenFile = join(stateDir, `watch-${pr}.json`);
   const seen = new Set<string>(existsSync(seenFile) ? (JSON.parse(readFileSync(seenFile, "utf8")) as string[]) : []);
 
-  const print = (key: string, line: string): boolean => {
-    if (seen.has(key)) return false;
+  const print = (key: string, line: string): void => {
+    if (seen.has(key)) return;
 
     seen.add(key);
     writeFileSync(seenFile, JSON.stringify([...seen]));
     console.log(line);
-
-    return true;
   };
 
   for (;;) {
     try {
-      const state = await read(run, pr);
-      const end = endOf(pr, state);
+      const reading = readingOf(pr, await read(run, pr), seen);
 
-      if (end !== null && print(END_KEY, end)) process.exit(0);
+      for (const wake of reading.wakes) print(wake.key, wake.line);
 
-      for (const wake of wakesOf(pr, state)) print(wake.key, wake.line);
+      if (reading.ends) process.exit(0);
     } catch (error) {
       console.error(`pr-watch: ${error instanceof Error ? error.message : String(error)}`);
     }
