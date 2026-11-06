@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import * as fc from "fast-check";
+
 import { routingRulesOf } from "./routing-rules.ts";
 
 describe("routingRulesOf", () => {
@@ -50,5 +52,43 @@ describe("changes to the Land loop's own code", () => {
       review: "deep",
       needsFable: false,
     });
+  });
+});
+
+const RISKY_DIRECTORIES = [".github", "scripts", ".claude", "app/src/store"];
+
+const RISKY_FILES = ["REVIEW.md", "AGENTS.md", "CLAUDE.md", "package.json", "bun.lock", "mise.toml", "tsconfig.json"];
+
+const SEGMENT = fc.stringMatching(/^[\w.-]{1,12}$/u).filter((segment) => segment !== "." && segment !== "..");
+
+const RISKY_PATH = fc.oneof(
+  fc.constantFrom(...RISKY_FILES),
+  fc
+    .tuple(fc.constantFrom(...RISKY_DIRECTORIES), fc.array(SEGMENT, { minLength: 1, maxLength: 4 }))
+    .map(([directory, segments]) => [directory, ...segments].join("/")),
+);
+
+const ANY_PATH = fc.array(SEGMENT, { minLength: 1, maxLength: 4 }).map((segments) => segments.join("/"));
+
+describe("a risky path", () => {
+  test("never lands auto, whatever else the change touches, its size or its messages", () => {
+    fc.assert(
+      fc.property(
+        fc.record({
+          risky: RISKY_PATH,
+          others: fc.array(ANY_PATH),
+          at: fc.nat(),
+          lines: fc.integer({ min: 0, max: 2000 }),
+          messages: fc.array(fc.string()),
+        }),
+        ({ risky, others, at, lines, messages }) => {
+          const paths = others.toSpliced(at % (others.length + 1), 0, risky);
+          const routing = routingRulesOf({ paths, lines, messages });
+
+          expect(routing).not.toBeNull();
+          expect(routing?.land).toBe("owner");
+        },
+      ),
+    );
   });
 });

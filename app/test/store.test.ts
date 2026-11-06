@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import * as fc from "fast-check";
+
 import { run } from "../src/cli.ts";
 import { FORMAT_VERSION, load, parse, save, serialize } from "../src/store/store.ts";
 import { TaskError } from "../src/task.ts";
@@ -236,5 +238,24 @@ describe("clear", () => {
 
     expect(run(["clear"], path)).toBe("cleared 1");
     expect(run(["list", "--all"], path)).toBe("[ ] #2 b");
+  });
+});
+
+const CREATED_AT = fc
+  .date({ min: new Date("1000-01-01T00:00:00.000Z"), max: new Date("9999-12-31T23:59:59.999Z"), noInvalidDate: true })
+  .map((date) => date.toISOString());
+
+const TASK = fc.record(
+  { id: fc.integer(), title: fc.string({ unit: "binary" }), done: fc.boolean(), createdAt: CREATED_AT },
+  { requiredKeys: ["id", "title", "done"] },
+);
+
+describe("the store's round trip", () => {
+  test("any task list, serialized then parsed, reads back the same", () => {
+    fc.assert(
+      fc.property(fc.array(TASK), (tasks) => {
+        expect(parse(serialize(tasks), "f.json")).toEqual(tasks);
+      }),
+    );
   });
 });

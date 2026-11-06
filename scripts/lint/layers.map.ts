@@ -45,6 +45,7 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["scripts/hooks/*.ts", at("tooling", "entry")],
   ["scripts/gates/*.ts", at("tooling", "tooling")],
   ["scripts/lint/*.ts", at("tooling", "tooling")],
+  ["scripts/ci/fast-check-seed.ts", at("tooling", "test")],
   ["scripts/ci/*.ts", at("tooling", "tooling")],
   ["scripts/lab/*.ts", at("tooling", "tooling")],
   ["*.config.ts", at("tooling", "tooling")],
@@ -74,7 +75,7 @@ export const LAYER_IMPORTS: Readonly<Record<Layer, readonly Layer[]>> = {
 /** What a type-only import may reach besides `LAYER_IMPORTS`: types of the pure layers load no code. */
 export const TYPE_ONLY_IMPORTS: readonly Layer[] = ["domain", "ports", "application"];
 
-export type External = "effect" | "node" | "bun" | "bun-test" | "agent-sdk" | "oxlint";
+export type External = "effect" | "node" | "bun" | "bun-test" | "agent-sdk" | "oxlint" | "stryker" | "fast-check";
 
 /** Bare specifiers, by exact name or by prefix ending in `/` or `:`. A bare specifier no entry names is an error. */
 export const EXTERNALS: ReadonlyArray<readonly [specifier: string, external: External]> = [
@@ -86,6 +87,8 @@ export const EXTERNALS: ReadonlyArray<readonly [specifier: string, external: Ext
   ["@anthropic-ai/claude-agent-sdk", "agent-sdk"],
   ["oxlint", "oxlint"],
   ["@oxlint/plugins", "oxlint"],
+  ["@stryker-mutator/core", "stryker"],
+  ["fast-check", "fast-check"],
 ];
 
 /** The bare specifiers each layer may import. */
@@ -95,8 +98,8 @@ export const EXTERNAL_IMPORTS: Readonly<Record<Layer, readonly External[]>> = {
   application: ["effect"],
   infra: ["effect", "node", "bun", "agent-sdk"],
   entry: ["effect", "node", "bun", "agent-sdk"],
-  tooling: ["effect", "node", "bun", "oxlint"],
-  test: ["effect", "node", "bun", "bun-test", "agent-sdk", "oxlint"],
+  tooling: ["effect", "node", "bun", "oxlint", "stryker"],
+  test: ["effect", "node", "bun", "bun-test", "agent-sdk", "oxlint", "fast-check"],
 };
 
 /** The only `effect` modules the domain may import as values; a type-only import may name any. */

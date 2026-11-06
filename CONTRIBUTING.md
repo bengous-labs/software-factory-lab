@@ -18,6 +18,12 @@ bun check
 
 `check` runs the typecheck (`bun run typecheck`), the lint (`bun run lint`), the format check (`bun run format:check`), the gates on lint suppressions, typecheck coverage and budget exceptions (`bun run gates`), the dead code check (`bun run knip`: unused files, exports and dependencies), and then the tests (`bun test`). It must pass. `bun fmt` formats the files the format check reads.
 
+CI's `mutation` job mutates each module `stryker.config.ts` lists whose lines or tests your branch changes, and fails on a mutant that survives on a changed line, or one the tests killed on `origin/dev` that survives now. Run it before you push:
+
+```bash
+bun scripts/ci/mutation.ts run
+```
+
 ## Where things live
 
 - `app/src/commands/`: one file per command. Each file holds a pure function over the task list.
