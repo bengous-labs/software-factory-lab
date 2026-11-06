@@ -3,6 +3,8 @@
  * posts from it. The Judge runs with no tool at all; it reads only what the prompt carries.
  */
 
+import { Result, Schema } from "effect";
+
 import type { Ask } from "../lib/ask.ts";
 import type { ReviewDepth } from "../merge-bot/decide.ts";
 
@@ -115,26 +117,26 @@ export function promptOf(guide: string, diff: string, reviewRound: 1 | 2, reject
   ].join("\n");
 }
 
-interface SchemaAnswer {
-  readonly findings?: Array<{
-    readonly file: string;
-    readonly line: number | null;
-    readonly severity: Severity;
-    readonly summary: string;
-    readonly failure_scenario: string;
-  }>;
-}
+/** The answer SCHEMA describes, decoded from the call's structured output. */
+export const ReviewAnswer = Schema.Struct({
+  findings: Schema.Array(
+    Schema.Struct({
+      file: Schema.String,
+      line: Schema.NullOr(Schema.Int),
+      severity: Schema.Literals(["important", "nit", "pre_existing"]),
+      summary: Schema.String,
+      failure_scenario: Schema.String,
+    }),
+  ),
+});
 
-/** The findings in the schema's answer, Nits capped; null when it does not read. */
-export function findingsOf(structured: unknown): readonly Finding[] | null {
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: the SDK checked structured against SCHEMA; the checks below refuse what is not a list of objects.
-  const raw = (structured as SchemaAnswer | null)?.findings;
+export type ReviewAnswer = typeof ReviewAnswer.Type;
 
-  if (!Array.isArray(raw) || !raw.every((finding: unknown) => typeof finding === "object" && finding !== null)) {
-    return null;
-  }
+const decodeReviewAnswer = Schema.decodeUnknownResult(ReviewAnswer);
 
-  const findings = raw.map((finding) => ({
+/** The findings of the answer, Nits capped. */
+export function findingsOf(answer: ReviewAnswer): readonly Finding[] {
+  const findings = answer.findings.map((finding) => ({
     file: finding.file,
     line: finding.line,
     severity: finding.severity,
@@ -196,7 +198,11 @@ export async function codeReview(
     return { findings: null, costUsd, model, ms, error: answer.error };
   }
 
-  const findings = findingsOf(answer.structured);
+  const decoded = decodeReviewAnswer(answer.structured);
 
-  return { findings, costUsd, model, ms, error: findings === null ? "the answer does not read" : null };
+  if (Result.isFailure(decoded)) {
+    return { findings: null, costUsd, model, ms, error: `the answer does not read: ${decoded.failure.message}` };
+  }
+
+  return { findings: findingsOf(decoded.success), costUsd, model, ms, error: null };
 }

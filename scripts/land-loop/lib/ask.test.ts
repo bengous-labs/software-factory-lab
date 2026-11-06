@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Options, PreToolUseHookInput, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  HookCallback,
+  Options,
+  PreToolUseHookInput,
+  SDKMessage,
+  SDKResultMessage,
+} from "@anthropic-ai/claude-agent-sdk";
+import type { Schema } from "effect";
 
 import { answerOf, askWith, modelOf, optionsOf, refuseTools, STRUCTURED_OUTPUT, toolDecision } from "./ask.ts";
 import type { Answer, Question, Stream } from "./ask.ts";
@@ -19,10 +26,10 @@ const preToolUse = (toolName: string): PreToolUseHookInput => ({
   cwd: "/repo",
 });
 
-const decisionOf = (toolName: string): Promise<unknown> =>
+const decisionOf = (toolName: string): ReturnType<HookCallback> =>
   refuseTools(preToolUse(toolName), "t1", { signal: new AbortController().signal });
 
-function result(fields: Record<string, unknown>): SDKResultMessage {
+function result(fields: Readonly<Record<string, Schema.Json>>): SDKResultMessage {
   // oxlint-disable-next-line anti-slop/no-chained-type-assertions, typescript/no-unsafe-type-assertion -- SAFETY: a test fixture holding only the fields answerOf reads.
   return {
     type: "result",

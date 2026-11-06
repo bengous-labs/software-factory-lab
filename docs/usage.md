@@ -24,46 +24,52 @@ Each command reads and writes the whole file. Two `todo` commands run at the sam
 
 When `todo` cannot read the task file, the command stops before it writes. The file keeps its content.
 
-The message names the file path. It is `TODO_FILE`, or `todo.json` when `TODO_FILE` is not set.
+The message names the file path. It is `TODO_FILE`, or `todo.json` when `TODO_FILE` is not set. It then says what was expected and, on the next line, where in the file: `at ["tasks"][0]["done"]` is the `done` field of the first task. `todo` exits with status 1.
 
 ### The file is not valid JSON
 
-`todo` does not print a `todo:` message. It prints a Bun `SyntaxError` stack trace that names the JSON error, and it exits with status 1.
+```text
+todo: <path>: Expected a valid JSON string
+```
 
 Open the file and fix the syntax, for example a missing comma or quote. To start again with an empty list, move the file aside. The next `add` creates a new file.
 
-### The file has another format version
-
-`todo` prints this message:
+### The file is not an object
 
 ```text
-todo: <path>: format version <found>, expected 1
+todo: <path>: Expected object
 ```
 
-`<found>` is the `version` value in the file. It shows `undefined` when the file has no `version` field, as for a JSON array.
+The file holds a JSON value that is not an object, such as `[]`, `null`, `5` or `"text"`. Replace the content with a file in the format below.
+
+### The file has another format version
+
+```text
+todo: <path>: Expected 1 | 2
+  at ["version"]
+```
+
+The `version` value is neither 1 nor 2. When the file has no `version` field, the first line reads `Missing key`.
 
 The file was written by another version of `todo`, or it is not a task file. Restore the file from a backup or from version control. Changing the `version` value by hand does not convert the tasks.
 
 ### The tasks do not match the format
 
-`todo` prints this message:
-
 ```text
-todo: <path>: tasks is not a list of tasks
+todo: <path>: Missing key
+  at ["tasks"][0]["done"]
 ```
 
-The file has no `tasks` array, or one task lacks a field of the right type. Each task needs a numeric `id`, a string `title` and a boolean `done`:
+The file has no `tasks` array, or a task lacks a field or holds one of the wrong type. Each task needs a numeric `id`, a string `title` and a boolean `done`. A version 2 task may carry `createdAt`, the time it was added as an ISO timestamp such as `2026-11-05T09:00:00.000Z`; a version 1 task carries none:
 
 ```json
 {
-  "version": 1,
-  "tasks": [{ "id": 1, "title": "write the spec", "done": false }]
+  "version": 2,
+  "tasks": [{ "id": 1, "title": "write the spec", "done": false, "createdAt": "2026-11-05T09:00:00.000Z" }]
 }
 ```
 
-### The file is not an object
-
-`todo` prints `todo: <path>: not an object` when the file holds a JSON value that is not an object, such as `null`, `5` or `"text"`. Replace the content with a file in the format above.
+A task may carry other keys, such as a hand-added `priority`; `todo` keeps them when it saves the file.
 
 ## Two task lists
 

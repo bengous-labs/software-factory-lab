@@ -13,6 +13,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { Schema } from "effect";
+
+import { decodeJson } from "../../lib/json.ts";
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
 import {
@@ -24,7 +27,7 @@ import {
   rejectedOf,
   severityOfBody,
 } from "../review/code-review.ts";
-import type { Finding, ReviewThread } from "../review/code-review.ts";
+import type { Finding } from "../review/code-review.ts";
 import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf as principalJudgePrompt } from "../review/principal-judge.ts";
 import { routingJudge } from "../routing/routing-judge.ts";
 import { routingRulesOf } from "../routing/routing-rules.ts";
@@ -80,43 +83,138 @@ const gh = (env: Env, args: readonly string[], stdin?: string): Promise<string> 
 const git = async (env: Env, args: readonly string[]): Promise<string> =>
   (await checked(run, ["git", ...args], { cwd: env.cwd })).trim();
 
-const api = async <T>(env: Env, path: string, method = "GET", body?: Readonly<Record<string, unknown>>): Promise<T> => {
-  const out = await gh(
+const call = (env: Env, method: string, path: string, body?: Schema.JsonObject): Promise<string> =>
+  gh(
     env,
     ["api", "-X", method, path, ...(body === undefined ? [] : ["--input", "-"])],
     body === undefined ? undefined : JSON.stringify(body),
   );
 
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh prints the JSON of the endpoint the caller names, and the caller types it as T.
-  return (out.trim() === "" ? {} : JSON.parse(out)) as T;
+/** The endpoint at `path`, decoded by `schema`. */
+const api = async <S extends Schema.ConstraintDecoder<unknown>>(
+  env: Env,
+  schema: S,
+  path: string,
+): Promise<S["Type"]> => decodeJson(schema, `gh api ${path}`, await call(env, "GET", path));
+
+/** Sends `body` to the endpoint at `path`; what it answers is not read. */
+const send = async (env: Env, method: string, path: string, body?: Schema.JsonObject): Promise<void> => {
+  await call(env, method, path, body);
 };
 
-const graphql = <T>(env: Env, query: string, variables: Record<string, string> = {}): Promise<T> =>
-  api<T>(env, "graphql", "POST", { query, variables });
+const graphql = async <S extends Schema.ConstraintDecoder<unknown>>(
+  env: Env,
+  schema: S,
+  query: string,
+  variables: Readonly<Record<string, string>>,
+): Promise<S["Type"]> => decodeJson(schema, "gh api graphql", await call(env, "POST", "graphql", { query, variables }));
 
-interface PullJson {
-  number: number;
-  node_id: string;
-  state: "open" | "closed";
-  merged: boolean;
-  draft: boolean;
-  mergeable: boolean | null;
-  mergeable_state: string;
-  user: { login: string };
-  labels: Array<{ name: string }>;
-  head: { sha: string; ref: string; repo: { full_name: string } | null };
-  base: { ref: string };
+/** Runs a GraphQL mutation; what it answers is not read. */
+const mutate = (env: Env, query: string, variables: Readonly<Record<string, string>>): Promise<void> =>
+  send(env, "POST", "graphql", { query, variables });
+
+/** `repos/<repo>/pulls/<n>`, as far as the Merge bot reads it. */
+export const Pull = Schema.Struct({
+  number: Schema.Finite,
+  node_id: Schema.String,
+  state: Schema.Literals(["open", "closed"]),
+  merged: Schema.Boolean,
+  draft: Schema.Boolean,
+  mergeable: Schema.NullOr(Schema.Boolean),
+  mergeable_state: Schema.String,
+  user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+  labels: Schema.Array(Schema.Struct({ name: Schema.String })),
+  head: Schema.Struct({
+    sha: Schema.String,
+    ref: Schema.String,
+    repo: Schema.NullOr(Schema.Struct({ full_name: Schema.String })),
+  }),
+  base: Schema.Struct({ ref: Schema.String }),
+});
+
+type Pull = typeof Pull.Type;
+
+const Login = Schema.Struct({ login: Schema.String });
+
+const ThreadJson = Schema.Struct({
+  id: Schema.String,
+  isResolved: Schema.Boolean,
+  path: Schema.String,
+  line: Schema.NullOr(Schema.Finite),
+  comments: Schema.Struct({
+    nodes: Schema.Array(Schema.Struct({ author: Schema.NullOr(Login), body: Schema.String })),
+  }),
+});
+
+type ThreadJson = typeof ThreadJson.Type;
+
+/** The review threads query's answer. */
+export const ReviewThreads = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      pullRequest: Schema.Struct({ reviewThreads: Schema.Struct({ nodes: Schema.Array(ThreadJson) }) }),
+    }),
+  }),
+});
+
+/** `repos/<repo>/issues/<n>/comments`, as far as the Merge bot reads it. */
+export const IssueComments = Schema.Array(
+  Schema.Struct({ id: Schema.Finite, user: Schema.NullOr(Login), body: Schema.String }),
+);
+
+/** `repos/<repo>/commits/<sha>/check-runs`, as far as the Merge bot reads it. */
+export const CheckRuns = Schema.Struct({
+  check_runs: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      status: Schema.String,
+      conclusion: Schema.NullOr(Schema.String),
+      app: Schema.NullOr(Schema.Struct({ slug: Schema.String })),
+    }),
+  ),
+});
+
+/** `repos/<repo>/issues/<n>/events`, as far as the Merge bot reads it. */
+export const IssueEvents = Schema.Array(
+  Schema.Struct({
+    event: Schema.String,
+    label: Schema.optionalKey(Schema.NullOr(Schema.Struct({ name: Schema.String }))),
+    actor: Schema.NullOr(Login),
+    created_at: Schema.String,
+  }),
+);
+
+/** Whether the last Land approval label put on the PR was put by `owner` after its head was pushed. */
+export function landApprovalByOwnerOf(
+  events: typeof IssueEvents.Type,
+  owner: string,
+  headPushedAt: string | null,
+): boolean {
+  const last = events.filter((event) => event.event === "labeled" && event.label?.name === LAND_APPROVAL_LABEL).at(-1);
+
+  return landApprovalCounts(last?.actor?.login === owner, last?.created_at ?? null, headPushedAt);
 }
 
-interface ThreadJson extends ReviewThread {
-  id: string;
-}
+/** `repos/<repo>/commits/<sha>/check-suites`, as far as the Merge bot reads it. */
+export const CheckSuites = Schema.Struct({ check_suites: Schema.Array(Schema.Struct({ created_at: Schema.String })) });
 
-async function threadsOf(env: Env, pr: number): Promise<ThreadJson[]> {
+/** `repos/<repo>/actions/runs`, as far as the Merge bot reads it. */
+export const WorkflowRuns = Schema.Struct({
+  workflow_runs: Schema.Array(Schema.Struct({ conclusion: Schema.NullOr(Schema.String) })),
+});
+
+/** `repos/<repo>/commits/<sha>/pulls`, as far as the Merge bot reads it. */
+export const CommitPulls = Schema.Array(Schema.Struct({ number: Schema.Finite, state: Schema.String }));
+
+/** `gh pr list --json number`. */
+export const ListedPrs = Schema.Array(Schema.Struct({ number: Schema.Finite }));
+
+async function threadsOf(env: Env, pr: number): Promise<readonly ThreadJson[]> {
   const [owner, name] = env.repo.split("/");
 
-  const out = await graphql<{ data: { repository: { pullRequest: { reviewThreads: { nodes: ThreadJson[] } } } } }>(
+  const out = await graphql(
     env,
+    ReviewThreads,
     `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{author{login} body}}}}}}}`,
     { owner: owner ?? "", name: name ?? "" },
   );
@@ -128,25 +226,22 @@ async function threadsOf(env: Env, pr: number): Promise<ThreadJson[]> {
 const bare = (login: string): string => login.replace(/\[bot\]$/u, "");
 
 /** The PR from the single-PR endpoint, read again up to three times while GitHub has not computed its mergeability yet. */
-async function pullOf(env: Env, number: number): Promise<PullJson> {
-  let pr = await api<PullJson>(env, `repos/${env.repo}/pulls/${number}`);
+async function pullOf(env: Env, number: number): Promise<Pull> {
+  let pr = await api(env, Pull, `repos/${env.repo}/pulls/${number}`);
 
   for (let tries = 0; tries < 3 && pr.state === "open" && pr.mergeable === null; tries += 1) {
     await Bun.sleep(5000);
-    pr = await api<PullJson>(env, `repos/${env.repo}/pulls/${number}`);
+    pr = await api(env, Pull, `repos/${env.repo}/pulls/${number}`);
   }
 
   return pr;
 }
 
 async function recordOf(env: Env, pr: number): Promise<{ id: number | null; record: StateRecord }> {
-  const comments = await api<Array<{ id: number; user: { login: string }; body: string }>>(
-    env,
-    `repos/${env.repo}/issues/${pr}/comments?per_page=100`,
-  );
+  const comments = await api(env, IssueComments, `repos/${env.repo}/issues/${pr}/comments?per_page=100`);
 
   const mine = comments.find(
-    (comment) => comment.user.login === env.appLogin && comment.body.includes(MERGE_BOT_STATE_MARKER),
+    (comment) => comment.user?.login === env.appLogin && comment.body.includes(MERGE_BOT_STATE_MARKER),
   );
 
   if (mine === undefined) {
@@ -162,9 +257,9 @@ async function writeRecord(env: Env, pr: number, id: number | null, record: Stat
   const body = `Merge bot state for this PR. Do not edit.\n\n${MERGE_BOT_STATE_MARKER} ${JSON.stringify(storedOfRecord(record))} -->`;
 
   if (id === null) {
-    await api(env, `repos/${env.repo}/issues/${pr}/comments`, "POST", { body });
+    await send(env, "POST", `repos/${env.repo}/issues/${pr}/comments`, { body });
   } else {
-    await api(env, `repos/${env.repo}/issues/comments/${id}`, "PATCH", { body });
+    await send(env, "PATCH", `repos/${env.repo}/issues/comments/${id}`, { body });
   }
 }
 
@@ -173,7 +268,7 @@ interface Range {
   readonly head: string;
 }
 
-async function rangeOf(env: Env, pr: PullJson): Promise<Range> {
+async function rangeOf(env: Env, pr: Pull): Promise<Range> {
   await git(env, [
     "fetch",
     "--quiet",
@@ -199,40 +294,30 @@ async function patchOf(env: Env, range: Range): Promise<string> {
 
 async function snapshotOf(
   env: Env,
-  pr: PullJson,
+  pr: Pull,
   range: Range,
   record: StateRecord,
   threads: readonly ThreadJson[],
 ): Promise<Snapshot> {
-  const runs = await api<{
-    check_runs: Array<{ name: string; status: string; conclusion: string | null; app: { slug: string } }>;
-  }>(env, `repos/${env.repo}/commits/${pr.head.sha}/check-runs?check_name=validate`);
+  const runs = await api(env, CheckRuns, `repos/${env.repo}/commits/${pr.head.sha}/check-runs?check_name=validate`);
 
-  const validate = runs.check_runs.find((check) => check.app.slug === "github-actions");
+  const validate = runs.check_runs.find((check) => check.app?.slug === "github-actions");
   const labels = pr.labels.map((label) => label.name);
   let landApprovalByOwner = false;
 
   if (labels.includes(LAND_APPROVAL_LABEL)) {
-    const events = await api<
-      Array<{ event: string; label?: { name: string }; actor: { login: string }; created_at: string }>
-    >(env, `repos/${env.repo}/issues/${pr.number}/events?per_page=100`);
-
-    const last = events
-      .filter((event) => event.event === "labeled" && event.label?.name === LAND_APPROVAL_LABEL)
-      .at(-1);
+    const events = await api(env, IssueEvents, `repos/${env.repo}/issues/${pr.number}/events?per_page=100`);
 
     // The head's first check suite is created when it is pushed: a Land approval put before that was given for another head.
-    const suites = await api<{ check_suites: Array<{ created_at: string }> }>(
-      env,
-      `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`,
-    );
+    const suites = await api(env, CheckSuites, `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`);
 
     const pushedAt = suites.check_suites.map((suite) => suite.created_at).toSorted()[0] ?? null;
-    landApprovalByOwner = landApprovalCounts(last?.actor.login === env.owner, last?.created_at ?? null, pushedAt);
+    landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, pushedAt);
   }
 
-  const devRuns = await api<{ workflow_runs: Array<{ conclusion: string | null }> }>(
+  const devRuns = await api(
     env,
+    WorkflowRuns,
     `repos/${env.repo}/actions/runs?branch=dev&event=push&status=completed&per_page=1`,
   );
 
@@ -240,7 +325,7 @@ async function snapshotOf(
     number: pr.number,
     state: pr.merged ? "MERGED" : pr.state === "open" ? "OPEN" : "CLOSED",
     sameRepository: pr.head.repo?.full_name === env.repo,
-    openedByOwner: pr.user.login === env.owner,
+    openedByOwner: pr.user?.login === env.owner,
     draft: pr.draft,
     head: pr.head.sha,
     patch: await patchOf(env, range),
@@ -271,22 +356,22 @@ async function setCheck(env: Env, name: string, head: string, check: CheckState)
       ? { name, head_sha: head, status: "in_progress", output }
       : { name, head_sha: head, status: "completed", conclusion: check.kind, output };
 
-  await api(env, `repos/${env.repo}/check-runs`, "POST", body);
+  await send(env, "POST", `repos/${env.repo}/check-runs`, body);
 }
 
 /** Sets the `land:*` and `review:*` labels. Their names are external: open PRs carry them, so the strings stay. */
-async function setLabels(env: Env, pr: PullJson, landRoute: LandRoute, depth: ReviewDepth): Promise<void> {
+async function setLabels(env: Env, pr: Pull, landRoute: LandRoute, depth: ReviewDepth): Promise<void> {
   const wanted = [`land:${storedLandRouteOf(landRoute)}`, `review:${depth}`];
   const current = pr.labels.map((label) => label.name);
   const stale = current.filter((name) => /^(land|review):/u.test(name) && !wanted.includes(name));
   const missing = wanted.filter((name) => !current.includes(name));
 
   for (const name of stale) {
-    await api(env, `repos/${env.repo}/issues/${pr.number}/labels/${encodeURIComponent(name)}`, "DELETE");
+    await send(env, "DELETE", `repos/${env.repo}/issues/${pr.number}/labels/${encodeURIComponent(name)}`);
   }
 
   if (missing.length > 0) {
-    await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: missing });
+    await send(env, "POST", `repos/${env.repo}/issues/${pr.number}/labels`, { labels: missing });
   }
 }
 
@@ -360,7 +445,7 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
 /** Posts the review; answers how many Important findings went out with no thread to resolve. */
 async function postFindings(
   env: Env,
-  pr: PullJson,
+  pr: Pull,
   findings: readonly Finding[],
   reviewRound: 1 | 2,
   by: string,
@@ -380,7 +465,7 @@ async function postFindings(
       : `${body}\n\n${loose.map((finding) => `- \`${finding.file}\`: ${commentOf(finding)}`).join("\n")}`;
 
   try {
-    await api(env, `repos/${env.repo}/pulls/${pr.number}/reviews`, "POST", {
+    await send(env, "POST", `repos/${env.repo}/pulls/${pr.number}/reviews`, {
       commit_id: pr.head.sha,
       event: "COMMENT",
       body: withLoose,
@@ -399,7 +484,7 @@ async function postFindings(
       .map((finding) => `- \`${finding.file}:${finding.line ?? "?"}\` ${commentOf(finding)}`)
       .join("\n");
 
-    await api(env, `repos/${env.repo}/pulls/${pr.number}/reviews`, "POST", {
+    await send(env, "POST", `repos/${env.repo}/pulls/${pr.number}/reviews`, {
       commit_id: pr.head.sha,
       event: "COMMENT",
       body: `${body}\n\n${all}\n\n(inline posting failed: ${String(error).slice(0, 200)})`,
@@ -412,7 +497,7 @@ async function postFindings(
 // oxlint-disable-next-line typescript/consistent-return -- the switch covers every Step kind, so no path reaches the end.
 async function perform(
   env: Env,
-  pr: PullJson,
+  pr: Pull,
   range: Range,
   recordId: number | null,
   record: StateRecord,
@@ -455,7 +540,7 @@ async function perform(
 
       if (result.findings === null) {
         await setCheck(env, REVIEW_CHECK, pr.head.sha, { kind: "failure", summary: "The Code review failed twice." });
-        await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: [NEEDS_OWNER_LABEL] });
+        await send(env, "POST", `repos/${env.repo}/issues/${pr.number}/labels`, { labels: [NEEDS_OWNER_LABEL] });
 
         return null;
       }
@@ -483,11 +568,9 @@ async function perform(
       await writeRecord(env, pr.number, recordId, next);
 
       if (important) {
-        await graphql(
-          env,
-          "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}",
-          { id: pr.node_id },
-        );
+        await mutate(env, "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}", {
+          id: pr.node_id,
+        });
       }
 
       return next;
@@ -512,7 +595,7 @@ async function perform(
     }
 
     case "needs-owner": {
-      await api(env, `repos/${env.repo}/issues/${pr.number}/labels`, "POST", { labels: [NEEDS_OWNER_LABEL] });
+      await send(env, "POST", `repos/${env.repo}/issues/${pr.number}/labels`, { labels: [NEEDS_OWNER_LABEL] });
 
       return record;
     }
@@ -524,7 +607,7 @@ async function perform(
     }
 
     case "remove-land-approval": {
-      await api(env, `repos/${env.repo}/issues/${pr.number}/labels/${LAND_APPROVAL_LABEL}`, "DELETE");
+      await send(env, "DELETE", `repos/${env.repo}/issues/${pr.number}/labels/${LAND_APPROVAL_LABEL}`);
 
       return record;
     }
@@ -550,7 +633,7 @@ async function perform(
           : `${result.verdict.ok ? "OK" : "NOT OK"}. ${result.verdict.reason}`;
 
       log(`#${pr.number} principal judge ${step.patch.slice(0, 8)} by ${by}: ${said}`);
-      await api(env, `repos/${env.repo}/issues/${pr.number}/comments`, "POST", {
+      await send(env, "POST", `repos/${env.repo}/issues/${pr.number}/comments`, {
         body: `Principal judge (${by}): ${said}`,
       });
 
@@ -559,7 +642,7 @@ async function perform(
 
     case "auto-merge": {
       try {
-        await graphql(
+        await mutate(
           env,
           "mutation($id:ID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:MERGE}){clientMutationId}}",
           { id: pr.node_id },
@@ -641,17 +724,16 @@ async function numbersOf(env: Env): Promise<number[]> {
 
   if (event === "workflow_run") {
     const sha = required("RUN_HEAD_SHA");
-    const listed = await api<Array<{ number: number; state: string }>>(env, `repos/${env.repo}/commits/${sha}/pulls`);
+    const listed = await api(env, CommitPulls, `repos/${env.repo}/commits/${sha}/pulls`);
 
     return listed.filter((found) => found.state === "open").map((found) => found.number);
   }
 
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh pr list --json number prints a list of { number }.
-  const open = JSON.parse(
+  const open = decodeJson(
+    ListedPrs,
+    "gh pr list",
     await gh(env, ["pr", "list", "--repo", env.repo, "--state", "open", "--json", "number"]),
-  ) as Array<{
-    number: number;
-  }>;
+  );
 
   return open.map((found) => found.number);
 }

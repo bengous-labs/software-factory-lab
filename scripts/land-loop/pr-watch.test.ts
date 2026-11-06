@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { END_KEY, endOf, readingOf, wakesOf } from "./pr-watch.ts";
+import { decodeJson } from "../lib/json.ts";
+import { END_KEY, endOf, prStateOf, readingOf, SeenKeys, wakesOf } from "./pr-watch.ts";
 import type { PrState } from "./pr-watch.ts";
 import { AUTHOR_MARK } from "./thread.ts";
 
@@ -166,5 +167,89 @@ describe("readingOf", () => {
       ],
       ends: false,
     });
+  });
+});
+
+const threads = (nodes: readonly object[]): string =>
+  JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } });
+
+describe("prStateOf", () => {
+  const view = JSON.stringify({ headRefOid: HEAD, isDraft: true, state: "OPEN" });
+
+  test("reads the view, the checks, each conversation line and the threads gh prints", () => {
+    const checks = JSON.stringify([{ bucket: "fail", link: "https://ci/1", name: "validate" }]);
+
+    const conversation = [
+      JSON.stringify({ id: "11", author: "bengous-labs-agents[bot]", body: "state" }),
+      JSON.stringify({ id: "12", author: "owner", body: "hi" }),
+      "",
+    ].join("\n");
+
+    const thread = {
+      id: "T1",
+      isResolved: false,
+      path: "a.ts",
+      line: null,
+      comments: {
+        nodes: [
+          { id: "C1", author: null, body: "finding" },
+          { id: "C2", author: { login: "owner" }, body: "reply" },
+        ],
+      },
+    };
+
+    expect(prStateOf(view, checks, conversation, threads([thread]))).toEqual({
+      state: "OPEN",
+      draft: true,
+      head: HEAD,
+      checks: [{ name: "validate", bucket: "fail", link: "https://ci/1" }],
+      threads: [
+        {
+          id: "T1",
+          resolved: false,
+          path: "a.ts",
+          line: null,
+          author: "unknown",
+          body: "finding",
+          replies: [{ id: "C2", author: "owner", body: "reply" }],
+        },
+      ],
+      comments: [
+        { id: "11", author: "bengous-labs-agents", body: "state" },
+        { id: "12", author: "owner", body: "hi" },
+      ],
+    });
+  });
+
+  test("a conversation comment by a deleted user reads, its author unknown", () => {
+    const conversation = JSON.stringify({ id: "13", author: null, body: "old" });
+
+    expect(prStateOf(view, "", conversation, threads([])).comments).toEqual([
+      { id: "13", author: "unknown", body: "old" },
+    ]);
+  });
+
+  test("no checks printed is no check", () => {
+    expect(prStateOf(view, "", "", threads([])).checks).toEqual([]);
+  });
+
+  test("what gh prints outside its schema throws, naming the command", () => {
+    const draft = JSON.stringify({ headRefOid: HEAD, isDraft: false, state: "DRAFT" });
+
+    expect(() => prStateOf(draft, "", "", threads([]))).toThrow('gh pr view: Expected "OPEN" | "MERGED" | "CLOSED"');
+    expect(() => prStateOf(view, "", JSON.stringify({ id: 11, author: "a", body: "b" }), threads([]))).toThrow(
+      'a conversation comment: Expected string\n  at ["id"]',
+    );
+    expect(() => prStateOf(view, "", "", JSON.stringify({ data: null }))).toThrow("the review threads query: ");
+    expect(() => prStateOf(view, JSON.stringify([{ name: "validate", bucket: "fail" }]), "", threads([]))).toThrow(
+      'gh pr checks: Missing key\n  at [0]["link"]',
+    );
+  });
+});
+
+describe("SeenKeys", () => {
+  test("the seen file is a list of keys; anything else is refused", () => {
+    expect(decodeJson(SeenKeys, "watch-7.json", JSON.stringify(["end", "draft:x"]))).toEqual(["end", "draft:x"]);
+    expect(() => decodeJson(SeenKeys, "watch-7.json", JSON.stringify({ end: true }))).toThrow("watch-7.json: ");
   });
 });

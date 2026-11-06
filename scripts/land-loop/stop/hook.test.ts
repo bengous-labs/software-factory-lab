@@ -3,10 +3,22 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../lib/run.ts";
 import { FORK_MARKER } from "./decide.ts";
-import { DONE_QUESTION, doneJudgeFailure, FORK_FLAG, hasForkMarker, modelOf, prTextOf, stop } from "./hook.ts";
-import type { StopInput } from "./hook.ts";
+import {
+  DONE_QUESTION,
+  doneJudgeFailure,
+  FORK_FLAG,
+  forkResultOf,
+  hasForkMarker,
+  linesOf,
+  ListedPrs,
+  modelOf,
+  prTextOf,
+  stop,
+  StopInput,
+} from "./hook.ts";
 
 const HEAD = "d".repeat(40);
 
@@ -142,9 +154,7 @@ describe("stop", () => {
 describe("transcript", () => {
   test("a user turn opening with the marker makes the session a fork; the marker elsewhere does not", () => {
     expect(hasForkMarker([{ type: "user", message: { content: `${FORK_MARKER} are you done?` } }])).toBe(true);
-    expect(hasForkMarker([{ type: "user", message: { content: [{ type: "text", text: ` ${FORK_MARKER} q` }] } }])).toBe(
-      true,
-    );
+    expect(hasForkMarker([{ type: "user", message: { content: [{ text: ` ${FORK_MARKER} q` }] } }])).toBe(true);
     expect(hasForkMarker([{ type: "user", message: { content: `the spec names ${FORK_MARKER}` } }])).toBe(false);
     expect(hasForkMarker([{ type: "assistant", message: { content: `${FORK_MARKER} q` } }])).toBe(false);
   });
@@ -160,9 +170,70 @@ describe("transcript", () => {
     expect(modelOf([])).toBeNull();
   });
 
+  test("each line reads as far as the hook needs it: block text, model, the keys it does not name dropped", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "transcript-")), "t.jsonl");
+
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ type: "file-history-snapshot", snapshot: {} }),
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: [{ type: "image" }, { type: "text", text: "q" }] },
+        }),
+        "",
+        JSON.stringify({
+          type: "assistant",
+          message: { model: "claude-opus-5-5", content: [{ type: "tool_use", input: {} }] },
+        }),
+      ].join("\n"),
+    );
+
+    expect(linesOf(path)).toEqual([
+      { type: "file-history-snapshot" },
+      { type: "user", message: { content: [{}, { text: "q" }] } },
+      { type: "assistant", message: { model: "claude-opus-5-5", content: [{}] } },
+    ]);
+  });
+
+  test("a line that does not read throws, naming the transcript and the line", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "transcript-")), "t.jsonl");
+
+    writeFileSync(
+      path,
+      `${JSON.stringify({ type: "user" })}\n${JSON.stringify({ type: "user", message: { content: 7 } })}\n`,
+    );
+
+    expect(() => linesOf(path)).toThrow(`${path} line 2: Expected string | array\n  at ["message"]["content"]`);
+  });
+
   test("the PR text is the fork's first line as title, the rest as body", () => {
     expect(prTextOf("# feat: x\n\nwhy\nhow")).toEqual({ title: "feat: x", body: "why\nhow" });
     expect(prTextOf("  ")).toBeNull();
+  });
+});
+
+describe("forkResultOf", () => {
+  test("reads the answer, cost and cache reads `claude -p --output-format json` prints", () => {
+    expect(
+      forkResultOf(
+        JSON.stringify({ result: "YES", total_cost_usd: 0.02, usage: { cache_read_input_tokens: 5 } }),
+        0,
+        9,
+      ),
+    ).toEqual({ text: "YES", ms: 9, costUsd: 0.02, cacheRead: 5, code: 0, unreadable: null });
+  });
+
+  test("output that does not read is no answer, and says why", () => {
+    expect(forkResultOf("", 124, 9)).toEqual({
+      text: "",
+      ms: 9,
+      costUsd: null,
+      cacheRead: null,
+      code: 124,
+      unreadable: "Expected a valid JSON string",
+    });
+    expect(forkResultOf(JSON.stringify({ result: 7 }), 0, 9).unreadable).toBe('Expected string\n  at ["result"]');
   });
 });
 
@@ -178,5 +249,29 @@ describe("doneJudgeFailure", () => {
     expect(blocked?.kind === "block" && blocked.reason).toContain("exited 124");
     expect(doneJudgeFailure(0, "  ", false)?.kind).toBe("block");
     expect(doneJudgeFailure(124, "", true)).toEqual({ kind: "allow" });
+  });
+});
+
+describe("the inputs the Stop hook decodes", () => {
+  test("the Stop input reads, with or without stop_hook_active", () => {
+    const stdin = { session_id: "S1", transcript_path: "/t.jsonl", cwd: "/repo", hook_event_name: "Stop" };
+
+    expect(decodeJson(StopInput, "the Stop input", JSON.stringify(stdin))).toEqual({
+      session_id: "S1",
+      transcript_path: "/t.jsonl",
+      cwd: "/repo",
+    });
+    expect(
+      decodeJson(StopInput, "the Stop input", JSON.stringify({ ...stdin, stop_hook_active: true })).stop_hook_active,
+    ).toBe(true);
+  });
+
+  test("a Stop input, or a gh pr list answer, outside its schema is refused", () => {
+    expect(() => decodeJson(StopInput, "the Stop input", JSON.stringify({ session_id: "S1", cwd: "/repo" }))).toThrow(
+      'the Stop input: Missing key\n  at ["transcript_path"]',
+    );
+    expect(() => decodeJson(ListedPrs, "gh pr list", JSON.stringify([{ number: 1, isDraft: "no" }]))).toThrow(
+      'gh pr list: Expected boolean\n  at [0]["isDraft"]',
+    );
   });
 });

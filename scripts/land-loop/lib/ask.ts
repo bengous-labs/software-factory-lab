@@ -6,11 +6,13 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { HookCallback, Options, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Schema } from "effect";
 
 export interface Question {
   readonly model: string;
   readonly prompt: string;
-  readonly schema: Readonly<Record<string, unknown>>;
+  /** The JSON Schema the answer must follow; the caller decodes `structured` with its own Effect schema. */
+  readonly schema: Schema.JsonObject;
   readonly cwd: string;
   readonly timeoutMs: number;
 }
@@ -58,7 +60,7 @@ export function optionsOf(question: Question, abortController: AbortController):
     settingSources: [],
     persistSession: false,
     permissionMode: "dontAsk",
-    outputFormat: { type: "json_schema", schema: { ...question.schema } },
+    outputFormat: { type: "json_schema", schema: question.schema },
     hooks: { PreToolUse: [{ hooks: [refuseTools], onFailure: "block" }] },
   };
 }

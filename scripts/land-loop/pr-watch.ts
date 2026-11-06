@@ -15,6 +15,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { Schema } from "effect";
+
+import { decodeJson } from "../lib/json.ts";
 import { checked, run } from "./lib/run.ts";
 import type { Run } from "./lib/run.ts";
 import { severityOfBody } from "./review/code-review.ts";
@@ -25,17 +28,23 @@ const POLL_MS = 30_000;
 /** The App's login as GraphQL prints it: only its own Nit and Pre-existing findings are skipped. */
 export const APP_LOGIN = "bengous-labs-agents";
 
-export interface Check {
-  readonly name: string;
-  readonly bucket: string;
-  readonly link: string;
-}
+/** One check as `gh pr checks --json name,bucket,link` prints it. */
+export const Check = Schema.Struct({ name: Schema.String, bucket: Schema.String, link: Schema.String });
+
+export type Check = typeof Check.Type;
 
 export interface Comment {
   readonly id: string;
   readonly author: string;
   readonly body: string;
 }
+
+/** One conversation comment as the `--jq` filter of `read` prints it; a deleted user's has a null author. */
+const ConversationComment = Schema.Struct({
+  id: Schema.String,
+  author: Schema.NullOr(Schema.String),
+  body: Schema.String,
+});
 
 export interface Thread {
   readonly id: string;
@@ -153,13 +162,80 @@ export function readingOf(pr: number, state: PrState, seen: ReadonlySet<string>)
   return { wakes: wakes.filter((wake) => !seen.has(wake.key)), ends: end !== null };
 }
 
+const PrView = Schema.Struct({
+  state: Schema.Literals(["OPEN", "MERGED", "CLOSED"]),
+  isDraft: Schema.Boolean,
+  headRefOid: Schema.String,
+});
+
+const Author = Schema.NullOr(Schema.Struct({ login: Schema.String }));
+
+const ReviewThreads = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      pullRequest: Schema.Struct({
+        reviewThreads: Schema.Struct({
+          nodes: Schema.Array(
+            Schema.Struct({
+              id: Schema.String,
+              isResolved: Schema.Boolean,
+              path: Schema.String,
+              line: Schema.NullOr(Schema.Finite),
+              comments: Schema.Struct({
+                nodes: Schema.Array(Schema.Struct({ id: Schema.String, author: Author, body: Schema.String })),
+              }),
+            }),
+          ),
+        }),
+      }),
+    }),
+  }),
+});
+
+/** The keys this PR watch printed, as `print` writes them to `.lab/state/watch-<pr>.json`. */
+export const SeenKeys = Schema.Array(Schema.String);
+
+/** A PR's state from what gh printed: its view, its checks, its conversation's lines and its review threads. */
+export function prStateOf(view: string, checks: string, conversation: string, threads: string): PrState {
+  const { state, isDraft, headRefOid } = decodeJson(PrView, "gh pr view", view);
+
+  const nodes = decodeJson(ReviewThreads, "the review threads query", threads).data.repository.pullRequest.reviewThreads
+    .nodes;
+
+  return {
+    state,
+    draft: isDraft,
+    head: headRefOid,
+    // `gh pr checks` exits 8 while checks are pending and 1 when one fails; its JSON is printed either way.
+    checks: checks.trim() === "" ? [] : decodeJson(Schema.Array(Check), "gh pr checks", checks),
+    threads: nodes.map((node) => ({
+      id: node.id,
+      resolved: node.isResolved,
+      path: node.path,
+      line: node.line,
+      author: node.comments.nodes[0]?.author?.login ?? "unknown",
+      body: node.comments.nodes[0]?.body ?? "",
+      replies: node.comments.nodes
+        .slice(1)
+        .map((comment) => ({ id: comment.id, author: comment.author?.login ?? "unknown", body: comment.body })),
+    })),
+    comments: conversation
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => {
+        const comment = decodeJson(ConversationComment, "a conversation comment", line);
+
+        return { ...comment, author: comment.author?.replace(/\[bot\]$/u, "") ?? "unknown" };
+      }),
+  };
+}
+
 async function read(runner: Run, pr: number): Promise<PrState> {
   const cwd = process.cwd();
 
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh pr view prints the JSON fields named by --json.
-  const view = JSON.parse(
-    await checked(runner, ["gh", "pr", "view", String(pr), "--json", "state,isDraft,headRefOid"], { cwd }),
-  ) as { state: PrState["state"]; isDraft: boolean; headRefOid: string };
+  const view = await checked(runner, ["gh", "pr", "view", String(pr), "--json", "state,isDraft,headRefOid"], {
+    cwd,
+  });
 
   const checks = await runner(["gh", "pr", "checks", String(pr), "--json", "name,bucket,link"], { cwd });
 
@@ -182,65 +258,19 @@ async function read(runner: Run, pr: number): Promise<PrState> {
     { cwd },
   );
 
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: GitHub answers this GraphQL query with the shape it selects.
-  const threads = JSON.parse(
-    await checked(
-      runner,
-      [
-        "gh",
-        "api",
-        "graphql",
-        "-f",
-        `query=query{repository(owner:"${owner}",name:"${name}"){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{id author{login} body}}}}}}}`,
-      ],
-      { cwd },
-    ),
-  ) as {
-    data: {
-      repository: {
-        pullRequest: {
-          reviewThreads: {
-            nodes: Array<{
-              id: string;
-              isResolved: boolean;
-              path: string;
-              line: number | null;
-              comments: { nodes: Array<{ id: string; author: { login: string } | null; body: string }> };
-            }>;
-          };
-        };
-      };
-    };
-  };
+  const threads = await checked(
+    runner,
+    [
+      "gh",
+      "api",
+      "graphql",
+      "-f",
+      `query=query{repository(owner:"${owner}",name:"${name}"){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{id author{login} body}}}}}}}`,
+    ],
+    { cwd },
+  );
 
-  return {
-    state: view.state,
-    draft: view.isDraft,
-    head: view.headRefOid,
-    // `gh pr checks` exits 8 while checks are pending and 1 when one fails; its JSON is printed either way.
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh pr checks prints a list of the fields named by --json.
-    checks: checks.stdout.trim() === "" ? [] : (JSON.parse(checks.stdout) as Check[]),
-    threads: threads.data.repository.pullRequest.reviewThreads.nodes.map((node) => ({
-      id: node.id,
-      resolved: node.isResolved,
-      path: node.path,
-      line: node.line,
-      author: node.comments.nodes[0]?.author?.login ?? "unknown",
-      body: node.comments.nodes[0]?.body ?? "",
-      replies: node.comments.nodes
-        .slice(1)
-        .map((comment) => ({ id: comment.id, author: comment.author?.login ?? "unknown", body: comment.body })),
-    })),
-    comments: conversation
-      .split("\n")
-      .filter((line) => line !== "")
-      .map((line) => {
-        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: the --jq filter above prints one Comment per line.
-        const comment = JSON.parse(line) as Comment;
-
-        return { ...comment, author: comment.author.replace(/\[bot\]$/u, "") };
-      }),
-  };
+  return prStateOf(view, checks.stdout, conversation, threads);
 }
 
 if (import.meta.main) {
@@ -256,8 +286,7 @@ if (import.meta.main) {
   const seenFile = join(stateDir, `watch-${pr}.json`);
 
   const seen = new Set<string>(
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: print below writes this file as a JSON list of keys.
-    existsSync(seenFile) ? (JSON.parse(readFileSync(seenFile, "utf8")) as string[]) : [],
+    existsSync(seenFile) ? decodeJson(SeenKeys, seenFile, readFileSync(seenFile, "utf8")) : [],
   );
 
   const print = (key: string, line: string): void => {

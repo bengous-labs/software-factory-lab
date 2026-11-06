@@ -346,14 +346,32 @@ describe("the stored record", () => {
   });
 
   test("a stored Land route that is not auto reads as owner, the safe side", () => {
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions, typescript/no-unsafe-type-assertion -- SAFETY: a stored Land route the type cannot hold is the case under test.
-    const stored = { ...EMPTY_RECORD, triage: { [P1]: { ...LIGHT, land: "later" } } } as unknown as StoredRecord;
+    const stored = { ...EMPTY_RECORD, triage: { [P1]: { ...LIGHT, land: "later" } } };
 
     expect(recordOfStored(stored).triage[P1]?.land).toBe("owner");
+    expect(recordOfJson(JSON.stringify(stored)).triage[P1]?.land).toBe("owner");
   });
 
   test("an empty comment JSON reads as the record of a change no Review round read", () => {
     expect(recordOfJson("{}")).toEqual(EMPTY_RECORD);
+  });
+
+  test("a record written before the Routing answer named its model reads with no model", () => {
+    const { model: _model, ...unnamed } = LIGHT;
+
+    expect(recordOfJson(JSON.stringify({ triage: { [P1]: { ...unnamed, land: "auto" } } })).triage[P1]).toEqual({
+      ...LIGHT,
+      model: null,
+    });
+  });
+
+  test("a record outside its schema is refused, naming the field", () => {
+    expect(() => recordOfJson(JSON.stringify({ reviewRounds: "1" }))).toThrow(
+      'the Merge bot state record: Expected number\n  at ["reviewRounds"]',
+    );
+    expect(() => recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, review: "skim" } } }))).toThrow(
+      `at ["triage"]["${P1}"]["review"]`,
+    );
   });
 
   test("a record is stored with its reviewRounds, and reads back the same", () => {

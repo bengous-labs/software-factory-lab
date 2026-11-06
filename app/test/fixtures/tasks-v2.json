@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "tasks": [
+    {
+      "id": 1,
+      "title": "write the release notes",
+      "done": true,
+      "createdAt": "2026-11-02T08:15:00.000Z"
+    },
+    {
+      "id": 2,
+      "title": "ship",
+      "done": false,
+      "createdAt": "2026-11-05T17:42:09.123Z"
+    },
+    {
+      "id": 4,
+      "title": "a task from version 1",
+      "done": false
+    }
+  ]
+}
