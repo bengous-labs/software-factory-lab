@@ -25,8 +25,13 @@ describe("uncovered", () => {
 
 describe("filesOf", () => {
   test("reads the files list, and refuses an answer without one", () => {
-    expect(filesOf({ compilerOptions: {}, files: ["./a.ts"] })).toEqual(["./a.ts"]);
-    expect(() => filesOf({ compilerOptions: {} })).toThrow("no files list");
+    expect(filesOf(JSON.stringify({ compilerOptions: {}, files: ["./a.ts"] }))).toEqual(["./a.ts"]);
+    expect(() => filesOf(JSON.stringify({ compilerOptions: {} }))).toThrow(
+      'tsgo --showConfig: Missing key\n  at ["files"]',
+    );
+    expect(() => filesOf(JSON.stringify({ files: ["./a.ts", 7] }))).toThrow(
+      'Expected string, got 7\n  at ["files"][1]',
+    );
   });
 });
 

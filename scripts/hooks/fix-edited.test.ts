@@ -16,9 +16,17 @@ const FIXED = 'export function f(x: number) {\n  if (x > 0) {\n    return "posit
 
 describe("filePathOf", () => {
   test("reads tool_input.file_path, and null when there is none", () => {
-    expect(filePathOf({ tool_name: "Write", tool_input: { file_path: "/repo/a.ts" } })).toBe("/repo/a.ts");
-    expect(filePathOf({ tool_name: "Write", tool_input: {} })).toBeNull();
-    expect(filePathOf(null)).toBeNull();
+    expect(filePathOf(JSON.stringify({ tool_name: "Write", tool_input: { file_path: "/repo/a.ts" } }))).toBe(
+      "/repo/a.ts",
+    );
+    expect(filePathOf(JSON.stringify({ tool_name: "Write", tool_input: {} }))).toBeNull();
+  });
+
+  test("refuses an input that is not a tool call's", () => {
+    expect(() => filePathOf("null")).toThrow("the PostToolUse input: Expected object, got null");
+    expect(() => filePathOf(JSON.stringify({ tool_input: { file_path: 7 } }))).toThrow(
+      'Expected string, got 7\n  at ["tool_input"]["file_path"]',
+    );
   });
 });
 
@@ -26,6 +34,12 @@ describe("formatIgnorePatterns", () => {
   test("reads [fmt].ignorePatterns, and none when the section has none", () => {
     expect(formatIgnorePatterns('[fmt]\nignorePatterns = ["vendor/**"]\n')).toEqual(["vendor/**"]);
     expect(formatIgnorePatterns("[test]\n")).toEqual([]);
+  });
+
+  test("refuses a list that holds anything but patterns", () => {
+    expect(() => formatIgnorePatterns("[fmt]\nignorePatterns = [7]\n")).toThrow(
+      'bunfig.toml: Expected string, got 7\n  at ["fmt"]["ignorePatterns"][0]',
+    );
   });
 
   test("the repository's own list keeps the vendored anti-slop copy out", async () => {

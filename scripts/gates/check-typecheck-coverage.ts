@@ -12,6 +12,9 @@
 import { join } from "node:path";
 
 import { $ } from "bun";
+import { Schema } from "effect";
+
+import { decodeJson } from "../lib/json.ts";
 
 /** What `tsconfig.json` leaves out on purpose; anything else tracked must be type-checked. */
 const LEFT_OUT = /^scripts\/vendor\/anti-slop\//u;
@@ -25,13 +28,11 @@ export function uncovered(root: string, tracked: readonly string[], typechecked:
   return tracked.filter((path) => !LEFT_OUT.test(path) && !covered.has(join(root, path)));
 }
 
-/** The `files` of `tsgo --showConfig`'s JSON. */
-export function filesOf(shown: unknown): string[] {
-  if (typeof shown !== "object" || shown === null || !("files" in shown) || !Array.isArray(shown.files)) {
-    throw new Error("tsgo --showConfig printed no files list");
-  }
+const ShownConfig = Schema.Struct({ files: Schema.Array(Schema.String) });
 
-  return shown.files.filter((file: unknown) => typeof file === "string");
+/** The `files` of `tsgo --showConfig`'s JSON. */
+export function filesOf(shown: string): readonly string[] {
+  return decodeJson(ShownConfig, "tsgo --showConfig", shown).files;
 }
 
 if (import.meta.main) {
@@ -41,8 +42,7 @@ if (import.meta.main) {
     .split("\0")
     .filter((path) => path !== "");
 
-  const shown: unknown = await $`${TSGO} --showConfig`.json();
-  const missing = uncovered(root, tracked, filesOf(shown));
+  const missing = uncovered(root, tracked, filesOf(await $`${TSGO} --showConfig`.text()));
 
   if (missing.length > 0) {
     console.error(`${missing.length} tracked TypeScript file(s) outside the typecheck:\n`);

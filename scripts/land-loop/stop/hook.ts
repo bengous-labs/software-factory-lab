@@ -13,6 +13,9 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { Predicate, Result, Schema } from "effect";
+
+import { decodeJson } from "../../lib/json.ts";
 import { checked, run as runCli } from "../lib/run.ts";
 import type { Run } from "../lib/run.ts";
 import { admit, afterStopChecks, answerOf, armReason, decide, FORK_MARKER, IGNORED_BRANCH } from "./decide.ts";
@@ -30,12 +33,14 @@ export const DONE_QUESTION = `${FORK_MARKER} Stop hook question, not the Owner's
 
 export const BODY_REQUEST = `${FORK_MARKER} Stop hook request, not the Owner's: write the pull request for the commits on this branch. First line: its title, as a conventional commit subject. Then a blank line, then its body in Markdown: what changed and why, and how you verified it. Print nothing else.`;
 
-export interface StopInput {
-  readonly session_id: string;
-  readonly transcript_path: string;
-  readonly cwd: string;
-  readonly stop_hook_active?: boolean;
-}
+export const StopInput = Schema.Struct({
+  session_id: Schema.String,
+  transcript_path: Schema.String,
+  cwd: Schema.String,
+  stop_hook_active: Schema.optionalKey(Schema.Boolean),
+});
+
+export type StopInput = typeof StopInput.Type;
 
 export interface Deps {
   readonly run: Run;
@@ -43,41 +48,42 @@ export interface Deps {
   readonly now: () => number;
 }
 
-interface TranscriptLine {
-  readonly type?: string;
-  readonly message?: { readonly model?: string; readonly content?: unknown };
-}
+/** One line of a session transcript, as far as this hook reads it: a message's model and its text blocks. */
+export const TranscriptLine = Schema.Struct({
+  type: Schema.optionalKey(Schema.String),
+  message: Schema.optionalKey(
+    Schema.Struct({
+      model: Schema.optionalKey(Schema.String),
+      content: Schema.optionalKey(
+        Schema.Union([Schema.String, Schema.Array(Schema.Struct({ text: Schema.optionalKey(Schema.String) }))]),
+      ),
+    }),
+  ),
+});
 
-function linesOf(path: string): TranscriptLine[] {
+export type TranscriptLine = typeof TranscriptLine.Type;
+
+type Content = NonNullable<NonNullable<TranscriptLine["message"]>["content"]>;
+
+/** The lines of the transcript at `path`; a missing transcript has none. */
+export function linesOf(path: string): TranscriptLine[] {
   if (!existsSync(path)) {
     return [];
   }
 
   return readFileSync(path, "utf8")
     .split("\n")
-    .filter((line) => line.trim() !== "")
-    .flatMap((line) => {
-      try {
-        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: each transcript line is a JSON message, and TranscriptLine reads only optional fields.
-        return [JSON.parse(line) as TranscriptLine];
-      } catch {
-        return [];
-      }
-    });
+    .flatMap((line, index) =>
+      line.trim() === "" ? [] : [decodeJson(TranscriptLine, `${path} line ${index + 1}`, line)],
+    );
 }
 
-function textOf(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (!Array.isArray(content)) {
+function textOf(content: Content | undefined): string {
+  if (content === undefined) {
     return "";
   }
 
-  return content
-    .map((block: unknown) => (typeof block === "object" && block !== null && "text" in block ? String(block.text) : ""))
-    .join("");
+  return Predicate.isString(content) ? content : content.map((block) => block.text ?? "").join("");
 }
 
 /** Whether a user turn of the transcript opens with the fork marker. */
@@ -92,7 +98,7 @@ export function modelOf(lines: readonly TranscriptLine[]): string | null {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const model = lines[index]?.message?.model;
 
-    if (lines[index]?.type === "assistant" && typeof model === "string" && model !== "<synthetic>") {
+    if (lines[index]?.type === "assistant" && model !== undefined && model !== "<synthetic>") {
       return model;
     }
   }
@@ -108,12 +114,41 @@ export function prTextOf(text: string): { title: string; body: string } | null {
   return title === "" ? null : { title, body: rest.join("\n").trim() };
 }
 
-interface ForkResult {
+/** What `claude -p --output-format json` prints, as far as this hook reads it. */
+export const ForkOutput = Schema.Struct({
+  result: Schema.optionalKey(Schema.String),
+  total_cost_usd: Schema.optionalKey(Schema.Number),
+  usage: Schema.optionalKey(Schema.Struct({ cache_read_input_tokens: Schema.optionalKey(Schema.Number) })),
+});
+
+const decodeForkOutput = Schema.decodeUnknownResult(Schema.fromJsonString(ForkOutput), { reportInput: true });
+
+/** `unreadable` says why the fork's output did not read: such a fork gave no answer. */
+export interface ForkResult {
   readonly text: string;
   readonly ms: number;
   readonly costUsd: number | null;
   readonly cacheRead: number | null;
   readonly code: number;
+  readonly unreadable: string | null;
+}
+
+/** The answer a fork printed; output that does not read is no answer, and says why. */
+export function forkResultOf(stdout: string, code: number, ms: number): ForkResult {
+  const out = decodeForkOutput(stdout);
+
+  if (Result.isFailure(out)) {
+    return { text: "", ms, costUsd: null, cacheRead: null, code, unreadable: out.failure.message };
+  }
+
+  return {
+    text: out.success.result ?? "",
+    ms,
+    costUsd: out.success.total_cost_usd ?? null,
+    cacheRead: out.success.usage?.cache_read_input_tokens ?? null,
+    code,
+    unreadable: null,
+  };
 }
 
 async function askFork(deps: Deps, input: StopInput, model: string | null, prompt: string): Promise<ForkResult> {
@@ -139,41 +174,27 @@ async function askFork(deps: Deps, input: StopInput, model: string | null, promp
     timeoutMs: FORK_TIMEOUT_MS,
   });
 
-  const ms = deps.now() - started;
-
-  try {
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: claude -p --output-format json prints its result object, every field read here optional.
-    const out = JSON.parse(ran.stdout) as {
-      result?: string;
-      total_cost_usd?: number;
-      usage?: { cache_read_input_tokens?: number };
-    };
-
-    return {
-      text: out.result ?? "",
-      ms,
-      costUsd: out.total_cost_usd ?? null,
-      cacheRead: out.usage?.cache_read_input_tokens ?? null,
-      code: ran.code,
-    };
-  } catch {
-    return { text: "", ms, costUsd: null, cacheRead: null, code: ran.code };
-  }
+  return forkResultOf(ran.stdout, ran.code, deps.now() - started);
 }
 
 async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise<string> {
   return (await checked(deps.run, ["git", ...args], { cwd })).trim();
 }
 
+const ListedPrs = Schema.Array(
+  Schema.Struct({ number: Schema.Number, isDraft: Schema.Boolean, headRefOid: Schema.String }),
+);
+
 async function prOf(deps: Deps, cwd: string, branch: string): Promise<PullRequest | null> {
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: gh pr list prints a list of the fields named by --json.
-  const listed = JSON.parse(
+  const listed = decodeJson(
+    ListedPrs,
+    "gh pr list",
     await checked(
       deps.run,
       ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,isDraft,headRefOid"],
       { cwd },
     ),
-  ) as Array<{ number: number; isDraft: boolean; headRefOid: string }>;
+  );
 
   const pr = listed[0];
 
@@ -225,7 +246,7 @@ export function doneJudgeFailure(code: number, text: string, stopHookActive: boo
 /** One `.lab/stop.log` record: the step it logs, and that step's fields. */
 export interface StopLogRecord {
   readonly step: string;
-  readonly [field: string]: unknown;
+  readonly [field: string]: Schema.Json;
 }
 
 export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRecord) => void): Promise<Outcome> {
@@ -310,6 +331,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     costUsd: doneJudge.costUsd,
     cacheRead: doneJudge.cacheRead,
     code: doneJudge.code,
+    unreadable: doneJudge.unreadable,
     text: doneJudge.text.slice(0, 300),
   });
 
@@ -341,6 +363,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
       ms: bodyFork.ms,
       costUsd: bodyFork.costUsd,
       cacheRead: bodyFork.cacheRead,
+      unreadable: bodyFork.unreadable,
       title: text.title,
     });
 
@@ -366,8 +389,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
 }
 
 if (import.meta.main) {
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: Claude Code writes the Stop input on stdin as JSON.
-  const input = JSON.parse(await Bun.stdin.text()) as StopInput;
+  const input = decodeJson(StopInput, "the Stop input", await Bun.stdin.text());
   const logFile = join(input.cwd, ".lab", "stop.log");
   mkdirSync(join(input.cwd, ".lab"), { recursive: true });
 
