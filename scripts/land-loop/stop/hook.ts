@@ -188,7 +188,7 @@ async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: strin
     return { kind: "green" };
   }
 
-  const ran = await deps.run(["bun", "run", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
+  const ran = await deps.run(["bun", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
 
   if (ran.code !== 0) {
     return { kind: "red", report: `${ran.stdout}\n${ran.stderr}`.trim().slice(-3000) };

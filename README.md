@@ -6,7 +6,7 @@ The app under `app/` is a small task CLI that gives the agents something to chan
 
 ```bash
 bun install
-bun run check
+bun check
 ```
 
 ## Commands
