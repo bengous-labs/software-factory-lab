@@ -5,14 +5,7 @@ import { join } from "node:path";
 
 import { $ } from "bun";
 
-import {
-  bashCallOf,
-  cdTargetOf,
-  commitDirOf,
-  commitDirsOf,
-  refusalFor,
-  simpleCommandsOf,
-} from "./refuse-commit-on-dev.ts";
+import { bashCallOf, cdTargetOf, commitDirOf, commitDirsOf, partsOf, refusalFor } from "./refuse-commit-on-dev.ts";
 
 const SCRIPT = join(import.meta.dir, "refuse-commit-on-dev.ts");
 
@@ -31,15 +24,26 @@ describe("bashCallOf", () => {
   });
 });
 
-describe("simpleCommandsOf", () => {
-  test("cuts at separators, and keeps a quoted separator inside its word", () => {
-    expect(simpleCommandsOf('git add . && git commit -m "a; b" | cat\n(ls)')).toEqual([
+describe("partsOf", () => {
+  test("cuts at operators, and keeps a quoted operator inside its word", () => {
+    expect(partsOf('git add . && git commit -m "a; b" | cat\n(ls) || x & y;z')).toEqual([
       ["git", "add", "."],
+      "&&",
       ["git", "commit", "-m", "a; b"],
+      "|",
       ["cat"],
+      ";",
+      "(",
       ["ls"],
+      ")",
+      "||",
+      ["x"],
+      "&",
+      ["y"],
+      ";",
+      ["z"],
     ]);
-    expect(simpleCommandsOf("git commit -m ''")).toEqual([["git", "commit", "-m", ""]]);
+    expect(partsOf("git commit -m ''")).toEqual([["git", "commit", "-m", ""]]);
   });
 });
 
@@ -63,23 +67,53 @@ describe("commitDirOf", () => {
   });
 });
 
+const ENV = { REPO: "/w/repo", HOME: "/home/u" };
+
 describe("commitDirsOf", () => {
   test("lists the directory of each commit in the command", () => {
-    expect(commitDirsOf("git add . && git commit -m x; git -C ../b commit", "/w/a")).toEqual(["/w/a", "/w/b"]);
-    expect(commitDirsOf('echo "git commit"', "/w/a")).toEqual([]);
+    expect(commitDirsOf("git add . && git commit -m x; git -C ../b commit", "/w/a", ENV)).toEqual(["/w/a", "/w/b"]);
+    expect(commitDirsOf('echo "git commit"', "/w/a", ENV)).toEqual([]);
   });
 
-  test("follows each cd before a commit", () => {
-    expect(commitDirsOf("cd ../b && git commit -m x", "/w/a")).toEqual(["/w/b"]);
-    expect(commitDirsOf("cd /w/c && cd sub && git -C .. commit", "/w/a")).toEqual(["/w/c"]);
-    expect(commitDirsOf("cd ~/repo && git commit", "/w/a")).toEqual([join(homedir(), "repo")]);
-    expect(commitDirsOf("cd && git commit", "/w/a")).toEqual([homedir()]);
+  test("follows a cd that && joins to the commit", () => {
+    expect(commitDirsOf("cd ../b && git commit -m x", "/w/a", ENV)).toEqual(["/w/b"]);
+    expect(commitDirsOf("cd /w/c && cd sub && git -C .. commit", "/w/a", ENV)).toEqual(["/w/c"]);
+    expect(commitDirsOf("cd -P -- $REPO && git commit", "/w/a", ENV)).toEqual(["/w/repo"]);
+  });
+
+  test("keeps the directory a cd may have failed to leave, after ; or ||", () => {
+    expect(commitDirsOf("cd /nonexistent; git commit", "/w/a", ENV)).toEqual(["/w/a", "/nonexistent"]);
+    expect(commitDirsOf("cd ../b || git commit", "/w/a", ENV)).toEqual(["/w/a", "/w/b"]);
+  });
+
+  test("a cd inside a subshell, a pipeline or the background leaves the directory after it", () => {
+    expect(commitDirsOf("(cd ../b && git commit); git commit", "/w/a", ENV)).toEqual(["/w/b", "/w/a"]);
+    expect(commitDirsOf("cd ../b | true; git commit", "/w/a", ENV)).toEqual(["/w/a"]);
+    expect(commitDirsOf("true | cd ../b; git commit", "/w/a", ENV)).toEqual(["/w/a"]);
+    expect(commitDirsOf("cd ../b & git commit", "/w/a", ENV)).toEqual(["/w/a"]);
+  });
+
+  test("a cd to a target the hook cannot know leaves the directory as it was", () => {
+    expect(commitDirsOf("cd - && git commit", "/w/a", ENV)).toEqual(["/w/a"]);
+    expect(commitDirsOf("cd $UNSET && git commit", "/w/a", ENV)).toEqual(["/w/a"]);
   });
 });
 
 describe("cdTargetOf", () => {
-  test("any other command keeps the directory", () => {
-    expect(cdTargetOf(["git", "status"], "/w/a")).toBe("/w/a");
+  test("reads the target after the options, with ~ and $VAR expanded", () => {
+    expect(cdTargetOf(["cd", "-L", "sub"], ENV)).toBe("sub");
+    expect(cdTargetOf(["cd", "--", "-dir"], ENV)).toBe("-dir");
+    expect(cdTargetOf(["cd", "${REPO}/x"], ENV)).toBe("/w/repo/x");
+    expect(cdTargetOf(["cd", "~/repo"], ENV)).toBe(join(homedir(), "repo"));
+    expect(cdTargetOf(["cd"], ENV)).toBe(homedir());
+  });
+
+  test("null for a target the hook cannot know, and for any other command", () => {
+    for (const target of ["-", "$UNSET", "$(pwd)", "`pwd`", "~other", "$"]) {
+      expect(cdTargetOf(["cd", target], ENV)).toBeNull();
+    }
+
+    expect(cdTargetOf(["git", "status"], ENV)).toBeNull();
   });
 });
 

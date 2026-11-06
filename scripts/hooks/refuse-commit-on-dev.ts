@@ -28,7 +28,10 @@ const PreToolUseInput = Schema.Struct({
 /** The git global options that take their value as the next word. */
 const VALUED_OPTIONS = new Set(["-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"]);
 
-const SEPARATORS = new Set([";", "&", "|", "\n", "(", ")"]);
+/** The options of `cd`, none of which takes a value. */
+const CD_OPTION = /^-[LPe@]+$/u;
+
+const VARIABLE = /\$(?:\{(?<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?<bare>[A-Za-z_][A-Za-z0-9_]*))/gu;
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 
@@ -39,20 +42,60 @@ export function bashCallOf(stdin: string) {
   return { command: input.tool_input.command ?? "", cwd: input.cwd };
 }
 
-/** `command` cut into simple commands, each a list of words, with quotes removed and separators dropped. */
-export function simpleCommandsOf(command: string): ReadonlyArray<readonly string[]> {
-  const commands: string[][] = [[]];
+/** A shell control operator, newline read as `;`. */
+type Operator = "&&" | "||" | ";" | "|" | "&" | "(" | ")";
+
+/** One part of a Bash command: a simple command's words, or the operator between two. */
+export type Part = readonly string[] | Operator;
+
+/** The one-character operators, by the character that spells them. */
+const OPERATORS: ReadonlyMap<string, Operator> = new Map([
+  [";", ";"],
+  ["\n", ";"],
+  ["&", "&"],
+  ["|", "|"],
+  ["(", "("],
+  [")", ")"],
+]);
+
+/** The operator that starts at `command[index]`, or null when none does. */
+function operatorAt(command: string, index: number): Operator | null {
+  const char = command[index] ?? "";
+
+  if ((char === "&" || char === "|") && command[index + 1] === char) {
+    return char === "&" ? "&&" : "||";
+  }
+
+  return OPERATORS.get(char) ?? null;
+}
+
+/** `command` cut into simple commands, each a list of words with quotes removed, and the operators between them. */
+export function partsOf(command: string): readonly Part[] {
+  const parts: Part[] = [];
+  let words: string[] = [];
   let word: string | null = null;
   let quote: string | null = null;
 
   const endWord = () => {
     if (word !== null) {
-      commands.at(-1)?.push(word);
+      words.push(word);
       word = null;
     }
   };
 
-  for (const char of command) {
+  const endCommand = () => {
+    endWord();
+
+    if (words.length > 0) {
+      parts.push(words);
+      words = [];
+    }
+  };
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    const operator = quote === null ? operatorAt(command, index) : null;
+
     if (quote !== null) {
       if (char === quote) {
         quote = null;
@@ -62,9 +105,10 @@ export function simpleCommandsOf(command: string): ReadonlyArray<readonly string
     } else if (char === '"' || char === "'") {
       quote = char;
       word ??= "";
-    } else if (SEPARATORS.has(char)) {
-      endWord();
-      commands.push([]);
+    } else if (operator !== null) {
+      endCommand();
+      parts.push(operator);
+      index += operator.length - 1;
     } else if (/\s/u.test(char)) {
       endWord();
     } else {
@@ -72,9 +116,9 @@ export function simpleCommandsOf(command: string): ReadonlyArray<readonly string
     }
   }
 
-  endWord();
+  endCommand();
 
-  return commands.filter((words) => words.length > 0);
+  return parts;
 }
 
 /** The directory a `git commit` in `words` runs in, starting from `cwd`; null when `words` is no commit. */
@@ -103,33 +147,105 @@ export function commitDirOf(words: readonly string[], cwd: string): string | nul
   return null;
 }
 
-/** The directory a `cd` in `words` moves to from `dir`, or `dir` when `words` is no `cd`. */
-export function cdTargetOf(words: readonly string[], dir: string): string {
-  if (words[0] !== "cd") {
-    return dir;
+/** The environment a Bash command expands its variables from. */
+export type Env = Readonly<Record<string, string | undefined>>;
+
+/** `word` with its `~` and `$VAR` expanded from `env`, or null when it holds what the hook cannot expand. */
+function expandedOf(word: string, env: Env): string | null {
+  if (word.includes("`") || word.includes("$(") || /^~[^/]/u.test(word)) {
+    return null;
   }
 
-  const target = words[1] ?? "~";
+  const names = [...word.matchAll(VARIABLE)].map((match) => match.groups?.["braced"] ?? match.groups?.["bare"] ?? "");
 
-  return resolve(dir, target === "~" || target.startsWith("~/") ? homedir() + target.slice(1) : target);
+  if (names.some((name) => env[name] === undefined)) {
+    return null;
+  }
+
+  const expanded = word.replaceAll(
+    VARIABLE,
+    (_match, braced?: string, bare?: string) => env[braced ?? bare ?? ""] ?? "",
+  );
+
+  if (expanded.includes("$")) {
+    return null;
+  }
+
+  return expanded.startsWith("~") ? homedir() + expanded.slice(1) : expanded;
 }
 
-/** The directories each `git commit` in the Bash `command` runs in, starting from `cwd` and following each `cd`. */
-export function commitDirsOf(command: string, cwd: string): readonly string[] {
-  const dirs: string[] = [];
-  let dir = cwd;
+/**
+ * The directory a `cd` in `words` moves to, as the shell reads it: absolute, or relative to the directory it
+ * runs in. Null when `words` is no `cd`, or for a target the hook cannot know, such as `cd -`.
+ */
+export function cdTargetOf(words: readonly string[], env: Env): string | null {
+  if (words[0] !== "cd") {
+    return null;
+  }
 
-  for (const words of simpleCommandsOf(command)) {
-    dir = cdTargetOf(words, dir);
+  let index = 1;
 
-    const commitDir = commitDirOf(words, dir);
+  while (CD_OPTION.test(words[index] ?? "")) {
+    index += 1;
+  }
 
-    if (commitDir !== null) {
-      dirs.push(commitDir);
+  if (words[index] === "--") {
+    index += 1;
+  }
+
+  const target = words[index] ?? "~";
+
+  return target === "-" ? null : expandedOf(target, env);
+}
+
+/** The directories the commands after a `cd` may run in, given the operator that follows it. */
+function afterCd(next: Part | undefined, before: readonly string[], moved: readonly string[]): readonly string[] {
+  if (next === "&&") {
+    return moved;
+  }
+
+  // A cd in a pipeline or in the background runs in a subshell; after `;` or `||` it may have failed.
+  return next === "|" || next === "&" ? before : [...new Set([...before, ...moved])];
+}
+
+/**
+ * The directories each `git commit` in the Bash `command` may run in, starting from `cwd`. It follows each
+ * `cd` the hook can read, restores the directory a `( … )` subshell started in, and keeps the directory a
+ * `cd` may have failed to leave, so a commit is checked in every directory it may run in.
+ */
+export function commitDirsOf(command: string, cwd: string, env: Env): readonly string[] {
+  const parts = partsOf(command);
+  const dirs = new Set<string>();
+  const saved: Array<readonly string[]> = [];
+  let possible: readonly string[] = [cwd];
+
+  for (const [index, part] of parts.entries()) {
+    if (part === "(") {
+      saved.push(possible);
+    } else if (part === ")") {
+      possible = saved.pop() ?? possible;
+    } else if (Array.isArray(part)) {
+      for (const dir of possible) {
+        const commitDir = commitDirOf(part, dir);
+
+        if (commitDir !== null) {
+          dirs.add(commitDir);
+        }
+      }
+
+      const target = cdTargetOf(part, env);
+
+      if (target !== null && parts[index - 1] !== "|") {
+        possible = afterCd(
+          parts[index + 1],
+          possible,
+          possible.map((dir) => resolve(dir, target)),
+        );
+      }
     }
   }
 
-  return dirs;
+  return [...dirs];
 }
 
 /** Why a commit on `branch` is refused, or null when it may go ahead; `branch` is null on a detached HEAD. */
@@ -149,7 +265,7 @@ async function branchIn(dir: string): Promise<string | null> {
 if (import.meta.main) {
   const { command, cwd } = bashCallOf(await Bun.stdin.text());
 
-  for (const dir of commitDirsOf(command, cwd)) {
+  for (const dir of commitDirsOf(command, cwd, process.env)) {
     const reason = refusalFor(await branchIn(dir));
 
     if (reason !== null) {
