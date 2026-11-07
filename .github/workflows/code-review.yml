@@ -34,10 +34,12 @@ on:
 # The number alone: the Merge bot reads it back from `workflow_run.display_title`.
 run-name: ${{ inputs.pr }}
 
-# A review that a new push made stale is worth nothing.
+# One review of a PR runs at a time, and a second one waits instead of cancelling it: a Sweep and a PR
+# event can dispatch side by side, and the run the record names must finish. A review a new push made
+# stale still runs to its end; the Merge bot ignores its result.
 concurrency:
   group: code-review-${{ inputs.pr }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read

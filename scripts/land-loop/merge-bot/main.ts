@@ -20,10 +20,10 @@ import { Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
-import type { Ran } from "../ports/run.ts";
+import type { Ran, Run } from "../ports/run.ts";
 import { graphqlLogin, openImportantOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
 import type { ReviewThread } from "../review/findings.ts";
-import { diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
+import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
 import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf as principalJudgePrompt } from "../review/principal-judge.ts";
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
@@ -297,49 +297,55 @@ export function notFound(read: Ran): boolean {
  * the review again instead of stopping, and a Sweep goes on. Any other failure of the read throws, as
  * every read of the decision does, so a passing API error never withdraws a live review.
  */
-async function reviewJobOf(
-  env: Env,
+export function reviewJobReader(
+  runner: Run,
+): (
+  where: Pick<Env, "repo" | "cwd">,
   pr: number,
   review: ReviewState | undefined,
   patch: string,
-): Promise<ReviewJob | null> {
-  if (review === undefined || review.patch !== patch) {
-    return null;
-  }
+) => Promise<ReviewJob | null> {
+  return async (where, pr, review, patch) => {
+    if (review === undefined || review.patch !== patch) {
+      return null;
+    }
 
-  const path = `repos/${env.repo}/actions/runs/${review.runId}`;
-  const read = await run(["gh", "api", path], { cwd: env.cwd });
+    const path = `repos/${where.repo}/actions/runs/${review.runId}`;
+    const read = await runner(["gh", "api", path], { cwd: where.cwd });
 
-  if (notFound(read)) {
-    return { kind: "completed", conclusion: "missing", result: null };
-  }
+    if (notFound(read)) {
+      return { kind: "missing" };
+    }
 
-  if (read.code !== 0) {
-    throw new Error(`gh api ${path} exited ${read.code}: ${(read.stderr || read.stdout).trim()}`);
-  }
+    if (read.code !== 0) {
+      throw new Error(`gh api ${path} exited ${read.code}: ${(read.stderr || read.stdout).trim()}`);
+    }
 
-  const job = decodeJson(ActionsRun, `gh api ${path}`, read.stdout);
+    const job = decodeJson(ActionsRun, `gh api ${path}`, read.stdout);
 
-  if (job.status !== "completed") {
-    return { kind: "running" };
-  }
+    if (job.status !== "completed") {
+      return { kind: "running" };
+    }
 
-  const dir = mkdtempSync(join(tmpdir(), "review-result-"));
-  const name = `review-${pr}-${review.round}`;
+    const dir = mkdtempSync(join(tmpdir(), "review-result-"));
+    const name = `review-${pr}-${review.round}`;
 
-  const downloaded = await run(
-    ["gh", "run", "download", String(review.runId), "--repo", env.repo, "--name", name, "--dir", dir],
-    { cwd: env.cwd },
-  );
+    const downloaded = await runner(
+      ["gh", "run", "download", String(review.runId), "--repo", where.repo, "--name", name, "--dir", dir],
+      { cwd: where.cwd },
+    );
 
-  const file = join(dir, "review-result.json");
+    const file = join(dir, "review-result.json");
 
-  return {
-    kind: "completed",
-    conclusion: job.conclusion ?? "no conclusion",
-    result: downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null,
+    return {
+      kind: "completed",
+      conclusion: job.conclusion ?? "no conclusion",
+      result: downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null,
+    };
   };
 }
+
+const reviewJobOf = reviewJobReader(run);
 
 async function snapshotOf(
   env: Env,
@@ -548,8 +554,7 @@ async function perform(
 
       if (!posted) {
         try {
-          // Unquoted paths: `diffLinesOf` reads `+++ b/<path>`, and git quotes a non-ASCII path by default.
-          const diff = await git(env, ["-c", "core.quotePath=false", "diff", `${range.base}..${range.head}`]);
+          const diff = await git(env, diffArgsOf(range.base, range.head));
           const plan = postPlanOf(result.report.findings, diffLinesOf(diff));
 
           await send(env, "POST", `repos/${env.repo}/pulls/${pr.number}/reviews`, reviewOf(plan, result, range.head));

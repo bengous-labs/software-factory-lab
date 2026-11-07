@@ -243,7 +243,9 @@ export interface Snapshot {
 export type ReviewJob =
   | { readonly kind: "running" }
   /** `result` is null when the run ended without an artifact that reads. */
-  | { readonly kind: "completed"; readonly conclusion: string; readonly result: ReviewResult | null };
+  | { readonly kind: "completed"; readonly conclusion: string; readonly result: ReviewResult | null }
+  /** GitHub answers 404 for the run: it was deleted, and its result with it. */
+  | { readonly kind: "missing" };
 
 /** GitHub's `mergeable_state` of one PR, from the single-PR endpoint: `dirty` is a conflict with the base. */
 export function conflictingOf(mergeableState: string | null | undefined): boolean {
@@ -368,7 +370,7 @@ interface ReviewMachine {
 
 type JobOutcome =
   | { readonly kind: "waiting" }
-  | { readonly kind: "cancelled" }
+  | { readonly kind: "missing" }
   | { readonly kind: "reported"; readonly result: ReportedResult }
   | { readonly kind: "failed"; readonly cause: string };
 
@@ -380,12 +382,14 @@ function outcomeOf(snapshot: Snapshot, review: ReviewState): JobOutcome {
     return { kind: "waiting" };
   }
 
+  if (job.kind === "missing") {
+    return job;
+  }
+
   const { result } = job;
 
   if (result === null) {
-    return job.conclusion === "cancelled" || job.conclusion === "missing"
-      ? { kind: "cancelled" }
-      : { kind: "failed", cause: `the review job ended (${job.conclusion}) with no result that reads` };
+    return { kind: "failed", cause: `the review job ended (${job.conclusion}) with no result that reads` };
   }
 
   const { request } = result;
@@ -473,10 +477,9 @@ export function reviewStepsOf(snapshot: Snapshot, record: StateRecord): ReviewMa
 
   const outcome = outcomeOf(snapshot, review);
 
-  // Two Merge bot runs on one PR, a Sweep's and an event's, can both dispatch: the review job's
-  // concurrency cancels the first run, and the record may keep its id. Such a request is asked again,
-  // as is one whose run GitHub no longer gives back (`missing`, from the adapter).
-  if (outcome.kind === "cancelled") {
+  // A deleted run took its result with it: the request is asked again. A cancelled run is a failure,
+  // like any run that ended with no result: the review job never cancels one of its own runs.
+  if (outcome.kind === "missing") {
     return { record: withoutReview(record), end: null };
   }
 

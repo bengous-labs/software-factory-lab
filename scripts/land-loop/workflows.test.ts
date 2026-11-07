@@ -53,7 +53,7 @@ describe("the review job's workflow", () => {
 
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
     expect(workflow["run-name"]).toBe("${{ inputs.pr }}");
-    expect(workflow.concurrency).toEqual({ group: "code-review-${{ inputs.pr }}", "cancel-in-progress": true });
+    expect(workflow.concurrency).toEqual({ group: "code-review-${{ inputs.pr }}", "cancel-in-progress": false });
   });
 
   test("it reads the contents and the pull requests, and holds no secret but the OAuth token", async () => {

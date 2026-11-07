@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
 
 import { markerOf } from "./findings.ts";
-import { diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "./post-plan.ts";
+import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "./post-plan.ts";
 import type { DiffLines } from "./post-plan.ts";
 import type { ReportedFinding, ReportedResult } from "./review-report.ts";
 
@@ -75,6 +75,28 @@ const finding = (severity: ReportedFinding["severity"], file: string, line: numb
   summary: `${severity} at ${file}`,
   failureScenario: "the scenario",
   breaks: null,
+});
+
+describe("diffArgsOf", () => {
+  test("asks git for the PR's whole range with unquoted paths, which a non-ASCII path needs to anchor", () => {
+    expect(diffArgsOf("b".repeat(40), "h".repeat(40))).toEqual([
+      "-c",
+      "core.quotePath=false",
+      "diff",
+      `${"b".repeat(40)}..${"h".repeat(40)}`,
+    ]);
+
+    const unquoted = [
+      "diff --git a/app/café.ts b/app/café.ts",
+      "--- /dev/null",
+      "+++ b/app/café.ts",
+      "@@ -0,0 +1,2 @@",
+      "+a",
+      "+b",
+    ];
+
+    expect(diffLinesOf(unquoted.join("\n")).get("app/café.ts")).toEqual(new Set([1, 2]));
+  });
 });
 
 describe("postPlanOf", () => {

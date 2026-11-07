@@ -753,6 +753,7 @@ describe("the review job's run", () => {
     const rows: Array<[ReviewJob, string]> = [
       [completed({ kind: "failed", cause: "timed out after 1500000 ms", ...FACTS }), "timed out after 1500000 ms"],
       [completed(null, "timed_out"), "the review job ended (timed_out) with no result that reads"],
+      [completed(null, "cancelled"), "the review job ended (cancelled) with no result that reads"],
       [completed({ ...reported(), request: { ...REQUEST, pr: 10 } }), "the artifact does not match the request"],
       [
         completed({ ...reported(), request: { ...REQUEST, patch: "patch-0" } }),
@@ -804,15 +805,11 @@ describe("the review job's run", () => {
     expect(reviewStepsOf(READY, READY.record)).toEqual({ record: READY.record, end: null });
   });
 
-  test("a run cancelled with no result, as a second dispatch for the PR leaves it, or a run GitHub no longer gives back, is asked again in the same decision", () => {
-    for (const [review, conclusion] of [
-      [REQUESTED, "cancelled"],
-      [failedState("c"), "cancelled"],
-      [REQUESTED, "missing"],
-    ] as const) {
-      const cancelled = { ...asked, record: { ...asked.record, review }, reviewJob: completed(null, conclusion) };
+  test("a run GitHub no longer gives back is asked again in the same decision, whether its review was asked or failed", () => {
+    for (const review of [REQUESTED, failedState("c")]) {
+      const gone = { ...asked, record: { ...asked.record, review }, reviewJob: { kind: "missing" as const } };
 
-      expect(stepsOf(cancelled).slice(0, 3)).toEqual([
+      expect(stepsOf(gone).slice(0, 3)).toEqual([
         { kind: "record", record: READY.record },
         { kind: "labels", route: "auto", depth: "light" },
         { kind: "request-review", depth: "light", reviewRound: 1 },
@@ -944,9 +941,10 @@ const ARBITRARY_JOB: fc.Arbitrary<ReviewJob | null> = fc.option(
     fc.record({ kind: fc.constantFrom("running") }),
     fc.record({
       kind: fc.constantFrom("completed"),
-      conclusion: fc.constantFrom("success", "failure", "cancelled", "missing"),
+      conclusion: fc.constantFrom("success", "failure", "cancelled"),
       result: fc.option(ARBITRARY_RESULT, { nil: null }),
     }),
+    fc.record({ kind: fc.constantFrom("missing") }),
   ),
   { nil: null },
 );
@@ -975,9 +973,8 @@ const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
 
 const RUNS = { numRuns: 2000 };
 
-/** A run cancelled with no result, or one GitHub no longer gives back: its request is withdrawn and asked again. */
-const withdrawn = (job: ReviewJob | null): boolean =>
-  job?.kind === "completed" && job.result === null && (job.conclusion === "cancelled" || job.conclusion === "missing");
+/** A run GitHub no longer gives back: its request is withdrawn and asked again. */
+const withdrawn = (job: ReviewJob | null): boolean => job?.kind === "missing";
 
 const MODEL_STEPS: ReadonlySet<Step["kind"]> = new Set(["route", "principal-judge"]);
 
