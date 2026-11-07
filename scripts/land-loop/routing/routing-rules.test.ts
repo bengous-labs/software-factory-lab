@@ -1,16 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import * as fc from "fast-check";
 
-import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
+import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
+import { LAB, SEGMENT, UNDER } from "../guarantees.test.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
 import { judgeAskOf, routingOf, routingRulesOf } from "./routing-rules.ts";
 import type { RoutingInput, RulesVerdict } from "./routing-rules.ts";
-
-const LAB = factoryConfigOf(readFileSync(join(import.meta.dir, "../../..", FACTORY_CONFIG_PATH), "utf8")).land.routing;
 
 const lab = (input: RoutingInput): RulesVerdict => routingRulesOf(LAB, input);
 
@@ -150,16 +147,6 @@ describe("the cap and the breaking commits", () => {
   });
 });
 
-describe("the factory config", () => {
-  test("goes to the Owner even under a policy that lists it nowhere, or among the factory's paths", () => {
-    for (const policy of [EMPTY, { ...EMPTY, factoryPaths: [".github/**"] }]) {
-      expect(answerOf(routingRulesOf(policy, { paths: [FACTORY_CONFIG_PATH], lines: 1, messages: [] }))?.land).toBe(
-        "owner",
-      );
-    }
-  });
-});
-
 const judge = (land: RoutingAnswer["land"]): RoutingAnswer => ({
   land,
   review: "light",
@@ -228,11 +215,6 @@ describe("routingOf", () => {
   });
 });
 
-const SEGMENT = fc.stringMatching(/^[\w.-]{1,12}$/u).filter((segment) => segment !== "." && segment !== "..");
-
-const UNDER = (directory: string) =>
-  fc.array(SEGMENT, { minLength: 1, maxLength: 4 }).map((segments) => [directory, ...segments].join("/"));
-
 const FACTORY_PATH = fc.oneof(
   fc.constantFrom("AGENTS.md", "REVIEW.md", "package.json", "stryker.config.ts", ".mcp.json"),
   fc.constantFrom("scripts/land-loop", "scripts/lint", ".claude").chain(UNDER),
@@ -253,16 +235,6 @@ const inserted = (path: string, others: readonly string[], at: number): string[]
   others.toSpliced(at % (others.length + 1), 0, path);
 
 describe("under the lab's policy", () => {
-  test("a path under .github/ never lands auto, whatever else the change touches, its size or its messages", () => {
-    fc.assert(
-      fc.property(fc.record({ owner: UNDER(".github"), ...CHANGE }), ({ owner, others, at, lines, messages }) => {
-        const verdict = lab({ paths: inserted(owner, others, at), lines, messages });
-
-        expect(verdict).toMatchObject({ kind: "ruled", answer: { land: "owner" } });
-      }),
-    );
-  });
-
   test("a change of the factory's paths only lands auto after a deep review, whatever its size or its messages", () => {
     fc.assert(
       fc.property(
@@ -274,14 +246,13 @@ describe("under the lab's policy", () => {
     );
   });
 
-  test("a ruled path always gets a deep review, and a path no rule names keeps the Routing judge's say on the route", () => {
+  test("a path no rule names keeps the Routing judge's say on the route of a change that also touches a ruled path", () => {
     fc.assert(
       fc.property(
         fc.record({ ruled: RULED_PATH, app: UNDER("app/src/commands"), ...CHANGE }),
         ({ ruled, app, others, at, lines, messages }) => {
           const verdict = lab({ paths: [app, ...inserted(ruled, others, at)], lines, messages });
 
-          expect(answerOf(verdict)?.review).toBe("deep");
           expect(verdict.kind === "ruled-then-judged" || answerOf(verdict)?.land === "owner").toBe(true);
         },
       ),

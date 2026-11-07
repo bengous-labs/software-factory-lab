@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import * as fc from "fast-check";
 
+import { LABELS, recordOf, ROUTING, RUNS, SNAPSHOT, stepsOrNone, withdrawn } from "../guarantees.test.ts";
 import type { ReportedFinding, ReportedResult, ReviewResult } from "../review/review-report.ts";
 import {
   afterPrincipalJudge,
@@ -21,16 +22,7 @@ import {
   risen,
   storedOfRecord,
 } from "./decide.ts";
-import type {
-  CheckState,
-  ReviewJob,
-  ReviewState,
-  RoutingAnswer,
-  Snapshot,
-  StateRecord,
-  Step,
-  StoredRecord,
-} from "./decide.ts";
+import type { CheckState, ReviewJob, ReviewState, RoutingAnswer, Snapshot, Step, StoredRecord } from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -883,137 +875,7 @@ describe("the review job's run", () => {
   });
 });
 
-const PATCH = fc.constantFrom(P1, "patch-2");
-
-const HEAD = fc.constantFrom("h1", "h2");
-
-const ROUTING: fc.Arbitrary<RoutingAnswer> = fc.record(
-  {
-    land: fc.constantFrom("auto", "owner"),
-    review: fc.constantFrom("none", "light", "deep"),
-    secondRound: fc.boolean(),
-    reason: fc.string(),
-    model: fc.option(fc.string(), { nil: null }),
-    needsFable: fc.boolean(),
-  },
-  { requiredKeys: ["land", "review", "secondRound", "reason", "model"] },
-);
-
-const ROUND = fc.constantFrom<1 | 2>(1, 2);
-
-/** When the arbitrary requests were dispatched: an arbitrary snapshot reads them before or after the deadline. */
-const DISPATCHED_AT = "2026-11-07T11:00:00.000Z";
-
-const reviewStateOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<ReviewState> =>
-  fc.oneof(
-    fc.record({
-      kind: fc.constantFrom("requested"),
-      patch,
-      round: ROUND,
-      runId: fc.nat(),
-      at: fc.constant(DISPATCHED_AT),
-    }),
-    fc.record({ kind: fc.constantFrom("failed"), patch, round: ROUND, runId: fc.nat(), cause: fc.string() }),
-  );
-
-/** A state record whose patches are `patch`, so that a snapshot's patch meets its entries. */
-const recordOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<StateRecord> =>
-  fc.record(
-    {
-      reviewedPatch: fc.option(patch, { nil: null }),
-      reviewedHead: fc.option(HEAD, { nil: null }),
-      reviewRounds: fc.integer({ min: 0, max: 2 }),
-      triage: fc.dictionary(patch, ROUTING),
-      landOkPatch: fc.option(patch, { nil: null }),
-      dequeued: fc.option(fc.record({ head: HEAD, reason: fc.string() }), { nil: null }),
-      fable: fc.dictionary(patch, fc.record({ ok: fc.boolean(), reason: fc.string() })),
-      fableFailures: fc.dictionary(patch, fc.nat({ max: 3 })),
-      review: reviewStateOf(patch),
-    },
-    { requiredKeys: ["reviewedPatch", "reviewedHead", "reviewRounds", "triage", "landOkPatch", "dequeued"] },
-  );
-
-const ARBITRARY_FINDING: fc.Arbitrary<ReportedFinding> = fc.record({
-  file: fc.constant("a.ts"),
-  line: fc.constant(3),
-  severity: fc.constantFrom("important", "nit", "pre_existing"),
-  summary: fc.constant("s"),
-  failureScenario: fc.constant("f"),
-  breaks: fc.constant(null),
-});
-
-const RUN_FACTS = {
-  request: fc.record({
-    pr: fc.constantFrom(9, 10),
-    head: HEAD,
-    base: fc.constant("b0"),
-    patch: PATCH,
-    round: ROUND,
-    model: fc.constant("sonnet"),
-    effort: fc.constantFrom("medium"),
-  }),
-  model: fc.constant(null),
-  claudeCodeVersion: fc.constant(null),
-  costUsd: fc.constant(null),
-  runUrl: fc.constant("https://github.com/o/r/actions/runs/1"),
-};
-
-const ARBITRARY_RESULT: fc.Arbitrary<ReviewResult> = fc.oneof(
-  fc.record({
-    kind: fc.constantFrom("reported"),
-    report: fc.record({ findings: fc.array(ARBITRARY_FINDING, { maxLength: 3 }) }),
-    ...RUN_FACTS,
-  }),
-  fc.record({ kind: fc.constantFrom("failed"), cause: fc.string(), ...RUN_FACTS }),
-);
-
-const ARBITRARY_JOB: fc.Arbitrary<ReviewJob | null> = fc.option(
-  fc.oneof(
-    fc.record({ kind: fc.constantFrom("running") }),
-    fc.record({
-      kind: fc.constantFrom("completed"),
-      conclusion: fc.constantFrom("success", "failure", "cancelled"),
-      result: fc.option(ARBITRARY_RESULT, { nil: null }),
-    }),
-    fc.record({ kind: fc.constantFrom("missing") }),
-  ),
-  { nil: null },
-);
-
-const LABELS = ["land:auto", "land:human", "review:none", "review:light", "review:deep", LAND_APPROVAL_LABEL];
-
-/** Mostly open PRs from the Owner's own branches, the ones `decide` does more than ignore. */
-const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
-  number: fc.constantFrom(9, 10),
-  state: fc.oneof({ arbitrary: fc.constant("OPEN"), weight: 8 }, fc.constantFrom("CLOSED", "MERGED")),
-  sameRepository: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
-  openedByOwner: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
-  draft: fc.boolean(),
-  head: HEAD,
-  patch: PATCH,
-  ci: fc.constantFrom("success", "failure", null),
-  labels: fc.subarray(LABELS),
-  landApprovalByOwner: fc.boolean(),
-  openImportant: fc.nat({ max: 2 }),
-  devRed: fc.boolean(),
-  conflicting: fc.boolean(),
-  record: recordOf(PATCH),
-  now: fc.constantFrom("2026-11-07T11:30:00.000Z", "2026-11-07T12:00:00.000Z"),
-  reviewJob: ARBITRARY_JOB,
-});
-
-const RUNS = { numRuns: 2000 };
-
-/** A run GitHub no longer gives back: its request is withdrawn and asked again. */
-const withdrawn = (job: ReviewJob | null): boolean => job?.kind === "missing";
-
 const MODEL_STEPS: ReadonlySet<Step["kind"]> = new Set(["route", "principal-judge"]);
-
-const stepsOrNone = (snapshot: Snapshot): readonly Step[] => {
-  const decision = decide(snapshot);
-
-  return decision.kind === "steps" ? decision.steps : [];
-};
 
 const REVIEW_RANK: Readonly<Record<RoutingAnswer["review"], number>> = { none: 0, light: 1, deep: 2 };
 
@@ -1089,49 +951,6 @@ describe("the Merge bot's invariants", () => {
     );
   });
 
-  test("an auto-merge comes last, after a green Land gate, on a PR that is ready, green, unblocked and routed", () => {
-    fc.assert(
-      fc.property(SNAPSHOT, (snapshot) => {
-        const decision = decide(snapshot);
-        const steps = decision.kind === "steps" ? decision.steps : [];
-        const merge = steps.findIndex((step) => step.kind === "auto-merge");
-
-        if (merge !== -1) {
-          const gateStep = steps[merge - 1];
-
-          expect(merge).toBe(steps.length - 1);
-          expect(gateStep?.kind === "land-gate" ? gateStep.check.kind : undefined).toBe("success");
-          expect(snapshot).toMatchObject({
-            draft: false,
-            ci: "success",
-            openImportant: 0,
-            devRed: false,
-            conflicting: false,
-          });
-          expect(snapshot.record.dequeued?.head).not.toBe(snapshot.head);
-          expect(snapshot.record.triage[snapshot.patch]).toBeDefined();
-        }
-      }),
-      RUNS,
-    );
-  });
-
-  test("without the Owner's Land approval, an auto-merge needs no land:human on the PR and an auto Routing answer", () => {
-    fc.assert(
-      fc.property(SNAPSHOT, (snapshot) => {
-        const decision = decide(snapshot);
-        const merged = decision.kind === "steps" && decision.steps.some((step) => step.kind === "auto-merge");
-        const approved = snapshot.landApprovalByOwner && snapshot.labels.includes(LAND_APPROVAL_LABEL);
-
-        if (merged && !approved) {
-          expect(snapshot.labels).not.toContain("land:human");
-          expect(snapshot.record.triage[snapshot.patch]?.land).toBe("auto");
-        }
-      }),
-      RUNS,
-    );
-  });
-
   test("a decision that posts a review ends with its Review check and posts no Land gate: the next decision reads the review", () => {
     fc.assert(
       fc.property(SNAPSHOT, (snapshot) => {
@@ -1147,7 +966,7 @@ describe("the Merge bot's invariants", () => {
     );
   });
 
-  test("while the review asked for this patch has no report, the Review check never turns green, nothing merges and no review is asked again", () => {
+  test("while the review asked for this patch has no report, the Review check never turns green and no review is asked again", () => {
     fc.assert(
       fc.property(SNAPSHOT, (snapshot) => {
         const job = snapshot.reviewJob;
@@ -1157,7 +976,6 @@ describe("the Merge bot's invariants", () => {
           const steps = stepsOrNone(snapshot);
 
           expect(steps.some((step) => step.kind === "review-check" && step.check.kind === "success")).toBe(false);
-          expect(steps.map((step) => step.kind)).not.toContain("auto-merge");
           expect(steps.map((step) => step.kind)).not.toContain("request-review");
         }
       }),
