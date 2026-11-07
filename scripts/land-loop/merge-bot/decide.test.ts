@@ -731,12 +731,22 @@ describe("the review job's run", () => {
   test("a completed run that reports for this PR, patch and round posts the review, even on a draft, then says whether it found an Important", () => {
     expect(stepsOf({ ...asked, reviewJob: completed(reported(finding("important"), finding("nit"))) })).toEqual([
       { kind: "post-review", result: reported(finding("important"), finding("nit")) },
-      { kind: "review-check", check: { kind: "failure", summary: "1 Important finding(s) posted." } },
+      { kind: "review-check", check: { kind: "failure", summary: "1 Important finding(s) open." } },
     ]);
     expect(stepsOf({ ...asked, draft: true, reviewJob: completed(reported(finding("nit"))) })).toEqual([
       { kind: "post-review", result: reported(finding("nit")) },
-      { kind: "review-check", check: { kind: "success", summary: "No Important finding." } },
+      { kind: "review-check", check: { kind: "success", summary: "No Important finding open." } },
     ]);
+  });
+
+  test("a report with no Important still leaves the Review check red while an earlier round's Important is open", () => {
+    expect(stepsOf({ ...asked, openImportant: 1, reviewJob: completed(reported(finding("nit"))) })).toEqual([
+      { kind: "post-review", result: reported(finding("nit")) },
+      { kind: "review-check", check: { kind: "failure", summary: "1 Important finding(s) open." } },
+    ]);
+    expect(
+      stepsOf({ ...asked, openImportant: 1, reviewJob: completed(reported(finding("important"))) }),
+    ).toContainEqual({ kind: "review-check", check: { kind: "failure", summary: "2 Important finding(s) open." } });
   });
 
   test("a failed result, a run with no result that reads, or an artifact of another PR, patch or round fails the review, with the cause", () => {

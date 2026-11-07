@@ -419,18 +419,22 @@ function failedOf(record: StateRecord, review: ReviewState, cause: string): Revi
   };
 }
 
-/** The review is posted, then its Review check says whether it found an Important. */
-function postedSteps(result: ReportedResult): readonly Step[] {
-  const important = result.report.findings.filter((finding) => finding.severity === "important").length;
+/**
+ * The review is posted, then its Review check counts the Important findings open once it is: those it
+ * posts and those of an earlier round still open.
+ */
+function postedSteps(snapshot: Snapshot, result: ReportedResult): readonly Step[] {
+  const posted = result.report.findings.filter((finding) => finding.severity === "important").length;
+  const open = posted + snapshot.openImportant;
 
   return [
     { kind: "post-review", result },
     {
       kind: "review-check",
       check:
-        important === 0
-          ? { kind: "success", summary: "No Important finding." }
-          : { kind: "failure", summary: `${important} Important finding(s) posted.` },
+        open === 0
+          ? { kind: "success", summary: "No Important finding open." }
+          : { kind: "failure", summary: `${open} Important finding(s) open.` },
     },
   ];
 }
@@ -474,7 +478,7 @@ export function reviewStepsOf(snapshot: Snapshot, record: StateRecord): ReviewMa
     return failedOf(record, review, outcome.cause);
   }
 
-  return { record, end: postedSteps(outcome.result) };
+  return { record, end: postedSteps(snapshot, outcome.result) };
 }
 
 /** What the Review rounds ask of this patch: a round to request, or the Owner instead of a third. */
