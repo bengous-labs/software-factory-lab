@@ -21,7 +21,7 @@ import { decodeJson } from "../lib/json.ts";
 import { AUTHOR_MARK } from "./author-mark.ts";
 import { checked, run } from "./lib/run.ts";
 import type { Run } from "./ports/run.ts";
-import { severityOfBody } from "./review/code-review.ts";
+import { severityOfBody } from "./review/findings.ts";
 
 const POLL_MS = 30_000;
 

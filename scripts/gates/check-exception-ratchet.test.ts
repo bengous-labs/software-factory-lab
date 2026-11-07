@@ -183,6 +183,6 @@ test("the repository's exceptions match what the budget rules report, the async 
   const repo = join(import.meta.dir, "..", "..");
   const breaches = await lintBudgets(repo, [...new Set(EXCEPTIONS.map((exception) => exception.file))]);
 
-  expect(breaches.find((found) => found.name === "perform")).toMatchObject({ rule: "eslint/max-params", value: 8 });
+  expect(breaches.find((found) => found.name === "perform")).toMatchObject({ rule: "eslint/max-params", value: 7 });
   expect(ratchetErrors(EXCEPTIONS, breaches)).toEqual([]);
 });

@@ -1,0 +1,111 @@
+name: code-review
+
+# The Code review of one pull request: Claude Code's native `/code-review`, run through the Agent SDK by
+# `scripts/land-loop/review/run-review.ts`. The Merge bot dispatches it with the request as inputs and
+# reads the result from the run's artifact. The job holds no App token and writes nothing to GitHub:
+# the pull request's head is checked out under `pr/` as files to read, and nothing of it runs. The
+# inputs reach the steps through `env`, never inside a script. Only the thread step of Review round 2
+# gets the job's token, read-only; the review session gets none.
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+      head:
+        description: The commit to review, the pull request's head
+        required: true
+      base:
+        description: Where the reviewed range starts
+        required: true
+      patch:
+        description: The patch identity the Merge bot keys the review on
+        required: true
+      round:
+        description: The review round, 1 or 2
+        required: true
+      model:
+        description: The model alias
+        required: true
+      effort:
+        description: The effort level of /code-review
+        required: true
+
+# The number alone: the Merge bot reads it back from `workflow_run.display_title`.
+run-name: ${{ inputs.pr }}
+
+# A review that a new push made stale is worth nothing.
+concurrency:
+  group: code-review-${{ inputs.pr }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # The thread step's only: it reads the earlier review threads on Review round 2.
+  pull-requests: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # A last resort: the runner times out first and writes the cause, while a job timeout cancels the job
+    # with no result.
+    timeout-minutes: 30
+    env:
+      REVIEW_PR: ${{ inputs.pr }}
+      REVIEW_HEAD: ${{ inputs.head }}
+      REVIEW_BASE: ${{ inputs.base }}
+      REVIEW_PATCH: ${{ inputs.patch }}
+      REVIEW_ROUND: ${{ inputs.round }}
+      REVIEW_MODEL: ${{ inputs.model }}
+      REVIEW_EFFORT: ${{ inputs.effort }}
+    steps:
+      - name: Checkout the dispatched ref
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the pull request's head under pr/
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.head }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up bun via mise
+        uses: jdx/mise-action@v5.2.5
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Read the earlier review threads
+        if: inputs.round == '2'
+        run: bun scripts/land-loop/review/read-threads.ts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_LOGIN: bengous-labs-agents[bot]
+
+      - name: Review
+        run: bun scripts/land-loop/review/run-review.ts
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+      - name: Write a failed result when the runner wrote none
+        if: failure()
+        run: |
+          test -f review-result.json || jq -n \
+            --argjson pr "$REVIEW_PR" --arg head "$REVIEW_HEAD" --arg base "$REVIEW_BASE" --arg patch "$REVIEW_PATCH" \
+            --argjson round "$REVIEW_ROUND" --arg model "$REVIEW_MODEL" --arg effort "$REVIEW_EFFORT" \
+            --arg runUrl "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{kind: "failed", cause: "the review job stopped before the runner wrote its result",
+              request: {pr: $pr, head: $head, base: $base, patch: $patch, round: $round, model: $model, effort: $effort},
+              model: null, claudeCodeVersion: null, costUsd: null, runUrl: $runUrl}' > review-result.json
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: review-${{ inputs.pr }}-${{ inputs.round }}
+          path: review-result.json
+          if-no-files-found: error
+          overwrite: true
