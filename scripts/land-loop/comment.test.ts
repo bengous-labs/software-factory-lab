@@ -1,0 +1,69 @@
+import { describe, expect, test } from "bun:test";
+
+import { AUTHOR_MARK } from "./author-mark.ts";
+import { argsOf, post } from "./comment.ts";
+import type { Run } from "./ports/run.ts";
+import type { PrState } from "./pr-watch.ts";
+import { wakesOf } from "./pr-watch.ts";
+
+const OPEN: PrState = { state: "OPEN", draft: false, head: "c0ffee1", checks: [], threads: [], comments: [] };
+
+const recording = (code: number) => {
+  const calls: string[][] = [];
+
+  const run: Run = (argv) => {
+    calls.push([...argv]);
+
+    return Promise.resolve({ code, stdout: "", stderr: code === 0 ? "" : "denied" });
+  };
+
+  return { run, calls };
+};
+
+describe("argsOf", () => {
+  test("a PR number and a comment are read; a missing, blank or non-integer one is refused", () => {
+    expect(argsOf(["86", "Kept the cap: the guarantees need it"])).toEqual({
+      pr: 86,
+      body: "Kept the cap: the guarantees need it",
+    });
+    expect(argsOf(["86"])).toBeNull();
+    expect(argsOf(["86", "  "])).toBeNull();
+    expect(argsOf(["", "x"])).toBeNull();
+    expect(argsOf(["8.6", "x"])).toBeNull();
+    expect(argsOf(["pr", "x"])).toBeNull();
+  });
+});
+
+describe("post", () => {
+  test("posts the comment on the PR's conversation with the author's mark", async () => {
+    const { run, calls } = recording(0);
+
+    await post(run, "/repo", 86, "Kept the cap");
+
+    expect(calls).toEqual([["gh", "pr", "comment", "86", "--body", `Kept the cap\n\n${AUTHOR_MARK}`]]);
+  });
+
+  test("the PR watch prints nothing for the comment it posts, and still wakes on an unmarked one from the same login", async () => {
+    const { run, calls } = recording(0);
+
+    await post(run, "/repo", 86, "Kept the cap");
+
+    const posted = calls[0]?.at(-1) ?? "";
+
+    const comments = [
+      { id: "1", author: "bengous", body: posted },
+      { id: "2", author: "bengous", body: "Why keep the cap?" },
+    ];
+
+    expect(wakesOf(86, { ...OPEN, comments })).toEqual([
+      { key: "comment:2", line: "Comment on PR #86 by bengous: Why keep the cap?" },
+    ]);
+  });
+
+  test("a failed post throws", async () => {
+    const { run } = recording(1);
+
+    // oxlint-disable-next-line typescript/await-thenable, typescript/no-confusing-void-expression -- bun-types types rejects matchers as void; Bun returns the promise the test awaits.
+    await expect(post(run, "/repo", 86, "x")).rejects.toThrow("denied");
+  });
+});

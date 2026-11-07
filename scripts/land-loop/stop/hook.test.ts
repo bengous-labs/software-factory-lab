@@ -35,8 +35,8 @@ interface World {
   readonly root: string;
 }
 
-/** A fake of git, gh, bun and claude for the Author's session on `agent/x`, one commit ahead, no PR. */
-function world(doneJudgeAnswer: string): World {
+/** A fake of git, gh, bun and claude for the Author's session on `agent/x`, one commit ahead, with the PRs `listed`. */
+function world(doneJudgeAnswer: string, listed = "[]"): World {
   const root = mkdtempSync(join(tmpdir(), "stop-"));
   const calls: Call[] = [];
 
@@ -69,7 +69,7 @@ function world(doneJudgeAnswer: string): World {
     }
 
     if (line.startsWith("gh pr list")) {
-      return ok("[]");
+      return ok(listed);
     }
 
     if (line.startsWith("gh pr create")) {
@@ -132,6 +132,23 @@ describe("stop", () => {
     expect(create?.options.stdin).toBe("Body text.");
     expect(outcome.kind).toBe("block");
     expect(outcome.kind === "block" && outcome.reason).toContain("PR #12 is ready");
+    expect(outcome.kind === "block" && outcome.reason).toContain(`bun ${root}/scripts/land-loop/pr-watch.ts 12`);
+    expect(outcome.kind === "block" && outcome.reason).toContain(
+      `\`bun ${root}/scripts/land-loop/thread.ts <thread-id> `,
+    );
+    expect(outcome.kind === "block" && outcome.reason).toContain(`\`bun ${root}/scripts/land-loop/comment.ts 12 "`);
+  });
+
+  test("a PR ready at HEAD and not armed yet: the hook asks to arm its PR watch, naming the PR in its commands, and pushes nothing", async () => {
+    const { run, calls, root } = world("YES", JSON.stringify([{ number: 12, isDraft: false, headRefOid: HEAD }]));
+    const outcome = await stop(input(root), { run, env: {}, now: () => 0 }, () => {});
+
+    expect(outcome.kind === "block" && outcome.reason).toContain(`bun ${root}/scripts/land-loop/pr-watch.ts 12`);
+    expect(outcome.kind === "block" && outcome.reason).toContain(
+      `\`bun ${root}/scripts/land-loop/thread.ts <thread-id> `,
+    );
+    expect(outcome.kind === "block" && outcome.reason).toContain(`\`bun ${root}/scripts/land-loop/comment.ts 12 "`);
+    expect(calls.some((call) => call.argv[1] === "push")).toBe(false);
   });
 
   test("a stop that asks the Owner a question: the Done judge says NO and nothing is pushed", async () => {

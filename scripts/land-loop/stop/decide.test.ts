@@ -103,13 +103,20 @@ describe("decide", () => {
 });
 
 describe("armReason", () => {
-  test("names the PR, the PR watch command and the thread command, and asks for no question", () => {
-    const reason = armReason(12, "bun /r/scripts/land-loop/pr-watch.ts 12", "bun /r/scripts/land-loop/thread.ts");
+  test("names the PR, the PR watch, thread and comment commands, and asks for no question", () => {
+    const reason = armReason(
+      12,
+      "bun /r/scripts/land-loop/pr-watch.ts 12",
+      "bun /r/scripts/land-loop/thread.ts",
+      "bun /r/scripts/land-loop/comment.ts 12",
+    );
 
     expect(reason).toContain("PR #12 is ready");
     expect(reason).toContain("    bun /r/scripts/land-loop/pr-watch.ts 12");
     expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "Fixed in <sha>: <what changed>"`');
     expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "<your reason>"`');
+    expect(reason).toContain('`bun /r/scripts/land-loop/comment.ts 12 "<what you decided and why>"`');
+    expect(reason).toContain("never with `gh pr comment`");
     expect(reason).toContain("Nit and Pre-existing findings never block");
     expect(reason).toContain("Never ask the Owner a question");
   });
