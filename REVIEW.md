@@ -29,5 +29,5 @@ A thread of an earlier round is settled once the author fixed it or rejected it 
 
 ## Out of scope
 
-- What `bun check` enforces: types, lint, formatting, failing tests, the coverage floor and the gates.
+- What `bun check` reports on its own: type errors, lint, formatting, failing tests, coverage under the floor, a gate that fails. A change that weakens a gate stays in scope.
 - `bun.lock` and `scripts/vendor/`.
