@@ -32,6 +32,7 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["scripts/land-loop/thread.ts", at("land-loop", "entry")],
   ["scripts/land-loop/queue/repost.ts", at("land-loop", "entry")],
   ["scripts/land-loop/review/run-review.ts", at("land-loop", "entry")],
+  ["scripts/land-loop/review/read-threads.ts", at("land-loop", "entry")],
   ["scripts/land-loop/*/decide.ts", at("land-loop", "domain")],
   ["scripts/land-loop/routing/routing-rules.ts", at("land-loop", "domain")],
   ["scripts/land-loop/author-mark.ts", at("land-loop", "domain")],
