@@ -35,9 +35,10 @@ on:
 run-name: ${{ inputs.pr }}
 
 # No concurrency group: GitHub never cancels a review run, so a run that ends cancelled was stopped by
-# a person or by the job's timeout. The Merge bot dispatches one review at a time per PR, from decisions
-# its own concurrency serializes; a review a new push made stale runs to its end, and its result is
-# ignored.
+# a person or by the job's timeout. Two Merge bot decisions on one PR, a Sweep's and an event's, can
+# each dispatch a review: both runs finish, and the Merge bot reads the one its record names, so the
+# race costs a review and never fails one. A review a new push made stale runs to its end, and its
+# result is ignored.
 
 permissions:
   contents: read

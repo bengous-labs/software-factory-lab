@@ -28,8 +28,7 @@ on:
 
 # One Merge bot run per PR at a time, whichever event starts it: a PR event, a CI completion and a
 # dispatch for the same PR all key on its number, so their Merge bot runs follow one another, never
-# side by side. A later event waits, and reads the PR afresh. A Sweep, under the `sweep` key, decides
-# nothing: it dispatches this workflow once per open PR, and each run joins its PR's key. A
+# side by side. A later event waits, and reads the PR afresh. Every Sweep shares the `sweep` key. A
 # dispatched run names no pull request: the review job's run carries the PR's number as its title. Its
 # `workflow_run.name` is that title too, not the workflow's name, so the review run is known by its path.
 concurrency:

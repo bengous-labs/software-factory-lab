@@ -22,7 +22,6 @@ import {
   Pull,
   PullReviews,
   reviewJobReader,
-  sweepOf,
   WorkflowRuns,
 } from "./main.ts";
 
@@ -262,16 +261,5 @@ describe("reviewJobReader", () => {
       conclusion: "success",
       result: null,
     });
-  });
-});
-
-describe("sweepOf", () => {
-  test("a run that names no PR is a Sweep, unless CI's completion names one through its head", () => {
-    expect(sweepOf("push", "")).toBe(true);
-    expect(sweepOf("schedule", "")).toBe(true);
-    expect(sweepOf("workflow_dispatch", "")).toBe(true);
-    expect(sweepOf("workflow_dispatch", "12")).toBe(false);
-    expect(sweepOf("pull_request_target", "12")).toBe(false);
-    expect(sweepOf("workflow_run", "")).toBe(false);
   });
 });
