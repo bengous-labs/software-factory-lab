@@ -1,34 +1,15 @@
 /**
- * The Routing rules: what sends a change to the deepest review whatever a model says of it, and who
- * lands it. The GitHub workflows, the session hooks and settings, the MCP servers, the task file's
- * format, the build config and the configs of the gates (lint, format, tests, mutation, dead code) always
- * go to the owner. So do the Land loop's own scripts, like any other risky path: the judges read only
- * the diff, so no route lands a risky path without the owner.
+ * The Routing rules: what sets a change's Land route and Review depth whatever a model says of it, under
+ * the routing policy of the factory config. A path of `ownerPaths`, or the factory config itself, sends
+ * the change to the Owner. A path of `deepReviewPaths` gets a deep Code review and lands without the
+ * Owner once CI is green and no Important is open. A change that also touches any other path goes to the
+ * Owner when one of its commits is breaking or it is past `lineCap`; a change of other paths only is
+ * otherwise the Routing judge's.
  */
 
+import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
+import type { RoutingPolicy } from "../factory-config.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
-
-const RISKY = [
-  ".github/**",
-  "scripts/**",
-  ".claude/**",
-  "REVIEW.md",
-  "AGENTS.md",
-  "CLAUDE.md",
-  "app/src/store/**",
-  "package.json",
-  "bun.lock",
-  "mise.toml",
-  "tsconfig.json",
-  "bunfig.toml",
-  "oxlint*.config.ts",
-  ".oxfmtrc*",
-  "stryker.config.ts",
-  "knip.json*",
-  ".mcp.json",
-].map((glob) => new Bun.Glob(glob));
-
-const LINE_CAP = 400;
 
 const BREAKING = /^\w+(\([^)]*\))?!:|BREAKING CHANGE/mu;
 
@@ -47,26 +28,49 @@ const toOwner = (reason: string): RoutingAnswer => ({
   needsFable: false,
 });
 
+function matching(globs: readonly string[], paths: readonly string[]): readonly string[] {
+  const compiled = globs.map((glob) => new Bun.Glob(glob));
+
+  return paths.filter((path) => compiled.some((glob) => glob.match(path)));
+}
+
+const listed = (paths: readonly string[]): string => paths.slice(0, 3).join(", ");
+
 /** The Routing rules' answer, or null when the change is the model's to judge. */
-export function routingRulesOf({ paths, lines, messages }: RoutingInput): RoutingAnswer | null {
+export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }: RoutingInput): RoutingAnswer | null {
   if (paths.length === 0) {
     return toOwner("the change touches no file");
   }
 
-  const risky = paths.filter((path) => RISKY.some((glob) => glob.match(path)));
+  const owner = matching([FACTORY_CONFIG_PATH, ...policy.ownerPaths], paths);
 
-  if (risky.length > 0) {
-    return toOwner(`touches a risky path: ${risky.slice(0, 3).join(", ")}`);
+  if (owner.length > 0) {
+    return toOwner(`touches a path the Owner lands: ${listed(owner)}`);
   }
 
-  const breaking = messages.find((message) => BREAKING.test(message));
+  const deep = matching(policy.deepReviewPaths, paths);
 
-  if (breaking !== undefined) {
-    return toOwner(`a breaking commit: ${breaking.split("\n")[0]}`);
+  if (deep.length < paths.length) {
+    const breaking = messages.find((message) => BREAKING.test(message));
+
+    if (breaking !== undefined) {
+      return toOwner(`a breaking commit: ${breaking.split("\n")[0]}`);
+    }
+
+    if (lines > policy.lineCap) {
+      return toOwner(`${lines} lines changed, past the ${policy.lineCap}-line cap`);
+    }
   }
 
-  if (lines > LINE_CAP) {
-    return toOwner(`${lines} lines changed, past the ${LINE_CAP}-line cap`);
+  if (deep.length > 0) {
+    return {
+      land: "auto",
+      review: "deep",
+      secondRound: true,
+      reason: `touches a path a deep review reads: ${listed(deep)}; lands once CI is green and no Important is open`,
+      model: null,
+      needsFable: false,
+    };
   }
 
   return null;

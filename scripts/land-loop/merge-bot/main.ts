@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
 import type { Ran, Run } from "../ports/run.ts";
@@ -32,6 +33,8 @@ import { routingRulesOf } from "../routing/routing-rules.ts";
 import {
   afterPrincipalJudge,
   afterReview,
+  CI_CHECKS,
+  ciOf,
   conflictingOf,
   decide,
   EMPTY_RECORD,
@@ -368,10 +371,15 @@ async function snapshotOf(
   record: StateRecord,
   threads: readonly ReviewThread[],
 ): Promise<Snapshot> {
-  const runs = await api(env, CheckRuns, `repos/${env.repo}/commits/${pr.head.sha}/check-runs?check_name=validate`);
-  const patch = await patchOf(env, range);
+  const ciChecks = await Promise.all(
+    CI_CHECKS.map(async (name) => {
+      const runs = await api(env, CheckRuns, `repos/${env.repo}/commits/${pr.head.sha}/check-runs?check_name=${name}`);
 
-  const validate = runs.check_runs.find((check) => check.app?.slug === "github-actions");
+      return runs.check_runs.find((check) => check.app?.slug === "github-actions");
+    }),
+  );
+
+  const patch = await patchOf(env, range);
   const labels = pr.labels.map((label) => label.name);
   let landApprovalByOwner = false;
 
@@ -399,7 +407,7 @@ async function snapshotOf(
     draft: pr.draft,
     head: pr.head.sha,
     patch,
-    ci: validate?.status === "completed" ? (validate.conclusion === "success" ? "success" : "failure") : null,
+    ci: ciOf(ciChecks),
     labels,
     landApprovalByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
@@ -454,6 +462,7 @@ async function rangeStart(env: Env, range: Range, record: StateRecord, patchDelt
 }
 
 async function route(env: Env, range: Range, record: StateRecord, patchDelta: boolean) {
+  const policy = factoryConfigOf(readFileSync(join(env.cwd, FACTORY_CONFIG_PATH), "utf8")).land.routing;
   const from = await rangeStart(env, range, record, patchDelta);
 
   const paths = (await git(env, ["diff", "--name-only", `${range.base}..${range.head}`]))
@@ -477,7 +486,7 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
     .map((message) => message.trim())
     .filter((message) => message !== "");
 
-  const rules = routingRulesOf({ paths, lines, messages });
+  const rules = routingRulesOf(policy, { paths, lines, messages });
 
   const asked = async () =>
     routingJudge(
@@ -501,7 +510,7 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
     .split("\n")
     .filter((path) => path !== "");
 
-  const patchDeltaRules = routingRulesOf({ paths: patchDeltaPaths, lines: 0, messages: [] });
+  const patchDeltaRules = routingRulesOf(policy, { paths: patchDeltaPaths, lines: 0, messages: [] });
 
   return { ...rules, secondRound: patchDeltaRules !== null || (await asked()).secondRound };
 }
