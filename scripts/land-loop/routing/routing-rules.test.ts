@@ -7,7 +7,7 @@ import * as fc from "fast-check";
 import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
-import { judgedRouting, routingRulesOf } from "./routing-rules.ts";
+import { judgeAskOf, routingOf, routingRulesOf } from "./routing-rules.ts";
 import type { RoutingInput, RulesVerdict } from "./routing-rules.ts";
 
 const LAB = factoryConfigOf(readFileSync(join(import.meta.dir, "../../..", FACTORY_CONFIG_PATH), "utf8")).land.routing;
@@ -130,6 +130,7 @@ describe("the cap and the breaking commits", () => {
     expect(lab({ paths, lines: 400, messages: ["fix: x"] })).toMatchObject({
       kind: "ruled-then-judged",
       answer: AUTO_DEEP,
+      judgedPaths: ["app/src/cli.ts"],
     });
   });
 
@@ -167,24 +168,63 @@ const judge = (land: RoutingAnswer["land"]): RoutingAnswer => ({
   model: "claude-haiku-5-5",
 });
 
-describe("judgedRouting", () => {
-  const RULED: RoutingAnswer = { ...AUTO_DEEP, reason: "touches scripts/a.ts" };
+const RULED: RoutingAnswer = { ...AUTO_DEEP, reason: "touches scripts/a.ts" };
 
-  test("a change no rule names takes the Routing judge's answer", () => {
-    expect(judgedRouting({ kind: "judged" }, judge("auto"))).toEqual(judge("auto"));
+const RULED_ONLY: RulesVerdict = { kind: "ruled", answer: RULED };
+
+const MIXED: RulesVerdict = { kind: "ruled-then-judged", answer: RULED, judgedPaths: ["app/b.ts"] };
+
+describe("judgeAskOf", () => {
+  test("asks the whole diff of a change no rule names, and only the unruled paths of a mixed one", () => {
+    expect(judgeAskOf({ kind: "judged" }, null)).toEqual({ kind: "ask", paths: null });
+    expect(judgeAskOf(MIXED, null)).toEqual({ kind: "ask", paths: ["app/b.ts"] });
+    expect(judgeAskOf(MIXED, RULED_ONLY)).toEqual({ kind: "ask", paths: ["app/b.ts"] });
   });
 
-  test("a ruled change the judge would land auto keeps the rules' answer, deep review included", () => {
-    expect(judgedRouting({ kind: "ruled-then-judged", answer: RULED }, judge("auto"))).toEqual(RULED);
+  test("asks nothing of a ruled change, unless its Patch delta is the judge's", () => {
+    expect(judgeAskOf(RULED_ONLY, null)).toEqual({ kind: "none" });
+    expect(judgeAskOf(RULED_ONLY, RULED_ONLY)).toEqual({ kind: "none" });
+    expect(judgeAskOf(RULED_ONLY, { kind: "judged" })).toEqual({ kind: "ask", paths: null });
+  });
+});
+
+describe("routingOf", () => {
+  test("a change no rule names takes the Routing judge's answer, on a Patch delta too", () => {
+    expect(routingOf({ kind: "judged" }, null, judge("auto"))).toEqual(judge("auto"));
+    expect(routingOf({ kind: "judged" }, RULED_ONLY, judge("auto"))).toEqual(judge("auto"));
   });
 
-  test("a ruled change the judge sends to the Owner goes to the Owner, still with a deep review, naming both reasons", () => {
-    expect(judgedRouting({ kind: "ruled-then-judged", answer: RULED }, judge("owner"))).toEqual({
+  test("a ruled change keeps the rules' answer, and asks no judge", () => {
+    expect(routingOf(RULED_ONLY, null, null)).toEqual(RULED);
+  });
+
+  test("a mixed change the judge would land auto keeps the rules' answer, deep review included", () => {
+    expect(routingOf(MIXED, null, judge("auto"))).toEqual(RULED);
+  });
+
+  test("a mixed change the judge sends to the Owner goes to the Owner, still with a deep review, naming both reasons", () => {
+    expect(routingOf(MIXED, null, judge("owner"))).toEqual({
       ...RULED,
       land: "owner",
       reason: "touches scripts/a.ts; the Routing judge: costly to undo",
       model: "claude-haiku-5-5",
     });
+  });
+
+  test("on a Patch delta, a ruled delta is read again, and a judged one only when the judge says so", () => {
+    expect(routingOf(RULED_ONLY, RULED_ONLY, null).secondRound).toBe(true);
+    expect(routingOf(RULED_ONLY, { kind: "judged" }, judge("auto")).secondRound).toBe(false);
+    expect(routingOf(RULED_ONLY, { kind: "judged" }, { ...judge("auto"), secondRound: true }).secondRound).toBe(true);
+    expect(routingOf(MIXED, RULED_ONLY, judge("auto")).secondRound).toBe(true);
+    expect(routingOf(MIXED, { kind: "judged" }, judge("auto")).secondRound).toBe(false);
+  });
+
+  test("a change the judge was not asked about, though its verdict needs it, fails", () => {
+    expect(() => routingOf({ kind: "judged" }, null, null)).toThrow(
+      "the Routing judge was not asked about a judged change",
+    );
+    expect(() => routingOf(MIXED, null, null)).toThrow("ruled-then-judged");
+    expect(() => routingOf(RULED_ONLY, { kind: "judged" }, null)).toThrow("ruled");
   });
 });
 

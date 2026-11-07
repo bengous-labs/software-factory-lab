@@ -30,7 +30,7 @@ import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf as principalJudgePrompt
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { routingJudge } from "../routing/routing-judge.ts";
-import { judgedRouting, routingRulesOf } from "../routing/routing-rules.ts";
+import { judgeAskOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
 import {
   afterPrincipalJudge,
   afterReview,
@@ -473,6 +473,20 @@ export const changedPathsArgs = (from: string, to: string): readonly string[] =>
   `${from}..${to}`,
 ];
 
+/** The arguments of the `git diff` the Routing judge reads, its `--stat` or its patch, limited to `paths` when given. */
+export const judgeDiffArgs = (
+  from: string,
+  to: string,
+  paths: readonly string[] | null,
+  stat: boolean,
+): readonly string[] => [
+  "--literal-pathspecs",
+  "diff",
+  ...(stat ? ["--stat"] : []),
+  `${from}..${to}`,
+  ...(paths === null ? [] : ["--", ...paths]),
+];
+
 /** The routing policy of the factory config in `checkout`: the Merge bot's own checkout of the Trunk, never a PR's head. */
 export function routingPolicyAt(checkout: string): RoutingPolicy {
   return factoryConfigOf(readFileSync(join(checkout, FACTORY_CONFIG_PATH), "utf8")).land.routing;
@@ -505,35 +519,25 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
 
   const rules = routingRulesOf(policy, { paths, lines, messages });
 
-  let judge: Promise<RoutingAnswer> | undefined;
-
-  const asked = (): Promise<RoutingAnswer> => {
-    judge ??= (async () =>
-      routingJudge(
-        ask,
-        env.cwd,
-        await git(env, ["diff", "--stat", `${from}..${range.head}`]),
-        await git(env, ["diff", `${from}..${range.head}`]),
-        patchDelta,
-      ))();
-
-    return judge;
-  };
-
-  const answer = rules.kind === "ruled" ? rules.answer : judgedRouting(rules, await asked());
-
-  if (rules.kind === "judged" || !patchDelta) {
-    return answer;
-  }
-
   // The Routing rules hold the labels of the whole PR; whether this Patch delta is read again is its own question.
-  const patchDeltaRules = routingRulesOf(policy, {
-    paths: await changedPaths(env, from, range.head),
-    lines: 0,
-    messages: [],
-  });
+  const patchDeltaRules = patchDelta
+    ? routingRulesOf(policy, { paths: await changedPaths(env, from, range.head), lines: 0, messages: [] })
+    : null;
 
-  return { ...answer, secondRound: patchDeltaRules.kind !== "judged" || (await asked()).secondRound };
+  const question = judgeAskOf(rules, patchDeltaRules);
+
+  const judge =
+    question.kind === "none"
+      ? null
+      : await routingJudge(
+          ask,
+          env.cwd,
+          await git(env, judgeDiffArgs(from, range.head, question.paths, true)),
+          await git(env, judgeDiffArgs(from, range.head, question.paths, false)),
+          patchDelta,
+        );
+
+  return routingOf(rules, patchDeltaRules, judge);
 }
 
 // oxlint-disable-next-line typescript/consistent-return -- the switch covers every Step kind, so no path reaches the end.

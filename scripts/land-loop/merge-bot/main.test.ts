@@ -22,6 +22,7 @@ import {
   Dispatched,
   IssueComments,
   IssueEvents,
+  judgeDiffArgs,
   landApprovalByOwnerOf,
   ListedPrs,
   notFound,
@@ -314,6 +315,18 @@ describe("the routing inputs", () => {
     const listed = (await git(changedPathsArgs(base, "HEAD"))).text().trim().split("\n").toSorted();
 
     expect(listed).toEqual([FACTORY_CONFIG_PATH, "scripts/software-factory.json"]);
+  });
+
+  test("the Routing judge reads the diff of the paths it is asked about, each path read literally", () => {
+    expect(judgeDiffArgs("b", "h", null, true)).toEqual(["--literal-pathspecs", "diff", "--stat", "b..h"]);
+    expect(judgeDiffArgs("b", "h", ["app/a*.ts", "docs/u.md"], false)).toEqual([
+      "--literal-pathspecs",
+      "diff",
+      "b..h",
+      "--",
+      "app/a*.ts",
+      "docs/u.md",
+    ]);
   });
 
   test("the CI of a head reads GitHub Actions' validate and mutation runs on it", () => {

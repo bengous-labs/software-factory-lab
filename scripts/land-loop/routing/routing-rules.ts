@@ -21,13 +21,13 @@ export interface RoutingInput {
 
 /**
  * What the Routing rules make of a change: `ruled`, their answer stands; `judged`, the Routing judge
- * answers; `ruled-then-judged`, their answer stands unless the judge, asked about the paths no rule
- * names, sends the change to the Owner.
+ * answers; `ruled-then-judged`, their answer stands unless the judge, asked about `judgedPaths`, the
+ * paths no rule names, sends the change to the Owner.
  */
 export type RulesVerdict =
   | { readonly kind: "ruled"; readonly answer: RoutingAnswer }
   | { readonly kind: "judged" }
-  | { readonly kind: "ruled-then-judged"; readonly answer: RoutingAnswer };
+  | { readonly kind: "ruled-then-judged"; readonly answer: RoutingAnswer; readonly judgedPaths: readonly string[] };
 
 const toOwner = (reason: string): RulesVerdict => ({
   kind: "ruled",
@@ -82,11 +82,32 @@ export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }
     needsFable: false,
   };
 
-  return deep.length < paths.length ? { kind: "ruled-then-judged", answer } : { kind: "ruled", answer };
+  const judgedPaths = paths.filter((path) => !deep.includes(path));
+
+  return judgedPaths.length > 0 ? { kind: "ruled-then-judged", answer, judgedPaths } : { kind: "ruled", answer };
+}
+
+/** What the Routing judge is asked: nothing, or the change's diff limited to `paths`, the whole diff when null. */
+export type JudgeAsk = { readonly kind: "none" } | { readonly kind: "ask"; readonly paths: readonly string[] | null };
+
+/**
+ * The judge's question for a change whose rules gave `verdict`, and `patchDelta` for its Patch delta, or
+ * null when it is routed whole. A `judged` Patch delta asks whether to read it again.
+ */
+export function judgeAskOf(verdict: RulesVerdict, patchDelta: RulesVerdict | null): JudgeAsk {
+  if (verdict.kind === "judged") {
+    return { kind: "ask", paths: null };
+  }
+
+  if (verdict.kind === "ruled-then-judged") {
+    return { kind: "ask", paths: verdict.judgedPaths };
+  }
+
+  return patchDelta?.kind === "judged" ? { kind: "ask", paths: null } : { kind: "none" };
 }
 
 /** The Routing answer of a verdict the judge was asked about: the judge's own, or the rules' raised to the Owner when the judge says so. */
-export function judgedRouting(verdict: Exclude<RulesVerdict, { kind: "ruled" }>, judge: RoutingAnswer): RoutingAnswer {
+function judgedRouting(verdict: Exclude<RulesVerdict, { kind: "ruled" }>, judge: RoutingAnswer): RoutingAnswer {
   if (verdict.kind === "judged") {
     return judge;
   }
@@ -99,4 +120,30 @@ export function judgedRouting(verdict: Exclude<RulesVerdict, { kind: "ruled" }>,
         model: judge.model,
       }
     : verdict.answer;
+}
+
+/**
+ * The Routing answer of a change from its rules' verdicts and the judge's answer to `judgeAskOf`, null
+ * when it asked nothing. On a Patch delta, a ruled one is read again, a judged one when the judge says so.
+ */
+export function routingOf(
+  verdict: RulesVerdict,
+  patchDelta: RulesVerdict | null,
+  judge: RoutingAnswer | null,
+): RoutingAnswer {
+  const needed = (): RoutingAnswer => {
+    if (judge === null) {
+      throw new Error(`the Routing judge was not asked about a ${verdict.kind} change`);
+    }
+
+    return judge;
+  };
+
+  const answer = verdict.kind === "ruled" ? verdict.answer : judgedRouting(verdict, needed());
+
+  if (patchDelta === null || verdict.kind === "judged") {
+    return answer;
+  }
+
+  return { ...answer, secondRound: patchDelta.kind !== "judged" || needed().secondRound };
 }
