@@ -13,6 +13,7 @@ import {
   IssueEvents,
   landApprovalByOwnerOf,
   ListedPrs,
+  notFound,
   Pull,
   PullReviews,
   WorkflowRuns,
@@ -151,5 +152,18 @@ describe("the GitHub answers the Merge bot reads", () => {
     for (const [schema, answer] of refused) {
       expect(Result.isFailure(Schema.decodeUnknownResult(schema)(answer))).toBe(true);
     }
+  });
+});
+
+/** A `gh api` read that exited 1 with `stderr`. */
+const failedRead = (stderr: string) => ({ code: 1, stdout: "", stderr });
+
+describe("notFound", () => {
+  test("only a read GitHub answered 404 is a run gone; a rate limit, a 5xx or a network error is not", () => {
+    expect(notFound(failedRead("gh: Not Found (HTTP 404)\n"))).toBe(true);
+    expect(notFound(failedRead("gh: Server Error (HTTP 502)\n"))).toBe(false);
+    expect(notFound(failedRead("gh: API rate limit exceeded (HTTP 403)\n"))).toBe(false);
+    expect(notFound(failedRead("error connecting to api.github.com\n"))).toBe(false);
+    expect(notFound({ code: 0, stdout: "{}", stderr: "(HTTP 404)" })).toBe(false);
   });
 });

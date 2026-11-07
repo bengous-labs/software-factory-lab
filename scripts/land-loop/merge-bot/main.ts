@@ -20,6 +20,7 @@ import { Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
+import type { Ran } from "../ports/run.ts";
 import { graphqlLogin, openImportantOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
 import type { ReviewThread } from "../review/findings.ts";
 import { diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
@@ -283,12 +284,18 @@ async function patchOf(env: Env, range: Range): Promise<string> {
   return ran.stdout.split(" ")[0] ?? "empty";
 }
 
+/** A `gh api` read GitHub answered 404: the resource is gone. A rate limit, a 5xx or a network error is not. */
+export function notFound(read: Ran): boolean {
+  return read.code !== 0 && read.stderr.includes("(HTTP 404)");
+}
+
 /**
  * The run of the review the record asked, and, once it completed, the result of its artifact. Read on
  * every decision, a Sweep's included: the run's `workflow_run` event only wakes the Merge bot, and a
  * wake can be lost. A run with no artifact, or one that does not read, has a null result. A request for
- * another patch is cleared without its run. A run GitHub does not give back, deleted or behind an API
- * error, is `missing`: the decision asks the review again instead of stopping, and a Sweep goes on.
+ * another patch is cleared without its run. A run GitHub answers 404 for is `missing`: the decision asks
+ * the review again instead of stopping, and a Sweep goes on. Any other failure of the read throws, as
+ * every read of the decision does, so a passing API error never withdraws a live review.
  */
 async function reviewJobOf(
   env: Env,
@@ -303,8 +310,12 @@ async function reviewJobOf(
   const path = `repos/${env.repo}/actions/runs/${review.runId}`;
   const read = await run(["gh", "api", path], { cwd: env.cwd });
 
-  if (read.code !== 0) {
+  if (notFound(read)) {
     return { kind: "completed", conclusion: "missing", result: null };
+  }
+
+  if (read.code !== 0) {
+    throw new Error(`gh api ${path} exited ${read.code}: ${(read.stderr || read.stdout).trim()}`);
   }
 
   const job = decodeJson(ActionsRun, `gh api ${path}`, read.stdout);
