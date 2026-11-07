@@ -1,15 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { $ } from "bun";
 import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
+import type { RoutingPolicy } from "../factory-config.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
+import { judgeAskOf, routingRulesOf } from "../routing/routing-rules.ts";
 import type { ReviewState } from "./decide.ts";
 import {
   ActionsRun,
@@ -276,6 +278,24 @@ const ciRuns = (conclusion: string | null, slug = "github-actions") => ({
   check_runs: [{ name: "x", status: conclusion === null ? "in_progress" : "completed", conclusion, app: { slug } }],
 });
 
+/** A new git repository, and a git that runs in it. */
+async function fixtureRepo(prefix: string) {
+  const repo = mkdtempSync(join(tmpdir(), prefix));
+
+  // An inherited GIT_DIR would point this git at the real repository; the test layer cannot import fixtureEnv.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([name, value]) => !name.startsWith("GIT_") && value !== undefined),
+  );
+
+  const git = (args: readonly string[]) => $`git ${args}`.cwd(repo).env(env).quiet();
+
+  await git(["init", "-q"]);
+  await git(["config", "user.email", "t@t"]);
+  await git(["config", "user.name", "t"]);
+
+  return { repo, git };
+}
+
 describe("the routing inputs", () => {
   test("the routing policy is read from the given checkout, and a config that does not read fails naming the file", () => {
     const checkout = mkdtempSync(join(tmpdir(), "routing-policy-"));
@@ -291,18 +311,8 @@ describe("the routing inputs", () => {
   });
 
   test("a moved file lists both its old and its new path, so a move out of an Owner path is still routed to the Owner", async () => {
-    const repo = mkdtempSync(join(tmpdir(), "changed-paths-"));
+    const { repo, git } = await fixtureRepo("changed-paths-");
 
-    // An inherited GIT_DIR would point this git at the real repository; the test layer cannot import fixtureEnv.
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter(([name, value]) => !name.startsWith("GIT_") && value !== undefined),
-    );
-
-    const git = (args: readonly string[]) => $`git ${args}`.cwd(repo).env(env).quiet();
-
-    await git(["init", "-q"]);
-    await git(["config", "user.email", "t@t"]);
-    await git(["config", "user.name", "t"]);
     mkdirSync(join(repo, ".github"));
     writeFileSync(join(repo, FACTORY_CONFIG_PATH), "{}\n");
     await git(["add", "."]);
@@ -315,6 +325,50 @@ describe("the routing inputs", () => {
     const listed = (await git(changedPathsArgs(base, "HEAD"))).text().trim().split("\n").toSorted();
 
     expect(listed).toEqual([FACTORY_CONFIG_PATH, "scripts/software-factory.json"]);
+  });
+
+  test("on a Patch delta, the Routing judge is asked nothing when the delta leaves the paths no rule names alone, and reads their diff when it touches one", async () => {
+    const { repo, git } = await fixtureRepo("patch-delta-");
+    const policy: RoutingPolicy = { ownerPaths: [], factoryPaths: ["scripts/**"], deepReviewPaths: [], lineCap: 400 };
+
+    const commit = async (files: Readonly<Record<string, string>>): Promise<string> => {
+      for (const [path, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(repo, path)), { recursive: true });
+        writeFileSync(join(repo, path), text);
+      }
+
+      await git(["add", "."]);
+      await git(["commit", "-q", "-m", "c"]);
+
+      return (await git(["rev-parse", "HEAD"])).text().trim();
+    };
+
+    const pathsOf = async (from: string, to: string): Promise<readonly string[]> =>
+      (await git(changedPathsArgs(from, to)))
+        .text()
+        .split("\n")
+        .filter((path) => path !== "");
+
+    const base = await commit({ "README.md": "r\n" });
+    const reviewed = await commit({ ".gitignore": "a\n", "scripts/a.ts": "1\n" });
+
+    const askOn = async (head: string) =>
+      judgeAskOf(
+        routingRulesOf(policy, { paths: await pathsOf(base, head), lines: 0, messages: [] }),
+        routingRulesOf(policy, { paths: await pathsOf(reviewed, head), lines: 0, messages: [] }),
+      );
+
+    expect(await askOn(await commit({ "scripts/a.ts": "2\n" }))).toEqual({ kind: "none" });
+
+    const head = await commit({ ".gitignore": "b\n" });
+    const question = await askOn(head);
+
+    expect(question).toEqual({ kind: "ask", paths: [".gitignore"] });
+
+    const diff = await git(judgeDiffArgs(reviewed, head, question.kind === "ask" ? question.paths : null, false));
+
+    expect(diff.text()).toContain("+b");
+    expect(diff.text()).not.toContain("scripts/a.ts");
   });
 
   test("the Routing judge reads the diff of the paths it is asked about, each path read literally", () => {

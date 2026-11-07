@@ -91,8 +91,26 @@ export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }
 export type JudgeAsk = { readonly kind: "none" } | { readonly kind: "ask"; readonly paths: readonly string[] | null };
 
 /**
+ * Which of `judgedPaths` the judge is asked about, when it reads only the diff of `patchDelta`: every one
+ * when the change is routed whole or no rule names a path of its Patch delta, those the delta's own judged
+ * paths share when it is mixed, none when its rules answer for the whole delta.
+ */
+function judgedOn(judgedPaths: readonly string[], patchDelta: RulesVerdict | null): readonly string[] {
+  if (patchDelta === null || patchDelta.kind === "judged") {
+    return judgedPaths;
+  }
+
+  if (patchDelta.kind === "ruled") {
+    return [];
+  }
+
+  return judgedPaths.filter((path) => patchDelta.judgedPaths.includes(path));
+}
+
+/**
  * The judge's question for a change whose rules gave `verdict`, and `patchDelta` for its Patch delta, or
- * null when it is routed whole. A `judged` Patch delta asks whether to read it again.
+ * null when it is routed whole. A `judged` Patch delta asks whether to read it again; a mixed change asks
+ * about the judged paths its Patch delta touches, and nothing when it touches none.
  */
 export function judgeAskOf(verdict: RulesVerdict, patchDelta: RulesVerdict | null): JudgeAsk {
   if (verdict.kind === "judged") {
@@ -100,7 +118,9 @@ export function judgeAskOf(verdict: RulesVerdict, patchDelta: RulesVerdict | nul
   }
 
   if (verdict.kind === "ruled-then-judged") {
-    return { kind: "ask", paths: verdict.judgedPaths };
+    const paths = judgedOn(verdict.judgedPaths, patchDelta);
+
+    return paths.length > 0 ? { kind: "ask", paths } : { kind: "none" };
   }
 
   return patchDelta?.kind === "judged" ? { kind: "ask", paths: null } : { kind: "none" };
@@ -124,7 +144,8 @@ function judgedRouting(verdict: Exclude<RulesVerdict, { kind: "ruled" }>, judge:
 
 /**
  * The Routing answer of a change from its rules' verdicts and the judge's answer to `judgeAskOf`, null
- * when it asked nothing. On a Patch delta, a ruled one is read again, a judged one when the judge says so.
+ * when it asked nothing. A mixed change whose Patch delta asks the judge nothing keeps the rules' answer.
+ * On a Patch delta, a ruled one is read again, a judged one when the judge says so.
  */
 export function routingOf(
   verdict: RulesVerdict,
@@ -139,7 +160,12 @@ export function routingOf(
     return judge;
   };
 
-  const answer = verdict.kind === "ruled" ? verdict.answer : judgedRouting(verdict, needed());
+  const asked = judgeAskOf(verdict, patchDelta).kind === "ask";
+
+  const answer =
+    verdict.kind === "judged" || (verdict.kind === "ruled-then-judged" && asked)
+      ? judgedRouting(verdict, needed())
+      : verdict.answer;
 
   if (patchDelta === null || verdict.kind === "judged") {
     return answer;
