@@ -6,6 +6,7 @@ import type { ReportedFinding, ReportedResult, ReviewResult } from "../review/re
 import {
   afterPrincipalJudge,
   afterReview,
+  ciOf,
   conflictingOf,
   decide,
   EMPTY_RECORD,
@@ -94,6 +95,15 @@ describe("decide", () => {
       expect(kinds(snapshot)).toEqual(["land-gate"]);
       expect(gate(snapshot)).toBe("pending");
     }
+  });
+
+  test("the Land gate names the CI it waits for, and the CI that is red", () => {
+    expect(stepsOf({ ...READY, ci: null })).toEqual([
+      { kind: "land-gate", check: { kind: "pending", summary: "Waiting for validate and mutation." } },
+    ]);
+    expect(stepsOf({ ...READY, ci: "failure" })).toEqual([
+      { kind: "land-gate", check: { kind: "pending", summary: "validate or mutation is red: the author's turn." } },
+    ]);
   });
 
   test("a ready PR with green CI and a patch with no Routing answer is routed first", () => {
@@ -462,6 +472,27 @@ describe("the stored record", () => {
 
     expect(stored.reviewRounds).toBe(1);
     expect(recordOfJson(JSON.stringify(stored))).toEqual(record);
+  });
+});
+
+describe("ciOf", () => {
+  const green = { status: "completed", conclusion: "success" };
+  const red = { status: "completed", conclusion: "failure" };
+  const running = { status: "in_progress", conclusion: null };
+
+  test("CI is green only once every check completed green", () => {
+    expect(ciOf([green, green])).toBe("success");
+  });
+
+  test("CI is red once one check ended other than green, even while another runs or is missing", () => {
+    expect(ciOf([green, red])).toBe("failure");
+    expect(ciOf([running, { status: "completed", conclusion: "cancelled" }])).toBe("failure");
+    expect(ciOf([undefined, { status: "completed", conclusion: null }])).toBe("failure");
+  });
+
+  test("CI is pending while a check runs or has not reported", () => {
+    expect(ciOf([green, running])).toBeNull();
+    expect(ciOf([green, undefined])).toBeNull();
   });
 });
 

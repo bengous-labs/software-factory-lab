@@ -1,34 +1,15 @@
 /**
- * The Routing rules: what sends a change to the deepest review whatever a model says of it, and who
- * lands it. The GitHub workflows, the session hooks and settings, the MCP servers, the task file's
- * format, the build config and the configs of the gates (lint, format, tests, mutation, dead code) always
- * go to the owner. So do the Land loop's own scripts, like any other risky path: the judges read only
- * the diff, so no route lands a risky path without the owner.
+ * The Routing rules: what sets a change's Land route and Review depth whatever a model says of it, under
+ * the routing policy of the factory config. A path of `ownerPaths`, or the factory config itself, sends
+ * the change to the Owner. A path of `factoryPaths` or `deepReviewPaths` gets a deep Code review and
+ * lands without the Owner once CI is green and no Important is open. A change that touches a path
+ * outside `factoryPaths` goes to the Owner when one of its commits is breaking or it is past `lineCap`.
+ * The Routing judge answers for the paths no rule names, and may raise a ruled change to the Owner.
  */
 
+import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
+import type { RoutingPolicy } from "../factory-config.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
-
-const RISKY = [
-  ".github/**",
-  "scripts/**",
-  ".claude/**",
-  "REVIEW.md",
-  "AGENTS.md",
-  "CLAUDE.md",
-  "app/src/store/**",
-  "package.json",
-  "bun.lock",
-  "mise.toml",
-  "tsconfig.json",
-  "bunfig.toml",
-  "oxlint*.config.ts",
-  ".oxfmtrc*",
-  "stryker.config.ts",
-  "knip.json*",
-  ".mcp.json",
-].map((glob) => new Bun.Glob(glob));
-
-const LINE_CAP = 400;
 
 const BREAKING = /^\w+(\([^)]*\))?!:|BREAKING CHANGE/mu;
 
@@ -38,36 +19,131 @@ export interface RoutingInput {
   readonly messages: readonly string[];
 }
 
-const toOwner = (reason: string): RoutingAnswer => ({
-  land: "owner",
-  review: "deep",
-  secondRound: true,
-  reason,
-  model: null,
-  needsFable: false,
+/**
+ * What the Routing rules make of a change: `ruled`, their answer stands; `judged`, the Routing judge
+ * answers; `ruled-then-judged`, their answer stands unless the judge, asked about `judgedPaths`, the
+ * paths no rule names, sends the change to the Owner.
+ */
+export type RulesVerdict =
+  | { readonly kind: "ruled"; readonly answer: RoutingAnswer }
+  | { readonly kind: "judged" }
+  | { readonly kind: "ruled-then-judged"; readonly answer: RoutingAnswer; readonly judgedPaths: readonly string[] };
+
+const toOwner = (reason: string): RulesVerdict => ({
+  kind: "ruled",
+  answer: { land: "owner", review: "deep", secondRound: true, reason, model: null, needsFable: false },
 });
 
-/** The Routing rules' answer, or null when the change is the model's to judge. */
-export function routingRulesOf({ paths, lines, messages }: RoutingInput): RoutingAnswer | null {
+function matching(globs: readonly string[], paths: readonly string[]): readonly string[] {
+  const compiled = globs.map((glob) => new Bun.Glob(glob));
+
+  return paths.filter((path) => compiled.some((glob) => glob.match(path)));
+}
+
+const listed = (paths: readonly string[]): string => paths.slice(0, 3).join(", ");
+
+export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }: RoutingInput): RulesVerdict {
   if (paths.length === 0) {
     return toOwner("the change touches no file");
   }
 
-  const risky = paths.filter((path) => RISKY.some((glob) => glob.match(path)));
+  const owner = matching([FACTORY_CONFIG_PATH, ...policy.ownerPaths], paths);
 
-  if (risky.length > 0) {
-    return toOwner(`touches a risky path: ${risky.slice(0, 3).join(", ")}`);
+  if (owner.length > 0) {
+    return toOwner(`touches a path the Owner lands: ${listed(owner)}`);
   }
 
-  const breaking = messages.find((message) => BREAKING.test(message));
+  const factory = matching(policy.factoryPaths, paths);
 
-  if (breaking !== undefined) {
-    return toOwner(`a breaking commit: ${breaking.split("\n")[0]}`);
+  if (factory.length < paths.length) {
+    const breaking = messages.find((message) => BREAKING.test(message));
+
+    if (breaking !== undefined) {
+      return toOwner(`a breaking commit: ${breaking.split("\n")[0]}`);
+    }
+
+    if (lines > policy.lineCap) {
+      return toOwner(`${lines} lines changed, past the ${policy.lineCap}-line cap`);
+    }
   }
 
-  if (lines > LINE_CAP) {
-    return toOwner(`${lines} lines changed, past the ${LINE_CAP}-line cap`);
+  const deep = matching([...policy.factoryPaths, ...policy.deepReviewPaths], paths);
+
+  if (deep.length === 0) {
+    return { kind: "judged" };
   }
 
-  return null;
+  const answer: RoutingAnswer = {
+    land: "auto",
+    review: "deep",
+    secondRound: true,
+    reason: `touches a path a deep review reads: ${listed(deep)}; lands once CI is green and no Important is open`,
+    model: null,
+    needsFable: false,
+  };
+
+  const judgedPaths = paths.filter((path) => !deep.includes(path));
+
+  return judgedPaths.length > 0 ? { kind: "ruled-then-judged", answer, judgedPaths } : { kind: "ruled", answer };
+}
+
+/** What the Routing judge is asked: nothing, or the change's diff limited to `paths`, the whole diff when null. */
+export type JudgeAsk = { readonly kind: "none" } | { readonly kind: "ask"; readonly paths: readonly string[] | null };
+
+/**
+ * The judge's question for a change whose rules gave `verdict`, and `patchDelta` for its Patch delta, or
+ * null when it is routed whole. A `judged` Patch delta asks whether to read it again.
+ */
+export function judgeAskOf(verdict: RulesVerdict, patchDelta: RulesVerdict | null): JudgeAsk {
+  if (verdict.kind === "judged") {
+    return { kind: "ask", paths: null };
+  }
+
+  if (verdict.kind === "ruled-then-judged") {
+    return { kind: "ask", paths: verdict.judgedPaths };
+  }
+
+  return patchDelta?.kind === "judged" ? { kind: "ask", paths: null } : { kind: "none" };
+}
+
+/** The Routing answer of a verdict the judge was asked about: the judge's own, or the rules' raised to the Owner when the judge says so. */
+function judgedRouting(verdict: Exclude<RulesVerdict, { kind: "ruled" }>, judge: RoutingAnswer): RoutingAnswer {
+  if (verdict.kind === "judged") {
+    return judge;
+  }
+
+  return judge.land === "owner"
+    ? {
+        ...verdict.answer,
+        land: "owner",
+        reason: `${verdict.answer.reason}; the Routing judge: ${judge.reason}`,
+        model: judge.model,
+      }
+    : verdict.answer;
+}
+
+/**
+ * The Routing answer of a change from its rules' verdicts and the judge's answer to `judgeAskOf`, null
+ * when it asked nothing. On a Patch delta, a ruled one is read again, a judged one when the judge says so.
+ */
+export function routingOf(
+  verdict: RulesVerdict,
+  patchDelta: RulesVerdict | null,
+  judge: RoutingAnswer | null,
+): RoutingAnswer {
+  const needed = (): RoutingAnswer => {
+    if (judge === null) {
+      throw new Error(`the Routing judge was not asked about a ${verdict.kind} change`);
+    }
+
+    return judge;
+  };
+
+  const answer = verdict.kind === "ruled" ? verdict.answer : judgedRouting(verdict, needed());
+
+  if (patchDelta === null || verdict.kind === "judged") {
+    return answer;
+  }
+
+  return { ...answer, secondRound: patchDelta.kind !== "judged" || needed().secondRound };
 }

@@ -1,0 +1,25 @@
+{
+  "land": {
+    "routing": {
+      "ownerPaths": [".github/**", "bun.lock", "scripts/vendor/**"],
+      "factoryPaths": [
+        "scripts/**",
+        ".claude/**",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "REVIEW.md",
+        "package.json",
+        "mise.toml",
+        "tsconfig.json",
+        "bunfig.toml",
+        "oxlint*.config.ts",
+        ".oxfmtrc*",
+        "stryker.config.ts",
+        "knip.json*",
+        ".mcp.json"
+      ],
+      "deepReviewPaths": ["app/src/store/**"],
+      "lineCap": 400
+    }
+  }
+}

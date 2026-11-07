@@ -18,6 +18,8 @@ import { join } from "node:path";
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
+import type { RoutingPolicy } from "../factory-config.ts";
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
 import type { Ran, Run } from "../ports/run.ts";
@@ -28,10 +30,12 @@ import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf as principalJudgePrompt
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { routingJudge } from "../routing/routing-judge.ts";
-import { routingRulesOf } from "../routing/routing-rules.ts";
+import { judgeAskOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
 import {
   afterPrincipalJudge,
   afterReview,
+  CI_CHECKS,
+  ciOf,
   conflictingOf,
   decide,
   EMPTY_RECORD,
@@ -51,6 +55,7 @@ import type {
   ReviewDepth,
   ReviewJob,
   ReviewState,
+  RoutingAnswer,
   Snapshot,
   StateRecord,
   Step,
@@ -361,6 +366,14 @@ export function reviewJobReader(
 
 const reviewJobOf = reviewJobReader(run);
 
+/** The `check-runs` endpoint of each of CI_CHECKS on `sha`. */
+export const ciRunsPathsOf = (repo: string, sha: string): readonly string[] =>
+  CI_CHECKS.map((name) => `repos/${repo}/commits/${sha}/check-runs?check_name=${name}`);
+
+/** The CI of a head from the check runs of each of CI_CHECKS: GitHub Actions' run of each, as `ciOf` reads them. */
+export const ciOfRuns = (runs: ReadonlyArray<typeof CheckRuns.Type>): Snapshot["ci"] =>
+  ciOf(runs.map((found) => found.check_runs.find((check) => check.app?.slug === "github-actions")));
+
 async function snapshotOf(
   env: Env,
   pr: Pull,
@@ -368,10 +381,9 @@ async function snapshotOf(
   record: StateRecord,
   threads: readonly ReviewThread[],
 ): Promise<Snapshot> {
-  const runs = await api(env, CheckRuns, `repos/${env.repo}/commits/${pr.head.sha}/check-runs?check_name=validate`);
-  const patch = await patchOf(env, range);
+  const ciRuns = await Promise.all(ciRunsPathsOf(env.repo, pr.head.sha).map((path) => api(env, CheckRuns, path)));
 
-  const validate = runs.check_runs.find((check) => check.app?.slug === "github-actions");
+  const patch = await patchOf(env, range);
   const labels = pr.labels.map((label) => label.name);
   let landApprovalByOwner = false;
 
@@ -399,7 +411,7 @@ async function snapshotOf(
     draft: pr.draft,
     head: pr.head.sha,
     patch,
-    ci: validate?.status === "completed" ? (validate.conclusion === "success" ? "success" : "failure") : null,
+    ci: ciOfRuns(ciRuns),
     labels,
     landApprovalByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
@@ -453,12 +465,40 @@ async function rangeStart(env: Env, range: Range, record: StateRecord, patchDelt
   return patchDeltaStart(range.base, record.reviewedHead, ancestor.code);
 }
 
-async function route(env: Env, range: Range, record: StateRecord, patchDelta: boolean) {
-  const from = await rangeStart(env, range, record, patchDelta);
+/** The arguments of a `git diff` that lists every path a range touches: renames split, so a moved file lists both its paths. */
+export const changedPathsArgs = (from: string, to: string): readonly string[] => [
+  "diff",
+  "--name-only",
+  "--no-renames",
+  `${from}..${to}`,
+];
 
-  const paths = (await git(env, ["diff", "--name-only", `${range.base}..${range.head}`]))
-    .split("\n")
-    .filter((path) => path !== "");
+/** The arguments of the `git diff` the Routing judge reads, its `--stat` or its patch, limited to `paths` when given. */
+export const judgeDiffArgs = (
+  from: string,
+  to: string,
+  paths: readonly string[] | null,
+  stat: boolean,
+): readonly string[] => [
+  "--literal-pathspecs",
+  "diff",
+  ...(stat ? ["--stat"] : []),
+  `${from}..${to}`,
+  ...(paths === null ? [] : ["--", ...paths]),
+];
+
+/** The routing policy of the factory config in `checkout`: the Merge bot's own checkout of the Trunk, never a PR's head. */
+export function routingPolicyAt(checkout: string): RoutingPolicy {
+  return factoryConfigOf(readFileSync(join(checkout, FACTORY_CONFIG_PATH), "utf8")).land.routing;
+}
+
+const changedPaths = async (env: Env, from: string, to: string): Promise<readonly string[]> =>
+  (await git(env, changedPathsArgs(from, to))).split("\n").filter((path) => path !== "");
+
+async function route(env: Env, range: Range, record: StateRecord, patchDelta: boolean): Promise<RoutingAnswer> {
+  const policy = routingPolicyAt(env.cwd);
+  const from = await rangeStart(env, range, record, patchDelta);
+  const paths = await changedPaths(env, range.base, range.head);
 
   const numstat = await git(env, ["diff", "--numstat", `${range.base}..${range.head}`]);
 
@@ -477,33 +517,27 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
     .map((message) => message.trim())
     .filter((message) => message !== "");
 
-  const rules = routingRulesOf({ paths, lines, messages });
-
-  const asked = async () =>
-    routingJudge(
-      ask,
-      env.cwd,
-      await git(env, ["diff", "--stat", `${from}..${range.head}`]),
-      await git(env, ["diff", `${from}..${range.head}`]),
-      patchDelta,
-    );
-
-  if (rules === null) {
-    return asked();
-  }
-
-  if (!patchDelta) {
-    return rules;
-  }
+  const rules = routingRulesOf(policy, { paths, lines, messages });
 
   // The Routing rules hold the labels of the whole PR; whether this Patch delta is read again is its own question.
-  const patchDeltaPaths = (await git(env, ["diff", "--name-only", `${from}..${range.head}`]))
-    .split("\n")
-    .filter((path) => path !== "");
+  const patchDeltaRules = patchDelta
+    ? routingRulesOf(policy, { paths: await changedPaths(env, from, range.head), lines: 0, messages: [] })
+    : null;
 
-  const patchDeltaRules = routingRulesOf({ paths: patchDeltaPaths, lines: 0, messages: [] });
+  const question = judgeAskOf(rules, patchDeltaRules);
 
-  return { ...rules, secondRound: patchDeltaRules !== null || (await asked()).secondRound };
+  const judge =
+    question.kind === "none"
+      ? null
+      : await routingJudge(
+          ask,
+          env.cwd,
+          await git(env, judgeDiffArgs(from, range.head, question.paths, true)),
+          await git(env, judgeDiffArgs(from, range.head, question.paths, false)),
+          patchDelta,
+        );
+
+  return routingOf(rules, patchDeltaRules, judge);
 }
 
 // oxlint-disable-next-line typescript/consistent-return -- the switch covers every Step kind, so no path reaches the end.

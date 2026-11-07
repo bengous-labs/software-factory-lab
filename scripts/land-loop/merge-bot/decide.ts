@@ -224,7 +224,7 @@ export interface Snapshot {
   readonly draft: boolean;
   readonly head: string;
   readonly patch: string;
-  /** `validate` on the head: null while it has not completed. */
+  /** CI_CHECKS on the head, as `ciOf` reads them: null while one has not completed. */
   readonly ci: "success" | "failure" | null;
   readonly labels: readonly string[];
   /** The Land approval label is on the PR and the owner put it there. */
@@ -246,6 +246,26 @@ export type ReviewJob =
   | { readonly kind: "completed"; readonly conclusion: string; readonly result: ReviewResult | null }
   /** GitHub answers 404 for the run: it was deleted, and its result with it. */
   | { readonly kind: "missing" };
+
+/**
+ * The CI checks a change lands on, the jobs of `.github/workflows/ci.yml`. External names: the workflow
+ * names its jobs so, so the strings stay. The ruleset requires `validate` alone; the Land gate waits for both.
+ */
+export const CI_CHECKS = ["validate", "mutation"] as const;
+
+interface CiCheck {
+  readonly status: string;
+  readonly conclusion: string | null;
+}
+
+/** The CI of the head, from the latest run of each of CI_CHECKS: red once one ended other than green, null while one has not. */
+export function ciOf(checks: ReadonlyArray<CiCheck | undefined>): Snapshot["ci"] {
+  if (checks.some((check) => check?.status === "completed" && check.conclusion !== "success")) {
+    return "failure";
+  }
+
+  return checks.every((check) => check?.status === "completed") ? "success" : null;
+}
 
 /** GitHub's `mergeable_state` of one PR, from the single-PR endpoint: `dirty` is a conflict with the base. */
 export function conflictingOf(mergeableState: string | null | undefined): boolean {
@@ -568,11 +588,11 @@ export function decide(snapshot: Snapshot): Decision {
   }
 
   if (snapshot.ci === null) {
-    return finish(pending("Waiting for validate."));
+    return finish(pending("Waiting for validate and mutation."));
   }
 
   if (snapshot.ci === "failure") {
-    return finish(pending("validate is red: the author's turn."));
+    return finish(pending("validate or mutation is red: the author's turn."));
   }
 
   const routing = next.triage[snapshot.patch];
