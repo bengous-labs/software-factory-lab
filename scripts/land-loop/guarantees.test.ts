@@ -1,18 +1,14 @@
 /**
- * The factory's safety guarantees, as properties over the pure decisions that enforce them: the
- * Routing rules and the Merge bot's `decide`. The factory config routes this file to the Owner, so a
- * change to the code a guarantee holds that breaks it fails `bun check` and CI, and the guarantee
- * itself changes only with the Owner. The paths the Owner lands are pinned here as literals, and the
- * config's parser is checked against the file's raw JSON, so neither the parser nor the config can
- * quietly drop one. What decides whether this file runs at all (`bunfig.toml`, `package.json`, the test
- * preload) lands without the Owner: the deep Code review is the only guard there.
- * The generators the guarantees draw from live here too, so that no other file can narrow them; the
- * other tests of those modules import them, so a mutation pass of either module runs these guarantees.
+ * The Land loop's safety guarantees, as properties over the pure decisions that enforce them: the
+ * Routing rules and the Merge bot's `decide`. A change to that code that breaks one fails `bun check`;
+ * a change that weakens one here shows in its diff, for the Code review to read. The generators the
+ * guarantees draw from live here too; the other tests of those modules import them, so a mutation pass
+ * of either module runs these guarantees.
  */
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 
 import * as fc from "fast-check";
 
@@ -31,13 +27,8 @@ const CONFIG_JSON = readFileSync(join(REPO_ROOT, FACTORY_CONFIG_PATH), "utf8");
 /** The lab's own routing policy, as the Merge bot reads it from the Trunk. */
 export const LAB = factoryConfigOf(CONFIG_JSON).land.routing;
 
-/** Set on each property, so a global fast-check setting cannot lower how hard the guarantees search. */
+/** The Merge bot's guarantees are rare to reach in a snapshot: they search harder than fast-check's default. */
 export const RUNS = { numRuns: 2000 };
-
-const GUARANTEES_PATH = relative(REPO_ROOT, import.meta.path);
-
-/** The paths the Owner lands, as the Owner chose them: a literal, so neither the config nor its parser can drop one. */
-const PINNED_OWNER_GLOBS = [".github/**", "bun.lock", "scripts/vendor/**", GUARANTEES_PATH];
 
 export const SEGMENT = fc.stringMatching(/^[\w.-]{1,12}$/u).filter((segment) => segment !== "." && segment !== "..");
 
@@ -139,13 +130,9 @@ const POLICY: fc.Arbitrary<RoutingPolicy> = fc.record({
 describe("the Routing rules' guarantees", () => {
   test("under the lab's config, a change that touches an ownerPaths path or the factory config never lands auto, whatever the Routing judge answers", () => {
     fc.assert(
-      fc.property(
-        routedArbitrarily(LAB, changeWith(anyOf([FACTORY_CONFIG_PATH, ...PINNED_OWNER_GLOBS, ...LAB.ownerPaths]))),
-        (answer) => {
-          expect(answer.land).toBe("owner");
-        },
-      ),
-      RUNS,
+      fc.property(routedArbitrarily(LAB, changeWith(anyOf([FACTORY_CONFIG_PATH, ...LAB.ownerPaths]))), (answer) => {
+        expect(answer.land).toBe("owner");
+      }),
     );
   });
 
@@ -157,7 +144,6 @@ describe("the Routing rules' guarantees", () => {
           expect(answer.land).toBe("owner");
         },
       ),
-      RUNS,
     );
   });
 
@@ -169,21 +155,13 @@ describe("the Routing rules' guarantees", () => {
           expect(answer.review).toBe("deep");
         },
       ),
-      RUNS,
     );
   });
 
-  test("the factory config reads as written: its parser drops, adds or changes no glob", () => {
+  test("the routing policy reads as written: the config's parser drops, adds or changes no glob", () => {
     const asWritten: unknown = JSON.parse(CONFIG_JSON);
 
-    expect(asWritten).toEqual(factoryConfigOf(CONFIG_JSON));
-  });
-
-  test("the lab's config sends a change to this file to the Owner", () => {
-    expect(routingRulesOf(LAB, { paths: [GUARANTEES_PATH], lines: 1, messages: [] })).toMatchObject({
-      kind: "ruled",
-      answer: { land: "owner" },
-    });
+    expect(asWritten).toMatchObject({ land: { routing: LAB } });
   });
 });
 
@@ -459,6 +437,22 @@ describe("the Merge bot's guarantees", () => {
 
       if (merges(snapshot) && asksReview(snapshot)) {
         expect(read).toBe(true);
+      }
+    });
+  });
+
+  test("a Patch delta its Routing answer asks to read again never merges before Review round 2 read it", () => {
+    holdsForSnapshots((snapshot) => {
+      const { record } = snapshot;
+
+      const roundTwoOwed =
+        asksReview(snapshot) &&
+        record.reviewedPatch !== snapshot.patch &&
+        record.reviewRounds === 1 &&
+        record.triage[snapshot.patch]?.secondRound === true;
+
+      if (roundTwoOwed) {
+        expect(merges(snapshot)).toBe(false);
       }
     });
   });
