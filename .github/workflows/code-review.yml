@@ -1,0 +1,125 @@
+name: code-review
+
+# The Code review of one pull request: Claude Code's native `/code-review`, run through the Agent SDK by
+# `scripts/land-loop/review/run-review.ts`. The Merge bot dispatches it with the request as inputs and
+# reads the result from the run's artifact. The job holds no App token and writes nothing to GitHub:
+# the pull request's head is checked out under `pr/` as files to read, and nothing of it runs. The
+# inputs reach the steps through `env`, never inside a script.
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+      head:
+        description: The commit to review, the pull request's head
+        required: true
+      base:
+        description: Where the reviewed range starts
+        required: true
+      patch:
+        description: The patch identity the Merge bot keys the review on
+        required: true
+      round:
+        description: The review round, 1 or 2
+        required: true
+      model:
+        description: The model alias
+        required: true
+      effort:
+        description: The effort level of /code-review
+        required: true
+  # LAB ONLY, removed before the pull request: a first run on this branch registers the workflow, so the
+  # API can dispatch it here before it exists on dev. The job is skipped on push.
+  push:
+    branches: [lab/code-review-job]
+
+# The number alone: the Merge bot reads it back from `workflow_run.display_title`.
+run-name: ${{ inputs.pr }}
+
+# A review that a new push made stale is worth nothing.
+concurrency:
+  group: code-review-${{ inputs.pr }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # A last resort: the runner times out first and writes the cause, while a job timeout cancels the job
+    # with no result.
+    timeout-minutes: 30
+    env:
+      REVIEW_PR: ${{ inputs.pr }}
+      REVIEW_HEAD: ${{ inputs.head }}
+      REVIEW_BASE: ${{ inputs.base }}
+      REVIEW_PATCH: ${{ inputs.patch }}
+      REVIEW_ROUND: ${{ inputs.round }}
+      REVIEW_MODEL: ${{ inputs.model }}
+      REVIEW_EFFORT: ${{ inputs.effort }}
+    steps:
+      - name: Checkout the dispatched ref
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the pull request's head under pr/
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.head }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      # LAB ONLY, removed before the pull request: verification 11 compares a checkout with
+      # `persist-credentials: false` to one with the default, and prints counts, never a value.
+      - name: Checkout with the default credentials (lab probe)
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.head }}
+          path: probe-default
+
+      - name: Count the persisted credentials (lab probe)
+        run: |
+          for dir in pr probe-default; do
+            echo "$dir: extraheader lines in .git/config: $(grep -c extraheader "$dir/.git/config" || true)"
+            echo "$dir: includeIf lines in .git/config: $(grep -c includeIf "$dir/.git/config" || true)"
+            echo "$dir: extraheader entries git reads: $(git -C "$dir" config --includes --get-regexp 'extraheader' | wc -l)"
+          done
+          echo "credential files under RUNNER_TEMP: $(find "$RUNNER_TEMP" -maxdepth 2 -name '*.config' -o -maxdepth 2 -name 'git-credentials-*' | wc -l)"
+          echo "~/.claude on the runner: $(test -e "$HOME/.claude" && echo present || echo absent)"
+          rm -rf probe-default
+
+      - name: Set up bun via mise
+        uses: jdx/mise-action@v5.2.5
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Review
+        run: bun scripts/land-loop/review/run-review.ts
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+      - name: Write a failed result when the runner wrote none
+        if: failure()
+        run: |
+          test -f review-result.json || jq -n \
+            --argjson pr "$REVIEW_PR" --arg head "$REVIEW_HEAD" --arg base "$REVIEW_BASE" --arg patch "$REVIEW_PATCH" \
+            --argjson round "$REVIEW_ROUND" --arg model "$REVIEW_MODEL" --arg effort "$REVIEW_EFFORT" \
+            --arg runUrl "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{kind: "failed", cause: "the review job stopped before the runner wrote its result",
+              request: {pr: $pr, head: $head, base: $base, patch: $patch, round: $round, model: $model, effort: $effort},
+              model: null, claudeCodeVersion: null, costUsd: null, runUrl: $runUrl}' > review-result.json
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: review-${{ inputs.pr }}-${{ inputs.round }}
+          path: review-result.json
+          if-no-files-found: error
+          overwrite: true
