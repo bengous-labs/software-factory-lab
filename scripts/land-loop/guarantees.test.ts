@@ -1,7 +1,11 @@
 /**
  * The factory's safety guarantees, as properties over the pure decisions that enforce them: the
  * Routing rules and the Merge bot's `decide`. The factory config routes this file to the Owner, so a
- * change that weakens a guarantee, here or in the code it holds, fails CI unless the Owner lands it.
+ * change to the code a guarantee holds that breaks it fails `bun check` and CI, and the guarantee
+ * itself changes only with the Owner. The paths the Owner lands are pinned here as literals, and the
+ * config's parser is checked against the file's raw JSON, so neither the parser nor the config can
+ * quietly drop one. What decides whether this file runs at all (`bunfig.toml`, `package.json`, the test
+ * preload) lands without the Owner: the deep Code review is the only guard there.
  * The generators the guarantees draw from live here too, so that no other file can narrow them; the
  * other tests of those modules import them, so a mutation pass of either module runs these guarantees.
  */
@@ -22,10 +26,18 @@ import type { RoutingInput } from "./routing/routing-rules.ts";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 
+const CONFIG_JSON = readFileSync(join(REPO_ROOT, FACTORY_CONFIG_PATH), "utf8");
+
 /** The lab's own routing policy, as the Merge bot reads it from the Trunk. */
-export const LAB = factoryConfigOf(readFileSync(join(REPO_ROOT, FACTORY_CONFIG_PATH), "utf8")).land.routing;
+export const LAB = factoryConfigOf(CONFIG_JSON).land.routing;
+
+/** Set on each property, so a global fast-check setting cannot lower how hard the guarantees search. */
+export const RUNS = { numRuns: 2000 };
 
 const GUARANTEES_PATH = relative(REPO_ROOT, import.meta.path);
+
+/** The paths the Owner lands, as the Owner chose them: a literal, so neither the config nor its parser can drop one. */
+const PINNED_OWNER_GLOBS = [".github/**", "bun.lock", "scripts/vendor/**", GUARANTEES_PATH];
 
 export const SEGMENT = fc.stringMatching(/^[\w.-]{1,12}$/u).filter((segment) => segment !== "." && segment !== "..");
 
@@ -127,9 +139,13 @@ const POLICY: fc.Arbitrary<RoutingPolicy> = fc.record({
 describe("the Routing rules' guarantees", () => {
   test("under the lab's config, a change that touches an ownerPaths path or the factory config never lands auto, whatever the Routing judge answers", () => {
     fc.assert(
-      fc.property(routedArbitrarily(LAB, changeWith(anyOf([FACTORY_CONFIG_PATH, ...LAB.ownerPaths]))), (answer) => {
-        expect(answer.land).toBe("owner");
-      }),
+      fc.property(
+        routedArbitrarily(LAB, changeWith(anyOf([FACTORY_CONFIG_PATH, ...PINNED_OWNER_GLOBS, ...LAB.ownerPaths]))),
+        (answer) => {
+          expect(answer.land).toBe("owner");
+        },
+      ),
+      RUNS,
     );
   });
 
@@ -141,6 +157,7 @@ describe("the Routing rules' guarantees", () => {
           expect(answer.land).toBe("owner");
         },
       ),
+      RUNS,
     );
   });
 
@@ -152,7 +169,14 @@ describe("the Routing rules' guarantees", () => {
           expect(answer.review).toBe("deep");
         },
       ),
+      RUNS,
     );
+  });
+
+  test("the factory config reads as written: its parser drops, adds or changes no glob", () => {
+    const asWritten: unknown = JSON.parse(CONFIG_JSON);
+
+    expect(asWritten).toEqual(factoryConfigOf(CONFIG_JSON));
   });
 
   test("the lab's config sends a change to this file to the Owner", () => {
@@ -277,8 +301,6 @@ export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   now: fc.constantFrom("2026-11-07T11:30:00.000Z", "2026-11-07T12:00:00.000Z"),
   reviewJob: ARBITRARY_JOB,
 });
-
-export const RUNS = { numRuns: 2000 };
 
 /** A run GitHub no longer gives back: its request is withdrawn and asked again. */
 export const withdrawn = (job: ReviewJob | null): boolean => job?.kind === "missing";
