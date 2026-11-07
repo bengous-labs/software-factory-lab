@@ -29,10 +29,6 @@ on:
       effort:
         description: The effort level of /code-review
         required: true
-  # LAB ONLY, removed before the pull request: a first run on this branch registers the workflow, so the
-  # API can dispatch it here before it exists on dev. The job is skipped on push.
-  push:
-    branches: [lab/code-review-job]
 
 # The number alone: the Merge bot reads it back from `workflow_run.display_title`.
 run-name: ${{ inputs.pr }}
@@ -47,7 +43,6 @@ permissions:
 
 jobs:
   review:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # A last resort: the runner times out first and writes the cause, while a job timeout cancels the job
     # with no result.
@@ -73,25 +68,6 @@ jobs:
           path: pr
           fetch-depth: 0
           persist-credentials: false
-
-      # LAB ONLY, removed before the pull request: verification 11 compares a checkout with
-      # `persist-credentials: false` to one with the default, and prints counts, never a value.
-      - name: Checkout with the default credentials (lab probe)
-        uses: actions/checkout@v7.0.1
-        with:
-          ref: ${{ inputs.head }}
-          path: probe-default
-
-      - name: Count the persisted credentials (lab probe)
-        run: |
-          for dir in pr probe-default; do
-            echo "$dir: extraheader lines in .git/config: $(grep -c extraheader "$dir/.git/config" || true)"
-            echo "$dir: includeIf lines in .git/config: $(grep -c includeIf "$dir/.git/config" || true)"
-            echo "$dir: extraheader entries git reads: $(git -C "$dir" config --includes --get-regexp 'extraheader' | wc -l)"
-          done
-          echo "credential files under RUNNER_TEMP: $(find "$RUNNER_TEMP" -maxdepth 2 -name '*.config' -o -maxdepth 2 -name 'git-credentials-*' | wc -l)"
-          echo "~/.claude on the runner: $(test -e "$HOME/.claude" && echo present || echo absent)"
-          rm -rf probe-default
 
       - name: Set up bun via mise
         uses: jdx/mise-action@v5.2.5
