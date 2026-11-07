@@ -196,14 +196,20 @@ describe("reviewOf", () => {
       finding("important", "app/other.ts", 4),
       finding("important", "app/other.ts", 120),
       finding("important", "app/a.ts", 7),
-      finding("important", "app/a.ts", null),
+      finding("important", "app/other.ts", null),
     ).map((comment) => comment.body.split("\n")[1]);
 
     expect(bodies).toEqual([
       "At `app/other.ts:4`, outside this diff.",
       "At `app/other.ts:120`, outside this diff.",
       "At `app/a.ts:7`, outside this diff.",
-      "At `app/a.ts`, outside this diff.",
+      "At `app/other.ts`, outside this diff.",
+    ]);
+  });
+
+  test("a finding with no line on a file of the diff anchors on that file and has not moved", () => {
+    expect(commentsOf(finding("important", "app/a.ts", null)).map((comment) => comment.body.split("\n")[1])).toEqual([
+      "",
     ]);
   });
 

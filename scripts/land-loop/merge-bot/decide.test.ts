@@ -752,7 +752,7 @@ describe("the review job's run", () => {
   test("a failed result, a run with no result that reads, or an artifact of another PR, patch or round fails the review, with the cause", () => {
     const rows: Array<[ReviewJob, string]> = [
       [completed({ kind: "failed", cause: "timed out after 1500000 ms", ...FACTS }), "timed out after 1500000 ms"],
-      [completed(null, "cancelled"), "the review job ended (cancelled) with no result that reads"],
+      [completed(null, "timed_out"), "the review job ended (timed_out) with no result that reads"],
       [completed({ ...reported(), request: { ...REQUEST, pr: 10 } }), "the artifact does not match the request"],
       [
         completed({ ...reported(), request: { ...REQUEST, patch: "patch-0" } }),
@@ -802,6 +802,22 @@ describe("the review job's run", () => {
       { kind: "request-review", depth: "light", reviewRound: 1 },
     ]);
     expect(reviewStepsOf(READY, READY.record)).toEqual({ record: READY.record, end: null });
+  });
+
+  test("a run cancelled with no result, as a second dispatch for the PR leaves it, or a run GitHub no longer gives back, is asked again in the same decision", () => {
+    for (const [review, conclusion] of [
+      [REQUESTED, "cancelled"],
+      [failedState("c"), "cancelled"],
+      [REQUESTED, "missing"],
+    ] as const) {
+      const cancelled = { ...asked, record: { ...asked.record, review }, reviewJob: completed(null, conclusion) };
+
+      expect(stepsOf(cancelled).slice(0, 3)).toEqual([
+        { kind: "record", record: READY.record },
+        { kind: "labels", route: "auto", depth: "light" },
+        { kind: "request-review", depth: "light", reviewRound: 1 },
+      ]);
+    }
   });
 
   test("a stale Land approval and a failed review are written in one record", () => {

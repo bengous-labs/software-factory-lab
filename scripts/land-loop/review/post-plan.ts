@@ -115,7 +115,8 @@ const placeOf = (place: { readonly file: string; readonly line: number | null })
 /** A finding's comment: its severity and summary, the true place when it anchors elsewhere, where it breaks, and the marker. */
 function commentOf(planned: PlannedComment): string {
   const { anchor, finding } = planned;
-  const moved = anchor.file !== finding.file || anchor.line !== finding.line;
+  // A finding with no line on a file of the diff anchors on that file's first line: it has not moved.
+  const moved = anchor.file !== finding.file || (finding.line !== null && anchor.line !== finding.line);
 
   return [
     `**${LABEL[planned.severity]}**: ${finding.summary}`,

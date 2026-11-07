@@ -368,6 +368,7 @@ interface ReviewMachine {
 
 type JobOutcome =
   | { readonly kind: "waiting" }
+  | { readonly kind: "cancelled" }
   | { readonly kind: "reported"; readonly result: ReportedResult }
   | { readonly kind: "failed"; readonly cause: string };
 
@@ -382,7 +383,9 @@ function outcomeOf(snapshot: Snapshot, review: ReviewState): JobOutcome {
   const { result } = job;
 
   if (result === null) {
-    return { kind: "failed", cause: `the review job ended (${job.conclusion}) with no result that reads` };
+    return job.conclusion === "cancelled" || job.conclusion === "missing"
+      ? { kind: "cancelled" }
+      : { kind: "failed", cause: `the review job ended (${job.conclusion}) with no result that reads` };
   }
 
   const { request } = result;
@@ -469,6 +472,13 @@ export function reviewStepsOf(snapshot: Snapshot, record: StateRecord): ReviewMa
   }
 
   const outcome = outcomeOf(snapshot, review);
+
+  // Two Merge bot runs on one PR, a Sweep's and an event's, can both dispatch: the review job's
+  // concurrency cancels the first run, and the record may keep its id. Such a request is asked again,
+  // as is one whose run GitHub no longer gives back (`missing`, from the adapter).
+  if (outcome.kind === "cancelled") {
+    return { record: withoutReview(record), end: null };
+  }
 
   if (outcome.kind === "waiting") {
     return waitingOf(snapshot, record, review);

@@ -286,14 +286,28 @@ async function patchOf(env: Env, range: Range): Promise<string> {
 /**
  * The run of the review the record asked, and, once it completed, the result of its artifact. Read on
  * every decision, a Sweep's included: the run's `workflow_run` event only wakes the Merge bot, and a
- * wake can be lost. A run with no artifact, or one that does not read, has a null result.
+ * wake can be lost. A run with no artifact, or one that does not read, has a null result. A request for
+ * another patch is cleared without its run. A run GitHub does not give back, deleted or behind an API
+ * error, is `missing`: the decision asks the review again instead of stopping, and a Sweep goes on.
  */
-async function reviewJobOf(env: Env, pr: number, review: ReviewState | undefined): Promise<ReviewJob | null> {
-  if (review === undefined) {
+async function reviewJobOf(
+  env: Env,
+  pr: number,
+  review: ReviewState | undefined,
+  patch: string,
+): Promise<ReviewJob | null> {
+  if (review === undefined || review.patch !== patch) {
     return null;
   }
 
-  const job = await api(env, ActionsRun, `repos/${env.repo}/actions/runs/${review.runId}`);
+  const path = `repos/${env.repo}/actions/runs/${review.runId}`;
+  const read = await run(["gh", "api", path], { cwd: env.cwd });
+
+  if (read.code !== 0) {
+    return { kind: "completed", conclusion: "missing", result: null };
+  }
+
+  const job = decodeJson(ActionsRun, `gh api ${path}`, read.stdout);
 
   if (job.status !== "completed") {
     return { kind: "running" };
@@ -324,6 +338,7 @@ async function snapshotOf(
   threads: readonly ReviewThread[],
 ): Promise<Snapshot> {
   const runs = await api(env, CheckRuns, `repos/${env.repo}/commits/${pr.head.sha}/check-runs?check_name=validate`);
+  const patch = await patchOf(env, range);
 
   const validate = runs.check_runs.find((check) => check.app?.slug === "github-actions");
   const labels = pr.labels.map((label) => label.name);
@@ -352,7 +367,7 @@ async function snapshotOf(
     openedByOwner: pr.user?.login === env.owner,
     draft: pr.draft,
     head: pr.head.sha,
-    patch: await patchOf(env, range),
+    patch,
     ci: validate?.status === "completed" ? (validate.conclusion === "success" ? "success" : "failure") : null,
     labels,
     landApprovalByOwner,
@@ -361,7 +376,7 @@ async function snapshotOf(
     conflicting: conflictingOf(pr.mergeable_state),
     record,
     now: new Date().toISOString(),
-    reviewJob: await reviewJobOf(env, pr.number, record.review),
+    reviewJob: await reviewJobOf(env, pr.number, record.review, patch),
   };
 }
 
@@ -522,10 +537,9 @@ async function perform(
 
       if (!posted) {
         try {
-          const plan = postPlanOf(
-            result.report.findings,
-            diffLinesOf(await git(env, ["diff", `${range.base}..${range.head}`])),
-          );
+          // Unquoted paths: `diffLinesOf` reads `+++ b/<path>`, and git quotes a non-ASCII path by default.
+          const diff = await git(env, ["-c", "core.quotePath=false", "diff", `${range.base}..${range.head}`]);
+          const plan = postPlanOf(result.report.findings, diffLinesOf(diff));
 
           await send(env, "POST", `repos/${env.repo}/pulls/${pr.number}/reviews`, reviewOf(plan, result, range.head));
         } catch (error) {
