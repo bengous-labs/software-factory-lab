@@ -944,7 +944,7 @@ const ARBITRARY_JOB: fc.Arbitrary<ReviewJob | null> = fc.option(
     fc.record({ kind: fc.constantFrom("running") }),
     fc.record({
       kind: fc.constantFrom("completed"),
-      conclusion: fc.constantFrom("success", "failure", "cancelled"),
+      conclusion: fc.constantFrom("success", "failure", "cancelled", "missing"),
       result: fc.option(ARBITRARY_RESULT, { nil: null }),
     }),
   ),
@@ -974,6 +974,10 @@ const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
 });
 
 const RUNS = { numRuns: 2000 };
+
+/** A run cancelled with no result, or one GitHub no longer gives back: its request is withdrawn and asked again. */
+const withdrawn = (job: ReviewJob | null): boolean =>
+  job?.kind === "completed" && job.result === null && (job.conclusion === "cancelled" || job.conclusion === "missing");
 
 const MODEL_STEPS: ReadonlySet<Step["kind"]> = new Set(["route", "principal-judge"]);
 
@@ -1121,7 +1125,7 @@ describe("the Merge bot's invariants", () => {
         const job = snapshot.reviewJob;
         const reported = job?.kind === "completed" && job.result?.kind === "reported";
 
-        if (snapshot.record.review?.patch === snapshot.patch && !reported) {
+        if (snapshot.record.review?.patch === snapshot.patch && !reported && !withdrawn(job)) {
           const steps = stepsOrNone(snapshot);
 
           expect(steps.some((step) => step.kind === "review-check" && step.check.kind === "success")).toBe(false);
@@ -1133,7 +1137,7 @@ describe("the Merge bot's invariants", () => {
     );
   });
 
-  test("a review is asked only of a ready PR with green CI, routed, with no review asked for its patch, and the Land gate stays pending", () => {
+  test("a review is asked only of a ready PR with green CI, routed, with no live review asked for its patch, and the Land gate stays pending", () => {
     fc.assert(
       fc.property(SNAPSHOT, (snapshot) => {
         const steps = stepsOrNone(snapshot);
@@ -1141,7 +1145,7 @@ describe("the Merge bot's invariants", () => {
         if (steps.some((step) => step.kind === "request-review")) {
           expect(snapshot).toMatchObject({ draft: false, ci: "success", conflicting: false });
           expect(snapshot.record.triage[snapshot.patch]).toBeDefined();
-          expect(snapshot.record.review?.patch).not.toBe(snapshot.patch);
+          expect(snapshot.record.review?.patch !== snapshot.patch || withdrawn(snapshot.reviewJob)).toBe(true);
           expect(steps.at(-1)?.kind === "land-gate" && steps.at(-1)).toMatchObject({ check: { kind: "pending" } });
         }
       }),
