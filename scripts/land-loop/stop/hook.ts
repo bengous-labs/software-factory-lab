@@ -295,6 +295,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
   const withArmed = { ...snapshot, armed: snapshot.pr !== null && existsSync(armedFile(snapshot.pr.number)) };
   const prWatch = `bun ${join(root, "scripts", "land-loop", "pr-watch.ts")}`;
   const thread = `bun ${join(root, "scripts", "land-loop", "thread.ts")}`;
+  const comment = `bun ${join(root, "scripts", "land-loop", "comment.ts")}`;
 
   const admission = admit(withArmed);
   log({ step: "admit", branch, head, pr: withArmed.pr?.number ?? null, ...admission });
@@ -306,7 +307,10 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
   if (admission.kind === "arm") {
     writeFileSync(armedFile(admission.pr), "asked\n");
 
-    return { kind: "block", reason: armReason(admission.pr, `${prWatch} ${admission.pr}`, thread) };
+    return {
+      kind: "block",
+      reason: armReason(admission.pr, `${prWatch} ${admission.pr}`, thread, `${comment} ${admission.pr}`),
+    };
   }
 
   const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), withArmed.stopHookActive);
@@ -385,7 +389,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
   log({ step: "published", action: action.kind, pr: number, head });
   writeFileSync(armedFile(number), "asked\n");
 
-  return { kind: "block", reason: armReason(number, `${prWatch} ${number}`, thread) };
+  return { kind: "block", reason: armReason(number, `${prWatch} ${number}`, thread, `${comment} ${number}`) };
 }
 
 if (import.meta.main) {

@@ -126,7 +126,7 @@ export function decide(pr: PullRequest | null, answer: Answer): Action {
 }
 
 /** What the hook tells the author once its PR is ready: arm the PR watch, then stop. */
-export function armReason(pr: number, prWatchCommand: string, threadCommand: string): string {
+export function armReason(pr: number, prWatchCommand: string, threadCommand: string, commentCommand: string): string {
   return [
     `PR #${pr} is ready for review. The Stop hook pushed your branch; you do not push, open or ready anything yourself.`,
     "",
@@ -139,6 +139,7 @@ export function armReason(pr: number, prWatchCommand: string, threadCommand: str
     "- A failing check: fix it with a commit, then stop.",
     `- A finding you accept: fix it with a commit, then reply and resolve its thread: \`${threadCommand} <thread-id> "Fixed in <sha>: <what changed>"\`. Then stop.`,
     `- A finding you reject: reply with your reason and resolve: \`${threadCommand} <thread-id> "<your reason>"\`. Then stop.`,
+    `- To explain a decision on the PR, post it with \`${commentCommand} "<what you decided and why>"\`, never with \`gh pr comment\`: the PR watch prints an unmarked comment back to you as a human's.`,
     "",
     "Never ask the Owner a question about the PR: the Land loop and the Owner handle the rest. When the PR watch expires, arm it again, until it reports the PR landed or closed. Then stop.",
   ].join("\n");
