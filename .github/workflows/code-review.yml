@@ -34,12 +34,10 @@ on:
 # The number alone: the Merge bot reads it back from `workflow_run.display_title`.
 run-name: ${{ inputs.pr }}
 
-# A newer dispatch for the PR cancels the run in progress: a review a new push made stale is worth
-# nothing. When the run the record names ends cancelled, the Merge bot reads its successor, the newer
-# run of the same PR, so two dispatches that race never fail the review.
-concurrency:
-  group: code-review-${{ inputs.pr }}
-  cancel-in-progress: true
+# No concurrency group: GitHub never cancels a review run, so a run that ends cancelled was stopped by
+# a person or by the job's timeout. The Merge bot dispatches one review at a time per PR, from decisions
+# its own concurrency serializes; a review a new push made stale runs to its end, and its result is
+# ignored.
 
 permissions:
   contents: read

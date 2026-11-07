@@ -70,6 +70,9 @@ const MAX_DECISIONS = 4;
 /** The review job's workflow file. An external name: the Merge bot dispatches it by this name. */
 const REVIEW_WORKFLOW = "code-review.yml";
 
+/** The Merge bot's own workflow file. An external name: a Sweep dispatches it once per open PR. */
+const MERGE_BOT_WORKFLOW = "merge-bot.yml";
+
 /** The ref the review job runs from, so its runner, REVIEW.md and AGENTS.md come from the Trunk, never from the PR. */
 const TRUNK = "dev";
 
@@ -289,29 +292,6 @@ export function notFound(read: Ran): boolean {
   return read.code !== 0 && read.stderr.includes("(HTTP 404)");
 }
 
-/** The review workflow's dispatched runs, newest first, as far as the Merge bot reads them. */
-export const ReviewRuns = Schema.Struct({
-  workflow_runs: Schema.Array(
-    Schema.Struct({
-      id: Schema.Int,
-      display_title: Schema.String,
-      status: Schema.String,
-      conclusion: Schema.NullOr(Schema.String),
-    }),
-  ),
-});
-
-type ReviewRun = (typeof ReviewRuns.Type)["workflow_runs"][number];
-
-/**
- * The newest review run of PR `pr` dispatched after run `runId`, or null. The review job's concurrency
- * cancels a run when a newer dispatch for the same PR arrives, so a cancelled run with such a successor
- * was replaced, not stopped: its successor holds the review.
- */
-export function successorOf(runs: readonly ReviewRun[], pr: number, runId: number): ReviewRun | null {
-  return runs.find((listed) => listed.display_title === String(pr) && listed.id > runId) ?? null;
-}
-
 /** The output of `gh api <path>`, or null when GitHub answers 404; any other failure throws. */
 async function readOrGone(runner: Run, where: Pick<Env, "repo" | "cwd">, path: string): Promise<string | null> {
   const read = await runner(["gh", "api", path], { cwd: where.cwd });
@@ -346,9 +326,7 @@ async function artifactOf(runner: Run, where: Pick<Env, "repo" | "cwd">, runId: 
  * every decision, a Sweep's included: the run's `workflow_run` event only wakes the Merge bot, and a
  * wake can be lost. A request for another patch is cleared without its run. A run GitHub answers 404 for
  * is `missing`, and the decision asks the review again; any other failed read throws, as every read of
- * the decision does. A cancelled run that a newer dispatch for the PR replaced is read through its
- * successor; a cancelled run with none was stopped by a person or the job's timeout. A run with no
- * artifact, or one that does not read, has a null result.
+ * the decision does. A run with no artifact, or one that does not read, has a null result.
  */
 export function reviewJobReader(
   runner: Run,
@@ -370,22 +348,7 @@ export function reviewJobReader(
       return { kind: "missing" };
     }
 
-    let reviewRun: Omit<ReviewRun, "display_title"> = {
-      id: review.runId,
-      ...decodeJson(ActionsRun, `gh api ${path}`, named),
-    };
-
-    if (reviewRun.status === "completed" && reviewRun.conclusion === "cancelled") {
-      const listing = `repos/${where.repo}/actions/workflows/${REVIEW_WORKFLOW}/runs?event=workflow_dispatch&per_page=30`;
-
-      const runs = decodeJson(
-        ReviewRuns,
-        `gh api ${listing}`,
-        await checked(runner, ["gh", "api", listing], { cwd: where.cwd }),
-      );
-
-      reviewRun = successorOf(runs.workflow_runs, pr, review.runId) ?? reviewRun;
-    }
+    const reviewRun = decodeJson(ActionsRun, `gh api ${path}`, named);
 
     if (reviewRun.status !== "completed") {
       return { kind: "running" };
@@ -394,7 +357,7 @@ export function reviewJobReader(
     return {
       kind: "completed",
       conclusion: reviewRun.conclusion ?? "no conclusion",
-      result: await artifactOf(runner, where, reviewRun.id, `review-${pr}-${review.round}`),
+      result: await artifactOf(runner, where, review.runId, `review-${pr}-${review.round}`),
     };
   };
 }
@@ -772,21 +735,15 @@ async function advance(
   }
 }
 
-async function numbersOf(env: Env): Promise<number[]> {
-  const event = required("EVENT_NAME");
-  const pr = process.env["PR_NUMBER"];
+/**
+ * A run with no PR of its own is a Sweep: a push to the Trunk, the schedule, or a dispatch with no PR.
+ * A CI completion names its PR through its head.
+ */
+export function sweepOf(eventName: string, prNumber: string | undefined): boolean {
+  return (prNumber === undefined || prNumber === "") && eventName !== "workflow_run";
+}
 
-  if (pr !== undefined && pr !== "") {
-    return [Number(pr)];
-  }
-
-  if (event === "workflow_run") {
-    const sha = required("RUN_HEAD_SHA");
-    const listed = await api(env, CommitPulls, `repos/${env.repo}/commits/${sha}/pulls`);
-
-    return listed.filter((found) => found.state === "open").map((found) => found.number);
-  }
-
+async function openPrsOf(env: Env): Promise<number[]> {
   const open = decodeJson(
     ListedPrs,
     "gh pr list",
@@ -794,6 +751,20 @@ async function numbersOf(env: Env): Promise<number[]> {
   );
 
   return open.map((found) => found.number);
+}
+
+/** The PRs a run that is not a Sweep decides on: the one it names, or the open ones of the commit CI completed on. */
+async function numbersOf(env: Env): Promise<number[]> {
+  const pr = process.env["PR_NUMBER"];
+
+  if (pr !== undefined && pr !== "") {
+    return [Number(pr)];
+  }
+
+  const sha = required("RUN_HEAD_SHA");
+  const listed = await api(env, CommitPulls, `repos/${env.repo}/commits/${sha}/pulls`);
+
+  return listed.filter((found) => found.state === "open").map((found) => found.number);
 }
 
 if (import.meta.main) {
@@ -806,9 +777,21 @@ if (import.meta.main) {
 
   const reason = process.env["EJECTION_REASON"];
 
-  for (const number of await numbersOf(env)) {
-    await advance(env, number, reason === undefined || reason === "" ? null : reason, (line) => {
-      console.log(`merge-bot: ${line}`);
-    });
+  // A Sweep decides nothing itself: it dispatches one Merge bot run per open PR, which joins that PR's
+  // concurrency group, so two decisions on one PR never run side by side and never dispatch two reviews.
+  if (sweepOf(required("EVENT_NAME"), process.env["PR_NUMBER"])) {
+    for (const number of await openPrsOf(env)) {
+      await send(env, "POST", `repos/${env.repo}/actions/workflows/${MERGE_BOT_WORKFLOW}/dispatches`, {
+        ref: TRUNK,
+        inputs: { pr: String(number) },
+      });
+      console.log(`merge-bot: sweep dispatched #${number}`);
+    }
+  } else {
+    for (const number of await numbersOf(env)) {
+      await advance(env, number, reason === undefined || reason === "" ? null : reason, (line) => {
+        console.log(`merge-bot: ${line}`);
+      });
+    }
   }
 }

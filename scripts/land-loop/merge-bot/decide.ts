@@ -478,8 +478,8 @@ export function reviewStepsOf(snapshot: Snapshot, record: StateRecord): ReviewMa
   const outcome = outcomeOf(snapshot, review);
 
   // A deleted run took its result with it: the request is asked again. A cancelled run is a failure,
-  // like any run that ended with no result: the adapter has already read past a run that a newer
-  // dispatch replaced, so what is left was stopped by a person or by the job's timeout.
+  // like any run that ended with no result: the review job has no concurrency group, so GitHub never
+  // cancels one of its runs, and a cancelled run was stopped by a person or by the job's timeout.
   if (outcome.kind === "missing") {
     return { record: withoutReview(record), end: null };
   }
