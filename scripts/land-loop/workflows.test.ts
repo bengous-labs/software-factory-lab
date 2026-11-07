@@ -110,13 +110,15 @@ describe("the Merge bot's workflow", () => {
   test("a completed review job wakes the Merge bot for the PR its title names", async () => {
     const workflow = await workflowOf("merge-bot.yml");
     const review = await workflowOf("code-review.yml");
-    const title = `(github.event.workflow_run.name == '${review.name}' && github.event.workflow_run.display_title)`;
+    // A review run's `workflow_run.name` is its run-name, the PR's number: only its path names the workflow.
+    const isReview = "github.event.workflow_run.path == '.github/workflows/code-review.yml'";
+    const title = `(${isReview} && github.event.workflow_run.display_title)`;
     const job = workflow.jobs["merge-bot"];
 
+    expect(review["run-name"]).toBe("${{ inputs.pr }}");
     expect(Schema.decodeUnknownSync(WorkflowRun)(workflow.on).workflow_run.workflows).toEqual(["CI", review.name]);
-    expect(job?.if).toContain(
-      `(github.event.workflow_run.name == '${review.name}' && github.event.workflow_run.event == 'workflow_dispatch')`,
-    );
+    expect(job?.if).toContain(`(${isReview} && github.event.workflow_run.event == 'workflow_dispatch')`);
+    expect(`${job?.if ?? ""} ${workflow.concurrency.group}`).not.toContain("workflow_run.name");
     expect(workflow.concurrency.group).toContain(title);
     expect(stepNamed(job?.steps ?? [], "Run the Merge bot").env?.["PR_NUMBER"]).toBe(
       `\${{ github.event.pull_request.number || inputs.pr || ${title} || '' }}`,
