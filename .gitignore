@@ -4,3 +4,4 @@ todo.json
 .claude/worktrees/
 .stryker-tmp/
 coverage/
+.claude/settings.local.json
