@@ -17,7 +17,7 @@ const Workflow = Schema.Struct({
   on: Schema.JsonObject,
   "run-name": Schema.optionalKey(Schema.String),
   permissions: Schema.Record(Schema.String, Schema.String),
-  concurrency: Schema.Struct({ group: Schema.String, "cancel-in-progress": Schema.Boolean }),
+  concurrency: Schema.optionalKey(Schema.Struct({ group: Schema.String, "cancel-in-progress": Schema.Boolean })),
   jobs: Schema.Record(
     Schema.String,
     Schema.Struct({
@@ -48,12 +48,12 @@ const stepNamed = (steps: (typeof Workflow.Type.jobs)[string]["steps"], name: st
 };
 
 describe("the review job's workflow", () => {
-  test("only a dispatch starts it, titled with the PR's number alone, one run per PR at a time", async () => {
+  test("only a dispatch starts it, titled with the PR's number alone, and no concurrency group ever cancels a run", async () => {
     const workflow = await workflowOf("code-review.yml");
 
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
     expect(workflow["run-name"]).toBe("${{ inputs.pr }}");
-    expect(workflow.concurrency).toEqual({ group: "code-review-${{ inputs.pr }}", "cancel-in-progress": true });
+    expect(workflow.concurrency).toBeUndefined();
   });
 
   test("it reads the contents and the pull requests, and holds no secret but the OAuth token", async () => {
@@ -118,8 +118,8 @@ describe("the Merge bot's workflow", () => {
     expect(review["run-name"]).toBe("${{ inputs.pr }}");
     expect(Schema.decodeUnknownSync(WorkflowRun)(workflow.on).workflow_run.workflows).toEqual(["CI", review.name]);
     expect(job?.if).toContain(`(${isReview} && github.event.workflow_run.event == 'workflow_dispatch')`);
-    expect(`${job?.if ?? ""} ${workflow.concurrency.group}`).not.toContain("workflow_run.name");
-    expect(workflow.concurrency.group).toContain(title);
+    expect(`${job?.if ?? ""} ${workflow.concurrency?.group ?? ""}`).not.toContain("workflow_run.name");
+    expect(workflow.concurrency?.group).toContain(title);
     expect(stepNamed(job?.steps ?? [], "Run the Merge bot").env?.["PR_NUMBER"]).toBe(
       `\${{ github.event.pull_request.number || inputs.pr || ${title} || '' }}`,
     );

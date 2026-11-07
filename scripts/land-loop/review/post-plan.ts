@@ -42,6 +42,14 @@ const NEW_FILE = "+++ b/";
 const HUNK = /^@@ -\S+ \+(\d+)/u;
 
 /**
+ * The `git` arguments of the diff `diffLinesOf` reads: the PR's whole range, with unquoted paths, since
+ * git quotes a non-ASCII path by default and `diffLinesOf` reads `+++ b/<path>` as it stands.
+ */
+export function diffArgsOf(base: string, head: string): readonly string[] {
+  return ["-c", "core.quotePath=false", "diff", `${base}..${head}`];
+}
+
+/**
  * The lines of the new side each hunk of `diff`, a `git diff` with its `a/` and `b/` prefixes, shows:
  * added and context lines. Git ends a path that holds a space with a tab.
  */

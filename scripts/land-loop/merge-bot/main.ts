@@ -20,10 +20,10 @@ import { Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
-import type { Ran } from "../ports/run.ts";
+import type { Ran, Run } from "../ports/run.ts";
 import { graphqlLogin, openImportantOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
 import type { ReviewThread } from "../review/findings.ts";
-import { diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
+import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
 import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf as principalJudgePrompt } from "../review/principal-judge.ts";
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
@@ -289,57 +289,77 @@ export function notFound(read: Ran): boolean {
   return read.code !== 0 && read.stderr.includes("(HTTP 404)");
 }
 
-/**
- * The run of the review the record asked, and, once it completed, the result of its artifact. Read on
- * every decision, a Sweep's included: the run's `workflow_run` event only wakes the Merge bot, and a
- * wake can be lost. A run with no artifact, or one that does not read, has a null result. A request for
- * another patch is cleared without its run. A run GitHub answers 404 for is `missing`: the decision asks
- * the review again instead of stopping, and a Sweep goes on. Any other failure of the read throws, as
- * every read of the decision does, so a passing API error never withdraws a live review.
- */
-async function reviewJobOf(
-  env: Env,
-  pr: number,
-  review: ReviewState | undefined,
-  patch: string,
-): Promise<ReviewJob | null> {
-  if (review === undefined || review.patch !== patch) {
-    return null;
-  }
-
-  const path = `repos/${env.repo}/actions/runs/${review.runId}`;
-  const read = await run(["gh", "api", path], { cwd: env.cwd });
+/** The output of `gh api <path>`, or null when GitHub answers 404; any other failure throws. */
+async function readOrGone(runner: Run, where: Pick<Env, "repo" | "cwd">, path: string): Promise<string | null> {
+  const read = await runner(["gh", "api", path], { cwd: where.cwd });
 
   if (notFound(read)) {
-    return { kind: "completed", conclusion: "missing", result: null };
+    return null;
   }
 
   if (read.code !== 0) {
     throw new Error(`gh api ${path} exited ${read.code}: ${(read.stderr || read.stdout).trim()}`);
   }
 
-  const job = decodeJson(ActionsRun, `gh api ${path}`, read.stdout);
+  return read.stdout;
+}
 
-  if (job.status !== "completed") {
-    return { kind: "running" };
-  }
-
+/** The result in the artifact `name` of run `runId`, or null when there is none or it does not read. */
+async function artifactOf(runner: Run, where: Pick<Env, "repo" | "cwd">, runId: number, name: string) {
   const dir = mkdtempSync(join(tmpdir(), "review-result-"));
-  const name = `review-${pr}-${review.round}`;
 
-  const downloaded = await run(
-    ["gh", "run", "download", String(review.runId), "--repo", env.repo, "--name", name, "--dir", dir],
-    { cwd: env.cwd },
+  const downloaded = await runner(
+    ["gh", "run", "download", String(runId), "--repo", where.repo, "--name", name, "--dir", dir],
+    { cwd: where.cwd },
   );
 
   const file = join(dir, "review-result.json");
 
-  return {
-    kind: "completed",
-    conclusion: job.conclusion ?? "no conclusion",
-    result: downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null,
+  return downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null;
+}
+
+/**
+ * The run of the review the record asked, and, once it completed, the result of its artifact. Read on
+ * every decision for the PR: the run's `workflow_run` event only wakes the Merge bot, and a wake can be
+ * lost. A request for another patch is cleared without its run. A run GitHub answers 404 for
+ * is `missing`, and the decision asks the review again; any other failed read throws, as every read of
+ * the decision does. A run with no artifact, or one that does not read, has a null result.
+ */
+export function reviewJobReader(
+  runner: Run,
+): (
+  where: Pick<Env, "repo" | "cwd">,
+  pr: number,
+  review: ReviewState | undefined,
+  patch: string,
+) => Promise<ReviewJob | null> {
+  return async (where, pr, review, patch) => {
+    if (review === undefined || review.patch !== patch) {
+      return null;
+    }
+
+    const path = `repos/${where.repo}/actions/runs/${review.runId}`;
+    const named = await readOrGone(runner, where, path);
+
+    if (named === null) {
+      return { kind: "missing" };
+    }
+
+    const reviewRun = decodeJson(ActionsRun, `gh api ${path}`, named);
+
+    if (reviewRun.status !== "completed") {
+      return { kind: "running" };
+    }
+
+    return {
+      kind: "completed",
+      conclusion: reviewRun.conclusion ?? "no conclusion",
+      result: await artifactOf(runner, where, review.runId, `review-${pr}-${review.round}`),
+    };
   };
 }
+
+const reviewJobOf = reviewJobReader(run);
 
 async function snapshotOf(
   env: Env,
@@ -548,8 +568,7 @@ async function perform(
 
       if (!posted) {
         try {
-          // Unquoted paths: `diffLinesOf` reads `+++ b/<path>`, and git quotes a non-ASCII path by default.
-          const diff = await git(env, ["-c", "core.quotePath=false", "diff", `${range.base}..${range.head}`]);
+          const diff = await git(env, diffArgsOf(range.base, range.head));
           const plan = postPlanOf(result.report.findings, diffLinesOf(diff));
 
           await send(env, "POST", `repos/${env.repo}/pulls/${pr.number}/reviews`, reviewOf(plan, result, range.head));
