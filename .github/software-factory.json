@@ -1,7 +1,7 @@
 {
   "land": {
     "routing": {
-      "ownerPaths": [".github/**", "bun.lock", "scripts/vendor/**"],
+      "ownerPaths": [".github/**", "bun.lock", "scripts/vendor/**", "scripts/land-loop/guarantees.test.ts"],
       "factoryPaths": [
         "scripts/**",
         ".claude/**",
