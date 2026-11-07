@@ -4,8 +4,9 @@
  * The author's PR watch, armed with Monitor on its PR: every 30 s it reads the PR and prints one line
  * per Wake: a failing check, a new open Important finding, a new comment in an open thread or in the
  * PR's conversation, the PR moved to draft. The App's own Nit and Pre-existing findings and its
- * conversation comments (state record, verdicts) print nothing; nor do the author's own replies,
- * which `thread.ts` marks, since an author and a human reviewer can post under one gh identity.
+ * conversation comments (state record, verdicts) print nothing; nor do the author's own replies and
+ * comments, which `thread.ts` and `comment.ts` mark, since an author and a human reviewer can post
+ * under one gh identity.
  * When the PR is landed or closed, it prints its end line and exits. What it printed is kept in
  * `.lab/state/watch-<pr>.json`, so a PR watch armed again after an expiry repeats nothing.
  *
