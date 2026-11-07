@@ -11,6 +11,7 @@ export const TESTS = {
   "scripts/land-loop/merge-bot/decide.ts": "scripts/land-loop/merge-bot/decide.test.ts",
   "scripts/land-loop/stop/decide.ts": "scripts/land-loop/stop/decide.test.ts",
   "scripts/land-loop/routing/routing-rules.ts": "scripts/land-loop/routing/routing-rules.test.ts",
+  "scripts/land-loop/review/tool-guard.ts": "scripts/land-loop/review/tool-guard.test.ts",
   "app/src/commands/add.ts": "app/test/commands.test.ts",
   "app/src/commands/clear.ts": "app/test/store.test.ts",
   "app/src/commands/count.ts": "app/test/commands.test.ts",

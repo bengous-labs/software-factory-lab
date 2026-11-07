@@ -101,14 +101,14 @@ const GIT_RULES: ReadonlyMap<string, GitRule> = new Map([
         /^-n\d+$/u,
         /^--max-count=\d+$/u,
         /^--skip=\d+$/u,
-        /^--format=.+$/u,
-        /^--pretty=.+$/u,
-        /^--since=.+$/u,
-        /^--until=.+$/u,
-        /^--author=.+$/u,
-        /^--grep=.+$/u,
-        /^-S.+$/u,
-        /^-G.+$/u,
+        /^--format=./u,
+        /^--pretty=./u,
+        /^--since=./u,
+        /^--until=./u,
+        /^--author=./u,
+        /^--grep=./u,
+        /^-S./u,
+        /^-G./u,
         /^-U\d+$/u,
       ],
       [["-n", NUMBER]],
@@ -130,7 +130,7 @@ const GIT_RULES: ReadonlyMap<string, GitRule> = new Map([
         "--abbrev-commit",
         "--",
       ],
-      [/^--format=.+$/u, /^--pretty=.+$/u, /^-U\d+$/u, /^--unified=\d+$/u],
+      [/^--format=./u, /^--pretty=./u, /^-U\d+$/u, /^--unified=\d+$/u],
     ),
   ],
   ["blame", rule(["-w", "-s", "--"], [/^-L\d+,\+?\d+$/u], [["-L", /^\d+,\+?\d+$/u]])],
@@ -216,8 +216,8 @@ export function bashGuard(command: string): ToolDecision {
   }
 
   const [program, ...rest] = tokens;
-  const [subcommand, ...options] = rest[0] === "--no-pager" ? rest.slice(1) : rest;
-  const gitRule = subcommand === undefined ? undefined : GIT_RULES.get(subcommand);
+  const [subcommand = "", ...options] = rest[0] === "--no-pager" ? rest.slice(1) : rest;
+  const gitRule = GIT_RULES.get(subcommand);
 
   return program === "git" && gitRule !== undefined && optionsAllowed(gitRule, options) ? ALLOW : deny(BASH_REASON);
 }
@@ -253,7 +253,7 @@ const GlobInput = Schema.Struct({ pattern: Schema.String, path: Schema.optional(
 
 const BashInput = Schema.Struct({ command: Schema.String });
 
-const SkillInput = Schema.Struct({ skill: Schema.String });
+const SkillInput = Schema.Struct({ skill: Schema.Literal("code-review") });
 
 const decoded = <S extends Schema.ConstraintDecoder<unknown>>(
   schema: S,
@@ -313,9 +313,7 @@ export function guardOf(scope: GuardScope): ToolGuard {
       }
 
       case "Skill": {
-        return Option.exists(decoded(SkillInput, input), (skill) => skill.skill === "code-review")
-          ? ALLOW
-          : deny("only the code-review skill runs here");
+        return Option.isSome(decoded(SkillInput, input)) ? ALLOW : deny("only the code-review skill runs here");
       }
 
       case "StructuredOutput": {

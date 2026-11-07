@@ -23,6 +23,61 @@ const guard = guardOf({ root: ROOT, resolve });
 
 const kindOf = (toolName: string, input: Schema.JsonObject): string => guard(toolName, input).kind;
 
+const kindOfCommand = (command: string): readonly [string, string] => [command, bashGuard(command).kind];
+
+/** Each subcommand with a flag of its own. */
+const FLAGGED = [
+  "git diff --cached",
+  "git log --oneline",
+  "git show --stat HEAD",
+  "git blame -w app/src/task.ts",
+  "git ls-files --cached",
+  "git rev-parse --short HEAD",
+  "git merge-base --is-ancestor HEAD dev",
+  "git status --short",
+  "git grep -n cleanTitle",
+];
+
+/** Each option that carries a number, a range or a filter in its own token, for the subcommand that admits it. */
+const BOUNDED_OPTIONS = [
+  ["diff", "-U10"],
+  ["diff", "--unified=10"],
+  ["diff", "--stat=100"],
+  ["diff", "--stat=100,20"],
+  ["diff", "--diff-filter=AM"],
+  ["log", "-10"],
+  ["log", "-n10"],
+  ["log", "--max-count=10"],
+  ["log", "--skip=10"],
+  ["log", "-U10"],
+  ["show", "-U10"],
+  ["show", "--unified=10"],
+  ["blame", "-L10,20"],
+  ["blame", "-L10,+20"],
+  ["rev-parse", "--short=10"],
+  ["grep", "-A10"],
+  ["grep", "-B10"],
+  ["grep", "-C10"],
+  ["grep", "--context=10"],
+  ["grep", "--after-context=10"],
+  ["grep", "--before-context=10"],
+  ["grep", "--max-depth=10"],
+] as const;
+
+/** Each option that carries any text in its own token, for the subcommand that admits it. */
+const TEXT_OPTIONS = [
+  ["log", "--format=%h%n"],
+  ["log", "--pretty=%h%n"],
+  ["log", "--since=2.weeks"],
+  ["log", "--until=2.weeks"],
+  ["log", "--author=ann"],
+  ["log", "--grep=fix"],
+  ["log", "-Sclean"],
+  ["log", "-Gclean"],
+  ["show", "--format=%h%n"],
+  ["show", "--pretty=%h%n"],
+] as const;
+
 describe("bashGuard", () => {
   test("one read-only git command from the list is allowed", () => {
     for (const command of [
@@ -65,8 +120,68 @@ describe("bashGuard", () => {
       "git log ~/.ssh",
       "git log\ncat x",
       "env git log",
+      "cat log README.md",
     ]) {
       expect([command, bashGuard(command)]).toEqual([command, { kind: "deny", reason: BASH_REASON }]);
+    }
+  });
+
+  test("each subcommand of the list runs bare and with a flag of its own", () => {
+    for (const subcommand of [
+      "diff",
+      "log",
+      "show",
+      "blame",
+      "ls-files",
+      "rev-parse",
+      "merge-base",
+      "status",
+      "grep",
+    ]) {
+      expect(kindOfCommand(`git ${subcommand}`)).toEqual([`git ${subcommand}`, "allow"]);
+    }
+
+    for (const command of FLAGGED) {
+      expect(kindOfCommand(command)).toEqual([command, "allow"]);
+    }
+  });
+
+  test("an option that carries its value takes a value of several characters, and nothing before the option", () => {
+    for (const [subcommand, option] of [...BOUNDED_OPTIONS, ...TEXT_OPTIONS]) {
+      expect(kindOfCommand(`git ${subcommand} ${option}`)).toEqual([`git ${subcommand} ${option}`, "allow"]);
+      expect(kindOfCommand(`git ${subcommand} -x${option}`)).toEqual([`git ${subcommand} -x${option}`, "deny"]);
+    }
+  });
+
+  test("an option that carries a number, a range or a filter takes nothing after its value", () => {
+    for (const [subcommand, option] of BOUNDED_OPTIONS) {
+      expect(kindOfCommand(`git ${subcommand} ${option}z`)).toEqual([`git ${subcommand} ${option}z`, "deny"]);
+    }
+  });
+
+  test("an option that takes the next token as its value needs one, of its own pattern and whole", () => {
+    for (const command of [
+      "git log -n 10",
+      "git blame -L 10,20 app/src/task.ts",
+      "git blame -L 10,+20 app/src/task.ts",
+      "git grep -A 10 cleanTitle",
+      "git grep -B 10 cleanTitle",
+      "git grep -C 10 cleanTitle",
+      "git grep -e cleanTitle",
+    ]) {
+      expect(kindOfCommand(command)).toEqual([command, "allow"]);
+    }
+
+    for (const command of [
+      "git log -n x10",
+      "git log -n 10z",
+      "git blame -L x10,20",
+      "git blame -L 10,20z",
+      "git grep -A x10",
+      "git grep -A 10z",
+      "git grep -e",
+    ]) {
+      expect(kindOfCommand(command)).toEqual([command, "deny"]);
     }
   });
 
@@ -109,6 +224,11 @@ describe("guardOf", () => {
     expect(kindOf("Grep", { pattern: "x", path: 3 })).toBe("deny");
     expect(kindOf("Glob", { pattern: "**/*.ts" })).toBe("allow");
     expect(kindOf("Glob", { pattern: "*.ts", path: "/etc" })).toBe("deny");
+  });
+
+  test("a Grep pattern is any text: only the path it searches is held to the checkout", () => {
+    expect(kindOf("Grep", { pattern: "/etc/passwd", path: "app" })).toBe("allow");
+    expect(kindOf("Grep", { pattern: "/etc/passwd", path: "/etc" })).toBe("deny");
   });
 
   test("a Glob pattern stays relative to the checkout", () => {
