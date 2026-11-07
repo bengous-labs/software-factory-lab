@@ -12,11 +12,13 @@ import { decodeJson } from "../lib/json.ts";
 export const FACTORY_CONFIG_PATH = ".github/software-factory.json";
 
 const RoutingPolicy = Schema.Struct({
-  /** Globs whose change lands only with the Owner's Land approval. */
+  /** Globs whose change lands only with the Owner's Land approval, such as the paths the Code review does not read. */
   ownerPaths: Schema.Array(Schema.String),
-  /** Globs whose change gets a deep Code review and lands without the Owner once CI is green and no Important is open. */
+  /** The factory's own code and config: a deep Code review, then land without the Owner, at any size, breaking or not. */
+  factoryPaths: Schema.Array(Schema.String),
+  /** Globs whose change gets a deep Code review and lands without the Owner, under the cap and the breaking-commit hold. */
   deepReviewPaths: Schema.Array(Schema.String),
-  /** Past this many changed lines, a change outside `deepReviewPaths` goes to the Owner. */
+  /** Past this many changed lines, a change that touches a path outside `factoryPaths` goes to the Owner. */
   lineCap: Schema.Int,
 });
 

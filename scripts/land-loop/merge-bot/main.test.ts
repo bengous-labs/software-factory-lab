@@ -1,17 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { $ } from "bun";
 import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
 import type { ReviewState } from "./decide.ts";
 import {
   ActionsRun,
+  changedPathsArgs,
   CheckRuns,
   CheckSuites,
+  ciOfRuns,
+  ciRunsPathsOf,
   CommitPulls,
   Dispatched,
   IssueComments,
@@ -22,6 +28,7 @@ import {
   Pull,
   PullReviews,
   reviewJobReader,
+  routingPolicyAt,
   WorkflowRuns,
 } from "./main.ts";
 
@@ -261,5 +268,63 @@ describe("reviewJobReader", () => {
       conclusion: "success",
       result: null,
     });
+  });
+});
+
+const ciRuns = (conclusion: string | null, slug = "github-actions") => ({
+  check_runs: [{ name: "x", status: conclusion === null ? "in_progress" : "completed", conclusion, app: { slug } }],
+});
+
+describe("the routing inputs", () => {
+  test("the routing policy is read from the given checkout, and a config that does not read fails naming the file", () => {
+    const checkout = mkdtempSync(join(tmpdir(), "routing-policy-"));
+    mkdirSync(join(checkout, ".github"));
+    const routing = { ownerPaths: ["x/**"], factoryPaths: [], deepReviewPaths: [], lineCap: 7 };
+    writeFileSync(join(checkout, FACTORY_CONFIG_PATH), JSON.stringify({ land: { routing } }));
+
+    expect(routingPolicyAt(checkout)).toEqual(routing);
+
+    writeFileSync(join(checkout, FACTORY_CONFIG_PATH), JSON.stringify({ land: {} }));
+
+    expect(() => routingPolicyAt(checkout)).toThrow(FACTORY_CONFIG_PATH);
+  });
+
+  test("a moved file lists both its old and its new path, so a move out of an Owner path is still routed to the Owner", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "changed-paths-"));
+
+    // An inherited GIT_DIR would point this git at the real repository; the test layer cannot import fixtureEnv.
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([name, value]) => !name.startsWith("GIT_") && value !== undefined),
+    );
+
+    const git = (args: readonly string[]) => $`git ${args}`.cwd(repo).env(env).quiet();
+
+    await git(["init", "-q"]);
+    await git(["config", "user.email", "t@t"]);
+    await git(["config", "user.name", "t"]);
+    mkdirSync(join(repo, ".github"));
+    writeFileSync(join(repo, FACTORY_CONFIG_PATH), "{}\n");
+    await git(["add", "."]);
+    await git(["commit", "-q", "-m", "a"]);
+    const base = (await git(["rev-parse", "HEAD"])).text().trim();
+    mkdirSync(join(repo, "scripts"));
+    await git(["mv", FACTORY_CONFIG_PATH, "scripts/software-factory.json"]);
+    await git(["commit", "-q", "-m", "b"]);
+
+    const listed = (await git(changedPathsArgs(base, "HEAD"))).text().trim().split("\n").toSorted();
+
+    expect(listed).toEqual([FACTORY_CONFIG_PATH, "scripts/software-factory.json"]);
+  });
+
+  test("the CI of a head reads GitHub Actions' validate and mutation runs on it", () => {
+    expect(ciRunsPathsOf("o/r", "h1")).toEqual([
+      "repos/o/r/commits/h1/check-runs?check_name=validate",
+      "repos/o/r/commits/h1/check-runs?check_name=mutation",
+    ]);
+
+    expect(ciOfRuns([ciRuns("success"), ciRuns("success")])).toBe("success");
+    expect(ciOfRuns([ciRuns("success"), ciRuns("failure")])).toBe("failure");
+    expect(ciOfRuns([ciRuns("success"), ciRuns(null)])).toBeNull();
+    expect(ciOfRuns([ciRuns("success"), ciRuns("success", "another-app")])).toBeNull();
   });
 });

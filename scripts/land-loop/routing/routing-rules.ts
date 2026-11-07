@@ -1,10 +1,10 @@
 /**
  * The Routing rules: what sets a change's Land route and Review depth whatever a model says of it, under
  * the routing policy of the factory config. A path of `ownerPaths`, or the factory config itself, sends
- * the change to the Owner. A path of `deepReviewPaths` gets a deep Code review and lands without the
- * Owner once CI is green and no Important is open. A change that also touches any other path goes to the
- * Owner when one of its commits is breaking or it is past `lineCap`; a change of other paths only is
- * otherwise the Routing judge's.
+ * the change to the Owner. A path of `factoryPaths` or `deepReviewPaths` gets a deep Code review and
+ * lands without the Owner once CI is green and no Important is open. A change that touches a path
+ * outside `factoryPaths` goes to the Owner when one of its commits is breaking or it is past `lineCap`.
+ * The Routing judge answers for the paths no rule names, and may raise a ruled change to the Owner.
  */
 
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
@@ -19,13 +19,19 @@ export interface RoutingInput {
   readonly messages: readonly string[];
 }
 
-const toOwner = (reason: string): RoutingAnswer => ({
-  land: "owner",
-  review: "deep",
-  secondRound: true,
-  reason,
-  model: null,
-  needsFable: false,
+/**
+ * What the Routing rules make of a change: `ruled`, their answer stands; `judged`, the Routing judge
+ * answers; `ruled-then-judged`, their answer stands unless the judge, asked about the paths no rule
+ * names, sends the change to the Owner.
+ */
+export type RulesVerdict =
+  | { readonly kind: "ruled"; readonly answer: RoutingAnswer }
+  | { readonly kind: "judged" }
+  | { readonly kind: "ruled-then-judged"; readonly answer: RoutingAnswer };
+
+const toOwner = (reason: string): RulesVerdict => ({
+  kind: "ruled",
+  answer: { land: "owner", review: "deep", secondRound: true, reason, model: null, needsFable: false },
 });
 
 function matching(globs: readonly string[], paths: readonly string[]): readonly string[] {
@@ -36,8 +42,7 @@ function matching(globs: readonly string[], paths: readonly string[]): readonly 
 
 const listed = (paths: readonly string[]): string => paths.slice(0, 3).join(", ");
 
-/** The Routing rules' answer, or null when the change is the model's to judge. */
-export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }: RoutingInput): RoutingAnswer | null {
+export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }: RoutingInput): RulesVerdict {
   if (paths.length === 0) {
     return toOwner("the change touches no file");
   }
@@ -48,9 +53,9 @@ export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }
     return toOwner(`touches a path the Owner lands: ${listed(owner)}`);
   }
 
-  const deep = matching(policy.deepReviewPaths, paths);
+  const factory = matching(policy.factoryPaths, paths);
 
-  if (deep.length < paths.length) {
+  if (factory.length < paths.length) {
     const breaking = messages.find((message) => BREAKING.test(message));
 
     if (breaking !== undefined) {
@@ -62,16 +67,36 @@ export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }
     }
   }
 
-  if (deep.length > 0) {
-    return {
-      land: "auto",
-      review: "deep",
-      secondRound: true,
-      reason: `touches a path a deep review reads: ${listed(deep)}; lands once CI is green and no Important is open`,
-      model: null,
-      needsFable: false,
-    };
+  const deep = matching([...policy.factoryPaths, ...policy.deepReviewPaths], paths);
+
+  if (deep.length === 0) {
+    return { kind: "judged" };
   }
 
-  return null;
+  const answer: RoutingAnswer = {
+    land: "auto",
+    review: "deep",
+    secondRound: true,
+    reason: `touches a path a deep review reads: ${listed(deep)}; lands once CI is green and no Important is open`,
+    model: null,
+    needsFable: false,
+  };
+
+  return deep.length < paths.length ? { kind: "ruled-then-judged", answer } : { kind: "ruled", answer };
+}
+
+/** The Routing answer of a verdict the judge was asked about: the judge's own, or the rules' raised to the Owner when the judge says so. */
+export function judgedRouting(verdict: Exclude<RulesVerdict, { kind: "ruled" }>, judge: RoutingAnswer): RoutingAnswer {
+  if (verdict.kind === "judged") {
+    return judge;
+  }
+
+  return judge.land === "owner"
+    ? {
+        ...verdict.answer,
+        land: "owner",
+        reason: `${verdict.answer.reason}; the Routing judge: ${judge.reason}`,
+        model: judge.model,
+      }
+    : verdict.answer;
 }
