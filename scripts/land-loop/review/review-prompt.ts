@@ -4,14 +4,8 @@
  * reaches the fork as part of its review target.
  */
 
+import type { EarlierThread } from "./findings.ts";
 import type { ReviewRequest } from "./review-report.ts";
-
-/** A thread of an earlier round: where its finding sits, the finding's first line, and the author's answers. */
-export interface EarlierThread {
-  readonly where: string;
-  readonly finding: string;
-  readonly reply: string;
-}
 
 export interface Guides {
   /** `REVIEW.md` from `dev`. */

@@ -4,15 +4,17 @@ import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import {
+  ActionsRun,
   CheckRuns,
   CheckSuites,
   CommitPulls,
+  Dispatched,
   IssueComments,
   IssueEvents,
   landApprovalByOwnerOf,
   ListedPrs,
   Pull,
-  ReviewThreads,
+  PullReviews,
   WorkflowRuns,
 } from "./main.ts";
 
@@ -72,28 +74,20 @@ describe("the GitHub answers the Merge bot reads", () => {
     expect(decodeJson(ListedPrs, "gh pr list", JSON.stringify([{ number: 3 }]))).toEqual([{ number: 3 }]);
   });
 
-  test("a review thread whose author was deleted reads with a null author", () => {
-    const answer = {
-      data: {
-        repository: {
-          pullRequest: {
-            reviewThreads: {
-              nodes: [
-                {
-                  id: "T",
-                  isResolved: true,
-                  path: "a.ts",
-                  line: 3,
-                  comments: { nodes: [{ author: null, body: "x" }] },
-                },
-              ],
-            },
-          },
-        },
-      },
-    };
-
-    expect(decodeJson(ReviewThreads, "threads", JSON.stringify(answer))).toEqual(answer);
+  test("the review job's run, its dispatch and the PR's reviews read into the fields the Merge bot uses", () => {
+    expect(
+      decodeJson(ActionsRun, "run", JSON.stringify({ id: 42, status: "in_progress", conclusion: null, name: "x" })),
+    ).toEqual({ status: "in_progress", conclusion: null });
+    expect(
+      decodeJson(
+        Dispatched,
+        "dispatch",
+        JSON.stringify({ workflow_run_id: 42_364_772_835, run_url: "u", html_url: "h" }),
+      ),
+    ).toEqual({ workflow_run_id: 42_364_772_835 });
+    expect(
+      decodeJson(PullReviews, "reviews", JSON.stringify([{ id: 1, user: null, body: "b", state: "COMMENTED" }])),
+    ).toEqual([{ user: null, body: "b" }]);
   });
 
   test("GitHub's null user, actor and App read, and a deleted user's event leaves the Land approval as it was", () => {
@@ -149,7 +143,9 @@ describe("the GitHub answers the Merge bot reads", () => {
       [WorkflowRuns, { workflow_runs: null }],
       [CommitPulls, [{ number: "3", state: "open" }]],
       [ListedPrs, [{ id: 3 }]],
-      [ReviewThreads, { data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "T" }] } } } } }],
+      [ActionsRun, { status: "completed" }],
+      [Dispatched, { workflow_run_id: "42" }],
+      [PullReviews, [{ user: { login: "a" } }]],
     ];
 
     for (const [schema, answer] of refused) {

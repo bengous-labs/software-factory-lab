@@ -7,10 +7,12 @@
  * decides again after a model step, until no model step is left.
  *
  * Reads GITHUB_REPOSITORY, OWNER (the only GitHub login whose PRs are served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
- * RUN_HEAD_SHA, EJECTION_REASON; calls gh and git, and the models through the Agent SDK.
+ * RUN_HEAD_SHA, EJECTION_REASON; calls gh and git, and the models through the Agent SDK. The Code review runs
+ * in its own job, `.github/workflows/code-review.yml`, which the Merge bot dispatches and whose artifact it reads.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Schema } from "effect";
@@ -18,28 +20,23 @@ import { Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
-import {
-  codeReview,
-  commentOf,
-  EFFORT,
-  MODEL,
-  promptOf as codeReviewPrompt,
-  rejectedOf,
-  severityOfBody,
-} from "../review/code-review.ts";
-import type { Finding } from "../review/code-review.ts";
+import { graphqlLogin, openImportantOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
+import type { ReviewThread } from "../review/findings.ts";
+import { diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
 import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf as principalJudgePrompt } from "../review/principal-judge.ts";
+import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
+import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { routingJudge } from "../routing/routing-judge.ts";
 import { routingRulesOf } from "../routing/routing-rules.ts";
 import {
   afterPrincipalJudge,
+  afterReview,
   conflictingOf,
   decide,
   EMPTY_RECORD,
   LAND_APPROVAL_LABEL,
   LAND_GATE,
   landApprovalCounts,
-  openImportantOf,
   patchDeltaStart,
   PRINCIPAL_JUDGE_TRIES,
   recordOfJson,
@@ -47,7 +44,16 @@ import {
   storedLandRouteOf,
   storedOfRecord,
 } from "./decide.ts";
-import type { CheckState, LandRoute, ReviewDepth, Snapshot, StateRecord, Step } from "./decide.ts";
+import type {
+  CheckState,
+  LandRoute,
+  ReviewDepth,
+  ReviewJob,
+  ReviewState,
+  Snapshot,
+  StateRecord,
+  Step,
+} from "./decide.ts";
 
 /** The state record's marker. An external name: existing PR records carry it, so the string stays. */
 const MERGE_BOT_STATE_MARKER = "<!-- lab-conductor-state";
@@ -59,6 +65,12 @@ const NEEDS_OWNER_LABEL = "needs-human";
 
 /** Decisions per Merge bot run. */
 const MAX_DECISIONS = 4;
+
+/** The review job's workflow file. An external name: the Merge bot dispatches it by this name. */
+const REVIEW_WORKFLOW = "code-review.yml";
+
+/** The ref the review job runs from, so its runner, REVIEW.md and AGENTS.md come from the Trunk, never from the PR. */
+const TRUNK = "dev";
 
 interface Env {
   readonly repo: string;
@@ -136,27 +148,6 @@ type Pull = typeof Pull.Type;
 
 const Login = Schema.Struct({ login: Schema.String });
 
-const ThreadJson = Schema.Struct({
-  id: Schema.String,
-  isResolved: Schema.Boolean,
-  path: Schema.String,
-  line: Schema.NullOr(Schema.Finite),
-  comments: Schema.Struct({
-    nodes: Schema.Array(Schema.Struct({ author: Schema.NullOr(Login), body: Schema.String })),
-  }),
-});
-
-type ThreadJson = typeof ThreadJson.Type;
-
-/** The review threads query's answer. */
-export const ReviewThreads = Schema.Struct({
-  data: Schema.Struct({
-    repository: Schema.Struct({
-      pullRequest: Schema.Struct({ reviewThreads: Schema.Struct({ nodes: Schema.Array(ThreadJson) }) }),
-    }),
-  }),
-});
-
 /** `repos/<repo>/issues/<n>/comments`, as far as the Merge bot reads it. */
 export const IssueComments = Schema.Array(
   Schema.Struct({ id: Schema.Finite, user: Schema.NullOr(Login), body: Schema.String }),
@@ -209,21 +200,21 @@ export const CommitPulls = Schema.Array(Schema.Struct({ number: Schema.Finite, s
 /** `gh pr list --json number`. */
 export const ListedPrs = Schema.Array(Schema.Struct({ number: Schema.Finite }));
 
-async function threadsOf(env: Env, pr: number): Promise<readonly ThreadJson[]> {
-  const [owner, name] = env.repo.split("/");
+/** `repos/<repo>/actions/runs/<id>`, as far as the Merge bot reads it. */
+export const ActionsRun = Schema.Struct({ status: Schema.String, conclusion: Schema.NullOr(Schema.String) });
 
-  const out = await graphql(
-    env,
-    ReviewThreads,
-    `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{author{login} body}}}}}}}`,
-    { owner: owner ?? "", name: name ?? "" },
-  );
+/** The answer of a workflow dispatch asked with `return_run_details`. */
+export const Dispatched = Schema.Struct({ workflow_run_id: Schema.Int });
+
+/** `repos/<repo>/pulls/<n>/reviews`, as far as the Merge bot reads it. */
+export const PullReviews = Schema.Array(Schema.Struct({ user: Schema.NullOr(Login), body: Schema.String }));
+
+async function threadsOf(env: Env, pr: number): Promise<readonly ReviewThread[]> {
+  const [owner, name] = env.repo.split("/");
+  const out = await graphql(env, ReviewThreads, threadsQueryOf(pr), { owner: owner ?? "", name: name ?? "" });
 
   return out.data.repository.pullRequest.reviewThreads.nodes;
 }
-
-/** The App's login as GraphQL prints it, without REST's `[bot]` suffix. */
-const bare = (login: string): string => login.replace(/\[bot\]$/u, "");
 
 /** The PR from the single-PR endpoint, read again up to three times while GitHub has not computed its mergeability yet. */
 async function pullOf(env: Env, number: number): Promise<Pull> {
@@ -292,12 +283,45 @@ async function patchOf(env: Env, range: Range): Promise<string> {
   return ran.stdout.split(" ")[0] ?? "empty";
 }
 
+/**
+ * The run of the review the record asked, and, once it completed, the result of its artifact. Read on
+ * every decision, a Sweep's included: the run's `workflow_run` event only wakes the Merge bot, and a
+ * wake can be lost. A run with no artifact, or one that does not read, has a null result.
+ */
+async function reviewJobOf(env: Env, pr: number, review: ReviewState | undefined): Promise<ReviewJob | null> {
+  if (review === undefined) {
+    return null;
+  }
+
+  const job = await api(env, ActionsRun, `repos/${env.repo}/actions/runs/${review.runId}`);
+
+  if (job.status !== "completed") {
+    return { kind: "running" };
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "review-result-"));
+  const name = `review-${pr}-${review.round}`;
+
+  const downloaded = await run(
+    ["gh", "run", "download", String(review.runId), "--repo", env.repo, "--name", name, "--dir", dir],
+    { cwd: env.cwd },
+  );
+
+  const file = join(dir, "review-result.json");
+
+  return {
+    kind: "completed",
+    conclusion: job.conclusion ?? "no conclusion",
+    result: downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null,
+  };
+}
+
 async function snapshotOf(
   env: Env,
   pr: Pull,
   range: Range,
   record: StateRecord,
-  threads: readonly ThreadJson[],
+  threads: readonly ReviewThread[],
 ): Promise<Snapshot> {
   const runs = await api(env, CheckRuns, `repos/${env.repo}/commits/${pr.head.sha}/check-runs?check_name=validate`);
 
@@ -332,19 +356,12 @@ async function snapshotOf(
     ci: validate?.status === "completed" ? (validate.conclusion === "success" ? "success" : "failure") : null,
     labels,
     landApprovalByOwner,
-    openImportant: openImportantOf(
-      threads.filter(
-        (thread) =>
-          !thread.isResolved &&
-          thread.comments.nodes[0]?.author?.login === bare(env.appLogin) &&
-          severityOfBody(thread.comments.nodes[0].body) === "important",
-      ).length,
-      record,
-      await patchOf(env, range),
-    ),
+    openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
     devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
     conflicting: conflictingOf(pr.mergeable_state),
     record,
+    now: new Date().toISOString(),
+    reviewJob: await reviewJobOf(env, pr.number, record.review),
   };
 }
 
@@ -376,11 +393,12 @@ async function setLabels(env: Env, pr: Pull, landRoute: LandRoute, depth: Review
 }
 
 /**
- * Where a Patch delta starts: the head the last review read, while it is still an ancestor of this head.
- * A rebase leaves it out of the PR's history, and the Patch delta is then the whole PR again.
+ * Where the range read starts: for a Patch delta, the head the last review read, while it is still an
+ * ancestor of this head; else the merge base. A rebase leaves that head out of the PR's history, and
+ * the Patch delta is then the whole PR again.
  */
-async function patchDeltaBase(env: Env, range: Range, record: StateRecord): Promise<string> {
-  if (record.reviewedHead === null) {
+async function rangeStart(env: Env, range: Range, record: StateRecord, patchDelta: boolean): Promise<string> {
+  if (!patchDelta || record.reviewedHead === null) {
     return range.base;
   }
 
@@ -390,7 +408,7 @@ async function patchDeltaBase(env: Env, range: Range, record: StateRecord): Prom
 }
 
 async function route(env: Env, range: Range, record: StateRecord, patchDelta: boolean) {
-  const from = patchDelta ? await patchDeltaBase(env, range, record) : range.base;
+  const from = await rangeStart(env, range, record, patchDelta);
 
   const paths = (await git(env, ["diff", "--name-only", `${range.base}..${range.head}`]))
     .split("\n")
@@ -442,58 +460,6 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
   return { ...rules, secondRound: patchDeltaRules !== null || (await asked()).secondRound };
 }
 
-/** Posts the review; answers how many Important findings went out with no thread to resolve. */
-async function postFindings(
-  env: Env,
-  pr: Pull,
-  findings: readonly Finding[],
-  reviewRound: 1 | 2,
-  by: string,
-  costUsd: number | null,
-): Promise<number> {
-  const counts = (["important", "nit", "pre_existing"] as const)
-    .map((severity) => `${findings.filter((found) => found.severity === severity).length} ${severity}`)
-    .join(", ");
-
-  const body = `Review round ${reviewRound} (${by}): ${counts}.${costUsd === null ? "" : ` Estimated cost $${costUsd.toFixed(3)}.`}`;
-  const inline = findings.filter((finding) => finding.line !== null);
-  const loose = findings.filter((finding) => finding.line === null);
-
-  const withLoose =
-    loose.length === 0
-      ? body
-      : `${body}\n\n${loose.map((finding) => `- \`${finding.file}\`: ${commentOf(finding)}`).join("\n")}`;
-
-  try {
-    await send(env, "POST", `repos/${env.repo}/pulls/${pr.number}/reviews`, {
-      commit_id: pr.head.sha,
-      event: "COMMENT",
-      body: withLoose,
-      comments: inline.map((finding) => ({
-        path: finding.file,
-        line: finding.line,
-        side: "RIGHT",
-        body: commentOf(finding),
-      })),
-    });
-
-    return loose.filter((finding) => finding.severity === "important").length;
-  } catch (error) {
-    // A line outside the diff makes GitHub refuse the whole review: post it as one body instead.
-    const all = findings
-      .map((finding) => `- \`${finding.file}:${finding.line ?? "?"}\` ${commentOf(finding)}`)
-      .join("\n");
-
-    await send(env, "POST", `repos/${env.repo}/pulls/${pr.number}/reviews`, {
-      commit_id: pr.head.sha,
-      event: "COMMENT",
-      body: `${body}\n\n${all}\n\n(inline posting failed: ${String(error).slice(0, 200)})`,
-    });
-
-    return findings.filter((finding) => finding.severity === "important").length;
-  }
-}
-
 // oxlint-disable-next-line typescript/consistent-return -- the switch covers every Step kind, so no path reaches the end.
 async function perform(
   env: Env,
@@ -501,7 +467,6 @@ async function perform(
   range: Range,
   recordId: number | null,
   record: StateRecord,
-  threads: readonly ThreadJson[],
   step: Step,
   log: (line: string) => void,
 ): Promise<StateRecord | null> {
@@ -517,57 +482,67 @@ async function perform(
       return next;
     }
 
-    case "code-review": {
-      const from = step.reviewRound === 2 ? await patchDeltaBase(env, range, record) : range.base;
-      const guide = readFileSync(join(env.cwd, "REVIEW.md"), "utf8");
+    case "request-review": {
+      const patch = await patchOf(env, range);
+      const base = await rangeStart(env, range, record, step.reviewRound === 2);
 
-      const prompt = codeReviewPrompt(
-        guide,
-        await git(env, ["diff", `${from}..${range.head}`]),
-        step.reviewRound,
-        rejectedOf(bare(env.appLogin), threads),
-      );
+      const request = {
+        pr: pr.number,
+        head: range.head,
+        base,
+        patch,
+        round: step.reviewRound,
+        ...REVIEW_SETTINGS[step.depth],
+      };
 
-      let result = await codeReview(ask, env.cwd, step.depth, prompt, Date.now);
-
-      if (result.findings === null) {
-        result = await codeReview(ask, env.cwd, step.depth, prompt, Date.now);
-      }
+      const path = `repos/${env.repo}/actions/workflows/${REVIEW_WORKFLOW}/dispatches`;
+      const body = { ref: TRUNK, inputs: inputsOf(request), return_run_details: true };
+      const { workflow_run_id: runId } = decodeJson(Dispatched, `gh api ${path}`, await call(env, "POST", path, body));
 
       log(
-        `#${pr.number} review round ${step.reviewRound} at ${step.depth} (${result.model ?? MODEL[step.depth]}, effort ${EFFORT}): ${result.error ?? "answered"}, ${result.ms} ms, $${result.costUsd ?? "?"}, ${result.findings?.length ?? "no"} findings`,
+        `#${pr.number} review round ${step.reviewRound} at ${step.depth} (${request.model}, ${request.effort}): run ${runId}`,
       );
 
-      if (result.findings === null) {
-        await setCheck(env, REVIEW_CHECK, pr.head.sha, { kind: "failure", summary: "The Code review failed twice." });
-        await send(env, "POST", `repos/${env.repo}/issues/${pr.number}/labels`, { labels: [NEEDS_OWNER_LABEL] });
-
-        return null;
-      }
-
-      const unthreaded = await postFindings(
-        env,
-        pr,
-        result.findings,
-        step.reviewRound,
-        `${step.depth}: ${result.model ?? MODEL[step.depth]}, effort ${EFFORT}`,
-        result.costUsd,
-      );
-
-      const important = result.findings.some((finding) => finding.severity === "important");
-      const reviewedPatch = await patchOf(env, range);
-
-      const next = {
+      // The record after the dispatch: a dispatch that fails leaves no request behind.
+      const next: StateRecord = {
         ...record,
-        reviewedPatch,
-        reviewedHead: range.head,
-        reviewRounds: step.reviewRound,
-        bodyImportant: { ...record.bodyImportant, [reviewedPatch]: unthreaded },
+        review: { kind: "requested", patch, round: step.reviewRound, runId, at: new Date().toISOString() },
       };
 
       await writeRecord(env, pr.number, recordId, next);
 
-      if (important) {
+      return next;
+    }
+
+    case "post-review": {
+      const { result } = step;
+      const reviews = await api(env, PullReviews, `repos/${env.repo}/pulls/${pr.number}/reviews?per_page=100`);
+      const marker = reviewMarkerOf(result.request);
+      const posted = reviews.some((review) => review.user?.login === env.appLogin && review.body.includes(marker));
+
+      if (!posted) {
+        try {
+          const plan = postPlanOf(
+            result.report.findings,
+            diffLinesOf(await git(env, ["diff", `${range.base}..${range.head}`])),
+          );
+
+          await send(env, "POST", `repos/${env.repo}/pulls/${pr.number}/reviews`, reviewOf(plan, result, range.head));
+        } catch (error) {
+          // No fallback to the body: a finding posted with no thread would block nothing.
+          const summary = `The review could not be posted: ${String(error).slice(0, 300)}`;
+          await setCheck(env, REVIEW_CHECK, pr.head.sha, { kind: "failure", summary });
+          log(`#${pr.number} ${summary}`);
+
+          return null;
+        }
+      }
+
+      log(`#${pr.number} ${summaryOf(result)}${posted ? ", posted before" : ""}`);
+      const next = afterReview(record, result);
+      await writeRecord(env, pr.number, recordId, next);
+
+      if (!pr.draft && result.report.findings.some((finding) => finding.severity === "important")) {
         await mutate(env, "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}", {
           id: pr.node_id,
         });
@@ -679,8 +654,7 @@ async function advance(
         ? { ...stored, dequeued: { head: pr.head.sha, reason: ejectionReason } }
         : stored;
 
-    const threads = await threadsOf(env, number);
-    const decision = decide(await snapshotOf(env, pr, range, record, threads));
+    const decision = decide(await snapshotOf(env, pr, range, record, await threadsOf(env, number)));
 
     if (decision.kind === "ignore") {
       log(decision.reason);
@@ -690,25 +664,25 @@ async function advance(
 
     log(`#${number} steps: ${decision.steps.map((step) => step.kind).join(", ")}`);
     let current: StateRecord | null = record;
-    let modelRan = false;
+    let decideAgain = false;
 
     if (record !== stored) {
       await writeRecord(env, number, id, record);
     }
 
     for (const step of decision.steps) {
-      current = await perform(env, pr, range, (await recordOf(env, number)).id, current, threads, step, log);
+      current = await perform(env, pr, range, (await recordOf(env, number)).id, current, step, log);
 
       if (current === null) {
         return;
       }
 
-      if (step.kind === "route" || step.kind === "code-review" || step.kind === "principal-judge") {
-        modelRan = true;
+      if (step.kind === "route" || step.kind === "post-review" || step.kind === "principal-judge") {
+        decideAgain = true;
       }
     }
 
-    if (!modelRan) {
+    if (!decideAgain) {
       return;
     }
   }

@@ -8,9 +8,9 @@ import { Result, Schema } from "effect";
 
 import type { SessionAnswer } from "../ports/review.ts";
 
-const Severity = Schema.Literals(["important", "nit", "pre_existing"]);
+export const Severity = Schema.Literals(["important", "nit", "pre_existing"]);
 
-type Severity = typeof Severity.Type;
+export type Severity = typeof Severity.Type;
 
 const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
 
@@ -57,7 +57,7 @@ const ReportedFinding = Schema.Struct({
   breaks: Schema.NullOr(Location),
 });
 
-type ReportedFinding = typeof ReportedFinding.Type;
+export type ReportedFinding = typeof ReportedFinding.Type;
 
 const ReviewReport = Schema.Struct({ findings: Schema.Array(ReportedFinding) });
 
@@ -126,6 +126,22 @@ export const ReviewResult = Schema.Union([
 ]);
 
 export type ReviewResult = typeof ReviewResult.Type;
+
+export type ReportedResult = Extract<ReviewResult, { readonly kind: "reported" }>;
+
+const encodeInputs = Schema.encodeSync(ReviewInputs);
+
+/** The request as the workflow's inputs, every value a string: what the Merge bot dispatches. */
+export function inputsOf(request: ReviewRequest): Readonly<Record<string, string>> {
+  return encodeInputs(request);
+}
+
+const decodeResultJson = Schema.decodeUnknownResult(Schema.fromJsonString(ReviewResult));
+
+/** The result an artifact's `review-result.json` holds; null when it does not read as one. */
+export function resultOfJson(json: string): ReviewResult | null {
+  return Result.getOrNull(decodeResultJson(json));
+}
 
 const decodeStructured = Schema.decodeUnknownResult(StructuredReport);
 

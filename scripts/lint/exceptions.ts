@@ -26,10 +26,8 @@ export interface Exception {
 const MERGE_BOT_MAIN = "scripts/land-loop/merge-bot/main.ts";
 
 export const EXCEPTIONS: readonly Exception[] = [
-  { file: "scripts/land-loop/merge-bot/decide.ts", rule: "complexity/complexity", name: "decide", measured: 40 },
+  { file: "scripts/land-loop/merge-bot/decide.ts", rule: "complexity/complexity", name: "decide", measured: 34 },
   { file: "scripts/land-loop/routing/routing-judge.ts", rule: "eslint/max-params", name: "routingJudge", measured: 5 },
-  { file: "scripts/land-loop/review/code-review.ts", rule: "eslint/max-params", name: "codeReview", measured: 5 },
   { file: MERGE_BOT_MAIN, rule: "eslint/max-params", name: "snapshotOf", measured: 5 },
-  { file: MERGE_BOT_MAIN, rule: "eslint/max-params", name: "postFindings", measured: 6 },
-  { file: MERGE_BOT_MAIN, rule: "eslint/max-params", name: "perform", measured: 8 },
+  { file: MERGE_BOT_MAIN, rule: "eslint/max-params", name: "perform", measured: 7 },
 ];

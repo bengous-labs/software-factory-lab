@@ -42,7 +42,7 @@ describe("placeOf", () => {
     expect(placeOf("scripts/land-loop/merge-bot/decide.ts")).toEqual(DOMAIN);
     expect(placeOf("scripts/land-loop/merge-bot/main.ts")).toEqual({ package: "land-loop", layer: "entry" });
     expect(placeOf("scripts/land-loop/ports/ask.ts")).toEqual({ package: "land-loop", layer: "ports" });
-    expect(placeOf("scripts/land-loop/review/code-review.ts")).toEqual({ package: "land-loop", layer: "application" });
+    expect(placeOf("scripts/land-loop/review/post-plan.ts")).toEqual({ package: "land-loop", layer: "application" });
     expect(placeOf("scripts/land-loop/lib/run.ts")).toEqual({ package: "land-loop", layer: "infra" });
     expect(placeOf("scripts/land-loop/lib/ask.test.ts")).toEqual({ package: "land-loop", layer: "test" });
     expect(placeOf("scripts/lib/json.ts")).toEqual({ package: "shared", layer: "domain" });
@@ -88,8 +88,8 @@ describe("edgeRefusal", () => {
   });
 
   test("lets a type-only import reach a pure layer, never the infra or an entry point", () => {
-    expect(edgeRefusal(DECIDE, DOMAIN, typeOnly("../review/code-review.ts"))).toBeNull();
-    expect(edgeRefusal(DECIDE, DOMAIN, value("../review/code-review.ts", "x"))).toContain("(application)");
+    expect(edgeRefusal(DECIDE, DOMAIN, typeOnly("../review/post-plan.ts"))).toBeNull();
+    expect(edgeRefusal(DECIDE, DOMAIN, value("../review/post-plan.ts", "x"))).toContain("(application)");
     expect(edgeRefusal(DECIDE, DOMAIN, typeOnly("../lib/ask.ts"))).toContain("(infra)");
     expect(edgeRefusal(DECIDE, DOMAIN, typeOnly("../pr-watch.ts"))).toContain("(entry)");
   });
@@ -130,10 +130,10 @@ const SOURCES = {
     'import { run } from "../lib/run.ts";',
     'import { type Ran, checked } from "../lib/run.ts";',
     'import type { Ask } from "../ports/ask.ts";',
-    'import type { Finding } from "../review/code-review.ts";',
+    'import type { DiffLines } from "../review/post-plan.ts";',
     'export { run as r } from "../lib/run.ts";',
     'export * from "../lib/run.ts";',
-    'export type * from "../review/code-review.ts";',
+    'export type * from "../review/post-plan.ts";',
     'const live = await import("../lib/ask.ts");',
     'export type Stream = import("../lib/ask.ts").Stream;',
     'Bun.spawn(["ls"]);',
@@ -148,7 +148,7 @@ const SOURCES = {
     'import f = require("../lib/run.ts");',
     'const g = require("../lib/run.ts");',
     'const h = import.meta.require("../lib/run.ts");',
-    'export {} from "../review/code-review.ts";',
+    'export {} from "../review/post-plan.ts";',
     'const name = "../lib/run.ts";',
     "const computed = require(name);",
     "export const all = [f, g, h, computed];",

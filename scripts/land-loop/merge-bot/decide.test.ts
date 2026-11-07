@@ -2,22 +2,34 @@ import { describe, expect, test } from "bun:test";
 
 import * as fc from "fast-check";
 
+import type { ReportedFinding, ReportedResult, ReviewResult } from "../review/review-report.ts";
 import {
   afterPrincipalJudge,
+  afterReview,
   conflictingOf,
   decide,
   EMPTY_RECORD,
   LAND_APPROVAL_LABEL,
   landApprovalCounts,
-  openImportantOf,
   patchDeltaStart,
   PRINCIPAL_JUDGE_TRIES,
   recordOfJson,
   recordOfStored,
+  REVIEW_DEADLINE_MS,
+  reviewStepsOf,
   risen,
   storedOfRecord,
 } from "./decide.ts";
-import type { RoutingAnswer, Snapshot, StateRecord, Step, StoredRecord } from "./decide.ts";
+import type {
+  CheckState,
+  ReviewJob,
+  ReviewState,
+  RoutingAnswer,
+  Snapshot,
+  StateRecord,
+  Step,
+  StoredRecord,
+} from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -44,6 +56,8 @@ const READY: Snapshot = {
   devRed: false,
   conflicting: false,
   record: { ...EMPTY_RECORD, triage: { [P1]: LIGHT } },
+  now: "2026-11-07T12:00:00.000Z",
+  reviewJob: null,
 };
 
 function stepsOf(snapshot: Snapshot): readonly Step[] {
@@ -86,8 +100,15 @@ describe("decide", () => {
     expect(stepsOf({ ...READY, record: EMPTY_RECORD })).toEqual([{ kind: "route", patch: P1, patchDelta: false }]);
   });
 
-  test("a routed patch nobody reviewed gets a Code review at its Review depth, Review round 1", () => {
-    expect(stepsOf(READY)).toContainEqual({ kind: "code-review", depth: "light", reviewRound: 1 });
+  test("a routed patch nobody reviewed asks the review job for Review round 1 at its Review depth, both checks pending", () => {
+    const running: CheckState = { kind: "pending", summary: "Review round 1 running." };
+
+    expect(stepsOf(READY)).toEqual([
+      { kind: "labels", route: "auto", depth: "light" },
+      { kind: "request-review", depth: "light", reviewRound: 1 },
+      { kind: "review-check", check: running },
+      { kind: "land-gate", check: running },
+    ]);
   });
 
   test("review:none sets the Review check green at once, and a land:auto PR goes to the queue", () => {
@@ -123,6 +144,27 @@ describe("decide", () => {
     expect(gate(owner)).toBe("pending");
     expect(gate({ ...owner, labels: ["land-ok"], landApprovalByOwner: true })).toBe("success");
     expect(kinds({ ...owner, labels: ["land-ok"], landApprovalByOwner: true })).toContain("record");
+  });
+
+  test("a land:human PR lands only on the Owner's Land approval for this very patch", () => {
+    const owner = {
+      ...READY,
+      labels: [LAND_APPROVAL_LABEL],
+      record: {
+        ...READY.record,
+        reviewedPatch: P1,
+        reviewRounds: 1,
+        triage: { [P1]: { ...LIGHT, land: "owner" as const } },
+      },
+    };
+
+    const someoneElse = { ...owner, landApprovalByOwner: false, record: { ...owner.record, landOkPatch: P1 } };
+    const otherPatch = { ...owner, landApprovalByOwner: true, record: { ...owner.record, landOkPatch: "patch-0" } };
+
+    for (const snapshot of [someoneElse, otherPatch]) {
+      expect(gate(snapshot)).toBe("pending");
+      expect(kinds(snapshot)).not.toContain("auto-merge");
+    }
   });
 
   test("a Land approval label that someone else put, or one given for another patch, is removed", () => {
@@ -177,12 +219,22 @@ describe("Review rounds", () => {
   const RISKY = { ...LIGHT, secondRound: true };
 
   // Rounds run, the patch the last one read (P1 is this one), Routing answer, open Important; then the
-  // Review round asked, the Owner asked, the Principal judge asked, and the Land gate (null: a model step ends the decision first).
+  // Review round asked, the Owner asked, the Principal judge asked, and the Land gate (null: the Principal judge ends the decision first).
   const rows: Array<
     [string, number, string | null, RoutingAnswer, number, 1 | 2 | null, boolean, boolean, string | null]
   > = [
-    ["no Review round yet: Review round 1", 0, null, LIGHT, 0, 1, false, false, null],
-    ["a Nit-only Review round 1, then a risky push: Review round 2", 1, "patch-0", RISKY, 0, 2, false, false, null],
+    ["no Review round yet: Review round 1", 0, null, LIGHT, 0, 1, false, false, "pending"],
+    [
+      "a Nit-only Review round 1, then a risky push: Review round 2",
+      1,
+      "patch-0",
+      RISKY,
+      0,
+      2,
+      false,
+      false,
+      "pending",
+    ],
     [
       "a Nit-only Review round 1, then a push that needs no review: landable on its Land route",
       1,
@@ -203,7 +255,7 @@ describe("Review rounds", () => {
       2,
       false,
       false,
-      null,
+      "pending",
     ],
     [
       "an Important in Review round 1, then a fix that needs no review, resolved: landable",
@@ -306,9 +358,9 @@ describe("Review rounds", () => {
 
       const snapshot = { ...READY, openImportant, record };
       const steps = stepsOf(snapshot);
-      const review = steps.find((step) => step.kind === "code-review");
+      const review = steps.find((step) => step.kind === "request-review");
 
-      expect(review?.kind === "code-review" ? review.reviewRound : null).toBe(reviewRound);
+      expect(review?.kind === "request-review" ? review.reviewRound : null).toBe(reviewRound);
       expect(steps.some((step) => step.kind === "needs-owner")).toBe(toOwner);
       expect(steps.some((step) => step.kind === "labels" && step.route === "owner")).toBe(toOwner);
       expect(steps.some((step) => step.kind === "principal-judge")).toBe(principalJudge);
@@ -377,6 +429,30 @@ describe("the stored record", () => {
     );
   });
 
+  test("a record with a review asked reads back the same, and one written before the field existed reads with none", () => {
+    const review = {
+      kind: "requested" as const,
+      patch: P1,
+      round: 2 as const,
+      runId: 7,
+      at: "2026-11-07T11:00:00.000Z",
+    };
+
+    const record = { ...EMPTY_RECORD, review };
+
+    expect(recordOfJson(JSON.stringify(storedOfRecord(record)))).toEqual(record);
+    expect(recordOfJson(JSON.stringify({ reviewRounds: 1 })).review).toBeUndefined();
+    expect(() => recordOfJson(JSON.stringify({ review: { ...review, round: 3 } }))).toThrow('at ["review"]');
+  });
+
+  test("a record that counted Important findings posted in a review's body still reads, and the count is left out", () => {
+    const record = recordOfJson(JSON.stringify({ reviewRounds: 1, reviewedPatch: P1, bodyImportant: { [P1]: 2 } }));
+
+    expect(record).toEqual({ ...EMPTY_RECORD, reviewRounds: 1, reviewedPatch: P1 });
+    expect(storedOfRecord(record)).not.toHaveProperty("bodyImportant");
+    expect(() => recordOfJson(JSON.stringify({ bodyImportant: { [P1]: "2" } }))).toThrow('at ["bodyImportant"]');
+  });
+
   test("a record is stored with its reviewRounds, and reads back the same", () => {
     const record = recordOfJson(
       JSON.stringify({ reviewRounds: 1, reviewedPatch: P1, triage: { [P1]: { ...LIGHT, land: "human" } } }),
@@ -430,17 +506,6 @@ describe("Land approval across a patch change", () => {
     const record = { ...READY.record, reviewedPatch: P1, landOkPatch: "patch-0" };
 
     expect(stepsOf({ ...READY, record })).toContainEqual({ kind: "record", record: { ...record, landOkPatch: null } });
-  });
-});
-
-describe("openImportantOf", () => {
-  test("an Important posted with no thread stays open until the patch changes", () => {
-    const record = { ...EMPTY_RECORD, bodyImportant: { [P1]: 1 } };
-
-    expect(openImportantOf(0, record, P1)).toBe(1);
-    expect(openImportantOf(2, record, P1)).toBe(3);
-    expect(openImportantOf(0, record, "patch-2")).toBe(0);
-    expect(openImportantOf(0, EMPTY_RECORD, P1)).toBe(0);
   });
 });
 
@@ -573,6 +638,197 @@ describe("afterPrincipalJudge", () => {
   });
 });
 
+const finding = (severity: ReportedFinding["severity"]): ReportedFinding => ({
+  file: "a.ts",
+  line: 3,
+  severity,
+  summary: "s",
+  failureScenario: "f",
+  breaks: null,
+});
+
+const completed = (result: ReviewResult | null, conclusion = "success"): ReviewJob => ({
+  kind: "completed",
+  conclusion,
+  result,
+});
+
+/** The Review check of a failed Review round 1 of run 42. */
+const failure = (cause: string): Step => ({
+  kind: "review-check",
+  check: { kind: "failure", summary: `Review round 1 failed (run 42): ${cause}` },
+});
+
+describe("the review job's run", () => {
+  const AT = "2026-11-07T11:50:00.000Z";
+
+  const REQUESTED: ReviewState = { kind: "requested", patch: P1, round: 1, runId: 42, at: AT };
+
+  const asked = { ...READY, record: { ...READY.record, review: REQUESTED } };
+
+  const REQUEST = {
+    pr: 9,
+    head: "a".repeat(40),
+    base: "b".repeat(40),
+    patch: P1,
+    round: 1 as const,
+    model: "sonnet",
+    effort: "medium" as const,
+  };
+
+  const FACTS = {
+    request: REQUEST,
+    model: "claude-sonnet-5-5",
+    claudeCodeVersion: "2.1.318",
+    costUsd: 0.03,
+    runUrl: "u",
+  };
+
+  const reported = (...findings: ReportedFinding[]): ReportedResult => ({
+    kind: "reported",
+    report: { findings },
+    ...FACTS,
+  });
+
+  const running: CheckState = { kind: "pending", summary: "Review round 1 running." };
+
+  const held: Step = {
+    kind: "land-gate",
+    check: { kind: "pending", summary: "Not landable: the Code review failed." },
+  };
+
+  const failedState = (cause: string): ReviewState => ({ kind: "failed", patch: P1, round: 1, runId: 42, cause });
+
+  test("while the run has not completed, the decision ends with both checks pending and asks no other review, even on a draft", () => {
+    for (const snapshot of [
+      { ...asked, reviewJob: { kind: "running" as const } },
+      { ...asked, reviewJob: null },
+      { ...asked, reviewJob: { kind: "running" as const }, draft: true, ci: null },
+    ]) {
+      expect(stepsOf(snapshot)).toEqual([
+        { kind: "review-check", check: running },
+        { kind: "land-gate", check: running },
+      ]);
+    }
+  });
+
+  test("a request still running past the deadline fails, and the record keeps why; up to the deadline it waits", () => {
+    const deadline = new Date(Date.parse(AT) + REVIEW_DEADLINE_MS).toISOString();
+    const late = new Date(Date.parse(AT) + REVIEW_DEADLINE_MS + 1).toISOString();
+    const waiting = { ...asked, reviewJob: { kind: "running" as const } };
+
+    expect(kinds({ ...waiting, now: deadline })).toEqual(["review-check", "land-gate"]);
+    expect(stepsOf({ ...waiting, now: late })).toEqual([
+      {
+        kind: "record",
+        record: { ...asked.record, review: failedState("the review job did not report") },
+      },
+      failure("the review job did not report"),
+      held,
+    ]);
+  });
+
+  test("a completed run that reports for this PR, patch and round posts the review, even on a draft, then says whether it found an Important", () => {
+    expect(stepsOf({ ...asked, reviewJob: completed(reported(finding("important"), finding("nit"))) })).toEqual([
+      { kind: "post-review", result: reported(finding("important"), finding("nit")) },
+      { kind: "review-check", check: { kind: "failure", summary: "1 Important finding(s) posted." } },
+    ]);
+    expect(stepsOf({ ...asked, draft: true, reviewJob: completed(reported(finding("nit"))) })).toEqual([
+      { kind: "post-review", result: reported(finding("nit")) },
+      { kind: "review-check", check: { kind: "success", summary: "No Important finding." } },
+    ]);
+  });
+
+  test("a failed result, a run with no result that reads, or an artifact of another PR, patch or round fails the review, with the cause", () => {
+    const rows: Array<[ReviewJob, string]> = [
+      [completed({ kind: "failed", cause: "timed out after 1500000 ms", ...FACTS }), "timed out after 1500000 ms"],
+      [completed(null, "cancelled"), "the review job ended (cancelled) with no result that reads"],
+      [completed({ ...reported(), request: { ...REQUEST, pr: 10 } }), "the artifact does not match the request"],
+      [
+        completed({ ...reported(), request: { ...REQUEST, patch: "patch-0" } }),
+        "the artifact does not match the request",
+      ],
+      [completed({ ...reported(), request: { ...REQUEST, round: 2 } }), "the artifact does not match the request"],
+    ];
+
+    for (const [reviewJob, cause] of rows) {
+      expect(stepsOf({ ...asked, reviewJob })).toEqual([
+        { kind: "record", record: { ...asked.record, review: failedState(cause) } },
+        failure(cause),
+        held,
+      ]);
+    }
+  });
+
+  test("a failed review stays failed while its run reruns, or when its run fails again, and writes no record again", () => {
+    const failed = { ...asked, record: { ...asked.record, review: failedState("c") } };
+
+    for (const reviewJob of [{ kind: "running" as const }, null]) {
+      expect(stepsOf({ ...failed, reviewJob, now: "2026-11-08T12:00:00.000Z" })).toEqual([failure("c"), held]);
+    }
+
+    expect(stepsOf({ ...failed, reviewJob: completed({ kind: "failed", cause: "other", ...FACTS }) })).toEqual([
+      failure("other"),
+      held,
+    ]);
+    expect(stepsOf({ ...failed, reviewJob: completed(null, "failure") })).toEqual([
+      failure("the review job ended (failure) with no result that reads"),
+      held,
+    ]);
+  });
+
+  test("a failed review whose run reran and reports for its patch and round is posted", () => {
+    const failed = { ...asked, record: { ...asked.record, review: failedState("c") } };
+
+    expect(kinds({ ...failed, reviewJob: completed(reported()) })).toEqual(["post-review", "review-check"]);
+  });
+
+  test("a review asked for another patch is stale: it is cleared, and the decision goes on for this patch", () => {
+    const stale = { ...asked, record: { ...asked.record, review: { ...REQUESTED, patch: "patch-0" } } };
+
+    expect(stepsOf({ ...stale, reviewJob: completed(reported()) }).slice(0, 3)).toEqual([
+      { kind: "record", record: READY.record },
+      { kind: "labels", route: "auto", depth: "light" },
+      { kind: "request-review", depth: "light", reviewRound: 1 },
+    ]);
+    expect(reviewStepsOf(READY, READY.record)).toEqual({ record: READY.record, end: null });
+  });
+
+  test("a stale Land approval and a failed review are written in one record", () => {
+    const snapshot = {
+      ...asked,
+      labels: [LAND_APPROVAL_LABEL],
+      landApprovalByOwner: true,
+      record: { ...asked.record, landOkPatch: "patch-0" },
+      reviewJob: completed(null),
+    };
+
+    expect(stepsOf(snapshot).slice(0, 2)).toEqual([
+      { kind: "remove-land-approval" },
+      {
+        kind: "record",
+        record: {
+          ...asked.record,
+          landOkPatch: null,
+          review: failedState("the review job ended (success) with no result that reads"),
+        },
+      },
+    ]);
+  });
+
+  test("a posted review records the patch and the head it read and its round, and clears the request", () => {
+    const record = { ...asked.record, reviewedPatch: "patch-0", reviewedHead: "h0", reviewRounds: 1 };
+    const round2 = { ...reported(), request: { ...REQUEST, round: 2 as const } };
+
+    expect(afterReview(record, round2)).toEqual({
+      ...READY.record,
+      reviewedPatch: P1,
+      reviewedHead: REQUEST.head,
+      reviewRounds: 2,
+    });
+  });
+});
+
 const PATCH = fc.constantFrom(P1, "patch-2");
 
 const HEAD = fc.constantFrom("h1", "h2");
@@ -589,6 +845,23 @@ const ROUTING: fc.Arbitrary<RoutingAnswer> = fc.record(
   { requiredKeys: ["land", "review", "secondRound", "reason", "model"] },
 );
 
+const ROUND = fc.constantFrom<1 | 2>(1, 2);
+
+/** When the arbitrary requests were dispatched: an arbitrary snapshot reads them before or after the deadline. */
+const DISPATCHED_AT = "2026-11-07T11:00:00.000Z";
+
+const reviewStateOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<ReviewState> =>
+  fc.oneof(
+    fc.record({
+      kind: fc.constantFrom("requested"),
+      patch,
+      round: ROUND,
+      runId: fc.nat(),
+      at: fc.constant(DISPATCHED_AT),
+    }),
+    fc.record({ kind: fc.constantFrom("failed"), patch, round: ROUND, runId: fc.nat(), cause: fc.string() }),
+  );
+
 /** A state record whose patches are `patch`, so that a snapshot's patch meets its entries. */
 const recordOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<StateRecord> =>
   fc.record(
@@ -599,18 +872,64 @@ const recordOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<StateRecord> =>
       triage: fc.dictionary(patch, ROUTING),
       landOkPatch: fc.option(patch, { nil: null }),
       dequeued: fc.option(fc.record({ head: HEAD, reason: fc.string() }), { nil: null }),
-      bodyImportant: fc.dictionary(patch, fc.nat({ max: 3 })),
       fable: fc.dictionary(patch, fc.record({ ok: fc.boolean(), reason: fc.string() })),
       fableFailures: fc.dictionary(patch, fc.nat({ max: 3 })),
+      review: reviewStateOf(patch),
     },
     { requiredKeys: ["reviewedPatch", "reviewedHead", "reviewRounds", "triage", "landOkPatch", "dequeued"] },
   );
+
+const ARBITRARY_FINDING: fc.Arbitrary<ReportedFinding> = fc.record({
+  file: fc.constant("a.ts"),
+  line: fc.constant(3),
+  severity: fc.constantFrom("important", "nit", "pre_existing"),
+  summary: fc.constant("s"),
+  failureScenario: fc.constant("f"),
+  breaks: fc.constant(null),
+});
+
+const RUN_FACTS = {
+  request: fc.record({
+    pr: fc.constantFrom(9, 10),
+    head: HEAD,
+    base: fc.constant("b0"),
+    patch: PATCH,
+    round: ROUND,
+    model: fc.constant("sonnet"),
+    effort: fc.constantFrom("medium"),
+  }),
+  model: fc.constant(null),
+  claudeCodeVersion: fc.constant(null),
+  costUsd: fc.constant(null),
+  runUrl: fc.constant("https://github.com/o/r/actions/runs/1"),
+};
+
+const ARBITRARY_RESULT: fc.Arbitrary<ReviewResult> = fc.oneof(
+  fc.record({
+    kind: fc.constantFrom("reported"),
+    report: fc.record({ findings: fc.array(ARBITRARY_FINDING, { maxLength: 3 }) }),
+    ...RUN_FACTS,
+  }),
+  fc.record({ kind: fc.constantFrom("failed"), cause: fc.string(), ...RUN_FACTS }),
+);
+
+const ARBITRARY_JOB: fc.Arbitrary<ReviewJob | null> = fc.option(
+  fc.oneof(
+    fc.record({ kind: fc.constantFrom("running") }),
+    fc.record({
+      kind: fc.constantFrom("completed"),
+      conclusion: fc.constantFrom("success", "failure", "cancelled"),
+      result: fc.option(ARBITRARY_RESULT, { nil: null }),
+    }),
+  ),
+  { nil: null },
+);
 
 const LABELS = ["land:auto", "land:human", "review:none", "review:light", "review:deep", LAND_APPROVAL_LABEL];
 
 /** Mostly open PRs from the Owner's own branches, the ones `decide` does more than ignore. */
 const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
-  number: fc.nat(),
+  number: fc.constantFrom(9, 10),
   state: fc.oneof({ arbitrary: fc.constant("OPEN"), weight: 8 }, fc.constantFrom("CLOSED", "MERGED")),
   sameRepository: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
   openedByOwner: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
@@ -624,11 +943,19 @@ const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   devRed: fc.boolean(),
   conflicting: fc.boolean(),
   record: recordOf(PATCH),
+  now: fc.constantFrom("2026-11-07T11:30:00.000Z", "2026-11-07T12:00:00.000Z"),
+  reviewJob: ARBITRARY_JOB,
 });
 
 const RUNS = { numRuns: 2000 };
 
-const MODEL_STEPS: ReadonlySet<Step["kind"]> = new Set(["route", "code-review", "principal-judge"]);
+const MODEL_STEPS: ReadonlySet<Step["kind"]> = new Set(["route", "principal-judge"]);
+
+const stepsOrNone = (snapshot: Snapshot): readonly Step[] => {
+  const decision = decide(snapshot);
+
+  return decision.kind === "steps" ? decision.steps : [];
+};
 
 const REVIEW_RANK: Readonly<Record<RoutingAnswer["review"], number>> = { none: 0, light: 1, deep: 2 };
 
@@ -741,6 +1068,55 @@ describe("the Merge bot's invariants", () => {
         if (merged && !approved) {
           expect(snapshot.labels).not.toContain("land:human");
           expect(snapshot.record.triage[snapshot.patch]?.land).toBe("auto");
+        }
+      }),
+      RUNS,
+    );
+  });
+
+  test("a decision that posts a review ends with its Review check and posts no Land gate: the next decision reads the review", () => {
+    fc.assert(
+      fc.property(SNAPSHOT, (snapshot) => {
+        const steps = stepsOrNone(snapshot);
+        const post = steps.findIndex((step) => step.kind === "post-review");
+
+        if (post !== -1) {
+          expect(steps.slice(post + 1).map((step) => step.kind)).toEqual(["review-check"]);
+          expect(steps.some((step) => step.kind === "land-gate")).toBe(false);
+        }
+      }),
+      RUNS,
+    );
+  });
+
+  test("while the review asked for this patch has no report, the Review check never turns green, nothing merges and no review is asked again", () => {
+    fc.assert(
+      fc.property(SNAPSHOT, (snapshot) => {
+        const job = snapshot.reviewJob;
+        const reported = job?.kind === "completed" && job.result?.kind === "reported";
+
+        if (snapshot.record.review?.patch === snapshot.patch && !reported) {
+          const steps = stepsOrNone(snapshot);
+
+          expect(steps.some((step) => step.kind === "review-check" && step.check.kind === "success")).toBe(false);
+          expect(steps.map((step) => step.kind)).not.toContain("auto-merge");
+          expect(steps.map((step) => step.kind)).not.toContain("request-review");
+        }
+      }),
+      RUNS,
+    );
+  });
+
+  test("a review is asked only of a ready PR with green CI, routed, with no review asked for its patch, and the Land gate stays pending", () => {
+    fc.assert(
+      fc.property(SNAPSHOT, (snapshot) => {
+        const steps = stepsOrNone(snapshot);
+
+        if (steps.some((step) => step.kind === "request-review")) {
+          expect(snapshot).toMatchObject({ draft: false, ci: "success", conflicting: false });
+          expect(snapshot.record.triage[snapshot.patch]).toBeDefined();
+          expect(snapshot.record.review?.patch).not.toBe(snapshot.patch);
+          expect(steps.at(-1)?.kind === "land-gate" && steps.at(-1)).toMatchObject({ check: { kind: "pending" } });
         }
       }),
       RUNS,

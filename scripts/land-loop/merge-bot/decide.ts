@@ -1,14 +1,15 @@
 /**
  * The Merge bot's decision, a pure function over a snapshot of one PR. Each Merge bot run re-reads
  * the whole state, so an event that arrives twice, late or not at all changes nothing. It returns the
- * steps to take in order; the adapter (`main.ts`) performs them and stops at the first that needs
- * a model's answer (`route`, `code-review`, `principal-judge`), then decides again with that answer
- * in the state record.
+ * steps to take in order; the adapter (`main.ts`) performs them and, after a step whose outcome the
+ * next decision reads (`route`, `post-review`, `principal-judge`), decides again with it in the
+ * state record.
  */
 
 import { Schema, Struct } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import type { ReportedResult, ReviewResult } from "../review/review-report.ts";
 
 /** Who lands a change: `auto`, the Merge bot alone, or `owner`, with a Land approval. */
 export type LandRoute = "auto" | "owner";
@@ -82,6 +83,29 @@ export interface PrincipalJudgeVerdict {
   readonly reason: string;
 }
 
+const Round = Schema.Literals([1, 2]);
+
+/** The review asked of the review job for one patch and round, and its run; `failed` once it gave no report. */
+const ReviewState = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("requested"),
+    patch: Schema.String,
+    round: Round,
+    runId: Schema.Int,
+    /** When the Merge bot dispatched it, as an ISO timestamp. */
+    at: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("failed"),
+    patch: Schema.String,
+    round: Round,
+    runId: Schema.Int,
+    cause: Schema.String,
+  }),
+]);
+
+export type ReviewState = typeof ReviewState.Type;
+
 /**
  * The record the App keeps in one comment per PR. Its keys are the stored record's format, an
  * external name: existing records must still read, so they stay as they are. `triage` holds the
@@ -100,8 +124,8 @@ export interface StateRecord {
   readonly landOkPatch: string | null;
   /** The Ejection of the PR from the merge queue at this head, for this reason. */
   readonly dequeued: { readonly head: string; readonly reason: string } | null;
-  /** Important findings posted in a review's body, with no thread to resolve, per patch reviewed. */
-  readonly bodyImportant?: Readonly<Record<string, number>>;
+  /** The review asked of the review job, until its review is posted. Absent before any. */
+  readonly review?: ReviewState;
   /** The Principal judge's verdict on each patch that needs one, keyed by patch identity. */
   readonly fable?: Readonly<Record<string, PrincipalJudgeVerdict>>;
   /** Principal judge runs that gave no verdict, per patch. */
@@ -143,9 +167,12 @@ const ReadRecord = Schema.Struct({
   ),
   landOkPatch: Schema.NullOr(Schema.String),
   dequeued: Schema.NullOr(Schema.Struct({ head: Schema.String, reason: Schema.String })),
+  // Records written while an Important could be posted in a review's body, with no thread, count them
+  // here: the field still reads, and counts no more.
   bodyImportant: Schema.optionalKey(Schema.Record(Schema.String, Schema.Finite)),
   fable: Schema.optionalKey(Schema.Record(Schema.String, Verdict)),
   fableFailures: Schema.optionalKey(Schema.Record(Schema.String, Schema.Finite)),
+  review: Schema.optionalKey(ReviewState),
 });
 
 type ReadRecord = typeof ReadRecord.Type;
@@ -153,14 +180,16 @@ type ReadRecord = typeof ReadRecord.Type;
 /** The comment's JSON: older records lack the fields added since they were written. */
 const StoredJson = ReadRecord.mapFields(Struct.map(Schema.optionalKey));
 
-/** The record a comment stores, with each Land route read back from its stored value. */
+/** The record a comment stores, with each Land route read back from its stored value; `bodyImportant` is left out. */
 export function recordOfStored(stored: ReadRecord): StateRecord {
-  const triage = Object.entries(stored.triage).map(
+  const { bodyImportant: _uncounted, ...kept } = stored;
+
+  const triage = Object.entries(kept.triage).map(
     ([patch, routing]) =>
       [patch, { ...routing, land: landRouteOf(routing.land), model: routing.model ?? null }] as const,
   );
 
-  return { ...stored, triage: Object.fromEntries(triage) };
+  return { ...kept, triage: Object.fromEntries(triage) };
 }
 
 /** The record its comment's JSON holds, each field it lacks read as in a record with no review yet. */
@@ -205,7 +234,16 @@ export interface Snapshot {
   /** GitHub reads the PR as conflicting with its base: no CI runs on it and the queue refuses it. */
   readonly conflicting: boolean;
   readonly record: StateRecord;
+  /** When the Merge bot read the PR, as an ISO timestamp: a review requested too long before it has failed. */
+  readonly now: string;
+  /** The run of `record.review` as this decision read it; null when the record holds no review. */
+  readonly reviewJob: ReviewJob | null;
 }
+
+export type ReviewJob =
+  | { readonly kind: "running" }
+  /** `result` is null when the run ended without an artifact that reads. */
+  | { readonly kind: "completed"; readonly conclusion: string; readonly result: ReviewResult | null };
 
 /** GitHub's `mergeable_state` of one PR, from the single-PR endpoint: `dirty` is a conflict with the base. */
 export function conflictingOf(mergeableState: string | null | undefined): boolean {
@@ -219,11 +257,6 @@ export function conflictingOf(mergeableState: string | null | undefined): boolea
  */
 export function patchDeltaStart(base: string, reviewedHead: string | null, ancestorExit: number | null): string {
   return reviewedHead !== null && ancestorExit === 0 ? reviewedHead : base;
-}
-
-/** Open Important findings: the unresolved threads, plus those posted with no thread, until the patch changes. */
-export function openImportantOf(threads: number, record: StateRecord, patch: string): number {
-  return threads + (record.bodyImportant?.[patch] ?? 0);
 }
 
 /** The owner's Land approval counts only when it was put after the head it would land was pushed. */
@@ -243,7 +276,8 @@ export type CheckState =
 export type Step =
   | { readonly kind: "route"; readonly patch: string; readonly patchDelta: boolean }
   | { readonly kind: "labels"; readonly route: LandRoute; readonly depth: ReviewDepth }
-  | { readonly kind: "code-review"; readonly depth: Exclude<ReviewDepth, "none">; readonly reviewRound: 1 | 2 }
+  | { readonly kind: "request-review"; readonly depth: Exclude<ReviewDepth, "none">; readonly reviewRound: 1 | 2 }
+  | { readonly kind: "post-review"; readonly result: ReportedResult }
   | { readonly kind: "review-check"; readonly check: CheckState }
   | { readonly kind: "land-gate"; readonly check: CheckState }
   | { readonly kind: "needs-owner"; readonly reason: string }
@@ -307,6 +341,165 @@ function landApprovalOf(snapshot: Snapshot, record: StateRecord): LandApproval {
   return { next: record, removeLabel: false };
 }
 
+/** How long after its dispatch a review the job has not reported counts as failed: past the job's 30-minute timeout. */
+export const REVIEW_DEADLINE_MS = 45 * 60_000;
+
+function withoutReview(record: StateRecord): StateRecord {
+  const { review: _done, ...rest } = record;
+
+  return rest;
+}
+
+/** The record once the review of `result` is posted: the patch and the head it read, its round, and no review asked. */
+export function afterReview(record: StateRecord, result: ReportedResult): StateRecord {
+  return {
+    ...withoutReview(record),
+    reviewedPatch: result.request.patch,
+    reviewedHead: result.request.head,
+    reviewRounds: result.request.round,
+  };
+}
+
+/** The review machine's outcome: the record it leaves, and the steps that end the decision, or null when it goes on. */
+interface ReviewMachine {
+  readonly record: StateRecord;
+  readonly end: readonly Step[] | null;
+}
+
+type JobOutcome =
+  | { readonly kind: "waiting" }
+  | { readonly kind: "reported"; readonly result: ReportedResult }
+  | { readonly kind: "failed"; readonly cause: string };
+
+/** What the run of `review` gave, as the snapshot read it; an artifact of another PR, patch or round is refused. */
+function outcomeOf(snapshot: Snapshot, review: ReviewState): JobOutcome {
+  const job = snapshot.reviewJob;
+
+  if (job === null || job.kind === "running") {
+    return { kind: "waiting" };
+  }
+
+  const { result } = job;
+
+  if (result === null) {
+    return { kind: "failed", cause: `the review job ended (${job.conclusion}) with no result that reads` };
+  }
+
+  const { request } = result;
+
+  if (request.pr !== snapshot.number || request.patch !== review.patch || request.round !== review.round) {
+    return { kind: "failed", cause: "the artifact does not match the request" };
+  }
+
+  return result.kind === "reported" ? { kind: "reported", result } : { kind: "failed", cause: result.cause };
+}
+
+const runningSteps = (round: 1 | 2): readonly Step[] => {
+  const check = pending(`Review round ${round} running.`);
+
+  return [
+    { kind: "review-check", check },
+    { kind: "land-gate", check },
+  ];
+};
+
+/** A review that failed: recorded once, when its request first fails; only a report moves it on. */
+function failedOf(record: StateRecord, review: ReviewState, cause: string): ReviewMachine {
+  const failed: ReviewState = { kind: "failed", patch: review.patch, round: review.round, runId: review.runId, cause };
+
+  return {
+    record: review.kind === "failed" ? record : { ...record, review: failed },
+    end: [
+      {
+        kind: "review-check",
+        check: { kind: "failure", summary: `Review round ${review.round} failed (run ${review.runId}): ${cause}` },
+      },
+      { kind: "land-gate", check: pending("Not landable: the Code review failed.") },
+    ],
+  };
+}
+
+/** The review is posted, then its Review check says whether it found an Important. */
+function postedSteps(result: ReportedResult): readonly Step[] {
+  const important = result.report.findings.filter((finding) => finding.severity === "important").length;
+
+  return [
+    { kind: "post-review", result },
+    {
+      kind: "review-check",
+      check:
+        important === 0
+          ? { kind: "success", summary: "No Important finding." }
+          : { kind: "failure", summary: `${important} Important finding(s) posted.` },
+    },
+  ];
+}
+
+/** A review whose run has not completed: a request waits up to the deadline, a failed review stays failed. */
+function waitingOf(snapshot: Snapshot, record: StateRecord, review: ReviewState): ReviewMachine {
+  if (review.kind === "failed") {
+    return failedOf(record, review, review.cause);
+  }
+
+  return Date.parse(snapshot.now) - Date.parse(review.at) > REVIEW_DEADLINE_MS
+    ? failedOf(record, review, "the review job did not report")
+    : { record, end: runningSteps(review.round) };
+}
+
+/**
+ * The review the record asked of the review job, read before any other exit of the decision, a draft
+ * included, so a result that comes while the author holds the PR is not lost. A request for another
+ * patch is stale and cleared; the decision then goes on for this one. While the run has not reported,
+ * the decision waits, and a request that waited past the deadline fails. A failed review stays failed
+ * until a run reports for its patch and round, such as the Owner's rerun of that run.
+ */
+export function reviewStepsOf(snapshot: Snapshot, record: StateRecord): ReviewMachine {
+  const { review } = record;
+
+  if (review === undefined) {
+    return { record, end: null };
+  }
+
+  if (review.patch !== snapshot.patch) {
+    return { record: withoutReview(record), end: null };
+  }
+
+  const outcome = outcomeOf(snapshot, review);
+
+  if (outcome.kind === "waiting") {
+    return waitingOf(snapshot, record, review);
+  }
+
+  if (outcome.kind === "failed") {
+    return failedOf(record, review, outcome.cause);
+  }
+
+  return { record, end: postedSteps(outcome.result) };
+}
+
+/** What the Review rounds ask of this patch: a round to request, or the Owner instead of a third. */
+type RoundNeed =
+  | { readonly kind: "request"; readonly depth: Exclude<ReviewDepth, "none">; readonly round: 1 | 2 }
+  | { readonly kind: "third" };
+
+/** The Review rounds' need for this patch; null when they ask nothing of it. */
+function roundNeedOf(record: StateRecord, routing: RoutingAnswer, depth: ReviewDepth, patch: string): RoundNeed | null {
+  if (depth === "none" || record.reviewedPatch === patch) {
+    return null;
+  }
+
+  if (record.reviewRounds === 0) {
+    return { kind: "request", depth, round: 1 };
+  }
+
+  // A later patch is read again only when the Routing answer of its Patch delta asks for it.
+  if (!routing.secondRound) {
+    return null;
+  }
+
+  return record.reviewRounds === 1 ? { kind: "request", depth, round: 2 } : { kind: "third" };
+}
+
 export function decide(snapshot: Snapshot): Decision {
   const { record } = snapshot;
 
@@ -319,15 +512,21 @@ export function decide(snapshot: Snapshot): Decision {
   }
 
   const steps: Step[] = [];
-  const { next, removeLabel } = landApprovalOf(snapshot, record);
+  const approval = landApprovalOf(snapshot, record);
+  const machine = reviewStepsOf(snapshot, approval.next);
+  const next = machine.record;
 
-  if (removeLabel) {
+  if (approval.removeLabel) {
     steps.push({ kind: "remove-land-approval" });
   }
 
-  // Written now: a routing or a Code review below ends this decision before the Land gate is reached.
+  // Written now: a routing, a review or the Principal judge below ends this decision before the Land gate is reached.
   if (next !== record) {
     steps.push({ kind: "record", record: next });
+  }
+
+  if (machine.end !== null) {
+    return { kind: "steps", steps: [...steps, ...machine.end] };
   }
 
   const landApproved = snapshot.landApprovalByOwner && next.landOkPatch === snapshot.patch;
@@ -369,29 +568,21 @@ export function decide(snapshot: Snapshot): Decision {
   const labels = risen(snapshot.labels, routing);
   steps.push({ kind: "labels", ...labels });
 
-  let thirdRoundNeeded = false;
+  const need = roundNeedOf(next, routing, labels.depth, snapshot.patch);
 
-  if (next.reviewedPatch !== snapshot.patch && labels.depth !== "none") {
-    if (next.reviewRounds === 0) {
-      steps.push({ kind: "code-review", depth: labels.depth, reviewRound: 1 });
+  if (need?.kind === "request") {
+    steps.push({ kind: "request-review", depth: need.depth, reviewRound: need.round }, ...runningSteps(need.round));
 
-      return { kind: "steps", steps };
-    }
+    return { kind: "steps", steps };
+  }
 
-    // A later patch is read again only when the Routing answer of its Patch delta asks for it.
-    if (routing.secondRound && next.reviewRounds === 1) {
-      steps.push({ kind: "code-review", depth: labels.depth, reviewRound: 2 });
+  const thirdRoundNeeded = need?.kind === "third";
 
-      return { kind: "steps", steps };
-    }
-
-    if (routing.secondRound) {
-      thirdRoundNeeded = true;
-      steps.push(
-        { kind: "labels", route: "owner", depth: labels.depth },
-        { kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." },
-      );
-    }
+  if (thirdRoundNeeded) {
+    steps.push(
+      { kind: "labels", route: "owner", depth: labels.depth },
+      { kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." },
+    );
   }
 
   if (snapshot.openImportant > 0) {

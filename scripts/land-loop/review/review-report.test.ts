@@ -3,7 +3,16 @@ import { describe, expect, test } from "bun:test";
 import { Result, Schema } from "effect";
 
 import type { SessionAnswer } from "../ports/review.ts";
-import { OUTPUT_SCHEMA, resultOf, ReviewInputs, ReviewResult, StructuredReport, summaryOf } from "./review-report.ts";
+import {
+  inputsOf,
+  OUTPUT_SCHEMA,
+  resultOf,
+  resultOfJson,
+  ReviewInputs,
+  ReviewResult,
+  StructuredReport,
+  summaryOf,
+} from "./review-report.ts";
 import type { ReviewRequest } from "./review-report.ts";
 
 const HEAD = "e1249fc0000000000000000000000000000000aa";
@@ -58,6 +67,27 @@ describe("ReviewInputs", () => {
         true,
       ]);
     }
+  });
+});
+
+describe("inputsOf", () => {
+  test("the request goes out as the workflow's string inputs, which read back as the same request", () => {
+    const inputs = inputsOf({ ...REQUEST, round: 2 });
+
+    expect(inputs).toEqual({
+      pr: "80",
+      head: HEAD,
+      base: BASE,
+      patch: "p1",
+      round: "2",
+      model: "sonnet",
+      effort: "medium",
+    });
+    expect(Schema.decodeUnknownSync(ReviewInputs)(inputs)).toEqual({ ...REQUEST, round: 2 });
+  });
+
+  test("a head that is not a SHA is refused before it is dispatched", () => {
+    expect(() => inputsOf({ ...REQUEST, head: "HEAD" })).toThrow('["head"]');
   });
 });
 
@@ -129,7 +159,13 @@ describe("resultOf", () => {
 
     for (const result of [reported, failed]) {
       expect(Schema.decodeUnknownSync(Schema.fromJsonString(ReviewResult))(JSON.stringify(result))).toEqual(result);
+      expect(resultOfJson(JSON.stringify(result))).toEqual(result);
     }
+  });
+
+  test("an artifact that is not JSON, or not a result, reads as none", () => {
+    expect(resultOfJson("{")).toBeNull();
+    expect(resultOfJson(JSON.stringify({ kind: "reported", report: { findings: [] } }))).toBeNull();
   });
 });
 
