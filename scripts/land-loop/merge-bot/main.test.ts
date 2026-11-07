@@ -22,6 +22,7 @@ import {
   Pull,
   PullReviews,
   reviewJobReader,
+  successorOf,
   WorkflowRuns,
 } from "./main.ts";
 
@@ -195,20 +196,47 @@ interface RecordedRunner {
   readonly calls: string[][];
 }
 
-/** A runner that answers `gh api` with `api` and `gh run download` with `download`, and records every call. */
-function runnerOf(api: Ran, download: (dir: string) => Ran): RecordedRunner {
+const NO_RUNS: Ran = { code: 0, stdout: '{"workflow_runs":[]}', stderr: "" };
+
+/**
+ * A runner that answers the read of one run with `api`, the list of the review workflow's runs with
+ * `listing`, and an artifact download with `download`, and records every call.
+ */
+function runnerOf(api: Ran, download: (dir: string) => Ran, listing: Ran = NO_RUNS): RecordedRunner {
   const calls: string[][] = [];
 
   const runner: Run = (argv) => {
     calls.push([...argv]);
 
-    return Promise.resolve(argv[1] === "api" ? api : download(argv.at(-1) ?? ""));
+    if (argv[1] !== "api") {
+      return Promise.resolve(download(argv.at(-1) ?? ""));
+    }
+
+    return Promise.resolve(argv[2]?.includes("/workflows/") === true ? listing : api);
   };
 
   return { runner, calls };
 }
 
 const ok = (stdout: string): Ran => ({ code: 0, stdout, stderr: "" });
+
+const noArtifact = (): Ran => ({ code: 1, stdout: "", stderr: "no artifact" });
+
+/** One run of the review workflow, as its listing gives it. */
+const runOf = (id: number, title: string, status = "completed", conclusion: string | null = "success") => ({
+  id,
+  display_title: title,
+  status,
+  conclusion,
+});
+
+/** The listing of the review workflow's runs, newest first. */
+const runsOf = (...listed: ReadonlyArray<readonly [number, string, string, string | null]>): Ran =>
+  ok(
+    JSON.stringify({
+      workflow_runs: listed.map(([id, title, status, conclusion]) => runOf(id, title, status, conclusion)),
+    }),
+  );
 
 const downloaded = (dir: string): Ran => {
   writeFileSync(join(dir, "review-result.json"), JSON.stringify(RESULT));
@@ -231,7 +259,8 @@ describe("reviewJobReader", () => {
 
     expect(await reviewJobReader(gone.runner)(WHERE, 12, ASKED, "p1")).toEqual({ kind: "missing" });
     expect(gone.calls).toEqual([["gh", "api", "repos/o/r/actions/runs/7"]]);
-    expect(reviewJobReader(flaky.runner)(WHERE, 12, ASKED, "p1")).rejects.toThrow(
+    // oxlint-disable-next-line typescript/await-thenable, typescript/no-confusing-void-expression -- bun-types types rejects matchers as void; Bun returns the promise the test awaits.
+    await expect(reviewJobReader(flaky.runner)(WHERE, 12, ASKED, "p1")).rejects.toThrow(
       "exited 1: gh: Server Error (HTTP 502)",
     );
   });
@@ -260,5 +289,52 @@ describe("reviewJobReader", () => {
       conclusion: "success",
       result: null,
     });
+  });
+
+  test("a cancelled run that a newer dispatch for the PR replaced is read through its successor", async () => {
+    const cancelled = ok('{"status":"completed","conclusion":"cancelled"}');
+
+    const running = runnerOf(
+      cancelled,
+      downloaded,
+      runsOf([9, "12", "in_progress", null], [7, "12", "completed", "cancelled"]),
+    );
+
+    const done = runnerOf(cancelled, downloaded, runsOf([9, "12", "completed", "success"]));
+
+    const alone = runnerOf(
+      cancelled,
+      noArtifact,
+      runsOf([8, "13", "completed", "success"], [5, "12", "completed", "success"]),
+    );
+
+    expect(await reviewJobReader(running.runner)(WHERE, 12, ASKED, "p1")).toEqual({ kind: "running" });
+    expect(running.calls[1]).toEqual([
+      "gh",
+      "api",
+      "repos/o/r/actions/workflows/code-review.yml/runs?event=workflow_dispatch&per_page=30",
+    ]);
+    expect(await reviewJobReader(done.runner)(WHERE, 12, ASKED, "p1")).toEqual({
+      kind: "completed",
+      conclusion: "success",
+      result: RESULT,
+    });
+    expect(done.calls[2]?.[3]).toBe("9");
+    expect(await reviewJobReader(alone.runner)(WHERE, 12, ASKED, "p1")).toEqual({
+      kind: "completed",
+      conclusion: "cancelled",
+      result: null,
+    });
+    expect(alone.calls[2]?.[3]).toBe("7");
+  });
+});
+
+describe("successorOf", () => {
+  test("the newest run of the same PR dispatched after the given one, or none", () => {
+    const listed = [runOf(11, "13"), runOf(10, "12"), runOf(9, "12"), runOf(6, "12")];
+
+    expect(successorOf(listed, 12, 7)?.id).toBe(10);
+    expect(successorOf(listed, 12, 10)).toBeNull();
+    expect(successorOf(listed, 14, 1)).toBeNull();
   });
 });

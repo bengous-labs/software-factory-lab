@@ -289,13 +289,66 @@ export function notFound(read: Ran): boolean {
   return read.code !== 0 && read.stderr.includes("(HTTP 404)");
 }
 
+/** The review workflow's dispatched runs, newest first, as far as the Merge bot reads them. */
+export const ReviewRuns = Schema.Struct({
+  workflow_runs: Schema.Array(
+    Schema.Struct({
+      id: Schema.Int,
+      display_title: Schema.String,
+      status: Schema.String,
+      conclusion: Schema.NullOr(Schema.String),
+    }),
+  ),
+});
+
+type ReviewRun = (typeof ReviewRuns.Type)["workflow_runs"][number];
+
+/**
+ * The newest review run of PR `pr` dispatched after run `runId`, or null. The review job's concurrency
+ * cancels a run when a newer dispatch for the same PR arrives, so a cancelled run with such a successor
+ * was replaced, not stopped: its successor holds the review.
+ */
+export function successorOf(runs: readonly ReviewRun[], pr: number, runId: number): ReviewRun | null {
+  return runs.find((listed) => listed.display_title === String(pr) && listed.id > runId) ?? null;
+}
+
+/** The output of `gh api <path>`, or null when GitHub answers 404; any other failure throws. */
+async function readOrGone(runner: Run, where: Pick<Env, "repo" | "cwd">, path: string): Promise<string | null> {
+  const read = await runner(["gh", "api", path], { cwd: where.cwd });
+
+  if (notFound(read)) {
+    return null;
+  }
+
+  if (read.code !== 0) {
+    throw new Error(`gh api ${path} exited ${read.code}: ${(read.stderr || read.stdout).trim()}`);
+  }
+
+  return read.stdout;
+}
+
+/** The result in the artifact `name` of run `runId`, or null when there is none or it does not read. */
+async function artifactOf(runner: Run, where: Pick<Env, "repo" | "cwd">, runId: number, name: string) {
+  const dir = mkdtempSync(join(tmpdir(), "review-result-"));
+
+  const downloaded = await runner(
+    ["gh", "run", "download", String(runId), "--repo", where.repo, "--name", name, "--dir", dir],
+    { cwd: where.cwd },
+  );
+
+  const file = join(dir, "review-result.json");
+
+  return downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null;
+}
+
 /**
  * The run of the review the record asked, and, once it completed, the result of its artifact. Read on
  * every decision, a Sweep's included: the run's `workflow_run` event only wakes the Merge bot, and a
- * wake can be lost. A run with no artifact, or one that does not read, has a null result. A request for
- * another patch is cleared without its run. A run GitHub answers 404 for is `missing`: the decision asks
- * the review again instead of stopping, and a Sweep goes on. Any other failure of the read throws, as
- * every read of the decision does, so a passing API error never withdraws a live review.
+ * wake can be lost. A request for another patch is cleared without its run. A run GitHub answers 404 for
+ * is `missing`, and the decision asks the review again; any other failed read throws, as every read of
+ * the decision does. A cancelled run that a newer dispatch for the PR replaced is read through its
+ * successor; a cancelled run with none was stopped by a person or the job's timeout. A run with no
+ * artifact, or one that does not read, has a null result.
  */
 export function reviewJobReader(
   runner: Run,
@@ -311,36 +364,37 @@ export function reviewJobReader(
     }
 
     const path = `repos/${where.repo}/actions/runs/${review.runId}`;
-    const read = await runner(["gh", "api", path], { cwd: where.cwd });
+    const named = await readOrGone(runner, where, path);
 
-    if (notFound(read)) {
+    if (named === null) {
       return { kind: "missing" };
     }
 
-    if (read.code !== 0) {
-      throw new Error(`gh api ${path} exited ${read.code}: ${(read.stderr || read.stdout).trim()}`);
+    let reviewRun: Omit<ReviewRun, "display_title"> = {
+      id: review.runId,
+      ...decodeJson(ActionsRun, `gh api ${path}`, named),
+    };
+
+    if (reviewRun.status === "completed" && reviewRun.conclusion === "cancelled") {
+      const listing = `repos/${where.repo}/actions/workflows/${REVIEW_WORKFLOW}/runs?event=workflow_dispatch&per_page=30`;
+
+      const runs = decodeJson(
+        ReviewRuns,
+        `gh api ${listing}`,
+        await checked(runner, ["gh", "api", listing], { cwd: where.cwd }),
+      );
+
+      reviewRun = successorOf(runs.workflow_runs, pr, review.runId) ?? reviewRun;
     }
 
-    const job = decodeJson(ActionsRun, `gh api ${path}`, read.stdout);
-
-    if (job.status !== "completed") {
+    if (reviewRun.status !== "completed") {
       return { kind: "running" };
     }
 
-    const dir = mkdtempSync(join(tmpdir(), "review-result-"));
-    const name = `review-${pr}-${review.round}`;
-
-    const downloaded = await runner(
-      ["gh", "run", "download", String(review.runId), "--repo", where.repo, "--name", name, "--dir", dir],
-      { cwd: where.cwd },
-    );
-
-    const file = join(dir, "review-result.json");
-
     return {
       kind: "completed",
-      conclusion: job.conclusion ?? "no conclusion",
-      result: downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null,
+      conclusion: reviewRun.conclusion ?? "no conclusion",
+      result: await artifactOf(runner, where, reviewRun.id, `review-${pr}-${review.round}`),
     };
   };
 }
