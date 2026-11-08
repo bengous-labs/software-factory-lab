@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import {
   EarlierThreads,
   earlierThreadsOf,
@@ -12,6 +13,7 @@ import {
   movedLineOf,
   nitPathsOf,
   openImportantOf,
+  rejectedImportantOf,
   reviewOfBody,
   ReviewThreads,
   severityOfBody,
@@ -22,6 +24,8 @@ import { reviewMarkerOf } from "./post-plan.ts";
 import type { ReviewRequest } from "./review-report.ts";
 
 const APP = "bengous-labs-agents";
+
+const AUTHOR = "bengous-labs-author";
 
 interface ThreadOptions {
   readonly isResolved?: boolean;
@@ -102,6 +106,54 @@ describe("openImportantOf", () => {
       ]),
     ).toBe(2);
     expect(openImportantOf(APP, [])).toBe(0);
+  });
+});
+
+const FIXED = `Fixed in abc1234: count the rejections apart\n\n${AUTHOR_MARK}`;
+
+const REJECTED = `Rejected: the record is never written without reviewRounds\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`;
+
+/** A resolved Important thread of the App with `replies`. */
+const answered = (...replies: ReadonlyArray<readonly [string, string]>): ReviewThread =>
+  thread(IMPORTANT, replies, { isResolved: true });
+
+describe("rejectedImportantOf", () => {
+  test("counts the App's resolved Important threads another login rejected with the reject mark, and nothing else", () => {
+    expect(
+      rejectedImportantOf(APP, [
+        thread(IMPORTANT, [[AUTHOR, REJECTED]], { isResolved: true }),
+        thread(
+          IMPORTANT,
+          [
+            [AUTHOR, FIXED],
+            [AUTHOR, REJECTED],
+          ],
+          { isResolved: true },
+        ),
+        thread(IMPORTANT, [[AUTHOR, REJECTED]]),
+        thread(IMPORTANT, [[AUTHOR, FIXED]], { isResolved: true }),
+        thread(IMPORTANT, [[APP, REJECTED]], { isResolved: true }),
+        thread(NIT, [[AUTHOR, REJECTED]], { isResolved: true }),
+        thread(IMPORTANT, [[AUTHOR, REJECTED]], { isResolved: true, by: "bengous" }),
+        thread(IMPORTANT, [[AUTHOR, REJECTED]], { isResolved: true, by: null }),
+      ]),
+    ).toBe(2);
+    expect(rejectedImportantOf(APP, [])).toBe(0);
+  });
+
+  test("the latest answer decides: a rejection fixed later is not rejected, and one the App replied after still is", () => {
+    expect(rejectedImportantOf(APP, [answered([AUTHOR, REJECTED], [AUTHOR, FIXED])])).toBe(0);
+    expect(rejectedImportantOf(APP, [answered([AUTHOR, REJECTED], [APP, "noted"])])).toBe(1);
+    expect(earlierThreadsOf(APP, [answered([AUTHOR, REJECTED], [AUTHOR, FIXED])])[0]?.reply).toBe(
+      "Rejected: the record is never written without reviewRounds / Fixed in abc1234: count the rejections apart (thread resolved)",
+    );
+  });
+
+  test("a thread answered before the reject mark existed is neither rejected nor open", () => {
+    const before = [thread(IMPORTANT, [[AUTHOR, `Rejected: intended\n\n${AUTHOR_MARK}`]], { isResolved: true })];
+
+    expect(rejectedImportantOf(APP, before)).toBe(0);
+    expect(openImportantOf(APP, before)).toBe(0);
   });
 });
 
@@ -221,6 +273,22 @@ describe("earlierThreadsOf", () => {
       earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous-labs-author", "Fixed in abc: bound checked"]])]),
     ).toEqual([
       { where: "a.ts:3", finding: "**Important**: off by one", reply: "Fixed in abc: bound checked (thread open)" },
+    ]);
+  });
+
+  test("the author's answers read without their marks, a rejection with its thread's state", () => {
+    expect(
+      earlierThreadsOf(APP, [
+        thread(IMPORTANT),
+        thread(IMPORTANT, [[AUTHOR, FIXED]], { isResolved: true }),
+        thread(IMPORTANT, [[AUTHOR, REJECTED]], { isResolved: true }),
+        thread(IMPORTANT, [[AUTHOR, `Rejected: intended\n\n${AUTHOR_MARK}`]], { isResolved: true }),
+      ]).map((earlier) => earlier.reply),
+    ).toEqual([
+      "no answer (thread open)",
+      "Fixed in abc1234: count the rejections apart (thread resolved)",
+      "Rejected: the record is never written without reviewRounds (thread resolved: rejected by the Author)",
+      "Rejected: intended (thread resolved)",
     ]);
   });
 

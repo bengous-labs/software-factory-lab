@@ -7,6 +7,7 @@
 
 import { Option, Schema } from "effect";
 
+import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import { Severity } from "./review-report.ts";
 
 /** The marker a finding's comment carries. An external name: posted findings carry it, so the string stays. */
@@ -76,6 +77,29 @@ export function openImportantOf(appLogin: string, threads: readonly ReviewThread
   }).length;
 }
 
+/** The replies of `thread` another login than the App's posted, the author's answers. */
+function answersOf(appLogin: string, thread: ReviewThread): ReviewThread["comments"]["nodes"] {
+  return thread.comments.nodes.slice(1).filter((reply) => reply.author?.login !== appLogin);
+}
+
+/** A resolved thread whose latest answer carries `REJECT_MARK`; a thread unresolved again is open, never rejected. */
+function rejectedOf(appLogin: string, thread: ReviewThread): boolean {
+  return thread.isResolved && answersOf(appLogin, thread).at(-1)?.body.includes(REJECT_MARK) === true;
+}
+
+/** The App's Important threads the author rejected. `appLogin` is the App's login as GraphQL prints it. */
+export function rejectedImportantOf(appLogin: string, threads: readonly ReviewThread[]): number {
+  return threads.filter((thread) => {
+    const [finding] = thread.comments.nodes;
+
+    return (
+      finding?.author?.login === appLogin &&
+      severityOfBody(finding.body) === "important" &&
+      rejectedOf(appLogin, thread)
+    );
+  }).length;
+}
+
 /** The marker a posted review ends with, as `post-plan.ts` `reviewMarkerOf` writes it: it names the review's patch and round. */
 const REVIEW_MARKER_PATTERN = /<!-- lab-review patch=(\S+) round=(\d+) -->/u;
 
@@ -132,6 +156,11 @@ export type EarlierThread = typeof EarlierThread.Type;
 /** `review-threads.json`, which the review job's thread step writes and its runner reads. */
 export const EarlierThreads = Schema.Array(EarlierThread);
 
+/** An author's answer without the marks `thread.ts` appends. */
+function unmarked(body: string): string {
+  return body.replaceAll(`\n\n${REJECT_MARK}`, "").replaceAll(`\n\n${AUTHOR_MARK}`, "");
+}
+
 /**
  * The App's findings, open or resolved, each with the author's answers and whether its thread is
  * resolved: Review round 2 reports again neither a finding the author resolved with a valid reason
@@ -139,19 +168,25 @@ export const EarlierThreads = Schema.Array(EarlierThread);
  */
 export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThread[]): EarlierThread[] {
   return threads.flatMap((thread) => {
-    const [finding, ...replies] = thread.comments.nodes;
+    const [finding] = thread.comments.nodes;
 
     if (finding?.author?.login !== appLogin) {
       return [];
     }
 
-    const answers = replies.filter((reply) => reply.author?.login !== appLogin).map((reply) => reply.body);
+    const answers = answersOf(appLogin, thread).map((reply) => unmarked(reply.body));
+
+    const state = rejectedOf(appLogin, thread)
+      ? "resolved: rejected by the Author"
+      : thread.isResolved
+        ? "resolved"
+        : "open";
 
     return [
       {
         where: `${thread.path}:${thread.line ?? "?"}`,
         finding: finding.body.split("\n")[0] ?? "",
-        reply: `${answers.length === 0 ? "no answer" : answers.join(" / ")} (thread ${thread.isResolved ? "resolved" : "open"})`,
+        reply: `${answers.length === 0 ? "no answer" : answers.join(" / ")} (thread ${state})`,
       },
     ];
   });

@@ -3,9 +3,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AUTHOR_MARK } from "./author-mark.ts";
+import { AUTHOR_MARK, REJECT_MARK } from "./author-mark.ts";
 import type { Run, RunOptions } from "./ports/run.ts";
-import { answer, argsOf, REPLY, RESOLVE } from "./thread.ts";
+import { answer, argsOf, REPLY, RESOLVE, USAGE } from "./thread.ts";
 
 const recording = (code: number) => {
   const calls: Array<{ argv: string[]; options: RunOptions }> = [];
@@ -20,19 +20,51 @@ const recording = (code: number) => {
 };
 
 describe("argsOf", () => {
-  test("a thread id and a reply are read; a missing or blank one is refused", () => {
-    expect(argsOf(["PRRT_1", "Fixed in abc"])).toEqual({ id: "PRRT_1", body: "Fixed in abc" });
+  test('a fix is read as given; a rejection becomes "Rejected: <reason>"', () => {
+    expect(argsOf(["PRRT_1", "Fixed in abc1234: count the rejections apart"])).toEqual({
+      id: "PRRT_1",
+      body: "Fixed in abc1234: count the rejections apart",
+    });
+    expect(argsOf(["PRRT_1", "--reject", "the record is never written without reviewRounds"])).toEqual({
+      id: "PRRT_1",
+      body: "Rejected: the record is never written without reviewRounds",
+    });
+  });
+
+  test("a reply that is neither a fix nor a rejection, a blank reason, or a missing or blank argument is refused", () => {
+    expect(argsOf(["PRRT_1", "the record is never written without reviewRounds"])).toBeNull();
+    expect(argsOf(["PRRT_1", "--reject", ""])).toBeNull();
+    expect(argsOf(["PRRT_1", "--reject", "  "])).toBeNull();
+    expect(argsOf(["PRRT_1", "--reject"])).toBeNull();
+    expect(argsOf(["PRRT_1", "--reject", "the", "bound", "is", "inclusive"])).toBeNull();
+    expect(argsOf(["PRRT_1", "Fixed in abc: x", "extra"])).toBeNull();
+    expect(argsOf(["PRRT_1", "Fixed in "])).toBeNull();
     expect(argsOf(["PRRT_1"])).toBeNull();
     expect(argsOf(["PRRT_1", "  "])).toBeNull();
-    expect(argsOf([" ", "x"])).toBeNull();
+    expect(argsOf([" ", "Fixed in abc: x"])).toBeNull();
+  });
+
+  test("the usage line names both answers", () => {
+    expect(USAGE).toBe(
+      'usage: bun scripts/land-loop/thread.ts <thread-id> "Fixed in <sha>: <what changed>" | bun scripts/land-loop/thread.ts <thread-id> --reject "<reason>"',
+    );
   });
 });
 
+/** The reply `answer` posts for `body`, as its `-f body=` argument. */
+const postedBodyOf = async (body: string): Promise<string | undefined> => {
+  const { run, calls } = recording(0);
+
+  await answer(run, "/repo", "t0k", { id: "PRRT_1", body });
+
+  return calls[0]?.argv.at(-1);
+};
+
 describe("answer", () => {
-  test("replies in the thread, then resolves that same thread, both as the Author", async () => {
+  test("a fix: replies in the thread with the Author's mark, then resolves that same thread, both as the Author", async () => {
     const { run, calls } = recording(0);
 
-    await answer(run, "/repo", "t0k", { id: "PRRT_1", body: "Rejected: intended" });
+    await answer(run, "/repo", "t0k", { id: "PRRT_1", body: "Fixed in abc1234: count the rejections apart" });
 
     expect(calls).toEqual([
       {
@@ -45,7 +77,7 @@ describe("answer", () => {
           "-f",
           "id=PRRT_1",
           "-f",
-          `body=Rejected: intended\n\n${AUTHOR_MARK}`,
+          `body=Fixed in abc1234: count the rejections apart\n\n${AUTHOR_MARK}`,
         ],
         options: { cwd: "/repo", env: { GH_TOKEN: "t0k" } },
       },
@@ -54,6 +86,13 @@ describe("answer", () => {
         options: { cwd: "/repo", env: { GH_TOKEN: "t0k" } },
       },
     ]);
+  });
+
+  test("a rejection carries the reject mark before the Author's mark", async () => {
+    expect(REJECT_MARK).toBe("<!-- lab-author-reject -->");
+    expect(await postedBodyOf("Rejected: the record is never written without reviewRounds")).toBe(
+      "body=Rejected: the record is never written without reviewRounds\n\n<!-- lab-author-reject -->\n\n<!-- lab-author-reply -->",
+    );
   });
 
   test("a failed reply resolves nothing", async () => {
@@ -67,7 +106,7 @@ describe("answer", () => {
   test("no Author token: the command exits non-zero with the reason before any gh call", () => {
     const missing = join(mkdtempSync(join(tmpdir(), "author-")), "absent");
 
-    const ran = Bun.spawnSync([process.execPath, join(import.meta.dir, "thread.ts"), "PRRT_1", "x"], {
+    const ran = Bun.spawnSync([process.execPath, join(import.meta.dir, "thread.ts"), "PRRT_1", "Fixed in abc: x"], {
       env: { ...process.env, LAB_AUTHOR_TOKEN_FILE: missing, PATH: "/nonexistent" },
     });
 
@@ -75,5 +114,19 @@ describe("answer", () => {
     expect(ran.stderr.toString()).toContain(
       `no Author token at ${missing}: the Owner provisions it (AGENTS.md, Identities); nothing was posted`,
     );
+  });
+
+  test("a refused answer exits 1 with the usage line, and posts nothing", () => {
+    for (const args of [
+      ["PRRT_1", "the record is never written without reviewRounds"],
+      ["PRRT_1", "--reject", ""],
+    ]) {
+      const ran = Bun.spawnSync([process.execPath, join(import.meta.dir, "thread.ts"), ...args], {
+        env: { ...process.env, PATH: "/nonexistent" },
+      });
+
+      expect(ran.exitCode).toBe(1);
+      expect(ran.stderr.toString()).toContain(USAGE);
+    }
   });
 });
