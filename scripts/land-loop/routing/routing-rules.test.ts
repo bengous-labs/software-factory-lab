@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import * as fc from "fast-check";
 
+import { LAB, SEGMENT, UNDER } from "../arbitraries.ts";
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
-import { LAB, SEGMENT, UNDER } from "../guarantees.test.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "./routing-rules.ts";
 import type { RoutingInput, RulesVerdict } from "./routing-rules.ts";

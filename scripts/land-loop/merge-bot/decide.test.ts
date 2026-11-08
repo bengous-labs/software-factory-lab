@@ -2,16 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import * as fc from "fast-check";
 
-import {
-  HUMAN_LABEL_BY,
-  LABELS,
-  recordOf,
-  ROUTING,
-  RUNS,
-  SNAPSHOT,
-  stepsOrNone,
-  withdrawn,
-} from "../guarantees.test.ts";
+import { HUMAN_LABEL_BY, LABELS, recordOf, ROUTING, RUNS, SNAPSHOT, stepsOrNone, withdrawn } from "../arbitraries.ts";
 import type { ReportedFinding, ReportedResult, ReviewResult } from "../review/review-report.ts";
 import {
   afterReview,

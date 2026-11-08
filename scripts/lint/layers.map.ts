@@ -18,6 +18,7 @@ const at = (pkg: Package, layer: Layer): Place => ({ package: pkg, layer });
 export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["app/test/**/*.test.ts", at("app", "test")],
   ["scripts/land-loop/**/*.test.ts", at("land-loop", "test")],
+  ["scripts/land-loop/arbitraries.ts", at("land-loop", "test")],
   ["scripts/lib/*.test.ts", at("shared", "test")],
   ["scripts/*/**/*.test.ts", at("tooling", "test")],
 
