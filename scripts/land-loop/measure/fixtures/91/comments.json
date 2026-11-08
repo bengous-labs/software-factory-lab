@@ -1,0 +1,23 @@
+[
+  {
+    "id": 4504133014,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: When a mixed change has a Patch delta of kind `judged`, `judgedOn` asks about every one of the change's judged paths, even ones the delta does not touch. That contradicts the new doc comment, which says the judge is asked about the judged paths the delta touches.\nBreaks: `scripts/land-loop/merge-bot/main.ts:535`\n\nRound 1 touched scripts/a.ts and docs/x.md, a mixed change with judgedPaths [docs/x.md]. Round 2 only reverts an earlier edit to app/y.ts, which the whole PR no longer changes. The delta is `judged`, so `judgedOn` returns [docs/x.md] and the judge reads an empty diff of docs/x.md. It may then raise the route or ask for a second round with nothing to read. A `ruled-then-judged` delta in the same position asks nothing. A `judged` verdict carries no paths, so the intersection can't be computed. Giving the `judged` kind its paths, or passing the delta's paths, would treat both cases the same way.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4504133017,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: The new main.test.ts test copies the steps of `route()` (routingRulesOf on base..head and on reviewed..head, then judgeAskOf, then judgeDiffArgs) instead of calling `route` itself. A wiring mistake in main.ts would still pass.\nBreaks: `scripts/land-loop/merge-bot/main.ts:524`\n\nSay `route()` passed `range.base` instead of `from` to the Patch delta's `changedPaths` (main.ts:524), or to `judgeDiffArgs` (main.ts:535-536). The judge would be asked about the whole PR again, and this test would stay green because it builds its own `from`. The cost is a test that seems to cover the adapter but only covers the pure functions, which routing-rules.test.ts already tests.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4504133019,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: The condition `verdict.kind === \"judged\" || (verdict.kind === \"ruled-then-judged\" && asked)` repeats a fact: `judgeAskOf` always asks for a `judged` verdict. The simpler `verdict.kind !== \"ruled\" && asked` does the same job. The comment at main.ts:522 also still says the Patch delta only decides whether it is read again, but it now also decides whether the judge is asked at all.\n\nThere is no wrong result. The cost is a branch mutation testing has to kill twice, and a stale comment in main.ts:522 telling the next reader the delta's rules only set secondRound.\n\n<!-- lab-finding severity=nit -->"
+  }
+]

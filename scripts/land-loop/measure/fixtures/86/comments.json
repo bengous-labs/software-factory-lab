@@ -1,0 +1,130 @@
+[
+  {
+    "id": 4503785464,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Important**: The ownerPaths guarantee only draws from whatever `factoryConfigOf` parses, and the PR deletes the routing test that named `.github/` outright. Code that auto-lands can now empty ownerPaths without failing any guarantee.\nBreaks: `scripts/land-loop/merge-bot/main.ts`\n\nA PR touches only `scripts/land-loop/factory-config.ts`, which is a factoryPaths path, so it lands auto after a deep review. It makes `factoryConfigOf` drop `.github/**` from `ownerPaths`, for example with a filter on the decoded array. `LAB` (line 26) is parsed by that same function, so `anyOf([FACTORY_CONFIG_PATH, ...LAB.ownerPaths])` no longer draws any `.github/` path and the guarantee still passes. The deleted test in routing-rules.test.ts ('a path under .github/ never lands auto') hard-coded `UNDER(\".github\")` and would have failed. Once merged, the Merge bot reads the config through the same parser and lands workflow changes without the Owner. Fix: pin the lab's owner globs as literals in the guarantees, or check the raw JSON against the parsed `LAB`.\n\n<!-- lab-finding severity=important -->"
+  },
+  {
+    "id": 4503785469,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Important**: The header says a change that weakens a guarantee fails CI unless the Owner lands it, but every file that decides whether the guarantees run, and how hard they search, is a factoryPaths path that lands auto.\nBreaks: `AGENTS.md:31`\n\nEach step below is a factoryPaths edit that lands without the Owner. (1) Drop the `../guarantees.test.ts` imports from decide.test.ts and routing-rules.test.ts, and add the file to `pathIgnorePatterns` in bunfig.toml; the guarantees then never run in `bun check` or in mutation. (2) Change the `check` script in package.json. (3) Make the preload `scripts/ci/fast-check-seed.ts` call `fc.configureGlobal({ numRuns: 1 })`. The four Routing guarantees (lines 128-156) pass no `RUNS` and use fast-check's global default, so they would draw a single input. The new AGENTS.md text, which calls this file 'the Land loop's safety guarantees', makes the same promise. Under REVIEW.md, a doc that lies is a failure.\n\n<!-- lab-finding severity=important -->"
+  },
+  {
+    "id": 4503785471,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: Importing helpers from a `.test.ts` file also runs its tests inside the importing file, so the 10 Merge bot property runs (20,000 `decide` calls) now run on every Stryker mutant of routing-rules.ts and are repeated across `bun test`.\nBreaks: `scripts/ci/mutation.ts:429`\n\n`runOptions` runs `bun test ./scripts/land-loop/routing/routing-rules.test.ts` once per mutant of routing-rules.ts. Each of those runs now also evaluates guarantees.test.ts and its 'the Merge bot's guarantees' block. That is 5 tests over 2 arbitraries at numRuns 2000, none of which can kill a routing-rules mutant. The mutation job slows by that cost multiplied by the mutant count. In a full `bun test`, the guarantees also run under decide.test.ts and on their own; with a shared module cache, guarantees.test.ts may instead show its tests under whichever file imported it first. Fix: move the shared generators into a non-test module, itself listed in ownerPaths, that both test files import.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4503785473,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: decide.test.ts now gets its Merge bot invariants from guarantees.test.ts, which reads `.github/software-factory.json` at import, so every decide test now fails if that config fails to read.\nBreaks: `scripts/land-loop/guarantees.test.ts:26`\n\nA config file missing from Stryker's sandbox copy, or one that no longer decodes, would throw at the top-level `LAB` read on line 26 of guarantees.test.ts. Every test in decide.test.ts would then fail at load, including the ones that have nothing to do with routing. The mutation dry run of `scripts/land-loop/merge-bot/decide.ts` would fail outright instead of scoring mutants. Before this PR, decide.test.ts did not depend on the config file.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4503785476,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: The 'merges only once a Review round read it' guarantee counts any `reviewedPatch` or any `reviewRounds > 0` as read, so it never ties the read to the patch being merged.\n\nIn this snapshot, `record.reviewedPatch` is an earlier patch, the current patch's triage asks for a deep review with `secondRound: true`, and `reviewRounds` is 1. A `decide` that stopped re-reviewing Patch deltas and merged here would still pass, because `read` is already true. The narrower third-round guarantee covers only `reviewRounds >= 2`. The second Review round that a ruled Patch delta requires (`routingOf` sets `secondRound` to true) is therefore not guaranteed anywhere.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4503794420,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Fixed in fa2392d: the ownerPaths guarantee now also draws from the Owner's globs pinned as literals in the guarantees file (.github/**, bun.lock, scripts/vendor/**, the file itself), and a new test checks that factoryConfigOf reads the config exactly as its raw JSON holds it. A parser that filters .github/** out now turns both tests red; I ran that breakage.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4503785464
+  },
+  {
+    "id": 4503794568,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Fixed in part in fa2392d. (3) The four Routing guarantees now pass RUNS, so a numRuns set globally in the preload no longer lowers their search; I checked it with numRuns: 1 set in the preload and a broken toOwner, and the guarantee still went red. The header no longer promises more than the file holds: it says the guarantees hold only while bun check runs the file, and that package.json, bunfig.toml and the preload, which decide that, are factoryPaths. (1) and (2) stay open by design. Moving those files to ownerPaths, or having an Owner-routed workflow step run this file on its own, changes the routing policy, and that is the Owner's decision, not this PR's. The AGENTS.md sentence describes what the file holds and routes it to the Owner; it makes no enforcement promise.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4503785469
+  },
+  {
+    "id": 4503853997,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: The comment on RUNS says a global fast-check setting cannot lower how hard the guarantees search, but a local `numRuns` only overrides `numRuns`. Other global parameters still apply to every property and can cut the search.\nBreaks: `scripts/ci/fast-check-seed.ts:27`\n\nThe preload `scripts/ci/fast-check-seed.ts`, a factoryPaths file that lands auto, adds `fc.configureGlobal({ ...fc.readConfigureGlobal(), seed, interruptAfterTimeLimit: 1 })` or `skipAllAfterTimeLimit: 0`. `markInterruptAsFailure` defaults to false, so each Routing and Merge bot guarantee stops after a run or two and passes. A broken `toOwner` stays green even though every property passes RUNS. The comment promises more than the code holds; it should name `numRuns` only, or RUNS should also pin `interruptAfterTimeLimit: undefined`, `skipAllAfterTimeLimit: undefined` and `markInterruptAsFailure: true`.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4503854001,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: The 'reads as written' test compares the whole raw JSON with the decoded config. Effect's `Schema.Struct` drops keys it does not declare, so any config key the parser does not read turns this test red, not only a dropped or changed glob.\n\n`factory-config.ts` describes the config as 'one section per subsystem'. Say the Owner adds a `merge` section, or a key such as `land.review`, ahead of the code that reads it. `JSON.parse(CONFIG_JSON)` holds the key, `factoryConfigOf` strips it, and `toEqual` fails. That forces a parser change into an Owner-only config PR, although no glob moved. Comparing `JSON.parse(CONFIG_JSON).land.routing` with `LAB` would check what the test's name says.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4503854002,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: Passing RUNS (2000 runs) to the three Routing properties raises each from fast-check's default 100 runs to 2000. Both `routing-rules.test.ts` and `decide.test.ts` import this file, which registers its tests again in each, so `bun test` runs every Routing guarantee three times at 2000 runs.\nBreaks: `stryker.config.ts:13`\n\nEach `bun check` now runs about 18,000 Routing property runs (3 properties x 2000 x 3 registrations) where it ran 900. A Stryker pass on `routing-rules.ts` or `merge-bot/decide.ts` adds 6,000 Routing runs to every mutant, which slows the mutation job and brings it closer to timeout kills. That cuts against stryker.config.ts's rule that a module 'kills by assertion alone'. Keeping a smaller run count for the cheap Routing properties, or not re-registering the guarantees in the importing files, would avoid this.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4503899746,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Fixed in ac95210: a new guarantee says a Patch delta its Routing answer asks to read again never merges before Review round 2 read it. I made decide skip round 2, and that turned it red in each of three runs.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4503785476
+  },
+  {
+    "id": 4503899913,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Fixed in ac95210: the test now compares the routing policy only, as its name says. A config section the parser does not read yet no longer fails it, and a parser that drops .github/** still turns it red.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4503854001
+  },
+  {
+    "id": 4503900082,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Fixed in ac95210: the guarantees file left ownerPaths, so it no longer claims to guard against a preload changed on purpose. The Routing properties are back on fast-check's defaults, and the RUNS comment now only says why the Merge bot's guarantees search harder.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4503853997
+  },
+  {
+    "id": 4503900249,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Fixed in ac95210: the Routing properties are back on fast-check's default 100 runs, and they still catch every deliberate Routing breakage I tried. On the three registrations: a full bun test runs an imported test file's tests once, not once per importer (checked on bun 1.4.4: 2 tests across 2 files). The imports exist so that each module's mutation pass runs the guarantees, which keeps the kills the moved invariants made at the base.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4503854002
+  },
+  {
+    "id": 4503900396,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Kept as is. A non-test module for the generators needs a layer-map entry, and the map is the Owner's. The import is also what makes each module's mutation pass run the guarantees, which keeps the kills the moved invariants made at the base (0 killed at the base and undetected now). It costs time on routing-rules.ts mutants; with the Routing properties back on default runs, the mutation run on ac95210 took about 5 minutes locally.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4503785471
+  },
+  {
+    "id": 4503900574,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Kept as is. The config is part of the repository and Stryker's sandbox copies it: the decide.ts mutation pass scores all 423 mutants. A config that no longer decodes already fails factory-config.test.ts and stops the Merge bot itself, so the decide tests failing alongside it hides nothing.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4503785473
+  },
+  {
+    "id": 4503901342,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Correction to my reply above: factory-config.test.ts does not read the real config. It is the guarantees file, and routing-rules.test.ts through it, that read it. The point stands, though: a config that no longer decodes stops the Merge bot at main.ts:492, so tests failing loudly on it hide nothing.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4503785473
+  }
+]

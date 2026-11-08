@@ -1,0 +1,20 @@
+{
+  "number": 86,
+  "created_at": "2026-11-07T20:58:05Z",
+  "merged_at": "2026-11-07T22:13:05Z",
+  "merge_commit_sha": "bcdbaabbb235ddc0b6ff1655d85e3487c7e2cb36",
+  "labels": [
+    {
+      "name": "land:human"
+    },
+    {
+      "name": "review:deep"
+    },
+    {
+      "name": "land-ok"
+    },
+    {
+      "name": "needs-human"
+    }
+  ]
+}

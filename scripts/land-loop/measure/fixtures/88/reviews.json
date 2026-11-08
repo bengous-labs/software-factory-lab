@@ -1,0 +1,23 @@
+[
+  {
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "Review round 1 (claude-opus-5-5, /code-review high): 1 important, 3 nit. 1 pre-existing finding(s) not posted.\n\nReview run: https://github.com/bengous-labs/software-factory-lab/actions/runs/42421207946\n\n<!-- lab-review patch=3caa00d82365a3268f4e6de9e48ea8144f684ab0 round=1 -->",
+    "submitted_at": "2026-11-07T22:35:58Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T22:37:37Z"
+  },
+  {
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "Review round 2 (claude-opus-5-5, /code-review high): 0 important, 2 nit.\n\nReview run: https://github.com/bengous-labs/software-factory-lab/actions/runs/42421588318\n\n<!-- lab-review patch=f63cb0e725959de65c154f963308fff34b602402 round=2 -->",
+    "submitted_at": "2026-11-07T22:40:00Z"
+  }
+]

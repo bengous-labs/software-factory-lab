@@ -1,0 +1,9 @@
+[
+  {
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "Review round 1 (claude-opus-5-5, /code-review high): 0 important, 3 nit.\n\nReview run: https://github.com/bengous-labs/software-factory-lab/actions/runs/42424779523\n\n<!-- lab-review patch=442aec3a7f10ba6abbfda7bc2946c17b301902d3 round=1 -->",
+    "submitted_at": "2026-11-07T23:22:29Z"
+  }
+]
