@@ -269,6 +269,15 @@ describe("humanLabelByOf", () => {
     expect(humanLabelByOf(ownerLast, ["land:human"], BOT)).toBe("other");
   });
 
+  test("a land:human on the PR whose latest event is its removal is a read that lags: another login", () => {
+    const lagging = [
+      labeled("land:human", BOT, "2026-11-05T10:00:00Z"),
+      { ...labeled("land:human", BOT, "2026-11-05T11:00:00Z"), event: "unlabeled" },
+    ];
+
+    expect(humanLabelByOf(lagging, ["land:human"], BOT)).toBe("other");
+  });
+
   test("an unreadable actor, or no labeled event of land:human, is another login: the safe side", () => {
     expect(humanLabelByOf([labeled("land:human", null, "2026-11-05T10:00:00Z")], ["land:human"], BOT)).toBe("other");
     expect(humanLabelByOf([labeled("land-ok", BOT, "2026-11-05T10:00:00Z")], ["land:human"], BOT)).toBe("other");

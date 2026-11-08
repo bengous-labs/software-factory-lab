@@ -201,9 +201,12 @@ export function humanLabelByOf(
     return null;
   }
 
-  const last = events.filter((event) => event.event === "labeled" && event.label?.name === humanLabel).at(-1);
+  // A latest event that removed the label, while the PR carries it, is a read that lags its re-add.
+  const last = events
+    .filter((event) => (event.event === "labeled" || event.event === "unlabeled") && event.label?.name === humanLabel)
+    .at(-1);
 
-  return last?.actor?.login === appLogin ? "merge-bot" : "other";
+  return last?.event === "labeled" && last.actor?.login === appLogin ? "merge-bot" : "other";
 }
 
 /** Every page of `repos/<repo>/issues/<n>/events`: past 100 events, the latest `labeled` is on a later page. */
