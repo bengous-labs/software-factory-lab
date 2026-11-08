@@ -16,10 +16,13 @@ import { join } from "node:path";
 import { Predicate, Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { authorTokenOf, authorTokenPathOf, ghEnv, pushArgs } from "../lib/author.ts";
+import type { AuthorToken } from "../lib/author.ts";
 import { checked, run as runCli } from "../lib/run.ts";
-import type { Run } from "../ports/run.ts";
+import type { Run, RunOptions } from "../ports/run.ts";
 import {
   admit,
+  afterAuthorToken,
   afterStopChecks,
   answerOf,
   armReason,
@@ -194,14 +197,19 @@ export const ListedPrs = Schema.Array(
   Schema.Struct({ number: Schema.Finite, isDraft: Schema.Boolean, headRefOid: Schema.String }),
 );
 
-async function prOf(deps: Deps, cwd: string, branch: string): Promise<PullRequest | null> {
+/** The options of a `gh` call: with the Author's credential once its token is found. */
+function ghOptions(cwd: string, author: AuthorToken): RunOptions {
+  return author.kind === "found" ? { cwd, env: ghEnv(author.token) } : { cwd };
+}
+
+async function prOf(deps: Deps, cwd: string, branch: string, author: AuthorToken): Promise<PullRequest | null> {
   const listed = decodeJson(
     ListedPrs,
     "gh pr list",
     await checked(
       deps.run,
       ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,isDraft,headRefOid"],
-      { cwd },
+      ghOptions(cwd, author),
     ),
   );
 
@@ -290,13 +298,16 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
 
   await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
 
+  // Read before the PR list, which the Author's credential reads too; only publishing needs the token.
+  const author = authorTokenOf(deps.env);
+
   const snapshot: Snapshot = {
     ...early,
     stopHookActive: input.stop_hook_active === true,
     head,
     treeClean: (await gitOut(deps, cwd, ["status", "--porcelain"])) === "",
     ahead: Number(await gitOut(deps, cwd, ["rev-list", "--count", `origin/${TRUNK}..HEAD`])),
-    pr: IGNORED_BRANCH.test(branch) ? null : await prOf(deps, cwd, branch),
+    pr: IGNORED_BRANCH.test(branch) ? null : await prOf(deps, cwd, branch, author),
     armed: false,
   };
 
@@ -320,6 +331,14 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
       kind: "block",
       reason: armReason(admission.pr, `${prWatch} ${admission.pr}`, thread, `${comment} ${admission.pr}`),
     };
+  }
+
+  const tokenPath = authorTokenPathOf(deps.env);
+  const noToken = afterAuthorToken(author.kind === "found", tokenPath, withArmed.stopHookActive);
+  log({ step: "author-token", found: author.kind === "found", path: tokenPath });
+
+  if (author.kind === "missing") {
+    return noToken?.kind === "block" ? { kind: "block", reason: noToken.reason } : { kind: "allow" };
   }
 
   const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), withArmed.stopHookActive);
@@ -360,10 +379,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     return { kind: "allow" };
   }
 
-  await checked(deps.run, ["git", "push", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`], {
-    cwd,
-    timeoutMs: 120_000,
-  });
+  await checked(deps.run, pushArgs(branch), { cwd, env: { LAB_AUTHOR_TOKEN: author.token }, timeoutMs: 120_000 });
 
   let number: number;
 
@@ -386,7 +402,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     const url = await checked(
       deps.run,
       ["gh", "pr", "create", "--base", TRUNK, "--head", branch, "--title", text.title, "--body-file", "-"],
-      { cwd, stdin: body === "" ? "(no body)" : body },
+      { cwd, env: ghEnv(author.token), stdin: body === "" ? "(no body)" : body },
     );
 
     number = Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
@@ -394,7 +410,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     number = action.pr;
 
     if (action.ready) {
-      await checked(deps.run, ["gh", "pr", "ready", String(number)], { cwd });
+      await checked(deps.run, ["gh", "pr", "ready", String(number)], { cwd, env: ghEnv(author.token) });
     }
   }
 

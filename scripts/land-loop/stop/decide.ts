@@ -1,6 +1,7 @@
 /**
  * The Stop decision of the Author's session, as pure functions over what the hook read. `admit`
- * settles what git and the transcript alone settle; `afterStopChecks` what the Stop checks' result
+ * settles what git and the transcript alone settle; `afterAuthorToken` whether the Author's token
+ * lets it publish; `afterStopChecks` what the Stop checks' result
  * adds; `decide` what the Done judge's answer adds. Each returns the next thing the hook does.
  */
 
@@ -90,6 +91,22 @@ export function admit(snapshot: Snapshot): Admission {
   }
 
   return { kind: "stop-checks" };
+}
+
+/** No Author token blocks once, naming where it was looked for; a second stop without it lets the session end. */
+export function afterAuthorToken(found: boolean, path: string, stopHookActive: boolean): Next | null {
+  if (found) {
+    return null;
+  }
+
+  if (stopHookActive) {
+    return none("no Author token after a block: nothing is published");
+  }
+
+  return {
+    kind: "block",
+    reason: `The Stop hook found no Author token at ${path}, so nothing was published. The Owner provisions it (AGENTS.md, Identities). Stop, and ask no question.`,
+  };
 }
 
 /** Red Stop checks block once, with their report; a second stop on the same failure lets the session end. */

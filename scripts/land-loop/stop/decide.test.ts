@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { admit, afterStopChecks, answerOf, armReason, closingLineOf, decide } from "./decide.ts";
+import { admit, afterAuthorToken, afterStopChecks, answerOf, armReason, closingLineOf, decide } from "./decide.ts";
 import type { Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
@@ -53,6 +53,25 @@ describe("admit", () => {
     expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({ kind: "stop-checks" });
     expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40) } })).toEqual({
       kind: "stop-checks",
+    });
+  });
+});
+
+describe("afterAuthorToken", () => {
+  test("a token found goes on to the Stop checks", () => {
+    expect(afterAuthorToken(true, "/h/author-token", false)).toBeNull();
+    expect(afterAuthorToken(true, "/h/author-token", true)).toBeNull();
+  });
+
+  test("no token blocks once, naming its path, then lets the session end with nothing published", () => {
+    expect(afterAuthorToken(false, "/h/author-token", false)).toEqual({
+      kind: "block",
+      reason:
+        "The Stop hook found no Author token at /h/author-token, so nothing was published. The Owner provisions it (AGENTS.md, Identities). Stop, and ask no question.",
+    });
+    expect(afterAuthorToken(false, "/h/author-token", true)).toEqual({
+      kind: "none",
+      reason: "no Author token after a block: nothing is published",
     });
   });
 });
