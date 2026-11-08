@@ -31,7 +31,7 @@ export type RulesVerdict =
 
 const toOwner = (reason: string): RulesVerdict => ({
   kind: "ruled",
-  answer: { land: "owner", review: "deep", secondRound: true, reason, model: null, needsFable: false },
+  answer: { land: "owner", review: "deep", secondRound: true, reason, model: null },
 });
 
 function matching(globs: readonly string[], paths: readonly string[]): readonly string[] {
@@ -79,7 +79,6 @@ export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }
     secondRound: true,
     reason: `touches a path a deep review reads: ${listed(deep)}; lands once CI is green and no Important is open`,
     model: null,
-    needsFable: false,
   };
 
   const judgedPaths = paths.filter((path) => !deep.includes(path));

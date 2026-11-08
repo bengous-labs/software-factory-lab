@@ -1,6 +1,6 @@
 # Review guide
 
-The Code review and the Principal judge read this guide in their prompt. Review each change against what failure means in the area it touches.
+The Code review reads this guide in its prompt. Review each change against what failure means in the area it touches.
 
 ## What failure looks like here
 

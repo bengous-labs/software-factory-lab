@@ -88,17 +88,13 @@ const changeWith = (path: fc.Arbitrary<string>): fc.Arbitrary<RoutingInput> =>
       messages,
     }));
 
-export const ROUTING: fc.Arbitrary<RoutingAnswer> = fc.record(
-  {
-    land: fc.constantFrom("auto", "owner"),
-    review: fc.constantFrom("none", "light", "deep"),
-    secondRound: fc.boolean(),
-    reason: fc.string(),
-    model: fc.option(fc.string(), { nil: null }),
-    needsFable: fc.boolean(),
-  },
-  { requiredKeys: ["land", "review", "secondRound", "reason", "model"] },
-);
+export const ROUTING: fc.Arbitrary<RoutingAnswer> = fc.record({
+  land: fc.constantFrom("auto", "owner"),
+  review: fc.constantFrom("none", "light", "deep"),
+  secondRound: fc.boolean(),
+  reason: fc.string(),
+  model: fc.option(fc.string(), { nil: null }),
+});
 
 /** The Routing answer of a change under `policy`, whatever the Routing judge answers and whatever its Patch delta. */
 const routedArbitrarily = (policy: RoutingPolicy, change: fc.Arbitrary<RoutingInput>): fc.Arbitrary<RoutingAnswer> =>
@@ -202,8 +198,6 @@ export const recordOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<StateRecord>
       triage: fc.dictionary(patch, ROUTING),
       landOkPatch: fc.option(patch, { nil: null }),
       dequeued: fc.option(fc.record({ head: HEAD, reason: fc.string() }), { nil: null }),
-      fable: fc.dictionary(patch, fc.record({ ok: fc.boolean(), reason: fc.string() })),
-      fableFailures: fc.dictionary(patch, fc.nat({ max: 3 })),
       review: reviewStateOf(patch),
     },
     {
