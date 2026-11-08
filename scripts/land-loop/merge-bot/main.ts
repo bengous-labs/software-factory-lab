@@ -370,6 +370,13 @@ const reviewJobOf = reviewJobReader(run);
 export const ciRunsPathsOf = (repo: string, sha: string): readonly string[] =>
   CI_CHECKS.map((name) => `repos/${repo}/commits/${sha}/check-runs?check_name=${name}`);
 
+/**
+ * The latest completed push run of `ci.yml` on dev. Not of any workflow: the Merge bot's own push run
+ * ends first and green, and would hide a red CI.
+ */
+export const devCiRunsPathOf = (repo: string): string =>
+  `repos/${repo}/actions/workflows/ci.yml/runs?branch=dev&event=push&status=completed&per_page=1`;
+
 /** The CI of a head from the check runs of each of CI_CHECKS: GitHub Actions' run of each, as `ciOf` reads them. */
 export const ciOfRuns = (runs: ReadonlyArray<typeof CheckRuns.Type>): Snapshot["ci"] =>
   ciOf(runs.map((found) => found.check_runs.find((check) => check.app?.slug === "github-actions")));
@@ -397,11 +404,7 @@ async function snapshotOf(
     landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, pushedAt);
   }
 
-  const devRuns = await api(
-    env,
-    WorkflowRuns,
-    `repos/${env.repo}/actions/runs?branch=dev&event=push&status=completed&per_page=1`,
-  );
+  const devRuns = await api(env, WorkflowRuns, devCiRunsPathOf(env.repo));
 
   return {
     number: pr.number,

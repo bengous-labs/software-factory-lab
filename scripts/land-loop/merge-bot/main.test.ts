@@ -21,6 +21,7 @@ import {
   ciOfRuns,
   ciRunsPathsOf,
   CommitPulls,
+  devCiRunsPathOf,
   Dispatched,
   IssueComments,
   IssueEvents,
@@ -381,6 +382,12 @@ describe("the routing inputs", () => {
       "app/a*.ts",
       "docs/u.md",
     ]);
+  });
+
+  test("dev is red by the latest push run of CI alone, never another workflow's", () => {
+    expect(devCiRunsPathOf("o/r")).toBe(
+      "repos/o/r/actions/workflows/ci.yml/runs?branch=dev&event=push&status=completed&per_page=1",
+    );
   });
 
   test("the CI of a head reads GitHub Actions' validate and mutation runs on it", () => {
