@@ -45,6 +45,7 @@ describe("placeOf", () => {
     expect(placeOf("scripts/land-loop/review/post-plan.ts")).toEqual({ package: "land-loop", layer: "application" });
     expect(placeOf("scripts/land-loop/lib/run.ts")).toEqual({ package: "land-loop", layer: "infra" });
     expect(placeOf("scripts/land-loop/lib/ask.test.ts")).toEqual({ package: "land-loop", layer: "test" });
+    expect(placeOf("scripts/land-loop/arbitraries.ts")).toEqual({ package: "land-loop", layer: "test" });
     expect(placeOf("scripts/lib/json.ts")).toEqual({ package: "shared", layer: "domain" });
     expect(placeOf("scripts/hooks/fix-edited.ts")).toEqual({ package: "tooling", layer: "entry" });
     expect(placeOf("scripts/gates/check-lint-disables.ts")).toEqual({ package: "tooling", layer: "tooling" });
