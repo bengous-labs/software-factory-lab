@@ -36,6 +36,8 @@ describe("argsOf", () => {
     expect(argsOf(["PRRT_1", "--reject", ""])).toBeNull();
     expect(argsOf(["PRRT_1", "--reject", "  "])).toBeNull();
     expect(argsOf(["PRRT_1", "--reject"])).toBeNull();
+    expect(argsOf(["PRRT_1", "--reject", "the", "bound", "is", "inclusive"])).toBeNull();
+    expect(argsOf(["PRRT_1", "Fixed in abc: x", "extra"])).toBeNull();
     expect(argsOf(["PRRT_1", "Fixed in "])).toBeNull();
     expect(argsOf(["PRRT_1"])).toBeNull();
     expect(argsOf(["PRRT_1", "  "])).toBeNull();

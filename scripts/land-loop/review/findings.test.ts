@@ -113,6 +113,10 @@ const FIXED = `Fixed in abc1234: count the rejections apart\n\n${AUTHOR_MARK}`;
 
 const REJECTED = `Rejected: the record is never written without reviewRounds\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`;
 
+/** A resolved Important thread of the App with `replies`. */
+const answered = (...replies: ReadonlyArray<readonly [string, string]>): ReviewThread =>
+  thread(IMPORTANT, replies, { isResolved: true });
+
 describe("rejectedImportantOf", () => {
   test("counts the App's resolved Important threads another login rejected with the reject mark, and nothing else", () => {
     expect(
@@ -135,6 +139,14 @@ describe("rejectedImportantOf", () => {
       ]),
     ).toBe(2);
     expect(rejectedImportantOf(APP, [])).toBe(0);
+  });
+
+  test("the latest answer decides: a rejection fixed later is not rejected, and one the App replied after still is", () => {
+    expect(rejectedImportantOf(APP, [answered([AUTHOR, REJECTED], [AUTHOR, FIXED])])).toBe(0);
+    expect(rejectedImportantOf(APP, [answered([AUTHOR, REJECTED], [APP, "noted"])])).toBe(1);
+    expect(earlierThreadsOf(APP, [answered([AUTHOR, REJECTED], [AUTHOR, FIXED])])[0]?.reply).toBe(
+      "Rejected: the record is never written without reviewRounds / Fixed in abc1234: count the rejections apart (thread resolved)",
+    );
   });
 
   test("a thread answered before the reject mark existed is neither rejected nor open", () => {

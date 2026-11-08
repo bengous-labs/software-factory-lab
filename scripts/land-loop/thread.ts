@@ -25,13 +25,20 @@ const FIX_PREFIX = "Fixed in ";
 
 const REJECT_PREFIX = "Rejected: ";
 
-/** The reply the arguments after the thread id ask for, without its marks; null for a blank reason or a reply that is not a fix. */
-function bodyOf([first, reason]: readonly string[]): string | null {
+/**
+ * The reply the arguments after the thread id ask for, without its marks; null for a blank reason, a
+ * reply that is not a fix, or an extra argument, such as the words of an unquoted reason.
+ */
+function bodyOf(rest: readonly string[]): string | null {
+  const [first, reason] = rest;
+
   if (first === "--reject") {
-    return reason === undefined || reason.trim() === "" ? null : `${REJECT_PREFIX}${reason}`;
+    return rest.length !== 2 || reason === undefined || reason.trim() === "" ? null : `${REJECT_PREFIX}${reason}`;
   }
 
-  return first?.startsWith(FIX_PREFIX) === true && first.slice(FIX_PREFIX.length).trim() !== "" ? first : null;
+  return rest.length === 1 && first?.startsWith(FIX_PREFIX) === true && first.slice(FIX_PREFIX.length).trim() !== ""
+    ? first
+    : null;
 }
 
 /** The thread id and the reply without its marks, or null for a refused form. */

@@ -82,9 +82,9 @@ function answersOf(appLogin: string, thread: ReviewThread): ReviewThread["commen
   return thread.comments.nodes.slice(1).filter((reply) => reply.author?.login !== appLogin);
 }
 
-/** A resolved thread an answer rejected with `REJECT_MARK`; a thread unresolved again is open, never rejected. */
+/** A resolved thread whose latest answer carries `REJECT_MARK`; a thread unresolved again is open, never rejected. */
 function rejectedOf(appLogin: string, thread: ReviewThread): boolean {
-  return thread.isResolved && answersOf(appLogin, thread).some((reply) => reply.body.includes(REJECT_MARK));
+  return thread.isResolved && answersOf(appLogin, thread).at(-1)?.body.includes(REJECT_MARK) === true;
 }
 
 /** The App's Important threads the author rejected. `appLogin` is the App's login as GraphQL prints it. */
