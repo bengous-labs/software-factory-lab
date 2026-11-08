@@ -6,14 +6,20 @@ import { decodeJson } from "../../lib/json.ts";
 import {
   EarlierThreads,
   earlierThreadsOf,
+  findingFileOf,
   graphqlLogin,
   markerOf,
+  movedLineOf,
+  nitPathsOf,
   openImportantOf,
+  reviewOfBody,
   ReviewThreads,
   severityOfBody,
   threadsQueryOf,
 } from "./findings.ts";
 import type { ReviewThread } from "./findings.ts";
+import { reviewMarkerOf } from "./post-plan.ts";
+import type { ReviewRequest } from "./review-report.ts";
 
 const APP = "bengous-labs-agents";
 
@@ -61,6 +67,7 @@ describe("the review threads", () => {
   test("the query names the PR and takes the repository as variables", () => {
     expect(threadsQueryOf(12)).toContain("query($owner:String!,$name:String!){repository(owner:$owner,name:$name)");
     expect(threadsQueryOf(12)).toContain("pullRequest(number:12)");
+    expect(threadsQueryOf(12)).toContain("comments(first:20){nodes{author{login} body pullRequestReview{body}}}");
   });
 
   test("a thread whose author was deleted reads with a null author; an answer outside the schema is refused", () => {
@@ -95,6 +102,92 @@ describe("openImportantOf", () => {
       ]),
     ).toBe(2);
     expect(openImportantOf(APP, [])).toBe(0);
+  });
+});
+
+/** `found` as the review of `posted` put it: its finding sits in the review whose body carries that marker. */
+const postedIn = (
+  found: ReviewThread,
+  posted: { readonly patch: string; readonly round: 1 | 2 | 3 },
+  path: string,
+): ReviewThread => ({
+  ...found,
+  path,
+  comments: {
+    nodes: found.comments.nodes.map((comment, index) =>
+      index === 0
+        ? {
+            ...comment,
+            pullRequestReview: {
+              body: `Review round ${posted.round}\n\n${reviewMarkerOf({ ...REQUEST, ...posted })}`,
+            },
+          }
+        : comment,
+    ),
+  },
+});
+
+const REQUEST: ReviewRequest = {
+  pr: 7,
+  head: "a".repeat(40),
+  base: "b".repeat(40),
+  patch: "p1",
+  round: 1,
+  model: "claude-opus-5-5",
+  effort: "high",
+};
+
+/** A Nit's comment as `post-plan.ts` writes it once its finding is anchored away from `place`. */
+const MOVED_NIT = (place: string): string => `**Nit**: a name\n${movedLineOf(place)}\n\nwhy\n\n${markerOf("nit")}`;
+
+describe("reviewOfBody", () => {
+  test("reads the patch and round of the marker a posted review ends with; a body without one has none", () => {
+    expect(reviewOfBody(`Review round 3\n\n${reviewMarkerOf({ ...REQUEST, patch: "p3", round: 3 })}`)).toEqual({
+      patch: "p3",
+      round: 3,
+    });
+    expect(reviewOfBody(reviewMarkerOf(REQUEST))).toEqual({ patch: "p1", round: 1 });
+    expect(reviewOfBody("Looks good")).toBeNull();
+  });
+});
+
+describe("findingFileOf", () => {
+  test("a finding anchored away from its place is about the file its moved line names; any other, the file it sits on", () => {
+    expect(findingFileOf("AGENTS.md", MOVED_NIT("scripts/lib/foo.ts:4"))).toBe("scripts/lib/foo.ts");
+    expect(findingFileOf("AGENTS.md", MOVED_NIT("scripts/lib/foo.ts"))).toBe("scripts/lib/foo.ts");
+    expect(findingFileOf("a.ts", MOVED_NIT("a.ts:120"))).toBe("a.ts");
+    expect(findingFileOf("a.ts", NIT)).toBe("a.ts");
+  });
+});
+
+describe("nitPathsOf", () => {
+  const ROUND_3 = { patch: "p3", round: 3 } as const;
+
+  test("the files of the App's Nit threads of the review given, open or resolved, once each; none of another review's, an Important's or a human's", () => {
+    expect(
+      nitPathsOf(APP, ROUND_3, [
+        postedIn(thread(NIT), ROUND_3, "b.ts"),
+        postedIn(thread(NIT, [], { isResolved: true }), ROUND_3, "a.ts"),
+        postedIn(thread(NIT), ROUND_3, "b.ts"),
+        postedIn(thread(NIT), { patch: "p3", round: 2 }, "f.ts"),
+        postedIn(thread(NIT), { patch: "p0", round: 3 }, "h.ts"),
+        postedIn(thread(IMPORTANT), ROUND_3, "c.ts"),
+        postedIn(thread(NIT, [], { by: "bengous" }), ROUND_3, "d.ts"),
+        postedIn(thread(NIT, [], { by: null }), ROUND_3, "e.ts"),
+        { ...thread(NIT), path: "g.ts" },
+      ]),
+    ).toEqual(["a.ts", "b.ts"]);
+    expect(nitPathsOf(APP, ROUND_3, [])).toEqual([]);
+    expect(nitPathsOf(APP, { patch: null, round: 3 }, [postedIn(thread(NIT), ROUND_3, "a.ts")])).toEqual([]);
+  });
+
+  test("a Nit anchored on another file, its own outside the diff, names neither; one moved within its own file names it", () => {
+    expect(
+      nitPathsOf(APP, ROUND_3, [
+        postedIn(thread(MOVED_NIT("scripts/lib/foo.ts:4")), ROUND_3, "AGENTS.md"),
+        postedIn(thread(MOVED_NIT("a.ts:120")), ROUND_3, "a.ts"),
+      ]),
+    ).toEqual(["a.ts"]);
   });
 });
 

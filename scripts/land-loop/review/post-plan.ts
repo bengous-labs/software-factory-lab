@@ -6,7 +6,7 @@
 
 import type { Schema } from "effect";
 
-import { markerOf } from "./findings.ts";
+import { markerOf, movedLineOf } from "./findings.ts";
 import type { ReportedFinding, ReportedResult, ReviewRequest, Severity } from "./review-report.ts";
 
 /** The RIGHT-side lines of each hunk of the PR's whole diff, context included: GitHub accepts an inline comment only there. */
@@ -128,7 +128,7 @@ function commentOf(planned: PlannedComment): string {
 
   return [
     `**${LABEL[planned.severity]}**: ${finding.summary}`,
-    ...(moved ? [`At \`${placeOf(finding)}\`, outside this diff.`] : []),
+    ...(moved ? [movedLineOf(placeOf(finding))] : []),
     ...(finding.breaks === null ? [] : [`Breaks: \`${placeOf(finding.breaks)}\``]),
     "",
     finding.failureScenario,

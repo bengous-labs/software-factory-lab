@@ -136,7 +136,10 @@ describe("armReason", () => {
     expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "<your reason>"`');
     expect(reason).toContain('`bun /r/scripts/land-loop/comment.ts 12 "<what you decided and why>"`');
     expect(reason).toContain("never with `gh pr comment`");
-    expect(reason).toContain("Nit and Pre-existing findings never block");
+    expect(reason).toContain(
+      "Each line it prints is a failing check, an Important or Nit finding, a human comment, or a change of state of the PR. Judge every finding, a Nit as an Important: fix it or reject it. Pre-existing findings never block: leave them.",
+    );
+    expect(reason).not.toContain("Nit and Pre-existing findings never block");
     expect(reason).toContain("Never ask the Owner a question");
   });
 });

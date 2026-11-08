@@ -26,7 +26,7 @@ describe("wakesOf", () => {
     ]);
   });
 
-  test("an open Important finding prints as a Finding and a human thread as a Comment, with its thread id; a resolved one, a Nit or a Pre-existing prints nothing", () => {
+  test("an open Important or Nit finding prints as a Finding and a human thread as a Comment, with its thread id; a resolved one or a Pre-existing prints nothing", () => {
     const threads = [
       {
         id: "T1",
@@ -70,10 +70,13 @@ describe("wakesOf", () => {
 
     const wakes = wakesOf(7, { ...OPEN, threads });
 
-    expect(wakes.map((wake) => wake.key)).toEqual(["thread:T1", "thread:T5", "thread:T6"]);
+    expect(wakes.map((wake) => wake.key)).toEqual(["thread:T1", "thread:T3", "thread:T5", "thread:T6"]);
     expect(wakes[0]?.line).toStartWith("Finding T1 on app/src/cli.ts:12 by bengous-labs-agents: **Important**: off");
-    expect(wakes[1]?.line).toBe("Comment T5 on a.ts:4 by bengous: why this name?");
-    expect(wakes[2]?.line).toStartWith("Comment T6 on a.ts:5 by bengous: quoting");
+    expect(wakes[1]?.line).toBe(
+      "Finding T3 on a.ts:2 by bengous-labs-agents: **Nit**: n <!-- lab-finding severity=nit -->",
+    );
+    expect(wakes[2]?.line).toBe("Comment T5 on a.ts:4 by bengous: why this name?");
+    expect(wakes[3]?.line).toStartWith("Comment T6 on a.ts:5 by bengous: quoting");
   });
 
   test("a reply in an open thread prints, a Nit thread included, keyed by its comment id; the author's own marked reply does not", () => {
@@ -105,6 +108,7 @@ describe("wakesOf", () => {
     ];
 
     expect(wakesOf(7, { ...OPEN, threads })).toEqual([
+      { key: "thread:T7", line: `Finding T7 on a.ts:9 by bengous-labs-agents: ${nit}` },
       { key: "comment:C1", line: "Reply in T7 on a.ts:9 by bengous: please fix this one anyway" },
     ]);
   });

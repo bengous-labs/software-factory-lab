@@ -45,7 +45,8 @@ export interface RoutingAnswer {
   readonly review: ReviewDepth;
   /**
    * On a Patch delta: whether the delta deserves another read on its own: it touches a path a Routing
-   * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names. After Review
+   * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names; never when it
+   * only answers the Nits after a Review round 3 with no Important (`withNitAnswers`). After Review
    * round 1 it runs Review round 2, after Review round 2 Review round 3; after Review round 3 it holds the
    * change for the Owner.
    */

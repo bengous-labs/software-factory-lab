@@ -34,7 +34,14 @@ const ReviewThread = Schema.Struct({
   path: Schema.String,
   line: Schema.NullOr(Schema.Finite),
   comments: Schema.Struct({
-    nodes: Schema.Array(Schema.Struct({ author: Schema.NullOr(Login), body: Schema.String })),
+    nodes: Schema.Array(
+      Schema.Struct({
+        author: Schema.NullOr(Login),
+        body: Schema.String,
+        /** The review the comment was posted in: an App finding's carries its round's marker. */
+        pullRequestReview: Schema.optionalKey(Schema.NullOr(Schema.Struct({ body: Schema.String }))),
+      }),
+    ),
   }),
 });
 
@@ -52,7 +59,7 @@ export const ReviewThreads = Schema.Struct({
 
 /** The GraphQL query of the review threads of PR `pr`, over the variables `owner` and `name`. */
 export function threadsQueryOf(pr: number): string {
-  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{author{login} body}}}}}}}`;
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{author{login} body pullRequestReview{body}}}}}}}}`;
 }
 
 /** The App's login as GraphQL prints it, without REST's `[bot]` suffix. */
@@ -67,6 +74,54 @@ export function openImportantOf(appLogin: string, threads: readonly ReviewThread
 
     return !thread.isResolved && finding?.author?.login === appLogin && severityOfBody(finding.body) === "important";
   }).length;
+}
+
+/** The marker a posted review ends with, as `post-plan.ts` `reviewMarkerOf` writes it: it names the review's patch and round. */
+const REVIEW_MARKER_PATTERN = /<!-- lab-review patch=(\S+) round=(\d+) -->/u;
+
+/** The patch and Review round a posted review's body names; null for a body with no marker, such as a human's. */
+export function reviewOfBody(body: string): { readonly patch: string; readonly round: number } | null {
+  const [, patch, round] = REVIEW_MARKER_PATTERN.exec(body) ?? [];
+
+  return patch === undefined || round === undefined ? null : { patch, round: Number(round) };
+}
+
+/**
+ * The line a finding's comment carries when it anchors away from its own place, `<file>` or
+ * `<file>:<line>`. An external format: posted comments carry it, so the words stay.
+ */
+export function movedLineOf(place: string): string {
+  return `At \`${place}\`, outside this diff.`;
+}
+
+const MOVED_LINE_PATTERN = /^At `(.+?)(?::\d+)?`, outside this diff\.$/mu;
+
+/** The file a finding's comment is about: the one its moved line names, else `anchorPath`, the file it sits on. */
+export function findingFileOf(anchorPath: string, body: string): string {
+  return MOVED_LINE_PATTERN.exec(body)?.[1] ?? anchorPath;
+}
+
+/**
+ * The files of the Nit threads the App posted in the review of `review`'s patch and round, open or
+ * resolved, sorted, once each. A Nit anchored on another file than its own, outside the diff, names
+ * neither. `appLogin` is the App's login as GraphQL prints it.
+ */
+export function nitPathsOf(
+  appLogin: string,
+  review: { readonly patch: string | null; readonly round: number },
+  threads: readonly ReviewThread[],
+): string[] {
+  const paths = threads.flatMap((thread) => {
+    const [finding] = thread.comments.nodes;
+    const posted = reviewOfBody(finding?.pullRequestReview?.body ?? "");
+
+    const ofReview = posted !== null && posted.patch === review.patch && posted.round === review.round;
+    const nit = finding?.author?.login === appLogin && severityOfBody(finding.body) === "nit";
+
+    return ofReview && nit && findingFileOf(thread.path, finding.body) === thread.path ? [thread.path] : [];
+  });
+
+  return [...new Set(paths)].toSorted();
 }
 
 const EarlierThread = Schema.Struct({ where: Schema.String, finding: Schema.String, reply: Schema.String });

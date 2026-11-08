@@ -167,7 +167,7 @@ export function armReason(pr: number, prWatchCommand: string, threadCommand: str
     "",
     `    ${prWatchCommand}`,
     "",
-    "Each line it prints is a failing check, an Important finding or a human comment, or a change of state of the PR. Nit and Pre-existing findings never block: leave them.",
+    "Each line it prints is a failing check, an Important or Nit finding, a human comment, or a change of state of the PR. Judge every finding, a Nit as an Important: fix it or reject it. Pre-existing findings never block: leave them.",
     "",
     "- A failing check: fix it with a commit, then stop.",
     `- A finding you accept: fix it with a commit, then reply and resolve its thread: \`${threadCommand} <thread-id> "Fixed in <sha>: <what changed>"\`. Then stop.`,

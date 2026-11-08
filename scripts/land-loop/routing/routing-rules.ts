@@ -10,7 +10,7 @@
 
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
-import type { RoutingAnswer } from "../merge-bot/decide.ts";
+import type { RoutingAnswer, StateRecord } from "../merge-bot/decide.ts";
 
 const BREAKING = /^\w+(\([^)]*\))?!:|BREAKING CHANGE/mu;
 
@@ -130,4 +130,49 @@ export function routingOf(
     ...verdict.answer,
     secondRound: patchDelta.kind === "ruled" ? patchDelta.answer.secondRound : judged().secondRound,
   };
+}
+
+/** The most lines a push after Review round 3 changes and still only answers its Nits. */
+export const NIT_ANSWER_LINE_CAP = 100;
+
+/** What a Patch delta after Review round 3 is weighed against. */
+export interface NitAnswerInput {
+  /** The PR's state record: its rounds, each round's Important count, the head the last round read. */
+  readonly record: Pick<StateRecord, "reviewRounds" | "importantByRound" | "reviewedHead">;
+  /** Where the Patch delta starts: the head the last round read, or the merge base once that head left the PR's history. */
+  readonly deltaFrom: string;
+  /** The files Review round 3 posted a Nit finding on. */
+  readonly nitPaths: readonly string[];
+}
+
+/**
+ * The Routing answer of a Patch delta that only answers the Nits of a Review round 3 that posted no
+ * Important: the delta starts at the head round 3 read, touches only files round 3 posted a Nit on and
+ * no `deepReviewPaths` path, in at most NIT_ANSWER_LINE_CAP lines. It needs no read, so it holds nothing
+ * for the Owner and the change keeps its Land route. Any other answer stands.
+ */
+export function withNitAnswers(
+  policy: RoutingPolicy,
+  answer: RoutingAnswer,
+  delta: RoutingInput,
+  { record, deltaFrom, nitPaths }: NitAnswerInput,
+): RoutingAnswer {
+  const nits = new Set(nitPaths);
+
+  const answersNits =
+    answer.secondRound &&
+    record.reviewRounds === 3 &&
+    record.importantByRound?.[2] === 0 &&
+    record.reviewedHead === deltaFrom &&
+    delta.lines <= NIT_ANSWER_LINE_CAP &&
+    delta.paths.every((path) => nits.has(path)) &&
+    matching(policy.deepReviewPaths, delta.paths).length === 0;
+
+  return answersNits
+    ? {
+        ...answer,
+        secondRound: false,
+        reason: `a push after Review round 3 that only answers its Nits: ${delta.lines} lines in ${listed(delta.paths)}`,
+      }
+    : answer;
 }

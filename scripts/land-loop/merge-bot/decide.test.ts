@@ -82,7 +82,7 @@ const gate = (snapshot: Snapshot): string | undefined => {
 
 describe("decide", () => {
   test("closed PRs, PRs from forks and PRs opened by neither the Owner nor the Author are ignored", () => {
-    expect(decide({ ...READY, state: "MERGED" }).kind).toBe("ignore");
+    expect(decide({ ...READY, state: "MERGED" })).toEqual({ kind: "ignore", reason: "#9 is merged" });
     expect(decide({ ...READY, sameRepository: false }).kind).toBe("ignore");
     expect(decide({ ...READY, openedByFactory: false })).toEqual({
       kind: "ignore",
@@ -512,6 +512,18 @@ describe("an Owner hold", () => {
     ]);
   });
 
+  test("a push after a clean Review round 3 routed as only answering its Nits sets no hold: it lands on land:auto, and waits for the Owner on land:human", () => {
+    const answered = { ...RISKY, secondRound: false, reason: "a push after Review round 3 that only answers its Nits" };
+    const auto = { ...READY, record: afterRound3(answered) };
+    const human = { ...READY, record: afterRound3({ ...answered, land: "owner" }) };
+
+    expect(kinds(auto)).not.toContain("record");
+    expect(kinds(auto)).toContain("auto-merge");
+    expect(kinds(human)).not.toContain("record");
+    expect(kinds(human)).not.toContain("auto-merge");
+    expect(gate(human)).toBe("pending");
+  });
+
   test("a held PR lands only with the Owner's Land approval on its current patch, and a later push removes that approval", () => {
     const held = {
       ...READY,
@@ -798,6 +810,12 @@ describe("Land approval across a patch change", () => {
   });
 });
 
+/** The summaries of the Review check and the Land gate a decision posts, in order. */
+const checksOf = (snapshot: Snapshot): string[] =>
+  stepsOf(snapshot).flatMap((step) =>
+    step.kind === "review-check" || step.kind === "land-gate" ? [step.check.summary] : [],
+  );
+
 describe("landApprovalCounts", () => {
   test("the owner's Land approval counts when put after the head was pushed, never before, and never someone else's", () => {
     expect(landApprovalCounts(true, "2026-11-05T20:00:00Z", "2026-11-05T19:00:00Z")).toBe(true);
@@ -805,6 +823,39 @@ describe("landApprovalCounts", () => {
     expect(landApprovalCounts(false, "2026-11-05T20:00:00Z", "2026-11-05T19:00:00Z")).toBe(false);
     expect(landApprovalCounts(true, null, null)).toBe(false);
     expect(landApprovalCounts(true, "2026-11-05T20:00:00Z", null)).toBe(true);
+    expect(landApprovalCounts(true, "2026-11-05T19:00:00Z", "2026-11-05T19:00:00Z")).toBe(true);
+  });
+
+  test("the checks of a landable PR say why: no Important open or review:none, then its land:auto or the Owner's Land approval", () => {
+    const landable = { ...READY, record: { ...READY.record, reviewedPatch: P1, reviewRounds: 1 } };
+    const unread = { ...READY, record: { ...READY.record, triage: { [P1]: { ...LIGHT, review: "none" as const } } } };
+
+    const approved = {
+      ...landable,
+      labels: [LAND_APPROVAL_LABEL],
+      landApprovalByOwner: true,
+      record: { ...landable.record, triage: { [P1]: { ...LIGHT, land: "owner" as const } }, landOkPatch: P1 },
+    };
+
+    expect(checksOf(landable)).toEqual(["No Important finding open.", "Landable, land:auto."]);
+    expect(checksOf(unread)).toEqual(["review:none, nothing to read.", "Landable, land:auto."]);
+    expect(checksOf(approved)).toEqual([
+      "No Important finding open.",
+      "Landable, with the Owner's Land approval (label land-ok).",
+    ]);
+  });
+
+  test("an owner's Land approval already recorded for the current patch stays, and lands it", () => {
+    const approved = {
+      ...READY,
+      labels: [LAND_APPROVAL_LABEL],
+      landApprovalByOwner: true,
+      record: { ...READY.record, reviewedPatch: P1, landOkPatch: P1 },
+    };
+
+    expect(kinds(approved)).not.toContain("remove-land-approval");
+    expect(kinds(approved)).not.toContain("record");
+    expect(kinds(approved)).toContain("auto-merge");
   });
 });
 

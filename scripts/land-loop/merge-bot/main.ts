@@ -23,13 +23,13 @@ import type { RoutingPolicy } from "../factory-config.ts";
 import { ask } from "../lib/ask.ts";
 import { checked, run } from "../lib/run.ts";
 import type { Ran, Run } from "../ports/run.ts";
-import { graphqlLogin, openImportantOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
+import { graphqlLogin, nitPathsOf, openImportantOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
 import type { ReviewThread } from "../review/findings.ts";
 import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { routingJudge } from "../routing/routing-judge.ts";
-import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
+import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
 import {
   afterReview,
   CI_CHECKS,
@@ -556,7 +556,12 @@ const linesChanged = async (env: Env, from: string, to: string): Promise<number>
 /** Whether a Review round reads the Patch delta, from the head the last round read: every round after the first. */
 export const readsPatchDelta = (round: ReviewRound): boolean => round >= 2;
 
-async function route(env: Env, range: Range, record: StateRecord, patchDelta: boolean): Promise<RoutingAnswer> {
+async function route(
+  env: Env,
+  range: Range,
+  record: StateRecord,
+  { patchDelta, pr }: { readonly patchDelta: boolean; readonly pr: number },
+): Promise<RoutingAnswer> {
   const policy = routingPolicyAt(env.cwd);
   const from = await rangeStart(env, range, record, patchDelta);
   const paths = await changedPaths(env, range.base, range.head);
@@ -571,13 +576,15 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
 
   // The Routing rules hold the labels of the whole PR; whether this Patch delta is read again is its own
   // question, on its own paths and lines. A breaking commit is judged on the whole PR.
-  const patchDeltaRules = patchDelta
-    ? patchDeltaRulesOf(policy, {
+  const delta = patchDelta
+    ? {
         paths: await changedPaths(env, from, range.head),
         lines: await linesChanged(env, from, range.head),
         messages: [],
-      })
+      }
     : null;
+
+  const patchDeltaRules = delta === null ? null : patchDeltaRulesOf(policy, delta);
 
   const question = judgeAskOf(rules, patchDeltaRules);
 
@@ -592,7 +599,19 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
           patchDelta,
         );
 
-  return routingOf(rules, patchDeltaRules, judge);
+  const answer = routingOf(rules, patchDeltaRules, judge);
+
+  if (delta === null) {
+    return answer;
+  }
+
+  const nitPaths = nitPathsOf(
+    graphqlLogin(env.appLogin),
+    { patch: record.reviewedPatch, round: 3 },
+    await threadsOf(env, pr),
+  );
+
+  return withNitAnswers(policy, answer, delta, { record, deltaFrom: from, nitPaths });
 }
 
 // oxlint-disable-next-line typescript/consistent-return -- the switch covers every Step kind, so no path reaches the end.
@@ -607,7 +626,7 @@ async function perform(
 ): Promise<StateRecord | null> {
   switch (step.kind) {
     case "route": {
-      const answer = await route(env, range, record, step.patchDelta);
+      const answer = await route(env, range, record, { patchDelta: step.patchDelta, pr: pr.number });
       log(
         `#${pr.number} routing ${step.patch.slice(0, 8)}: route:${answer.land} review:${answer.review} second:${answer.secondRound} by ${answer.model ?? "the Routing rules"} (${answer.reason})`,
       );
