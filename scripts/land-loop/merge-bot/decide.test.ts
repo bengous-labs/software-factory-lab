@@ -274,6 +274,16 @@ describe("Review rounds", () => {
       false,
       "success",
     ],
+    [
+      "two Review rounds, the last on this risky patch: it was read, so no third, landable",
+      2,
+      P1,
+      RISKY,
+      0,
+      null,
+      false,
+      "success",
+    ],
   ];
 
   for (const [name, reviewRounds, reviewedPatch, routing, openImportant, reviewRound, toOwner, landGate] of rows) {
