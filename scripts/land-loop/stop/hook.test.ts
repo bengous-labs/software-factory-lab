@@ -139,6 +139,27 @@ async function bodyOf(branch: string, forkBody: string): Promise<string | undefi
   return calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.options.stdin;
 }
 
+/** The publishing calls in their order, from the push on, as argv lines with their env and stdin. */
+function publishing(calls: readonly Call[]): Array<[string, RunOptions["env"], string | undefined]> {
+  return calls.flatMap((call): Array<[string, RunOptions["env"], string | undefined]> => {
+    if (call.argv.includes("push")) {
+      return [["push", call.options.env, undefined]];
+    }
+
+    if (!/^gh pr (create|edit|comment|ready)/u.test(call.argv.join(" "))) {
+      return [];
+    }
+
+    return [
+      [
+        call.argv.slice(0, 4).join(" "),
+        call.options.env,
+        call.argv.includes("create") ? undefined : call.options.stdin,
+      ],
+    ];
+  });
+}
+
 const REPO = resolve(import.meta.dir, "..", "..", "..");
 
 const FORK_SETTINGS = `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"bun \\"${REPO}/scripts/land-loop/stop/fork-guard.ts\\"","timeout":30}]}]}}`;
@@ -226,7 +247,7 @@ describe("stop", () => {
   test("the push and every gh call carry the Author's credential; git fetch and the forks do not", async () => {
     const { run, calls, root } = world(
       "YES",
-      JSON.stringify([{ number: 12, isDraft: true, headRefOid: "e".repeat(40) }]),
+      JSON.stringify([{ number: 12, isDraft: true, headRefOid: "e".repeat(40), labels: [] }]),
     );
 
     await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
@@ -302,7 +323,11 @@ describe("stop", () => {
   });
 
   test("a PR ready at HEAD and not armed yet: the hook asks to arm its PR watch, naming the PR in its commands, and pushes nothing", async () => {
-    const { run, calls, root } = world("YES", JSON.stringify([{ number: 12, isDraft: false, headRefOid: HEAD }]));
+    const { run, calls, root } = world(
+      "YES",
+      JSON.stringify([{ number: 12, isDraft: false, headRefOid: HEAD, labels: [] }]),
+    );
+
     const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
 
     expect(outcome.kind === "block" && outcome.reason).toContain(`bun ${root}/scripts/land-loop/pr-watch.ts 12`);
@@ -325,6 +350,156 @@ describe("stop", () => {
 
     expect(outcome).toEqual({ kind: "allow" });
     expect(calls.some((call) => call.argv[1] === "push")).toBe(false);
+  });
+
+  test("the Done judge's question asks for YES, NO, or YES, HOLD: with a reason", () => {
+    expect(DONE_QUESTION).toBe(
+      `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, with no question pending for the Owner? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason. When it is finished but a human should read it before it lands, answer YES, HOLD: and the reason instead: for example a change to a name or a format stored outside the code, or to a setting the Owner must change on GitHub.`,
+    );
+  });
+
+  const REASON = "renames the agent-review check, which the dev ruleset requires";
+
+  const COMMENT = `Held for the Owner by the Author: ${REASON}\n\n<!-- lab-author-reply -->`;
+
+  test("a hold on the open path: the PR opens as a draft, gets the label and the comment with the Author's credential, then is readied", async () => {
+    const records: StopLogRecord[] = [];
+    const { run, calls, root } = world(`YES, HOLD: ${REASON}`);
+
+    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
+      records.push(record);
+    });
+
+    expect(publishing(calls)).toEqual([
+      ["push", { LAB_AUTHOR_TOKEN: TOKEN }, undefined],
+      ["gh pr create --base", { GH_TOKEN: TOKEN }, undefined],
+      ["gh pr edit 12", { GH_TOKEN: TOKEN }, undefined],
+      ["gh pr comment 12", { GH_TOKEN: TOKEN }, COMMENT],
+      ["gh pr ready 12", { GH_TOKEN: TOKEN }, undefined],
+    ]);
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv.at(-1)).toBe("--draft");
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr edit"))?.argv).toEqual([
+      "gh",
+      "pr",
+      "edit",
+      "12",
+      "--add-label",
+      "land:human",
+    ]);
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr comment"))?.argv).toEqual([
+      "gh",
+      "pr",
+      "comment",
+      "12",
+      "--body-file",
+      "-",
+    ]);
+    expect(records).toContainEqual({ step: "hold", pr: 12, reason: REASON, added: true });
+    expect(outcome.kind === "block" && outcome.reason.split("\n")[1]).toBe(
+      `The Done judge held this PR for the Owner's read: ${REASON}. Do not remove land:human.`,
+    );
+  });
+
+  test("a label that fails on a held PR just opened leaves it a draft, and the next stop asks the Done judge again", async () => {
+    const { run, calls, root } = world(`YES, HOLD: ${REASON}`);
+
+    const labelFails: Run = (argv, options) =>
+      argv.join(" ").startsWith("gh pr edit")
+        ? Promise.resolve({ code: 1, stdout: "", stderr: "HTTP 502" })
+        : run(argv, options);
+
+    // oxlint-disable-next-line typescript/await-thenable, typescript/no-confusing-void-expression -- bun-types types rejects matchers as void; Bun returns the promise the test awaits.
+    await expect(stop(input(root), { run: labelFails, env: TOKEN_ENV, now: () => 0 }, () => {})).rejects.toThrow(
+      "HTTP 502",
+    );
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv.at(-1)).toBe("--draft");
+    expect(calls.some((call) => /^gh pr (comment|ready)/u.test(call.argv.join(" ")))).toBe(false);
+
+    const next = world(
+      `YES, HOLD: ${REASON}`,
+      JSON.stringify([{ number: 12, isDraft: true, headRefOid: HEAD, labels: [] }]),
+    );
+
+    await stop(input(next.root), { run: next.run, env: TOKEN_ENV, now: () => 0 }, () => {});
+
+    expect(next.calls.some((call) => call.argv[0] === "claude" && call.argv.at(-1) === DONE_QUESTION)).toBe(true);
+    expect(publishing(next.calls).map(([line]) => line)).toEqual([
+      "gh pr edit 12",
+      "gh pr comment 12",
+      "push",
+      "gh pr ready 12",
+    ]);
+  });
+
+  test("a hold on the push path: the label, then the comment, go out before the push and gh pr ready", async () => {
+    const records: StopLogRecord[] = [];
+
+    const { run, calls, root } = world(
+      "YES, HOLD:",
+      JSON.stringify([{ number: 12, isDraft: true, headRefOid: "e".repeat(40), labels: [{ name: "enhancement" }] }]),
+    );
+
+    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
+      records.push(record);
+    });
+
+    expect(publishing(calls)).toEqual([
+      ["gh pr edit 12", { GH_TOKEN: TOKEN }, undefined],
+      [
+        "gh pr comment 12",
+        { GH_TOKEN: TOKEN },
+        "Held for the Owner by the Author: (no reason given)\n\n<!-- lab-author-reply -->",
+      ],
+      ["push", { LAB_AUTHOR_TOKEN: TOKEN }, undefined],
+      ["gh pr ready 12", { GH_TOKEN: TOKEN }, undefined],
+    ]);
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr edit"))?.argv).toEqual([
+      "gh",
+      "pr",
+      "edit",
+      "12",
+      "--add-label",
+      "land:human",
+    ]);
+    expect(records).toContainEqual({ step: "hold", pr: 12, reason: "(no reason given)", added: true });
+  });
+
+  test("a hold on a PR that carries land:human already publishes as YES and adds nothing", async () => {
+    const records: StopLogRecord[] = [];
+
+    const { run, calls, root } = world(
+      `YES, HOLD: ${REASON}`,
+      JSON.stringify([{ number: 12, isDraft: true, headRefOid: "e".repeat(40), labels: [{ name: "land:human" }] }]),
+    );
+
+    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
+      records.push(record);
+    });
+
+    expect(publishing(calls).map(([line]) => line)).toEqual(["push", "gh pr ready 12"]);
+    expect(records).toContainEqual({ step: "hold", pr: 12, reason: REASON, added: false });
+  });
+
+  test("a plain YES adds no label and posts no comment", async () => {
+    const records: StopLogRecord[] = [];
+    const { run, calls, root } = world("YES, done.");
+
+    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
+      records.push(record);
+    });
+
+    expect(publishing(calls).map(([line]) => line)).toEqual(["push", "gh pr create --base"]);
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv).not.toContain("--draft");
+    expect(records.some((record) => record.step === "hold")).toBe(false);
+    expect(outcome.kind === "block" && outcome.reason).not.toContain("held this PR");
+  });
+
+  test("a NO with a hold's words publishes nothing", async () => {
+    const { run, calls, root } = world("NO, HOLD: not finished");
+    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
+
+    expect(outcome).toEqual({ kind: "allow" });
+    expect(publishing(calls)).toEqual([]);
   });
 
   test("inside a fork the hook launched, nothing runs past reading HEAD", async () => {

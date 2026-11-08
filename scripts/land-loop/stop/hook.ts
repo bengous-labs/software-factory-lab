@@ -31,9 +31,10 @@ import {
   closingLineOf,
   decide,
   FORK_MARKER,
+  holdStepsOf,
   IGNORED_BRANCH,
 } from "./decide.ts";
-import type { Action, PullRequest, Snapshot, StopChecks } from "./decide.ts";
+import type { Action, HoldSteps, PullRequest, Snapshot, StopChecks } from "./decide.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
 
@@ -66,7 +67,7 @@ const FORK_SETTINGS = JSON.stringify({
   },
 });
 
-export const DONE_QUESTION = `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, with no question pending for the Owner? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason.`;
+export const DONE_QUESTION = `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, with no question pending for the Owner? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason. When it is finished but a human should read it before it lands, answer YES, HOLD: and the reason instead: for example a change to a name or a format stored outside the code, or to a setting the Owner must change on GitHub.`;
 
 export const BODY_REQUEST = `${FORK_MARKER} Stop hook request, not the Owner's: write the pull request for the commits on this branch. First line: its title, as a conventional commit subject. Then a blank line, then its body in Markdown: what changed and why, and how you verified it. Print nothing else.`;
 
@@ -222,7 +223,12 @@ async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise
 }
 
 export const ListedPrs = Schema.Array(
-  Schema.Struct({ number: Schema.Finite, isDraft: Schema.Boolean, headRefOid: Schema.String }),
+  Schema.Struct({
+    number: Schema.Finite,
+    isDraft: Schema.Boolean,
+    headRefOid: Schema.String,
+    labels: Schema.Array(Schema.Struct({ name: Schema.String })),
+  }),
 );
 
 /** The options of a `gh` call: with the Author's credential once its token is found. */
@@ -236,14 +242,58 @@ async function prOf(deps: Deps, cwd: string, branch: string, author: AuthorToken
     "gh pr list",
     await checked(
       deps.run,
-      ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,isDraft,headRefOid"],
+      ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,isDraft,headRefOid,labels"],
       ghOptions(cwd, author),
     ),
   );
 
   const pr = listed[0];
 
-  return pr === undefined ? null : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid };
+  return pr === undefined
+    ? null
+    : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid, labels: pr.labels.map((label) => label.name) };
+}
+
+/** The Done judge's hold on a PR, and what it puts there; `ready` readies the draft a held PR opened as. */
+interface HoldTarget {
+  readonly pr: number;
+  readonly hold: string | null;
+  readonly steps: HoldSteps;
+  readonly ready: boolean;
+}
+
+/**
+ * Puts the hold's label, then posts its comment, with the Author's credential, and logs the hold. The
+ * label goes first: a failure after it leaves the PR held, never a hold comment with no hold behind it.
+ */
+async function putHold(
+  deps: Deps,
+  options: RunOptions,
+  target: HoldTarget,
+  log: (record: StopLogRecord) => void,
+): Promise<void> {
+  const { pr, hold, steps, ready } = target;
+
+  if (hold === null) {
+    return;
+  }
+
+  if (steps.addLabel) {
+    await checked(deps.run, ["gh", "pr", "edit", String(pr), "--add-label", "land:human"], options);
+  }
+
+  if (steps.comment !== null) {
+    await checked(deps.run, ["gh", "pr", "comment", String(pr), "--body-file", "-"], {
+      ...options,
+      stdin: steps.comment,
+    });
+  }
+
+  log({ step: "hold", pr, reason: hold, added: steps.addLabel });
+
+  if (ready) {
+    await checked(deps.run, ["gh", "pr", "ready", String(pr)], options);
+  }
 }
 
 async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: string): Promise<StopChecks> {
@@ -357,7 +407,11 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
 
     return {
       kind: "block",
-      reason: armReason(admission.pr, `${prWatch} ${admission.pr}`, thread, `${comment} ${admission.pr}`),
+      reason: armReason(admission.pr, {
+        prWatch: `${prWatch} ${admission.pr}`,
+        thread,
+        comment: `${comment} ${admission.pr}`,
+      }),
     };
   }
 
@@ -385,7 +439,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
   log({
     step: "done-judge",
     model,
-    answer,
+    answer: answer.kind,
     ms: doneJudge.ms,
     tokens: doneJudge.tokens,
     code: doneJudge.code,
@@ -403,6 +457,14 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
 
   if (action.kind === "none") {
     return { kind: "allow" };
+  }
+
+  // A PR the hook opens carries no label yet.
+  const hold = holdStepsOf(action.hold, action.kind === "push" ? (withArmed.pr?.labels ?? []) : []);
+
+  // The hold goes on before the push, so the Merge bot never reads the new head without it.
+  if (action.kind === "push") {
+    await putHold(deps, ghOptions(cwd, author), { pr: action.pr, hold: action.hold, steps: hold, ready: false }, log);
   }
 
   await checked(deps.run, pushArgs(branch), { cwd, env: { LAB_AUTHOR_TOKEN: author.token }, timeoutMs: 120_000 });
@@ -426,11 +488,26 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
 
     const url = await checked(
       deps.run,
-      ["gh", "pr", "create", "--base", TRUNK, "--head", branch, "--title", text.title, "--body-file", "-"],
+      [
+        "gh",
+        "pr",
+        "create",
+        "--base",
+        TRUNK,
+        "--head",
+        branch,
+        "--title",
+        text.title,
+        "--body-file",
+        "-",
+        // A held PR opens as a draft and is readied once held: a failure in between leaves a draft, which the next stop asks about again.
+        ...(hold.addLabel ? ["--draft"] : []),
+      ],
       { ...ghOptions(cwd, author), stdin: body === "" ? "(no body)" : body },
     );
 
     number = Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
+    await putHold(deps, ghOptions(cwd, author), { pr: number, hold: action.hold, steps: hold, ready: true }, log);
   } else {
     number = action.pr;
 
@@ -442,7 +519,14 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
   log({ step: "published", action: action.kind, pr: number, head });
   writeFileSync(armedFile(number), "asked\n");
 
-  return { kind: "block", reason: armReason(number, `${prWatch} ${number}`, thread, `${comment} ${number}`) };
+  return {
+    kind: "block",
+    reason: armReason(
+      number,
+      { prWatch: `${prWatch} ${number}`, thread, comment: `${comment} ${number}` },
+      action.hold,
+    ),
+  };
 }
 
 if (import.meta.main) {
