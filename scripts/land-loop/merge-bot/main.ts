@@ -92,6 +92,7 @@ interface Env {
   readonly authorLogin: string;
   readonly appLogin: string;
   readonly cwd: string;
+  readonly runUrl: string;
 }
 
 function required(name: string): string {
@@ -511,16 +512,27 @@ async function snapshotOf(
   };
 }
 
-async function setCheck(env: Env, name: string, head: string, check: CheckState): Promise<void> {
+/** The POST body of `repos/<repo>/check-runs`: its Details link opens `runUrl`, the run that posts it. */
+export function checkRunBodyOf(name: string, head: string, check: CheckState, runUrl: string): Schema.JsonObject {
   const output = { title: check.summary, summary: check.summary };
 
-  const body =
-    check.kind === "pending"
-      ? { name, head_sha: head, status: "in_progress", output }
-      : { name, head_sha: head, status: "completed", conclusion: check.kind, output };
-
-  await send(env, "POST", `repos/${env.repo}/check-runs`, body);
+  return check.kind === "pending"
+    ? { name, head_sha: head, status: "in_progress", output, details_url: runUrl }
+    : { name, head_sha: head, status: "completed", conclusion: check.kind, output, details_url: runUrl };
 }
+
+export function checkSetter(
+  runner: Run,
+): (where: Pick<Env, "repo" | "cwd" | "runUrl">, name: string, head: string, check: CheckState) => Promise<void> {
+  return async (where, name, head, check) => {
+    await checked(runner, ["gh", "api", "-X", "POST", `repos/${where.repo}/check-runs`, "--input", "-"], {
+      cwd: where.cwd,
+      stdin: JSON.stringify(checkRunBodyOf(name, head, check, where.runUrl)),
+    });
+  };
+}
+
+const setCheck = checkSetter(run);
 
 /** Sets the `land:*` and `review:*` labels. Their names are external: open PRs carry them, so the strings stay. */
 async function setLabels(env: Env, pr: Pull, landRoute: LandRoute, depth: ReviewDepth): Promise<void> {
@@ -1011,6 +1023,7 @@ if (import.meta.main) {
     authorLogin: required("AUTHOR_LOGIN"),
     appLogin: required("APP_LOGIN"),
     cwd: process.cwd(),
+    runUrl: `${required("GITHUB_SERVER_URL")}/${required("GITHUB_REPOSITORY")}/actions/runs/${required("GITHUB_RUN_ID")}`,
   };
 
   const reason = process.env["EJECTION_REASON"];

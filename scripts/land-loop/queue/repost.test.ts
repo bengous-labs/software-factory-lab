@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { decodeJson } from "../../lib/json.ts";
-import { CheckRuns, greenOnHead, prOfRef, Pull } from "./repost.ts";
+import { CheckRuns, greenOnHead, prOfRef, Pull, repostBodyOf } from "./repost.ts";
 
 const SHA = "a".repeat(40);
 
@@ -72,5 +72,32 @@ describe("the GitHub answers this job reads", () => {
     expect(() => decodeJson(CheckRuns, "check runs", JSON.stringify({ check_runs: [{ name: "x" }] }))).toThrow(
       'check runs: Missing key\n  at ["check_runs"][0]["status"]',
     );
+  });
+});
+
+describe("repostBodyOf", () => {
+  const RUN_URL = "https://github.com/o/r/actions/runs/9";
+  const HEAD = "c".repeat(40);
+
+  test("a green check is a success on the queue's commit, and links to the run that posts it", () => {
+    expect(repostBodyOf("land-gate", SHA, { green: true, pr: 12, headSha: HEAD }, RUN_URL)).toEqual({
+      name: "land-gate",
+      head_sha: SHA,
+      status: "completed",
+      conclusion: "success",
+      output: { title: "Green on #12's head ccccccc.", summary: "Green on #12's head ccccccc." },
+      details_url: RUN_URL,
+    });
+  });
+
+  test("a check not green is a failure on the queue's commit, and links to the run that posts it", () => {
+    expect(repostBodyOf("agent-review", SHA, { green: false, pr: 12, headSha: HEAD }, RUN_URL)).toEqual({
+      name: "agent-review",
+      head_sha: SHA,
+      status: "completed",
+      conclusion: "failure",
+      output: { title: "Not green on #12's head ccccccc.", summary: "Not green on #12's head ccccccc." },
+      details_url: RUN_URL,
+    });
   });
 });

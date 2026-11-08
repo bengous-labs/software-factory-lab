@@ -17,7 +17,9 @@ import type { ReviewState } from "./decide.ts";
 import {
   ActionsRun,
   changedPathsArgs,
+  checkRunBodyOf,
   CheckRuns,
+  checkSetter,
   CheckSuites,
   ciOfRuns,
   ciRunsPathsOf,
@@ -361,6 +363,59 @@ describe("ownerCommenter", () => {
       {
         argv: ["gh", "api", "-X", "POST", "repos/o/r/issues/12/comments", "--input", "-"],
         stdin: JSON.stringify({ body: "Only the Owner's Land approval counts." }),
+      },
+    ]);
+  });
+});
+
+describe("checkRunBodyOf", () => {
+  const RUN_URL = "https://github.com/o/r/actions/runs/42";
+  const SHA = "b".repeat(40);
+
+  test("a pending check is in progress, with no conclusion, and links to the run that posts it", () => {
+    expect(checkRunBodyOf("land-gate", SHA, { kind: "pending", summary: "Waiting." }, RUN_URL)).toEqual({
+      name: "land-gate",
+      head_sha: SHA,
+      status: "in_progress",
+      output: { title: "Waiting.", summary: "Waiting." },
+      details_url: RUN_URL,
+    });
+  });
+
+  test("a success or a failure check is completed with its kind as conclusion, and links to the run", () => {
+    for (const kind of ["success", "failure"] as const) {
+      expect(checkRunBodyOf("agent-review", SHA, { kind, summary: "Done." }, RUN_URL)).toEqual({
+        name: "agent-review",
+        head_sha: SHA,
+        status: "completed",
+        conclusion: kind,
+        output: { title: "Done.", summary: "Done." },
+        details_url: RUN_URL,
+      });
+    }
+  });
+});
+
+describe("checkSetter", () => {
+  test("posts the body checkRunBodyOf gives to the repository's check-runs", async () => {
+    const calls: Array<{ argv: string[]; stdin: string | undefined }> = [];
+
+    const runner: Run = (argv, options) => {
+      calls.push({ argv: [...argv], stdin: options.stdin });
+
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    };
+
+    const runUrl = "https://github.com/o/r/actions/runs/42";
+    const head = "c".repeat(40);
+    const check = { kind: "success", summary: "Landable." } as const;
+
+    await checkSetter(runner)({ ...WHERE, runUrl }, "land-gate", head, check);
+
+    expect(calls).toEqual([
+      {
+        argv: ["gh", "api", "-X", "POST", "repos/o/r/check-runs", "--input", "-"],
+        stdin: JSON.stringify(checkRunBodyOf("land-gate", head, check, runUrl)),
       },
     ]);
   });

@@ -6,7 +6,7 @@
  * this job the required checks never report there and the queue times out. A check reads green on the
  * queue's commit only when the App's latest check of that name is green on the PR's head.
  *
- * Reads GITHUB_REPOSITORY, MERGE_GROUP_HEAD_SHA, MERGE_GROUP_HEAD_REF (`gh-readonly-queue/<base>/pr-<n>-<sha>`), APP_SLUG.
+ * Reads GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID, MERGE_GROUP_HEAD_SHA, MERGE_GROUP_HEAD_REF (`gh-readonly-queue/<base>/pr-<n>-<sha>`), APP_SLUG.
  */
 
 import { Schema } from "effect";
@@ -48,6 +48,31 @@ export function greenOnHead(runs: readonly CheckRun[], name: string, appSlug: st
   return mine.at(-1)?.conclusion === "success";
 }
 
+/** How the App's latest check of a name reads on the head of the PR the queue tests. */
+export interface OnHead {
+  readonly green: boolean;
+  readonly pr: number;
+  readonly headSha: string;
+}
+
+/** The POST body of `repos/<repo>/check-runs` that re-posts `name` on the queue's commit `sha`. */
+export function repostBodyOf(name: string, sha: string, onHead: OnHead, runUrl: string): Schema.JsonObject {
+  const { green, pr, headSha } = onHead;
+
+  const summary = green
+    ? `Green on #${pr}'s head ${headSha.slice(0, 7)}.`
+    : `Not green on #${pr}'s head ${headSha.slice(0, 7)}.`;
+
+  return {
+    name,
+    head_sha: sha,
+    status: "completed",
+    conclusion: green ? "success" : "failure",
+    output: { title: summary, summary },
+    details_url: runUrl,
+  };
+}
+
 function required(name: string): string {
   const value = process.env[name];
 
@@ -63,6 +88,7 @@ if (import.meta.main) {
   const sha = required("MERGE_GROUP_HEAD_SHA");
   const ref = required("MERGE_GROUP_HEAD_REF");
   const appSlug = required("APP_SLUG");
+  const runUrl = `${required("GITHUB_SERVER_URL")}/${repo}/actions/runs/${required("GITHUB_RUN_ID")}`;
   const cwd = process.cwd();
   const pr = prOfRef(ref);
 
@@ -81,21 +107,9 @@ if (import.meta.main) {
   for (const name of CHECKS) {
     const green = greenOnHead(runs.check_runs, name, appSlug);
 
-    const summary = green
-      ? `Green on #${pr}'s head ${head.head.sha.slice(0, 7)}.`
-      : `Not green on #${pr}'s head ${head.head.sha.slice(0, 7)}.`;
-
-    const body = {
-      name,
-      head_sha: sha,
-      status: "completed",
-      conclusion: green ? "success" : "failure",
-      output: { title: summary, summary },
-    };
-
     await checked(run, ["gh", "api", "-X", "POST", `repos/${repo}/check-runs`, "--input", "-"], {
       cwd,
-      stdin: JSON.stringify(body),
+      stdin: JSON.stringify(repostBodyOf(name, sha, { green, pr, headSha: head.head.sha }, runUrl)),
     });
     console.log(`repost: ${name} ${green ? "success" : "failure"} on ${sha.slice(0, 7)} for #${pr}`);
   }
