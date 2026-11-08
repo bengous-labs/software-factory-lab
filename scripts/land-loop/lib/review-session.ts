@@ -8,6 +8,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Options, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 
+import { tokensOf } from "../../lib/tokens.ts";
 import type { ReviewCall, ReviewSession, SessionAnswer } from "../ports/review.ts";
 import { guardHook, modelOf, STRUCTURED_OUTPUT } from "./ask.ts";
 import type { Stream } from "./ask.ts";
@@ -98,7 +99,7 @@ function answerOf(reading: Reading, failure: string | null): SessionAnswer {
   const facts = {
     model: result === null ? null : modelOf(result.modelUsage),
     claudeCodeVersion: reading.claudeCodeVersion,
-    costUsd: result?.total_cost_usd ?? null,
+    tokens: result === null ? null : tokensOf(result.modelUsage),
   };
 
   const failed = (error: string): SessionAnswer => ({ kind: "failed", error, ...facts });

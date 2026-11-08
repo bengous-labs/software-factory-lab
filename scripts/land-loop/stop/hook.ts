@@ -16,6 +16,8 @@ import { join, resolve } from "node:path";
 import { Predicate, Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { tokensOf } from "../../lib/tokens.ts";
+import type { TokenCounts } from "../../lib/tokens.ts";
 import { authorTokenOf, ghEnv, pushArgs } from "../lib/author.ts";
 import type { AuthorToken } from "../lib/author.ts";
 import { checked, run as runCli } from "../lib/run.ts";
@@ -152,12 +154,16 @@ export function prTextOf(text: string): { title: string; body: string } | null {
 /** What `claude -p --output-format json` prints, as far as this hook reads it. */
 export const ForkOutput = Schema.Struct({
   result: Schema.optionalKey(Schema.String),
-  total_cost_usd: Schema.optionalKey(Schema.Finite),
-  usage: Schema.optionalKey(
-    Schema.Struct({
-      cache_read_input_tokens: Schema.optionalKey(Schema.Finite),
-      cache_creation_input_tokens: Schema.optionalKey(Schema.Finite),
-    }),
+  modelUsage: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        inputTokens: Schema.Finite,
+        outputTokens: Schema.Finite,
+        cacheReadInputTokens: Schema.Finite,
+        cacheCreationInputTokens: Schema.Finite,
+      }),
+    ),
   ),
 });
 
@@ -167,9 +173,7 @@ const decodeForkOutput = Schema.decodeResult(Schema.fromJsonString(ForkOutput));
 export interface ForkResult {
   readonly text: string;
   readonly ms: number;
-  readonly costUsd: number | null;
-  readonly cacheRead: number | null;
-  readonly cacheCreation: number | null;
+  readonly tokens: TokenCounts | null;
   readonly code: number;
   readonly unreadable: string | null;
 }
@@ -179,15 +183,13 @@ export function forkResultOf(stdout: string, code: number, ms: number): ForkResu
   const out = decodeForkOutput(stdout);
 
   if (Result.isFailure(out)) {
-    return { text: "", ms, costUsd: null, cacheRead: null, cacheCreation: null, code, unreadable: out.failure.message };
+    return { text: "", ms, tokens: null, code, unreadable: out.failure.message };
   }
 
   return {
     text: out.success.result ?? "",
     ms,
-    costUsd: out.success.total_cost_usd ?? null,
-    cacheRead: out.success.usage?.cache_read_input_tokens ?? null,
-    cacheCreation: out.success.usage?.cache_creation_input_tokens ?? null,
+    tokens: out.success.modelUsage === undefined ? null : tokensOf(out.success.modelUsage),
     code,
     unreadable: null,
   };
@@ -392,9 +394,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     model,
     answer,
     ms: doneJudge.ms,
-    costUsd: doneJudge.costUsd,
-    cacheRead: doneJudge.cacheRead,
-    cacheCreation: doneJudge.cacheCreation,
+    tokens: doneJudge.tokens,
     code: doneJudge.code,
     unreadable: doneJudge.unreadable,
     text: doneJudge.text.slice(0, 300),
@@ -423,9 +423,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     log({
       step: "body-fork",
       ms: bodyFork.ms,
-      costUsd: bodyFork.costUsd,
-      cacheRead: bodyFork.cacheRead,
-      cacheCreation: bodyFork.cacheCreation,
+      tokens: bodyFork.tokens,
       unreadable: bodyFork.unreadable,
       title: text.title,
     });

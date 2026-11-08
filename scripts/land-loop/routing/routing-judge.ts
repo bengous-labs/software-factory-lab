@@ -7,6 +7,7 @@
 
 import { Result, Schema } from "effect";
 
+import type { TokenCounts } from "../../lib/tokens.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
 import type { Ask, Reader } from "../ports/ask.ts";
 
@@ -72,13 +73,19 @@ export function judgeFailed(why: string, model: string): RoutingAnswer {
   };
 }
 
+/** The Routing judge's answer, with the tokens its call counted. */
+export interface RoutingVerdict {
+  readonly routing: RoutingAnswer;
+  readonly tokens: TokenCounts | null;
+}
+
 export async function routingJudge(
   ask: Ask,
   reader: Reader,
   stat: string,
   diff: string,
   patchDelta: boolean,
-): Promise<RoutingAnswer> {
+): Promise<RoutingVerdict> {
   const answer = await ask({
     model: ROUTING_JUDGE_MODEL,
     prompt: promptOf(stat, diff, patchDelta),
@@ -87,7 +94,12 @@ export async function routingJudge(
     timeoutMs: 180_000,
   });
 
-  const safeSide = (why: string): RoutingAnswer => judgeFailed(why, answer.model ?? ROUTING_JUDGE_MODEL);
+  const { tokens } = answer;
+
+  const safeSide = (why: string): RoutingVerdict => ({
+    routing: judgeFailed(why, answer.model ?? ROUTING_JUDGE_MODEL),
+    tokens,
+  });
 
   if (answer.kind === "failed") {
     return safeSide(answer.error);
@@ -97,5 +109,5 @@ export async function routingJudge(
 
   return Result.isFailure(decoded)
     ? safeSide(`its answer does not read: ${decoded.failure.message}`)
-    : routingOf(decoded.success, answer.model);
+    : { routing: routingOf(decoded.success, answer.model), tokens };
 }

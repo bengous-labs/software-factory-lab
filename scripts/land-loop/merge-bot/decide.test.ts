@@ -929,7 +929,7 @@ describe("the review job's run", () => {
     request: REQUEST,
     model: "claude-sonnet-5-5",
     claudeCodeVersion: "2.1.318",
-    costUsd: 0.03,
+    tokens: null,
     runUrl: "u",
   };
 

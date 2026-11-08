@@ -31,7 +31,11 @@ const REQUEST: ReviewRequest = {
 
 const RUN_URL = "https://github.com/o/r/actions/runs/1";
 
-const FACTS = { model: "claude-sonnet-5-5", claudeCodeVersion: "2.1.318", costUsd: 0.03 };
+const FACTS = {
+  model: "claude-sonnet-5-5",
+  claudeCodeVersion: "2.1.318",
+  tokens: { input: 41_022, output: 3310, cacheRead: 812_400, cacheCreation: 60_211 },
+};
 
 const answered = (structured: Schema.Json): SessionAnswer => ({ kind: "answered", structured, ...FACTS });
 
@@ -161,7 +165,7 @@ describe("resultOf", () => {
 
     const failed = resultOf(
       REQUEST,
-      { kind: "failed", error: "e", model: null, claudeCodeVersion: null, costUsd: null },
+      { kind: "failed", error: "e", model: null, claudeCodeVersion: null, tokens: null },
       RUN_URL,
     );
 
@@ -169,6 +173,13 @@ describe("resultOf", () => {
       expect(Schema.decodeUnknownSync(Schema.fromJsonString(ReviewResult))(JSON.stringify(result))).toEqual(result);
       expect(resultOfJson(JSON.stringify(result))).toEqual(result);
     }
+  });
+
+  test("an artifact written before the token counts, with costUsd and no tokens, reads with no counts and drops costUsd", () => {
+    const { tokens: _, ...current } = resultOf(REQUEST, answered({ findings: [FINDING] }), RUN_URL);
+
+    expect(resultOfJson(JSON.stringify({ ...current, costUsd: 0.03 }))).toEqual({ ...current, tokens: null });
+    expect(resultOfJson(JSON.stringify({ ...current, costUsd: null }))).toEqual({ ...current, tokens: null });
   });
 
   test("an artifact that is not JSON, or not a result, reads as none", () => {
@@ -182,16 +193,16 @@ describe("summaryOf", () => {
     const nit = { ...FINDING, severity: "nit" };
 
     expect(summaryOf(resultOf(REQUEST, answered({ findings: [FINDING, nit, nit] }), RUN_URL))).toBe(
-      "review pr=80 round=1 model=claude-sonnet-5-5 effort=medium claude_code=2.1.318 reported: 1 important, 2 nit, 0 pre_existing",
+      "review pr=80 round=1 model=claude-sonnet-5-5 effort=medium claude_code=2.1.318 reported: 1 important, 2 nit, 0 pre_existing tokens in=41022 out=3310 cache_read=812400 cache_write=60211",
     );
     expect(
       summaryOf(
         resultOf(
           REQUEST,
-          { kind: "failed", error: "boom", model: null, claudeCodeVersion: null, costUsd: null },
+          { kind: "failed", error: "boom", model: null, claudeCodeVersion: null, tokens: null },
           RUN_URL,
         ),
       ),
-    ).toBe("review pr=80 round=1 model=sonnet effort=medium claude_code=unknown failed: boom");
+    ).toBe("review pr=80 round=1 model=sonnet effort=medium claude_code=unknown failed: boom tokens none");
   });
 });

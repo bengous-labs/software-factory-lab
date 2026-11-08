@@ -4,8 +4,9 @@
  * shape is an external format: the Merge bot reads it from another run.
  */
 
-import { Result, Schema } from "effect";
+import { Effect, Result, Schema, SchemaGetter } from "effect";
 
+import { TokenCounts, tokensText } from "../../lib/tokens.ts";
 import type { SessionAnswer } from "../ports/review.ts";
 
 export const Severity = Schema.Literals(["important", "nit", "pre_existing"]);
@@ -114,7 +115,11 @@ const RunFacts = {
   /** The exact model that ran, null when no result names one. */
   model: Schema.NullOr(Schema.String),
   claudeCodeVersion: Schema.NullOr(Schema.String),
-  costUsd: Schema.NullOr(Schema.Finite),
+  // An artifact may hold the SDK's estimated `costUsd`: it still reads, and decoding drops it.
+  costUsd: Schema.optionalKey(Schema.NullOr(Schema.Finite)).pipe(
+    Schema.decodeTo(Schema.optionalKey(Schema.Never), { decode: SchemaGetter.omit(), encode: SchemaGetter.omit() }),
+  ),
+  tokens: Schema.NullOr(TokenCounts).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** The review job's run, linked from the agent-review summary. */
   runUrl: Schema.String,
 };
@@ -151,7 +156,7 @@ export function resultOf(request: ReviewRequest, answer: SessionAnswer, runUrl: 
     request,
     model: answer.model,
     claudeCodeVersion: answer.claudeCodeVersion,
-    costUsd: answer.costUsd,
+    tokens: answer.tokens,
     runUrl,
   };
 
@@ -188,11 +193,11 @@ export function summaryOf(result: ReviewResult): string {
   const head = `review pr=${request.pr} round=${request.round} model=${result.model ?? request.model} effort=${request.effort} claude_code=${result.claudeCodeVersion ?? "unknown"}`;
 
   if (result.kind === "failed") {
-    return `${head} failed: ${result.cause}`;
+    return `${head} failed: ${result.cause} ${tokensText(result.tokens)}`;
   }
 
   const count = (severity: Severity): number =>
     result.report.findings.filter((finding) => finding.severity === severity).length;
 
-  return `${head} reported: ${count("important")} important, ${count("nit")} nit, ${count("pre_existing")} pre_existing`;
+  return `${head} reported: ${count("important")} important, ${count("nit")} nit, ${count("pre_existing")} pre_existing ${tokensText(result.tokens)}`;
 }
