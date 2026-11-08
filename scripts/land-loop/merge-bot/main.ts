@@ -26,13 +26,11 @@ import type { Ran, Run } from "../ports/run.ts";
 import { graphqlLogin, openImportantOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
 import type { ReviewThread } from "../review/findings.ts";
 import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
-import { PRINCIPAL_JUDGE_MODEL, principalJudge, promptOf as principalJudgePrompt } from "../review/principal-judge.ts";
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { routingJudge } from "../routing/routing-judge.ts";
 import { judgeAskOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
 import {
-  afterPrincipalJudge,
   afterReview,
   CI_CHECKS,
   ciOf,
@@ -43,7 +41,6 @@ import {
   LAND_GATE,
   landApprovalCounts,
   patchDeltaStart,
-  PRINCIPAL_JUDGE_TRIES,
   recordOfJson,
   REVIEW_CHECK,
   storedLandRouteOf,
@@ -668,34 +665,6 @@ async function perform(
       return record;
     }
 
-    case "principal-judge": {
-      const guide = readFileSync(join(env.cwd, "REVIEW.md"), "utf8");
-
-      const result = await principalJudge(
-        ask,
-        env.cwd,
-        principalJudgePrompt(guide, await git(env, ["diff", `${range.base}..${range.head}`])),
-      );
-
-      const by = `${result.model ?? PRINCIPAL_JUDGE_MODEL}${result.costUsd === null ? "" : `, $${result.costUsd.toFixed(3)}`}`;
-      const next = afterPrincipalJudge(record, step.patch, result.verdict);
-      const failures = next.fableFailures?.[step.patch] ?? 0;
-      // The record first: a failed comment must not make the next decision pay for the Principal judge again.
-      await writeRecord(env, pr.number, recordId, next);
-
-      const said =
-        result.verdict === null
-          ? `no verdict (${result.failure}), run ${failures} of ${PRINCIPAL_JUDGE_TRIES}${failures >= PRINCIPAL_JUDGE_TRIES ? ", so the owner decides" : ", asked again"}.`
-          : `${result.verdict.ok ? "OK" : "NOT OK"}. ${result.verdict.reason}`;
-
-      log(`#${pr.number} principal judge ${step.patch.slice(0, 8)} by ${by}: ${said}`);
-      await send(env, "POST", `repos/${env.repo}/issues/${pr.number}/comments`, {
-        body: `Principal judge (${by}): ${said}`,
-      });
-
-      return next;
-    }
-
     case "auto-merge": {
       try {
         await mutate(
@@ -758,7 +727,7 @@ async function advance(
         return;
       }
 
-      if (step.kind === "route" || step.kind === "post-review" || step.kind === "principal-judge") {
+      if (step.kind === "route" || step.kind === "post-review") {
         decideAgain = true;
       }
     }

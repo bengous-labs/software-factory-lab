@@ -15,9 +15,9 @@ const answerOf = (verdict: RulesVerdict): RoutingAnswer | null => (verdict.kind 
 
 const EMPTY: RoutingPolicy = { ownerPaths: [], factoryPaths: [], deepReviewPaths: [], lineCap: 400 };
 
-const AUTO_DEEP = { land: "auto", review: "deep", secondRound: true, model: null, needsFable: false } as const;
+const AUTO_DEEP = { land: "auto", review: "deep", secondRound: true, model: null } as const;
 
-const OWNER_DEEP = { land: "owner", review: "deep", secondRound: true, model: null, needsFable: false } as const;
+const OWNER_DEEP = { land: "owner", review: "deep", secondRound: true, model: null } as const;
 
 const FACTORY_FILES = [
   "scripts/land-loop/routing/routing-rules.ts",

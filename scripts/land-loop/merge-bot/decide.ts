@@ -2,7 +2,7 @@
  * The Merge bot's decision, a pure function over a snapshot of one PR. Each Merge bot run re-reads
  * the whole state, so an event that arrives twice, late or not at all changes nothing. It returns the
  * steps to take in order; the adapter (`main.ts`) performs them and, after a step whose outcome the
- * next decision reads (`route`, `post-review`, `principal-judge`), decides again with it in the
+ * next decision reads (`route`, `post-review`), decides again with it in the
  * state record.
  */
 
@@ -55,32 +55,6 @@ export interface RoutingAnswer {
   readonly reason: string;
   /** The model asked, exact when it answered; null when the Routing rules decided. */
   readonly model: string | null;
-  /** A change to the Land loop's own code only: land:auto holds only once the Principal judge answers OK. */
-  readonly needsFable?: boolean;
-}
-
-/** Principal judge runs per patch that may give no verdict before the change goes to the owner. */
-export const PRINCIPAL_JUDGE_TRIES = 2;
-
-/** The record after one Principal judge run on `patch`: its verdict, or one more failure when it gave none. */
-export function afterPrincipalJudge(
-  record: StateRecord,
-  patch: string,
-  verdict: PrincipalJudgeVerdict | null,
-): StateRecord {
-  if (verdict !== null) {
-    return { ...record, fable: { ...record.fable, [patch]: verdict } };
-  }
-
-  return {
-    ...record,
-    fableFailures: { ...record.fableFailures, [patch]: (record.fableFailures?.[patch] ?? 0) + 1 },
-  };
-}
-
-export interface PrincipalJudgeVerdict {
-  readonly ok: boolean;
-  readonly reason: string;
 }
 
 const Round = Schema.Literals([1, 2]);
@@ -109,7 +83,7 @@ export type ReviewState = typeof ReviewState.Type;
 /**
  * The record the App keeps in one comment per PR. Its keys are the stored record's format, an
  * external name: existing records must still read, so they stay as they are. `triage` holds the
- * Routing answers, `dequeued` the Ejection, `fable` the Principal judge.
+ * Routing answers, `dequeued` the Ejection.
  */
 export interface StateRecord {
   /** The patch the last Code review read, or null before any review. */
@@ -126,10 +100,6 @@ export interface StateRecord {
   readonly dequeued: { readonly head: string; readonly reason: string } | null;
   /** The review asked of the review job, until its review is posted. Absent before any. */
   readonly review?: ReviewState;
-  /** The Principal judge's verdict on each patch that needs one, keyed by patch identity. */
-  readonly fable?: Readonly<Record<string, PrincipalJudgeVerdict>>;
-  /** Principal judge runs that gave no verdict, per patch. */
-  readonly fableFailures?: Readonly<Record<string, number>>;
 }
 
 export const EMPTY_RECORD: StateRecord = {
@@ -162,6 +132,7 @@ const ReadRecord = Schema.Struct({
       reason: Schema.String,
       // Records written before the Routing answer named its model have none.
       model: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      // Records written while the Principal judge existed: the field still reads, and is left out.
       needsFable: Schema.optionalKey(Schema.Boolean),
     }),
   ),
@@ -170,6 +141,7 @@ const ReadRecord = Schema.Struct({
   // Records written while an Important could be posted in a review's body, with no thread, count them
   // here: the field still reads, and counts no more.
   bodyImportant: Schema.optionalKey(Schema.Record(Schema.String, Schema.Finite)),
+  // Records written while the Principal judge existed hold its verdicts and failed runs: they still read, and are left out.
   fable: Schema.optionalKey(Schema.Record(Schema.String, Verdict)),
   fableFailures: Schema.optionalKey(Schema.Record(Schema.String, Schema.Finite)),
   review: Schema.optionalKey(ReviewState),
@@ -180,12 +152,15 @@ type ReadRecord = typeof ReadRecord.Type;
 /** The comment's JSON: older records lack the fields added since they were written. */
 const StoredJson = ReadRecord.mapFields(Struct.map(Schema.optionalKey));
 
-/** The record a comment stores, with each Land route read back from its stored value; `bodyImportant` is left out. */
+/**
+ * The record a comment stores, with each Land route read back from its stored value; `bodyImportant`,
+ * `fable`, `fableFailures` and each answer's `needsFable` are left out.
+ */
 export function recordOfStored(stored: ReadRecord): StateRecord {
-  const { bodyImportant: _uncounted, ...kept } = stored;
+  const { bodyImportant: _uncounted, fable: _fable, fableFailures: _fableFailures, ...kept } = stored;
 
   const triage = Object.entries(kept.triage).map(
-    ([patch, routing]) =>
+    ([patch, { needsFable: _needsFable, ...routing }]) =>
       [patch, { ...routing, land: landRouteOf(routing.land), model: routing.model ?? null }] as const,
   );
 
@@ -305,7 +280,6 @@ export type Step =
   | { readonly kind: "needs-owner"; readonly reason: string }
   | { readonly kind: "record"; readonly record: StateRecord }
   | { readonly kind: "remove-land-approval" }
-  | { readonly kind: "principal-judge"; readonly patch: string }
   | { readonly kind: "auto-merge" };
 
 export type Decision =
@@ -558,7 +532,7 @@ export function decide(snapshot: Snapshot): Decision {
     steps.push({ kind: "remove-land-approval" });
   }
 
-  // Written now: a routing, a review or the Principal judge below ends this decision before the Land gate is reached.
+  // Written now: a routing or a review below ends this decision before the Land gate is reached.
   if (next !== record) {
     steps.push({ kind: "record", record: next });
   }
@@ -640,24 +614,7 @@ export function decide(snapshot: Snapshot): Decision {
     },
   });
 
-  let route: LandRoute = thirdRoundNeeded ? "owner" : labels.route;
-
-  // Not when a third Review round is needed: no Code review read the risky Patch delta it would judge.
-  if (routing.needsFable === true && !thirdRoundNeeded) {
-    const verdict = next.fable?.[snapshot.patch];
-
-    if (verdict === undefined && (next.fableFailures?.[snapshot.patch] ?? 0) < PRINCIPAL_JUDGE_TRIES) {
-      steps.push({ kind: "principal-judge", patch: snapshot.patch });
-
-      return { kind: "steps", steps };
-    }
-
-    // No verdict after PRINCIPAL_JUDGE_TRIES failed runs counts as NOT OK.
-    if (verdict?.ok !== true && route === "auto") {
-      steps.push({ kind: "labels", route: "owner", depth: labels.depth });
-      route = "owner";
-    }
-  }
+  const route: LandRoute = thirdRoundNeeded ? "owner" : labels.route;
 
   if (snapshot.devRed) {
     return finish(pending("dev is red: landing is on hold."));
