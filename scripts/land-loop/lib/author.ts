@@ -4,9 +4,11 @@
  */
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const AUTHOR_TOKEN_PATH = join(process.env["HOME"] ?? "", ".config", "software-factory-lab", "author-token");
+/** Under `homedir()`, which reads HOME and falls back to the user's passwd entry: never a path relative to the work tree. */
+export const AUTHOR_TOKEN_PATH = join(homedir(), ".config", "software-factory-lab", "author-token");
 
 export type AuthorToken =
   { readonly kind: "found"; readonly token: string } | { readonly kind: "missing"; readonly path: string };

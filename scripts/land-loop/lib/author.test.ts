@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 
 import { AUTHOR_TOKEN_PATH, authorTokenOf, ghEnv, pushArgs, requiredAuthorToken } from "./author.ts";
 
@@ -27,7 +27,8 @@ describe("authorTokenOf", () => {
   });
 
   test("with LAB_AUTHOR_TOKEN_FILE unset, the default path under HOME is read", () => {
-    expect(AUTHOR_TOKEN_PATH).toBe(join(process.env["HOME"] ?? "", ".config", "software-factory-lab", "author-token"));
+    expect(AUTHOR_TOKEN_PATH).toBe(join(homedir(), ".config", "software-factory-lab", "author-token"));
+    expect(isAbsolute(AUTHOR_TOKEN_PATH)).toBe(true);
 
     const read = authorTokenOf({});
 
