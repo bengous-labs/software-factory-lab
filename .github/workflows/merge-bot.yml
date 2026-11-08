@@ -6,9 +6,11 @@ name: merge-bot
 # write starts no GitHub workflow, and only an App can post check runs. A Sweep, a start that makes one
 # Merge bot run for every open PR, catches what no event carries, such as a review thread resolved, and
 # what a landing changes in the other open PRs, such as a new conflict. A push to the Trunk is the
-# Sweep's main trigger; the schedule is a net, because GitHub may drop scheduled runs. A completed
-# review job (`code-review.yml`, dispatched by the Merge bot) only wakes the Merge bot for its PR, whose
-# number is the run's title: each decision reads the review's run and artifact by the id in the record.
+# Sweep's main trigger; the schedule is a net, because GitHub may drop scheduled runs. CI's completion
+# on a push to the Trunk starts a Sweep too: the Merge bot reads dev's red from that run, which ends
+# after the push's own Sweep. A completed review job (`code-review.yml`, dispatched by the Merge bot)
+# only wakes the Merge bot for its PR, whose number is the run's title: each decision reads the
+# review's run and artifact by the id in the record.
 on:
   push:
     branches: [dev]
@@ -41,7 +43,8 @@ jobs:
   merge-bot:
     if: >-
       github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' ||
-      (github.event.workflow_run.path == '.github/workflows/code-review.yml' && github.event.workflow_run.event == 'workflow_dispatch')
+      (github.event.workflow_run.path == '.github/workflows/code-review.yml' && github.event.workflow_run.event == 'workflow_dispatch') ||
+      (github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -83,4 +86,5 @@ jobs:
           # `|| ''` last: a false `&&` would otherwise reach the Merge bot as "false".
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr || (github.event.workflow_run.path == '.github/workflows/code-review.yml' && github.event.workflow_run.display_title) || '' }}
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
           EJECTION_REASON: ${{ github.event.action == 'dequeued' && (github.event.reason || 'no reason given') || '' }}

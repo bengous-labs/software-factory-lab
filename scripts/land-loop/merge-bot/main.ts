@@ -777,7 +777,8 @@ async function numbersOf(env: Env): Promise<number[]> {
     return [Number(pr)];
   }
 
-  if (event === "workflow_run") {
+  // CI's completion on a push to dev is a Sweep: the PR that landed is closed, the others need dev's red.
+  if (event === "workflow_run" && process.env["RUN_EVENT"] !== "push") {
     const sha = required("RUN_HEAD_SHA");
     const listed = await api(env, CommitPulls, `repos/${env.repo}/commits/${sha}/pulls`);
 
