@@ -16,7 +16,7 @@ import { join, resolve } from "node:path";
 import { Predicate, Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
-import { tokensOf } from "../../lib/tokens.ts";
+import { ModelUsage, tokensOf } from "../../lib/tokens.ts";
 import type { TokenCounts } from "../../lib/tokens.ts";
 import { authorTokenOf, ghEnv, pushArgs } from "../lib/author.ts";
 import type { AuthorToken } from "../lib/author.ts";
@@ -157,16 +157,6 @@ export const ForkOutput = Schema.Struct({
   // Read on its own: a usage that does not read loses the tokens, never the fork's answer.
   modelUsage: Schema.optionalKey(Schema.Unknown),
 });
-
-const ModelUsage = Schema.Record(
-  Schema.String,
-  Schema.Struct({
-    inputTokens: Schema.Finite,
-    outputTokens: Schema.Finite,
-    cacheReadInputTokens: Schema.Finite,
-    cacheCreationInputTokens: Schema.Finite,
-  }),
-);
 
 const decodeForkOutput = Schema.decodeResult(Schema.fromJsonString(ForkOutput));
 

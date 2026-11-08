@@ -9,15 +9,19 @@ export const TokenCounts = Schema.Struct({
 
 export type TokenCounts = typeof TokenCounts.Type;
 
-interface ModelUsage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cacheReadInputTokens: number;
-  readonly cacheCreationInputTokens: number;
-}
+/** The `modelUsage` of a call's result, as far as the counts read it. */
+export const ModelUsage = Schema.Record(
+  Schema.String,
+  Schema.Struct({
+    inputTokens: Schema.Finite,
+    outputTokens: Schema.Finite,
+    cacheReadInputTokens: Schema.Finite,
+    cacheCreationInputTokens: Schema.Finite,
+  }),
+);
 
 /** A call's counts: the sum over every model its `modelUsage` names. */
-export function tokensOf(modelUsage: Readonly<Record<string, ModelUsage>>): TokenCounts {
+export function tokensOf(modelUsage: typeof ModelUsage.Type): TokenCounts {
   return Object.values(modelUsage).reduce<TokenCounts>(
     (sum, usage) => ({
       input: sum.input + usage.inputTokens,
