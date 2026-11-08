@@ -51,6 +51,7 @@ import type {
   LandRoute,
   ReviewDepth,
   ReviewJob,
+  ReviewRound,
   ReviewState,
   RoutingAnswer,
   Snapshot,
@@ -62,9 +63,6 @@ import type {
 const MERGE_BOT_STATE_MARKER = "<!-- lab-conductor-state";
 
 const MERGE_BOT_STATE_PATTERN = new RegExp(`${MERGE_BOT_STATE_MARKER} (.*) -->`, "su");
-
-/** The label that sends the change to the Owner. An external name: open PRs carry it, so the string stays. */
-const NEEDS_OWNER_LABEL = "needs-human";
 
 /** Decisions per Merge bot run. */
 const MAX_DECISIONS = 4;
@@ -528,14 +526,12 @@ export function routingPolicyAt(checkout: string): RoutingPolicy {
 const changedPaths = async (env: Env, from: string, to: string): Promise<readonly string[]> =>
   (await git(env, changedPathsArgs(from, to))).split("\n").filter((path) => path !== "");
 
-async function route(env: Env, range: Range, record: StateRecord, patchDelta: boolean): Promise<RoutingAnswer> {
-  const policy = routingPolicyAt(env.cwd);
-  const from = await rangeStart(env, range, record, patchDelta);
-  const paths = await changedPaths(env, range.base, range.head);
+/** The arguments of the `git diff --numstat` that counts the lines a range changes. */
+export const numstatArgs = (from: string, to: string): readonly string[] => ["diff", "--numstat", `${from}..${to}`];
 
-  const numstat = await git(env, ["diff", "--numstat", `${range.base}..${range.head}`]);
-
-  const lines = numstat.split("\n").reduce(
+/** The lines a `git diff --numstat` output counts, added and deleted; a binary file's `-` counts none. */
+export const linesOfNumstat = (numstat: string): number =>
+  numstat.split("\n").reduce(
     (sum, row) =>
       sum +
       row
@@ -545,6 +541,18 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
     0,
   );
 
+const linesChanged = async (env: Env, from: string, to: string): Promise<number> =>
+  linesOfNumstat(await git(env, numstatArgs(from, to)));
+
+/** Whether a Review round reads the Patch delta, from the head the last round read: every round after the first. */
+export const readsPatchDelta = (round: ReviewRound): boolean => round >= 2;
+
+async function route(env: Env, range: Range, record: StateRecord, patchDelta: boolean): Promise<RoutingAnswer> {
+  const policy = routingPolicyAt(env.cwd);
+  const from = await rangeStart(env, range, record, patchDelta);
+  const paths = await changedPaths(env, range.base, range.head);
+  const lines = await linesChanged(env, range.base, range.head);
+
   const messages = (await git(env, ["log", "--format=%B%x00", `${range.base}..${range.head}`]))
     .split("\0")
     .map((message) => message.trim())
@@ -552,9 +560,14 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
 
   const rules = routingRulesOf(policy, { paths, lines, messages });
 
-  // The Routing rules hold the labels of the whole PR; whether this Patch delta is read again is its own question.
+  // The Routing rules hold the labels of the whole PR; whether this Patch delta is read again is its own
+  // question, on its own paths and lines. A breaking commit is judged on the whole PR.
   const patchDeltaRules = patchDelta
-    ? patchDeltaRulesOf(policy, { paths: await changedPaths(env, from, range.head), lines: 0, messages: [] })
+    ? patchDeltaRulesOf(policy, {
+        paths: await changedPaths(env, from, range.head),
+        lines: await linesChanged(env, from, range.head),
+        messages: [],
+      })
     : null;
 
   const question = judgeAskOf(rules, patchDeltaRules);
@@ -597,7 +610,7 @@ async function perform(
 
     case "request-review": {
       const patch = await patchOf(env, range);
-      const base = await rangeStart(env, range, record, step.reviewRound === 2);
+      const base = await rangeStart(env, range, record, readsPatchDelta(step.reviewRound));
 
       const request = {
         pr: pr.number,
@@ -676,12 +689,6 @@ async function perform(
 
     case "land-gate": {
       await setCheck(env, LAND_GATE, pr.head.sha, step.check);
-
-      return record;
-    }
-
-    case "needs-owner": {
-      await send(env, "POST", `repos/${env.repo}/issues/${pr.number}/labels`, { labels: [NEEDS_OWNER_LABEL] });
 
       return record;
     }

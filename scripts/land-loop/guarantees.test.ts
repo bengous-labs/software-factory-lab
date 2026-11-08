@@ -165,7 +165,7 @@ const PATCH = fc.constantFrom("patch-1", "patch-2");
 
 const HEAD = fc.constantFrom("h1", "h2");
 
-const ROUND = fc.constantFrom<1 | 2>(1, 2);
+const ROUND = fc.constantFrom<1 | 2 | 3>(1, 2, 3);
 
 /** When the arbitrary requests were dispatched: an arbitrary snapshot reads them before or after the deadline. */
 const DISPATCHED_AT = "2026-11-07T11:00:00.000Z";
@@ -194,11 +194,13 @@ export const recordOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<StateRecord>
     {
       reviewedPatch: fc.option(patch, { nil: null }),
       reviewedHead: fc.option(HEAD, { nil: null }),
-      reviewRounds: fc.integer({ min: 0, max: 2 }),
+      reviewRounds: fc.integer({ min: 0, max: 3 }),
       triage: fc.dictionary(patch, ROUTING),
       landOkPatch: fc.option(patch, { nil: null }),
       dequeued: fc.option(fc.record({ head: HEAD, reason: fc.string() }), { nil: null }),
       review: reviewStateOf(patch),
+      importantByRound: fc.array(fc.option(fc.nat({ max: 2 }), { nil: null }), { maxLength: 3 }),
+      ownerHold: fc.string(),
     },
     {
       requiredKeys: ["reviewedPatch", "reviewedHead", "reviewRounds", "triage", "landOkPatch", "dequeued"],
@@ -382,18 +384,48 @@ describe("the Merge bot's guarantees", () => {
     });
   });
 
-  test("a Patch delta a third Review round would read merges only with the Owner's Land approval for this very patch", () => {
+  test("a PR with an Owner hold merges only with the Owner's Land approval for its current patch", () => {
     holdsForSnapshots((snapshot) => {
       const { record } = snapshot;
 
-      const thirdRound =
-        asksReview(snapshot) &&
+      const pushAfterRound3 =
+        record.reviewRounds === 3 &&
         record.reviewedPatch !== snapshot.patch &&
-        record.reviewRounds >= 2 &&
         record.triage[snapshot.patch]?.secondRound === true;
 
-      if (merges(snapshot) && thirdRound) {
+      if (merges(snapshot) && (record.ownerHold !== undefined || pushAfterRound3)) {
         expectLandApproval(snapshot);
+      }
+    });
+  });
+
+  test("a Patch delta that needs a read after Review round 2 never merges before Review round 3 read it", () => {
+    holdsForSnapshots((snapshot) => {
+      const { record } = snapshot;
+
+      const roundThreeOwed =
+        asksReview(snapshot) &&
+        record.reviewedPatch !== snapshot.patch &&
+        record.reviewRounds === 2 &&
+        record.triage[snapshot.patch]?.secondRound === true;
+
+      if (roundThreeOwed) {
+        expect(merges(snapshot)).toBe(false);
+      }
+    });
+  });
+
+  test("a patch after a Review round 2 that posted an Important never merges before Review round 3 read it", () => {
+    holdsForSnapshots((snapshot) => {
+      const { record } = snapshot;
+      const round2 = record.importantByRound?.[1];
+      const posted = round2 === undefined || round2 === null || round2 > 0;
+
+      const roundThreeOwed =
+        asksReview(snapshot) && record.reviewedPatch !== snapshot.patch && record.reviewRounds === 2 && posted;
+
+      if (roundThreeOwed) {
+        expect(merges(snapshot)).toBe(false);
       }
     });
   });

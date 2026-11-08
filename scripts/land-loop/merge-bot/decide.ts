@@ -44,8 +44,10 @@ export interface RoutingAnswer {
   readonly land: LandRoute;
   readonly review: ReviewDepth;
   /**
-   * On a Patch delta: whether it is risky enough to be read again. After Review round 1 it runs Review
-   * round 2; after Review round 2 it sends the change to the Owner, since a third never runs.
+   * On a Patch delta: whether the delta deserves another read on its own: it touches a path a Routing
+   * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names. After Review
+   * round 1 it runs Review round 2, after Review round 2 Review round 3; after Review round 3 it holds the
+   * change for the Owner.
    */
   readonly secondRound: boolean;
   readonly reason: string;
@@ -53,7 +55,9 @@ export interface RoutingAnswer {
   readonly model: string | null;
 }
 
-const Round = Schema.Literals([1, 2]);
+const Round = Schema.Literals([1, 2, 3]);
+
+export type ReviewRound = typeof Round.Type;
 
 /** The review asked of the review job for one patch and round, and its run; `failed` once it gave no report. */
 const ReviewState = Schema.Union([
@@ -86,8 +90,15 @@ export interface StateRecord {
   readonly reviewedPatch: string | null;
   /** The head that review read, from which the Patch delta of the next Review round is diffed. */
   readonly reviewedHead: string | null;
-  /** The Review rounds run on the change, whether they posted findings or not: 0, 1 or 2. */
+  /** The Review rounds posted on the change, whether they posted findings or not: 0 to 3. */
   readonly reviewRounds: number;
+  /**
+   * The Important findings each Review round posted, index 0 for round 1; null for a round posted before
+   * the count was kept. Absent before any count. A missing or null count reads as an Important posted.
+   */
+  readonly importantByRound?: ReadonlyArray<number | null>;
+  /** Why the PR is held for the Owner, who alone lands it then. Absent: no hold. Set once, never cleared. */
+  readonly ownerHold?: string;
   /** The Routing answer of each patch, keyed by patch identity. */
   readonly triage: Readonly<Record<string, RoutingAnswer>>;
   /** The patch the owner's Land approval was given for. */
@@ -141,6 +152,8 @@ const ReadRecord = Schema.Struct({
   fable: Schema.optionalKey(Schema.Record(Schema.String, Verdict)),
   fableFailures: Schema.optionalKey(Schema.Record(Schema.String, Schema.Finite)),
   review: Schema.optionalKey(ReviewState),
+  importantByRound: Schema.optionalKey(Schema.Array(Schema.NullOr(Schema.Finite))),
+  ownerHold: Schema.optionalKey(Schema.String),
 });
 
 type ReadRecord = typeof ReadRecord.Type;
@@ -276,11 +289,10 @@ export type CheckState =
 export type Step =
   | { readonly kind: "route"; readonly patch: string; readonly patchDelta: boolean }
   | { readonly kind: "labels"; readonly route: LandRoute; readonly depth: ReviewDepth }
-  | { readonly kind: "request-review"; readonly depth: Exclude<ReviewDepth, "none">; readonly reviewRound: 1 | 2 }
+  | { readonly kind: "request-review"; readonly depth: Exclude<ReviewDepth, "none">; readonly reviewRound: ReviewRound }
   | { readonly kind: "post-review"; readonly result: ReportedResult }
   | { readonly kind: "review-check"; readonly check: CheckState }
   | { readonly kind: "land-gate"; readonly check: CheckState }
-  | { readonly kind: "needs-owner"; readonly reason: string }
   | { readonly kind: "record"; readonly record: StateRecord }
   | { readonly kind: "remove-land-approval" }
   | { readonly kind: "auto-merge" };
@@ -359,14 +371,51 @@ function withoutReview(record: StateRecord): StateRecord {
   return rest;
 }
 
-/** The record once the review of `result` is posted: the patch and the head it read, its round, and no review asked. */
+const importantOf = (result: ReportedResult): number =>
+  result.report.findings.filter((finding) => finding.severity === "important").length;
+
+/** The counts with `count` at `round`'s index, whatever was there, and each earlier round they lack as null. */
+function countedAt(
+  counts: ReadonlyArray<number | null>,
+  round: ReviewRound,
+  count: number,
+): ReadonlyArray<number | null> {
+  return Array.from({ length: Math.max(counts.length, round) }, (_, index) =>
+    index === round - 1 ? count : (counts[index] ?? null),
+  );
+}
+
+/**
+ * The record once the review of `result` is posted: the patch and the head it read, its round, its
+ * Important count, and no review asked. A Review round 3 that posted an Important holds the PR for the Owner.
+ */
 export function afterReview(record: StateRecord, result: ReportedResult): StateRecord {
-  return {
+  const { round } = result.request;
+  const important = importantOf(result);
+
+  const next: StateRecord = {
     ...withoutReview(record),
     reviewedPatch: result.request.patch,
     reviewedHead: result.request.head,
-    reviewRounds: result.request.round,
+    reviewRounds: round,
+    importantByRound: countedAt(record.importantByRound ?? [], round, important),
   };
+
+  return round === 3 && important > 0
+    ? { ...next, ownerHold: `Review round 3 posted ${important} Important finding(s).` }
+    : next;
+}
+
+/**
+ * The record with an Owner hold when this patch, routed, comes after Review round 3 and its Patch delta
+ * needs a read: no Review round 4 runs. The same record otherwise.
+ */
+function heldAfterRound3(record: StateRecord, patch: string): StateRecord {
+  const needsRead = record.triage[patch]?.secondRound === true;
+
+  return record.reviewRounds === 3 && record.reviewedPatch !== patch && needsRead && record.ownerHold === undefined
+    ? { ...record, ownerHold: "A push after Review round 3 needs a read." }
+    : record;
 }
 
 /** The review machine's outcome: the record it leaves, and the steps that end the decision, or null when it goes on. */
@@ -408,7 +457,7 @@ function outcomeOf(snapshot: Snapshot, review: ReviewState): JobOutcome {
   return result.kind === "reported" ? { kind: "reported", result } : { kind: "failed", cause: result.cause };
 }
 
-const runningSteps = (round: 1 | 2): readonly Step[] => {
+const runningSteps = (round: ReviewRound): readonly Step[] => {
   const check = pending(`Review round ${round} running.`);
 
   return [
@@ -438,8 +487,7 @@ function failedOf(record: StateRecord, review: ReviewState, cause: string): Revi
  * posts and those of an earlier round still open.
  */
 function postedSteps(snapshot: Snapshot, result: ReportedResult): readonly Step[] {
-  const posted = result.report.findings.filter((finding) => finding.severity === "important").length;
-  const open = posted + snapshot.openImportant;
+  const open = importantOf(result) + snapshot.openImportant;
 
   return [
     { kind: "post-review", result },
@@ -502,27 +550,37 @@ export function reviewStepsOf(snapshot: Snapshot, record: StateRecord): ReviewMa
   return { record, end: postedSteps(snapshot, outcome.result) };
 }
 
-/** What the Review rounds ask of this patch: a round to request, or the Owner instead of a third. */
-type RoundNeed =
-  | { readonly kind: "request"; readonly depth: Exclude<ReviewDepth, "none">; readonly round: 1 | 2 }
-  | { readonly kind: "third" };
+/** The Review round to request for this patch, at the PR's risen depth. */
+interface RoundNeed {
+  readonly depth: Exclude<ReviewDepth, "none">;
+  readonly round: ReviewRound;
+}
 
-/** The Review rounds' need for this patch; null when they ask nothing of it. */
+/**
+ * The Review round this patch needs; null when none. A later patch is read again when its Patch delta
+ * needs a read; after Review round 2, also when round 2 posted an Important, or its count is unknown.
+ * Review round 3 is the last.
+ */
 function roundNeedOf(record: StateRecord, routing: RoutingAnswer, depth: ReviewDepth, patch: string): RoundNeed | null {
   if (depth === "none" || record.reviewedPatch === patch) {
     return null;
   }
 
+  const round2Important = record.importantByRound?.[1] ?? null;
+
   if (record.reviewRounds === 0) {
-    return { kind: "request", depth, round: 1 };
+    return { depth, round: 1 };
   }
 
-  // A later patch is read again only when the Routing answer of its Patch delta asks for it.
-  if (!routing.secondRound) {
-    return null;
+  if (record.reviewRounds === 1) {
+    return routing.secondRound ? { depth, round: 2 } : null;
   }
 
-  return record.reviewRounds === 1 ? { kind: "request", depth, round: 2 } : { kind: "third" };
+  if (record.reviewRounds === 2) {
+    return routing.secondRound || round2Important === null || round2Important > 0 ? { depth, round: 3 } : null;
+  }
+
+  return null;
 }
 
 /** The decision on a PR that gets no route: one closed or from outside is ignored, an empty one has nothing to land. */
@@ -556,7 +614,7 @@ export function decide(snapshot: Snapshot): Decision {
   const steps: Step[] = [];
   const approval = landApprovalOf(snapshot, record);
   const machine = reviewStepsOf(snapshot, approval.next);
-  const next = machine.record;
+  const next = heldAfterRound3(machine.record, snapshot.patch);
 
   if (approval.removeLabel) {
     steps.push({ kind: "remove-land-approval" });
@@ -608,23 +666,18 @@ export function decide(snapshot: Snapshot): Decision {
   }
 
   const need = roundNeedOf(next, routing, risenDepth(snapshot.labels, routing.review), snapshot.patch);
-  const thirdRoundNeeded = need?.kind === "third";
 
   const labels = risen(snapshot.labels, snapshot.humanLabelBy, {
-    land: thirdRoundNeeded ? "owner" : routing.land,
+    land: next.ownerHold === undefined ? routing.land : "owner",
     review: routing.review,
   });
 
   steps.push({ kind: "labels", ...labels });
 
-  if (need?.kind === "request") {
+  if (need !== null) {
     steps.push({ kind: "request-review", depth: need.depth, reviewRound: need.round }, ...runningSteps(need.round));
 
     return { kind: "steps", steps };
-  }
-
-  if (thirdRoundNeeded) {
-    steps.push({ kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." });
   }
 
   if (snapshot.openImportant > 0) {
@@ -664,5 +717,11 @@ export function decide(snapshot: Snapshot): Decision {
     }
   }
 
-  return finish(pending("Landable, land:human: waiting for the Owner's Land approval."));
+  return finish(
+    pending(
+      next.ownerHold === undefined
+        ? "Landable, land:human: waiting for the Owner's Land approval."
+        : `Held for the Owner: ${next.ownerHold} Waiting for the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).`,
+    ),
+  );
 }
