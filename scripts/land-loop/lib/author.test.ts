@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-import { AUTHOR_TOKEN_PATH, authorTokenOf, ghEnv, pushArgs, requiredAuthorToken } from "./author.ts";
+import { AUTHOR_TOKEN_PATH, authorTokenOf, authorTokenPathOf, ghEnv, pushArgs, requiredAuthorToken } from "./author.ts";
 
 const dir = (): string => mkdtempSync(join(tmpdir(), "author-"));
 
@@ -29,10 +29,8 @@ describe("authorTokenOf", () => {
   test("with LAB_AUTHOR_TOKEN_FILE unset, the default path under HOME is read", () => {
     expect(AUTHOR_TOKEN_PATH).toBe(join(homedir(), ".config", "software-factory-lab", "author-token"));
     expect(isAbsolute(AUTHOR_TOKEN_PATH)).toBe(true);
-
-    const read = authorTokenOf({});
-
-    expect(read.kind === "missing" ? read.path : AUTHOR_TOKEN_PATH).toBe(AUTHOR_TOKEN_PATH);
+    expect(authorTokenPathOf({})).toBe(AUTHOR_TOKEN_PATH);
+    expect(authorTokenPathOf({ LAB_AUTHOR_TOKEN_FILE: "/elsewhere/token" })).toBe("/elsewhere/token");
   });
 });
 
