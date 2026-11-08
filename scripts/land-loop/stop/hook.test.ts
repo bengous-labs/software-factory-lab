@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { decodeJson } from "../../lib/json.ts";
 import { pushArgs } from "../lib/author.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
 import { FORK_MARKER } from "./decide.ts";
 import {
+  BODY_REQUEST,
   DONE_QUESTION,
   doneJudgeFailure,
   FORK_FLAG,
@@ -93,7 +94,13 @@ function world(doneJudgeAnswer: string, listed = "[]", branch = "agent/x", forkB
       const prompt = argv.at(-1) ?? "";
       const result = prompt === DONE_QUESTION ? doneJudgeAnswer : `feat: x\n\n${forkBody}`;
 
-      return ok(JSON.stringify({ result, total_cost_usd: 0.01, usage: { cache_read_input_tokens: 9000 } }));
+      return ok(
+        JSON.stringify({
+          result,
+          total_cost_usd: 0.01,
+          usage: { cache_read_input_tokens: 9000, cache_creation_input_tokens: 700 },
+        }),
+      );
     }
 
     return ok("");
@@ -126,20 +133,63 @@ async function bodyOf(branch: string, forkBody: string): Promise<string | undefi
   return calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.options.stdin;
 }
 
+const REPO = resolve(import.meta.dir, "..", "..", "..");
+
+const FORK_SETTINGS = `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"bun \\"${REPO}/scripts/land-loop/stop/fork-guard.ts\\"","timeout":30}]}]}}`;
+
+/** The command line of the Target for a fork asked `prompt` on the session's model. */
+const forkArgv = (prompt: string): readonly string[] => [
+  "claude",
+  "-p",
+  "--resume",
+  "S1",
+  "--fork-session",
+  "--tools",
+  "Read,Grep,Glob,Bash",
+  "--permission-mode",
+  "dontAsk",
+  "--settings",
+  FORK_SETTINGS,
+  "--strict-mcp-config",
+  "--output-format",
+  "json",
+  "--model",
+  "claude-haiku-5-5",
+  prompt,
+];
+
 describe("stop", () => {
+  test("each fork reads with Read, Grep, Glob and Bash under the fork guard, never Monitor", async () => {
+    const { run, calls, root } = world("YES");
+    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
+
+    const forks = calls.filter((call) => call.argv[0] === "claude").map((call) => call.argv);
+
+    expect(forks).toEqual([forkArgv(DONE_QUESTION), forkArgv(BODY_REQUEST)]);
+    expect(forks.every((argv) => !(argv[argv.indexOf("--tools") + 1] ?? "").includes("Monitor"))).toBe(true);
+  });
+
+  test("the done-judge and body-fork lines log the cache read and the cache creation", async () => {
+    const records: StopLogRecord[] = [];
+    const { run, root } = world("YES");
+    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
+      records.push(record);
+    });
+
+    for (const step of ["done-judge", "body-fork"]) {
+      expect(records.find((record) => record.step === step)).toMatchObject({ cacheRead: 9000, cacheCreation: 700 });
+    }
+  });
+
   test("a finished task: the Done judge's fork runs on the session's model with the flag, then the branch is pushed and the PR opened", async () => {
     const { run, calls, root } = world("YES, done and tested.");
     const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
 
     const doneJudge = calls.find((call) => call.argv[0] === "claude" && call.argv.at(-1) === DONE_QUESTION);
 
-    expect(doneJudge?.argv).toEqual(
-      // oxlint-disable-next-line typescript/no-unsafe-argument -- bun-types types every asymmetric matcher as any.
-      expect.arrayContaining(["-p", "--resume", "S1", "--fork-session", "--tools", "", "--model", "claude-haiku-5-5"]),
-    );
+    expect(doneJudge?.argv).toEqual(forkArgv(DONE_QUESTION));
     expect(doneJudge?.options.env?.[FORK_FLAG]).toBe("1");
-    expect(doneJudge?.argv[doneJudge.argv.indexOf("--tools") + 1]).toBe("");
-    expect(doneJudge?.argv).toContain("--strict-mcp-config");
+    expect(doneJudge?.options.cwd).toBe(root);
     expect(calls.some((call) => call.argv.join(" ") === pushArgs("agent/x").join(" "))).toBe(true);
 
     const create = calls.find((call) => call.argv.join(" ").startsWith("gh pr create"));
@@ -334,14 +384,19 @@ describe("transcript", () => {
 });
 
 describe("forkResultOf", () => {
-  test("reads the answer, cost and cache reads `claude -p --output-format json` prints", () => {
+  test("reads the answer, cost, cache reads and cache creation `claude -p --output-format json` prints", () => {
     expect(
       forkResultOf(
-        JSON.stringify({ result: "YES", total_cost_usd: 0.02, usage: { cache_read_input_tokens: 5 } }),
+        JSON.stringify({
+          result: "YES",
+          total_cost_usd: 0.02,
+          usage: { cache_read_input_tokens: 5, cache_creation_input_tokens: 3 },
+        }),
         0,
         9,
       ),
-    ).toEqual({ text: "YES", ms: 9, costUsd: 0.02, cacheRead: 5, code: 0, unreadable: null });
+    ).toEqual({ text: "YES", ms: 9, costUsd: 0.02, cacheRead: 5, cacheCreation: 3, code: 0, unreadable: null });
+    expect(forkResultOf(JSON.stringify({ result: "YES", usage: {} }), 0, 9).cacheCreation).toBeNull();
   });
 
   test("output that does not read is no answer, and says why", () => {
@@ -350,6 +405,7 @@ describe("forkResultOf", () => {
       ms: 9,
       costUsd: null,
       cacheRead: null,
+      cacheCreation: null,
       code: 124,
       unreadable: "Expected a valid JSON string",
     });

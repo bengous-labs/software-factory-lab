@@ -11,7 +11,7 @@
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { Predicate, Result, Schema } from "effect";
 
@@ -40,6 +40,29 @@ const TRUNK = "dev";
 const FORK_TIMEOUT_MS = 180_000;
 
 const STOP_CHECKS_TIMEOUT_MS = 300_000;
+
+/** The repository of the hook's own files, where the fork guard lives; the Author's cwd may be another checkout. */
+const REPO = resolve(import.meta.dir, "..", "..", "..");
+
+// No Monitor: a fork that re-armed the session's PR watch waited on it until it was killed (#38, #39).
+const FORK_TOOLS = "Read,Grep,Glob,Bash";
+
+const FORK_SETTINGS = JSON.stringify({
+  hooks: {
+    PreToolUse: [
+      {
+        matcher: "*",
+        hooks: [
+          {
+            type: "command",
+            command: `bun "${join(REPO, "scripts", "land-loop", "stop", "fork-guard.ts")}"`,
+            timeout: 30,
+          },
+        ],
+      },
+    ],
+  },
+});
 
 export const DONE_QUESTION = `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, with no question pending for the Owner? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason.`;
 
@@ -130,7 +153,12 @@ export function prTextOf(text: string): { title: string; body: string } | null {
 export const ForkOutput = Schema.Struct({
   result: Schema.optionalKey(Schema.String),
   total_cost_usd: Schema.optionalKey(Schema.Finite),
-  usage: Schema.optionalKey(Schema.Struct({ cache_read_input_tokens: Schema.optionalKey(Schema.Finite) })),
+  usage: Schema.optionalKey(
+    Schema.Struct({
+      cache_read_input_tokens: Schema.optionalKey(Schema.Finite),
+      cache_creation_input_tokens: Schema.optionalKey(Schema.Finite),
+    }),
+  ),
 });
 
 const decodeForkOutput = Schema.decodeResult(Schema.fromJsonString(ForkOutput));
@@ -141,6 +169,7 @@ export interface ForkResult {
   readonly ms: number;
   readonly costUsd: number | null;
   readonly cacheRead: number | null;
+  readonly cacheCreation: number | null;
   readonly code: number;
   readonly unreadable: string | null;
 }
@@ -150,7 +179,7 @@ export function forkResultOf(stdout: string, code: number, ms: number): ForkResu
   const out = decodeForkOutput(stdout);
 
   if (Result.isFailure(out)) {
-    return { text: "", ms, costUsd: null, cacheRead: null, code, unreadable: out.failure.message };
+    return { text: "", ms, costUsd: null, cacheRead: null, cacheCreation: null, code, unreadable: out.failure.message };
   }
 
   return {
@@ -158,6 +187,7 @@ export function forkResultOf(stdout: string, code: number, ms: number): ForkResu
     ms,
     costUsd: out.success.total_cost_usd ?? null,
     cacheRead: out.success.usage?.cache_read_input_tokens ?? null,
+    cacheCreation: out.success.usage?.cache_creation_input_tokens ?? null,
     code,
     unreadable: null,
   };
@@ -166,7 +196,6 @@ export function forkResultOf(stdout: string, code: number, ms: number): ForkResu
 async function askFork(deps: Deps, input: StopInput, model: string | null, prompt: string): Promise<ForkResult> {
   const started = deps.now();
 
-  // No tool: a fork that re-armed the session's PR watch waited on it until it was killed (#38, #39).
   const argv = [
     "claude",
     "-p",
@@ -174,7 +203,11 @@ async function askFork(deps: Deps, input: StopInput, model: string | null, promp
     input.session_id,
     "--fork-session",
     "--tools",
-    "",
+    FORK_TOOLS,
+    "--permission-mode",
+    "dontAsk",
+    "--settings",
+    FORK_SETTINGS,
     "--strict-mcp-config",
     "--output-format",
     "json",
@@ -361,6 +394,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     ms: doneJudge.ms,
     costUsd: doneJudge.costUsd,
     cacheRead: doneJudge.cacheRead,
+    cacheCreation: doneJudge.cacheCreation,
     code: doneJudge.code,
     unreadable: doneJudge.unreadable,
     text: doneJudge.text.slice(0, 300),
@@ -391,6 +425,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
       ms: bodyFork.ms,
       costUsd: bodyFork.costUsd,
       cacheRead: bodyFork.cacheRead,
+      cacheCreation: bodyFork.cacheCreation,
       unreadable: bodyFork.unreadable,
       title: text.title,
     });

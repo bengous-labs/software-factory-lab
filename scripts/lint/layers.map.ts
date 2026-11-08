@@ -29,6 +29,7 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
 
   ["scripts/land-loop/merge-bot/main.ts", at("land-loop", "entry")],
   ["scripts/land-loop/stop/hook.ts", at("land-loop", "entry")],
+  ["scripts/land-loop/stop/fork-guard.ts", at("land-loop", "entry")],
   ["scripts/land-loop/pr-watch.ts", at("land-loop", "entry")],
   ["scripts/land-loop/thread.ts", at("land-loop", "entry")],
   ["scripts/land-loop/comment.ts", at("land-loop", "entry")],

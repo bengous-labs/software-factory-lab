@@ -17,7 +17,7 @@ const deny = (reason: string): ToolDecision => ({ kind: "deny", reason });
 export const BASH_REASON =
   "one read-only git command from the allowed list per call, no shell operators or quotes; use Read and Grep for files";
 
-const PATH_REASON = "read only inside the pull request's checkout, outside .git";
+export const PATH_REASON = "read only inside the pull request's checkout, outside .git";
 
 const GLOB_REASON = "a Glob pattern is relative to the checkout, with no `..` segment";
 
