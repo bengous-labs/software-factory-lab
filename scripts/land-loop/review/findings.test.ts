@@ -5,10 +5,12 @@ import { Result, Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import {
+  earlierFindingsOf,
   EarlierThreads,
   earlierThreadsOf,
   findingFileOf,
   graphqlLogin,
+  localReviewEntriesOf,
   markerOf,
   movedLineOf,
   nitPathsOf,
@@ -305,5 +307,47 @@ describe("earlierThreadsOf", () => {
     expect(() => decodeJson(EarlierThreads, "review-threads.json", JSON.stringify([{ where: "a.ts:3" }]))).toThrow(
       "review-threads.json",
     );
+  });
+});
+
+const LOCAL_BLOCK = `<!-- lab-local-review -->
+Local review (deep, ac95210): 1 Important fixed, 1 rejected, 3 Nit.
+<details><summary>Findings</summary>
+
+- scripts/land-loop/merge-bot/decide.ts:598: The routing of an empty patch is read from the record. | Author: Fixed in fa2392d
+- b.ts: Blank: a title. | Author: Rejected: kept | on purpose
+</details>
+<!-- /lab-local-review -->`;
+
+describe("localReviewEntriesOf", () => {
+  test("each entry of the body's local review block is an earlier finding, its answer marked as the local review's", () => {
+    expect(localReviewEntriesOf(`Intro.\n\n- not: an entry | Author: x\n\n${LOCAL_BLOCK}\n\nCloses #66`)).toEqual([
+      {
+        where: "scripts/land-loop/merge-bot/decide.ts:598",
+        finding: "The routing of an empty patch is read from the record.",
+        reply: "Fixed in fa2392d (local review)",
+      },
+      { where: "b.ts", finding: "Blank: a title.", reply: "Rejected: kept | on purpose (local review)" },
+    ]);
+  });
+
+  test("a body with no block, or a block with no entry, gives none", () => {
+    expect(localReviewEntriesOf("Intro.\n\n- a.ts:1: x | Author: y")).toEqual([]);
+    expect(localReviewEntriesOf("<!-- lab-local-review -->\n- a.ts:1: x | Author: y")).toEqual([]);
+    expect(
+      localReviewEntriesOf(
+        "<!-- lab-local-review -->\nLocal review (deep, ac95210): 0 Important fixed, 0 rejected, 0 Nit.\n<details><summary>Findings</summary>\n\n</details>\n<!-- /lab-local-review -->",
+      ),
+    ).toEqual([]);
+  });
+
+  test("the thread step gives the local review's entries first, then the App's threads", () => {
+    const threads = earlierThreadsOf(APP, [thread(IMPORTANT)]);
+
+    expect(earlierFindingsOf(APP, [thread(IMPORTANT)], LOCAL_BLOCK)).toEqual([
+      ...localReviewEntriesOf(LOCAL_BLOCK),
+      ...threads,
+    ]);
+    expect(earlierFindingsOf(APP, [], "")).toEqual([]);
   });
 });

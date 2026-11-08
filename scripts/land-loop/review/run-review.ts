@@ -1,7 +1,7 @@
 /**
  * The review job's runner, which `.github/workflows/code-review.yml` runs from the root checkout of the
  * dispatched ref. It reviews the checkout of the pull request's head under `pr/` and writes the job's
- * result to `review-result.json`, which the workflow uploads as its artifact. On Review rounds 2 and 3 it puts
+ * result to `review-result.json`, which the workflow uploads as its artifact. On every Review round it puts
  * the earlier findings `read-threads.ts` wrote to `review-threads.json` in the prompt. The review session
  * gets a fresh Claude Code configuration and no variable of the job but `PATH`, `HOME` and the OAuth token.
  */
@@ -16,7 +16,7 @@ import { decodeJson } from "../../lib/json.ts";
 import { resolverOf } from "../lib/resolve.ts";
 import { reviewSession } from "../lib/review-session.ts";
 import { EarlierThreads } from "./findings.ts";
-import { promptOf, readsEarlierThreads } from "./review-prompt.ts";
+import { promptOf } from "./review-prompt.ts";
 import { OUTPUT_SCHEMA, resultOf, ReviewInputs, summaryOf } from "./review-report.ts";
 import { guardOf } from "./tool-guard.ts";
 
@@ -54,9 +54,7 @@ const guides = {
 
 const threadsFile = join(workspace, "review-threads.json");
 
-const threads = readsEarlierThreads(request.round)
-  ? decodeJson(EarlierThreads, threadsFile, readFileSync(threadsFile, "utf8"))
-  : [];
+const threads = decodeJson(EarlierThreads, threadsFile, readFileSync(threadsFile, "utf8"));
 
 const answer = await reviewSession({
   prompt: promptOf(request, guides, threads),

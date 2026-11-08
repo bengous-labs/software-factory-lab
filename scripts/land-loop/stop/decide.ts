@@ -2,10 +2,18 @@
  * The Stop decision of the Author's session, as pure functions over what the hook read. `admit`
  * settles what git and the transcript alone settle; `afterAuthorToken` whether the Author's token
  * lets it publish; `afterStopChecks` what the Stop checks' result
- * adds; `decide` what the Done judge's answer adds. Each returns the next thing the hook does.
+ * adds; `decide` what the Done judge's answer adds; `afterLocalReview` what the local review of a
+ * risky branch adds. Each returns the next thing the hook does.
  */
 
+import { Schema } from "effect";
+
+import { decodeJson } from "../../lib/json.ts";
+import { TokenCounts } from "../../lib/tokens.ts";
 import { AUTHOR_MARK } from "../author-mark.ts";
+import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
+import type { RoutingPolicy } from "../factory-config.ts";
+import type { Severity } from "../review/review-report.ts";
 
 /**
  * The marker that opens every question the hook puts to a fork, so a fork stays recognisable. The
@@ -51,7 +59,8 @@ export type StopChecks = { readonly kind: "green" } | { readonly kind: "red"; re
 export type Next =
   | { readonly kind: "none"; readonly reason: string }
   | { readonly kind: "block"; readonly reason: string }
-  | { readonly kind: "ask-done-judge" };
+  | { readonly kind: "ask-done-judge" }
+  | { readonly kind: "publish" };
 
 export type Answer =
   { readonly kind: "yes" } | { readonly kind: "hold"; readonly reason: string } | { readonly kind: "no" };
@@ -242,4 +251,198 @@ export function armReason(pr: number, commands: ArmCommands, hold: string | null
     "",
     "Never ask the Owner a question about the PR: the Land loop and the Owner handle the rest. When the PR watch expires, arm it again, until it reports the PR landed or closed. Then stop.",
   ].join("\n");
+}
+
+/** Whether a branch that changes `paths` gets a local deep review: one touches the factory config or a path the policy names. */
+export function localReviewNeeded(paths: readonly string[], policy: RoutingPolicy): boolean {
+  const globs = [FACTORY_CONFIG_PATH, ...policy.ownerPaths, ...policy.factoryPaths, ...policy.deepReviewPaths].map(
+    (glob) => new Bun.Glob(glob),
+  );
+
+  return paths.some((path) => globs.some((glob) => glob.match(path)));
+}
+
+const LocalFinding = Schema.Struct({
+  file: Schema.String,
+  line: Schema.NullOr(Schema.Int),
+  severity: Schema.Literals(["important", "nit", "pre_existing"] satisfies readonly Severity[]),
+  summary: Schema.String,
+  failureScenario: Schema.String,
+});
+
+export type LocalFinding = typeof LocalFinding.Type;
+
+/** `.lab/state/review-<head>.json`: what the local review session found on that head. */
+const LocalReviewRecord = Schema.Struct({
+  findings: Schema.Array(LocalFinding),
+  model: Schema.NullOr(Schema.String),
+  tokens: Schema.NullOr(TokenCounts),
+});
+
+export type LocalReviewRecord = typeof LocalReviewRecord.Type;
+
+/** A head's local review: its stored result, or why the session gave none. */
+export type LocalReview = LocalReviewRecord | { readonly failed: string };
+
+/** `.lab/state/review-<head>-answers.json`: the Author's answer to each Important, by its 1-based number. */
+const LocalReviewAnswers = Schema.Record(Schema.String, Schema.String);
+
+export type LocalReviewAnswers = typeof LocalReviewAnswers.Type;
+
+// On-disk names under `.lab/state/`: existing records carry them, so they stay.
+export const reviewRecordName = (head: string): string => `review-${head}.json`;
+
+export const answersRecordName = (head: string): string => `review-${head}-answers.json`;
+
+export function localReviewOf(source: string, json: string): LocalReviewRecord {
+  return decodeJson(LocalReviewRecord, source, json);
+}
+
+export function answersOf(source: string, json: string): LocalReviewAnswers {
+  return decodeJson(LocalReviewAnswers, source, json);
+}
+
+/** The Importants of `review`, each with its 1-based number, the one the block text and `local-review.ts` name. */
+function importantsOf(review: LocalReviewRecord): Array<{ readonly n: number; readonly finding: LocalFinding }> {
+  return review.findings
+    .filter((found) => found.severity === "important")
+    .map((found, index) => ({ n: index + 1, finding: found }));
+}
+
+const placeOf = (found: LocalFinding): string => (found.line === null ? found.file : `${found.file}:${found.line}`);
+
+const unanswered = (review: LocalReviewRecord, answers: LocalReviewAnswers): ReturnType<typeof importantsOf> =>
+  importantsOf(review).filter(({ n }) => answers[String(n)] === undefined);
+
+/** What the hook tells the Author when the local review left an Important without an answer. */
+export function localReviewReason(review: LocalReviewRecord, answers: LocalReviewAnswers): string {
+  const open = unanswered(review, answers);
+  const nits = review.findings.filter((found) => found.severity === "nit").length;
+
+  return [
+    `The local review found ${open.length} Important finding(s) on this head without an answer, so nothing was published:`,
+    "",
+    ...open.flatMap(({ n, finding: found }) => [
+      `${n}. ${placeOf(found)}: ${found.summary}`,
+      `   ${found.failureScenario}`,
+    ]),
+    "",
+    `Fix a finding with a commit, or reject it: bun scripts/land-loop/local-review.ts reject <n> "<reason>". Then stop. A Nit never blocks: ${nits === 1 ? "1 Nit is" : `${nits} Nits are`} in .lab/stop.log.`,
+  ].join("\n");
+}
+
+const LOCAL_REVIEW_ERROR_MAX = 200;
+
+/** A local review with every Important answered publishes; an open one, or a failed session, blocks once, then lets the session end. */
+export function afterLocalReview(review: LocalReview, answers: LocalReviewAnswers, stopHookActive: boolean): Next {
+  if (!("failed" in review) && unanswered(review, answers).length === 0) {
+    return { kind: "publish" };
+  }
+
+  if (stopHookActive) {
+    return none("the local review is still red after a block: nothing is published");
+  }
+
+  return {
+    kind: "block",
+    reason:
+      "failed" in review
+        ? `The local review could not run (${review.failed.slice(0, LOCAL_REVIEW_ERROR_MAX)}), so nothing was published. Stop again to retry; ask no question.`
+        : localReviewReason(review, answers),
+  };
+}
+
+/** The arguments of `local-review.ts reject <n> "<reason>"`, or null unless `<n>` names an Important of `review` and the reason is not blank. */
+export function rejectArgsOf(
+  argv: readonly string[],
+  review: LocalReviewRecord,
+): { readonly n: number; readonly reason: string } | null {
+  const [verb, number, reason] = argv;
+
+  if (
+    verb !== "reject" ||
+    number === undefined ||
+    !/^\d+$/u.test(number) ||
+    reason === undefined ||
+    reason.trim() === ""
+  ) {
+    return null;
+  }
+
+  const n = Number(number);
+
+  return n >= 1 && n <= importantsOf(review).length ? { n, reason } : null;
+}
+
+/** One reviewed head of the branch, in commit order; `nextHead` is the commit after it on the branch, null for the last. */
+export interface ReviewedHead {
+  readonly head: string;
+  readonly review: LocalReview;
+  readonly answers: LocalReviewAnswers;
+  readonly nextHead: string | null;
+}
+
+/** The block's markers. An external format: PR bodies carry them, and the review job reads them back. */
+export const LOCAL_REVIEW_OPEN = "<!-- lab-local-review -->";
+
+export const LOCAL_REVIEW_CLOSE = "<!-- /lab-local-review -->";
+
+/** The PR body's block of the local reviews of the branch's heads, with the Author's answers; null when no head has one. */
+export function localReviewBlockOf(reviews: readonly ReviewedHead[]): string | null {
+  const reviewed = reviews.flatMap((entry) => ("failed" in entry.review ? [] : [{ ...entry, review: entry.review }]));
+  const latest = reviewed.at(-1);
+
+  if (latest === undefined) {
+    return null;
+  }
+
+  const entries = reviewed.flatMap(({ review, answers, nextHead }) =>
+    importantsOf(review).flatMap(({ n, finding: found }) => {
+      const answer = answers[String(n)] ?? (nextHead === null ? null : `Fixed in ${nextHead.slice(0, 7)}`);
+
+      return answer === null
+        ? []
+        : [
+            {
+              rejected: answers[String(n)] !== undefined,
+              line: `- ${placeOf(found)}: ${found.summary.replaceAll(/\s+/gu, " ")} | Author: ${answer}`,
+            },
+          ];
+    }),
+  );
+
+  const rejected = entries.filter((entry) => entry.rejected).length;
+  const nits = latest.review.findings.filter((found) => found.severity === "nit").length;
+
+  return [
+    LOCAL_REVIEW_OPEN,
+    `Local review (deep, ${latest.head.slice(0, 7)}): ${entries.length - rejected} Important fixed, ${rejected} rejected, ${nits} Nit.`,
+    "<details><summary>Findings</summary>",
+    "",
+    ...entries.map((entry) => entry.line),
+    "</details>",
+    LOCAL_REVIEW_CLOSE,
+  ].join("\n");
+}
+
+/** The closing line `closingLineOf` writes. */
+const CLOSING_LINE = /^Closes #\d+$/u;
+
+/** `body` with `block` in place of its block, or before its closing line, or at its end. */
+export function bodyWithBlock(body: string, block: string): string {
+  const open = body.indexOf(LOCAL_REVIEW_OPEN);
+  const close = body.indexOf(LOCAL_REVIEW_CLOSE, open);
+
+  if (open !== -1 && close !== -1) {
+    return `${body.slice(0, open)}${block}${body.slice(close + LOCAL_REVIEW_CLOSE.length)}`;
+  }
+
+  const lines = body.trimEnd().split("\n");
+  const last = lines.at(-1) ?? "";
+
+  const [before, after] = CLOSING_LINE.test(last)
+    ? [lines.slice(0, -1).join("\n").trimEnd(), last]
+    : [body.trimEnd(), ""];
+
+  return [before, block, after].filter((part) => part !== "").join("\n\n");
 }

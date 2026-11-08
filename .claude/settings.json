@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR\"/scripts/land-loop/stop/hook.ts",
-            "timeout": 600
+            "timeout": 1500
           }
         ]
       }

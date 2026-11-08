@@ -1,17 +1,28 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import { AUTHOR_MARK } from "../author-mark.ts";
+import { factoryConfigOf } from "../factory-config.ts";
+import type { RoutingPolicy } from "../factory-config.ts";
 import {
   admit,
   afterAuthorToken,
+  afterLocalReview,
   afterStopChecks,
   answerOf,
+  answersOf,
   armReason,
+  bodyWithBlock,
   closingLineOf,
   decide,
   holdStepsOf,
+  localReviewBlockOf,
+  localReviewNeeded,
+  localReviewOf,
+  localReviewReason,
+  rejectArgsOf,
 } from "./decide.ts";
-import type { Answer, Snapshot } from "./decide.ts";
+import type { Answer, LocalFinding, LocalReviewRecord, Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -316,5 +327,278 @@ describe("closingLineOf", () => {
     expect(closingLineOf("fix/89-x", "Closes #12, see #89")).toBe("Closes #89");
     expect(closingLineOf("fix/89-x", "encloses #89")).toBe("Closes #89");
     expect(closingLineOf("fix/89-x", "")).toBe("Closes #89");
+  });
+});
+
+const POLICY: RoutingPolicy = factoryConfigOf(readFileSync(".github/software-factory.json", "utf8")).land.routing;
+
+const finding = (
+  severity: LocalFinding["severity"],
+  file: string,
+  line: number | null,
+  summary: string,
+): LocalFinding => ({ file, line, severity, summary, failureScenario: `${summary} Scenario.` });
+
+const DECIDE_598: LocalFinding = {
+  file: "scripts/land-loop/merge-bot/decide.ts",
+  line: 598,
+  severity: "important",
+  summary:
+    "The routing of an empty patch is read from the record without a routing step, so a PR with no file lands auto.",
+  failureScenario:
+    'A PR whose diff is empty: patchOf returns "empty", decide finds no triage for it, routes it, then merges it on the rules\' auto answer.',
+};
+
+const MAIN_421: LocalFinding = {
+  file: "scripts/land-loop/merge-bot/main.ts",
+  line: 421,
+  severity: "important",
+  summary:
+    "The snapshot's `now` is taken after the review job read, so a slow read makes a fresh request read as past its deadline.",
+  failureScenario: "A review requested 44 minutes ago, a job read that takes 2 minutes: the request reads as failed.",
+};
+
+const reviewOf = (findings: readonly LocalFinding[]): LocalReviewRecord => ({
+  findings,
+  model: "claude-opus-5-5",
+  tokens: null,
+});
+
+const TWO_IMPORTANT = reviewOf([
+  DECIDE_598,
+  finding("nit", "a.ts", 1, "a nit"),
+  finding("pre_existing", "b.ts", 2, "old"),
+  MAIN_421,
+]);
+
+describe("localReviewNeeded", () => {
+  test("a factory, Owner or deep-review path, or the factory config, needs the local review; the app's commands and docs do not", () => {
+    expect(localReviewNeeded(["scripts/land-loop/stop/hook.ts"], POLICY)).toBe(true);
+    expect(localReviewNeeded([".github/workflows/ci.yml"], POLICY)).toBe(true);
+    expect(localReviewNeeded(["app/src/store/store.ts"], POLICY)).toBe(true);
+    expect(localReviewNeeded([".github/software-factory.json"], POLICY)).toBe(true);
+    expect(localReviewNeeded(["app/src/commands/add.ts", "docs/usage.md"], POLICY)).toBe(false);
+    expect(localReviewNeeded(["docs/usage.md", "app/src/store/store.ts"], POLICY)).toBe(true);
+    expect(localReviewNeeded([], POLICY)).toBe(false);
+  });
+
+  test("each list of the policy counts on its own, and the config path whatever the policy", () => {
+    const empty: RoutingPolicy = { ownerPaths: [], factoryPaths: [], deepReviewPaths: [], lineCap: 400 };
+
+    expect(localReviewNeeded([".github/software-factory.json"], empty)).toBe(true);
+    expect(localReviewNeeded(["x/a.ts"], { ...empty, ownerPaths: ["x/**"] })).toBe(true);
+    expect(localReviewNeeded(["x/a.ts"], { ...empty, factoryPaths: ["x/**"] })).toBe(true);
+    expect(localReviewNeeded(["x/a.ts"], { ...empty, deepReviewPaths: ["x/**"] })).toBe(true);
+    expect(localReviewNeeded(["x/a.ts"], empty)).toBe(false);
+  });
+});
+
+describe("localReviewReason", () => {
+  test("two unanswered Importants and one Nit give the block text, word for word", () => {
+    expect(localReviewReason(TWO_IMPORTANT, {}))
+      .toBe(`The local review found 2 Important finding(s) on this head without an answer, so nothing was published:
+
+1. scripts/land-loop/merge-bot/decide.ts:598: The routing of an empty patch is read from the record without a routing step, so a PR with no file lands auto.
+   A PR whose diff is empty: patchOf returns "empty", decide finds no triage for it, routes it, then merges it on the rules' auto answer.
+2. scripts/land-loop/merge-bot/main.ts:421: The snapshot's \`now\` is taken after the review job read, so a slow read makes a fresh request read as past its deadline.
+   A review requested 44 minutes ago, a job read that takes 2 minutes: the request reads as failed.
+
+Fix a finding with a commit, or reject it: bun scripts/land-loop/local-review.ts reject <n> "<reason>". Then stop. A Nit never blocks: 1 Nit is in .lab/stop.log.`);
+  });
+
+  test("an answered Important is skipped and keeps the others' numbers; no Nit, or two, take the plural", () => {
+    const reason = localReviewReason(reviewOf([DECIDE_598, MAIN_421]), { "1": "Rejected: no" });
+
+    expect(reason.startsWith("The local review found 1 Important finding(s) on this head")).toBe(true);
+    expect(reason).not.toContain("1. ");
+    expect(reason).toContain(":\n\n2. scripts/land-loop/merge-bot/main.ts:421: ");
+    expect(reason.endsWith("A Nit never blocks: 0 Nits are in .lab/stop.log.")).toBe(true);
+    expect(
+      localReviewReason(reviewOf([DECIDE_598, finding("nit", "a.ts", 1, "x"), finding("nit", "a.ts", 2, "y")]), {}),
+    ).toContain("A Nit never blocks: 2 Nits are in .lab/stop.log.");
+  });
+
+  test("a finding with no line names its file alone", () => {
+    expect(localReviewReason(reviewOf([finding("important", "a.ts", null, "broken")]), {})).toContain(
+      ":\n\n1. a.ts: broken\n   broken Scenario.\n\nFix",
+    );
+  });
+});
+
+describe("afterLocalReview", () => {
+  test("no Important, or every Important answered, publishes", () => {
+    const answered = { "1": "Rejected: a", "2": "Rejected: b" };
+
+    expect(afterLocalReview(reviewOf([finding("nit", "a.ts", 1, "x")]), {}, false)).toEqual({ kind: "publish" });
+    expect(afterLocalReview(TWO_IMPORTANT, answered, false)).toEqual({ kind: "publish" });
+    expect(afterLocalReview(TWO_IMPORTANT, answered, true)).toEqual({ kind: "publish" });
+  });
+
+  test("an unanswered Important blocks with the block text, then lets the session end with nothing published", () => {
+    const answers = { "1": "Rejected: a" };
+
+    expect(afterLocalReview(TWO_IMPORTANT, answers, false)).toEqual({
+      kind: "block",
+      reason: localReviewReason(TWO_IMPORTANT, answers),
+    });
+    expect(afterLocalReview(TWO_IMPORTANT, answers, true)).toEqual({
+      kind: "none",
+      reason: "the local review is still red after a block: nothing is published",
+    });
+  });
+
+  test("a failed session blocks once with its error cut at 200 characters, then lets the session end", () => {
+    const error = `timed out ${"x".repeat(300)}`;
+
+    expect(afterLocalReview({ failed: error }, {}, false)).toEqual({
+      kind: "block",
+      reason: `The local review could not run (${error.slice(0, 200)}), so nothing was published. Stop again to retry; ask no question.`,
+    });
+    expect(afterLocalReview({ failed: error }, {}, true)).toEqual({
+      kind: "none",
+      reason: "the local review is still red after a block: nothing is published",
+    });
+  });
+});
+
+describe("rejectArgsOf", () => {
+  test("reject <n> <reason> names an Important of the review", () => {
+    expect(rejectArgsOf(["reject", "2", "the bound is inclusive"], TWO_IMPORTANT)).toEqual({
+      n: 2,
+      reason: "the bound is inclusive",
+    });
+    expect(rejectArgsOf(["reject", "1", "x"], TWO_IMPORTANT)).toEqual({ n: 1, reason: "x" });
+  });
+
+  test("a missing or malformed number, a number with no Important, an empty reason or another verb is refused", () => {
+    const refused: ReadonlyArray<readonly string[]> = [
+      ["reject"],
+      ["reject", "x", "r"],
+      ["reject", "1.5", "r"],
+      ["reject", "01x", "r"],
+      ["reject", "0", "r"],
+      ["reject", "3", "r"],
+      ["reject", "2"],
+      ["reject", "2", "  "],
+      ["accept", "1", "r"],
+      [],
+    ];
+
+    for (const argv of refused) {
+      expect(rejectArgsOf(argv, TWO_IMPORTANT)).toBeNull();
+    }
+  });
+});
+
+describe("the local review records", () => {
+  test("a record and its answers read back; a file outside the schema throws, naming it", () => {
+    expect(localReviewOf("r.json", JSON.stringify(TWO_IMPORTANT))).toEqual(TWO_IMPORTANT);
+    expect(answersOf("a.json", '{"1":"Rejected: x"}')).toEqual({ "1": "Rejected: x" });
+    expect(() => localReviewOf("r.json", '{"findings":[]}')).toThrow("r.json");
+    expect(() => answersOf("a.json", '{"1":2}')).toThrow("a.json");
+  });
+});
+
+const HEAD_A = "ac95210".padEnd(40, "0");
+
+const HEAD_B = "fa2392d".padEnd(40, "1");
+
+const HEAD_C = "0c0ffee".padEnd(40, "2");
+
+describe("localReviewBlockOf", () => {
+  test("two reviewed heads, a fix and a rejection: the block of the Target", () => {
+    const block = localReviewBlockOf([
+      {
+        head: HEAD_B,
+        review: reviewOf([
+          { ...DECIDE_598, summary: "The routing of an empty patch is read from the record without a routing step." },
+          { ...MAIN_421, summary: "The snapshot's `now` is taken after the review job read." },
+        ]),
+        answers: {},
+        nextHead: HEAD_C,
+      },
+      {
+        head: HEAD_A,
+        review: reviewOf([
+          finding(
+            "important",
+            "scripts/land-loop/guarantees.test.ts",
+            131,
+            "The ownerPaths guarantee draws only from the parsed config.",
+          ),
+          finding("nit", "a", 1, "n"),
+          finding("nit", "b", 1, "n"),
+          finding("pre_existing", "c", 1, "n"),
+          finding("nit", "c", 1, "n"),
+        ]),
+        answers: { "1": "Rejected: the Owner's globs are pinned as literals since fa2392d" },
+        nextHead: null,
+      },
+    ]);
+
+    expect(block).toBe(`<!-- lab-local-review -->
+Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
+<details><summary>Findings</summary>
+
+- scripts/land-loop/merge-bot/decide.ts:598: The routing of an empty patch is read from the record without a routing step. | Author: Fixed in 0c0ffee
+- scripts/land-loop/merge-bot/main.ts:421: The snapshot's \`now\` is taken after the review job read. | Author: Fixed in 0c0ffee
+- scripts/land-loop/guarantees.test.ts:131: The ownerPaths guarantee draws only from the parsed config. | Author: Rejected: the Owner's globs are pinned as literals since fa2392d
+</details>
+<!-- /lab-local-review -->`);
+  });
+
+  test("no review in the range gives no block; a failed review counts for nothing", () => {
+    expect(localReviewBlockOf([])).toBeNull();
+    expect(localReviewBlockOf([{ head: HEAD_A, review: { failed: "x" }, answers: {}, nextHead: null }])).toBeNull();
+  });
+
+  test("a rejection on an older head stays one; a clean head lists nothing; a finding with no line names its file", () => {
+    const block = localReviewBlockOf([
+      {
+        head: HEAD_B,
+        review: reviewOf([finding("important", "a.ts", null, "broken"), finding("important", "b.ts", 3, "off")]),
+        answers: { "2": "Rejected: inclusive" },
+        nextHead: HEAD_C,
+      },
+      { head: HEAD_C, review: reviewOf([]), answers: {}, nextHead: null },
+      { head: HEAD_A, review: { failed: "x" }, answers: {}, nextHead: null },
+    ]);
+
+    expect(block).toContain("Local review (deep, 0c0ffee): 1 Important fixed, 1 rejected, 0 Nit.\n");
+    expect(block).toContain(
+      "\n\n- a.ts: broken | Author: Fixed in 0c0ffee\n- b.ts:3: off | Author: Rejected: inclusive\n</details>",
+    );
+  });
+
+  test("a summary over several lines stays on its entry's line", () => {
+    const block = localReviewBlockOf([
+      {
+        head: HEAD_A,
+        review: reviewOf([finding("important", "a.ts", 1, "two\n lines")]),
+        answers: { "1": "Rejected: x" },
+        nextHead: null,
+      },
+    ]);
+
+    expect(block).toContain("\n- a.ts:1: two lines | Author: Rejected: x\n");
+  });
+});
+
+describe("bodyWithBlock", () => {
+  const BLOCK = "<!-- lab-local-review -->\nnew\n<!-- /lab-local-review -->";
+
+  test("a body with a block gets it replaced, and no other line changes", () => {
+    expect(
+      bodyWithBlock("Intro.\n\n<!-- lab-local-review -->\nold\nlines\n<!-- /lab-local-review -->\n\nCloses #66", BLOCK),
+    ).toBe(`Intro.\n\n${BLOCK}\n\nCloses #66`);
+  });
+
+  test("a body without one gets it before its closing line, or at its end", () => {
+    expect(bodyWithBlock("Intro.\n\nCloses #66", BLOCK)).toBe(`Intro.\n\n${BLOCK}\n\nCloses #66`);
+    expect(bodyWithBlock("Intro.\n\nCloses #66\n", BLOCK)).toBe(`Intro.\n\n${BLOCK}\n\nCloses #66`);
+    expect(bodyWithBlock("Closes #66", BLOCK)).toBe(`${BLOCK}\n\nCloses #66`);
+    expect(bodyWithBlock("Intro.\n\nSee #66.", BLOCK)).toBe(`Intro.\n\nSee #66.\n\n${BLOCK}`);
+    expect(bodyWithBlock("Intro.\n\nCloses #66 and more", BLOCK)).toBe(`Intro.\n\nCloses #66 and more\n\n${BLOCK}`);
+    expect(bodyWithBlock("", BLOCK)).toBe(BLOCK);
   });
 });
