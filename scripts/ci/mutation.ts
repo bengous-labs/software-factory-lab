@@ -393,11 +393,14 @@ export function githubOutput(hunks: readonly Hunk[]): string {
   return `mutate=${hunks.length > 0}\n`;
 }
 
-/** What a pass adds to `stryker.config.ts`: one module, whole, and its own tests alone. */
+/**
+ * What a pass adds to `stryker.config.ts`: one module, whole, and its own tests alone. The command
+ * runner reads only the exit code, so `--bail` stops at the first failing test: it kills the mutant.
+ */
 export function runOptions(module: string, tests: Readonly<Record<string, string>> = TESTS) {
   return {
     mutate: [module],
-    commandRunner: { command: `FAST_CHECK_SEED=${FAST_CHECK_SEED} bun test ./${testFileOf(module, tests)}` },
+    commandRunner: { command: `FAST_CHECK_SEED=${FAST_CHECK_SEED} bun test --bail ./${testFileOf(module, tests)}` },
   };
 }
 
