@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -9,6 +9,7 @@ import { Result, Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
+import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
@@ -26,7 +27,9 @@ import {
   humanLabelByOf,
   IssueComments,
   IssueEvents,
+  judgeAt,
   judgeDiffArgs,
+  judgeEnvOf,
   labelEventsReader,
   landApprovalByOwnerOf,
   linesOfNumstat,
@@ -389,14 +392,30 @@ const ciRuns = (conclusion: string | null, slug = "github-actions") => ({
   check_runs: [{ name: "x", status: conclusion === null ? "in_progress" : "completed", conclusion, app: { slug } }],
 });
 
+// An inherited GIT_DIR would point a fixture's git at the real repository; the test layer cannot import fixtureEnv.
+const FIXTURE_ENV = Object.fromEntries(
+  Object.entries(process.env).flatMap(([name, value]) =>
+    name.startsWith("GIT_") || value === undefined ? [] : [[name, value] as const],
+  ),
+);
+
+/** A `Run` over the fixture's environment. */
+const fixtureRun: Run = async (argv, options) => {
+  const child = Bun.spawn([...argv], { cwd: options.cwd, env: FIXTURE_ENV, stdout: "pipe", stderr: "pipe" });
+
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+
+  return { code, stdout, stderr };
+};
+
 /** A new git repository, and a git that runs in it. */
 async function fixtureRepo(prefix: string) {
   const repo = mkdtempSync(join(tmpdir(), prefix));
-
-  // An inherited GIT_DIR would point this git at the real repository; the test layer cannot import fixtureEnv.
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([name, value]) => !name.startsWith("GIT_") && value !== undefined),
-  );
+  const env = FIXTURE_ENV;
 
   const git = (args: readonly string[]) => $`git ${args}`.cwd(repo).env(env).quiet();
 
@@ -592,5 +611,119 @@ describe("the routing inputs", () => {
     expect(ciOfRuns([ciRuns("success"), ciRuns("failure")])).toBe("failure");
     expect(ciOfRuns([ciRuns("success"), ciRuns(null)])).toBeNull();
     expect(ciOfRuns([ciRuns("success"), ciRuns("success", "another-app")])).toBeNull();
+  });
+});
+
+/** A repository whose checkout sits on its first commit, and the head of a PR one commit past it. */
+async function prRepo() {
+  const { repo, git } = await fixtureRepo("judge-worktree-");
+
+  mkdirSync(join(repo, "app/src"), { recursive: true });
+  writeFileSync(join(repo, "app/src/cli.ts"), "base\n");
+  await git(["add", "."]);
+  await git(["commit", "-q", "-m", "a"]);
+  writeFileSync(join(repo, "app/src/cli.ts"), "head\n");
+  await git(["commit", "-q", "-am", "b"]);
+  const head = (await git(["rev-parse", "HEAD"])).text().trim();
+  await git(["checkout", "-q", "--detach", "HEAD~1"]);
+
+  const worktrees = async (): Promise<number> =>
+    (await git(["worktree", "list", "--porcelain"]))
+      .text()
+      .split("\n")
+      .filter((line) => line.startsWith("worktree ")).length;
+
+  return { checkout: { run: fixtureRun, cwd: repo, head }, worktrees };
+}
+
+describe("the Routing judge's worktree", () => {
+  const JOB = { PATH: "/usr/bin", HOME: "/home/runner", CLAUDE_CODE_OAUTH_TOKEN: "oauth", GH_TOKEN: "app" };
+
+  const ANSWER = { land: "auto", review: "light", secondRound: false, reason: "r", model: "m" } as const;
+
+  test("no question makes no worktree and asks nothing", async () => {
+    const { checkout, worktrees } = await prRepo();
+    const readers: Reader[] = [];
+
+    const answer = await judgeAt({ kind: "none" }, checkout, JOB, (reader) => {
+      readers.push(reader);
+
+      return Promise.resolve(ANSWER);
+    });
+
+    expect(answer).toBeNull();
+    expect(readers).toEqual([]);
+    expect(await worktrees()).toBe(1);
+  });
+
+  test("the judge reads a worktree of the PR's head under the read guard, with no GitHub token, and the worktree goes after the call", async () => {
+    const { checkout, worktrees } = await prRepo();
+    const readers: Reader[] = [];
+    const seen: string[] = [];
+
+    const answer = await judgeAt({ kind: "ask" }, checkout, JOB, async (reader) => {
+      readers.push(reader);
+      seen.push(
+        readFileSync(join(reader.cwd, "app/src/cli.ts"), "utf8"),
+        String(await worktrees()),
+        reader.guard("Read", { file_path: "app/src/cli.ts" }).kind,
+        reader.guard("Read", { file_path: join(checkout.cwd, "app/src/cli.ts") }).kind,
+        reader.guard("Read", { file_path: ".git" }).kind,
+      );
+
+      return ANSWER;
+    });
+
+    const [reader] = readers;
+
+    expect(answer).toEqual(ANSWER);
+    expect(seen).toEqual(["head\n", "2", "allow", "deny", "deny"]);
+    expect(reader?.cwd).not.toBe(checkout.cwd);
+    expect(Object.keys(reader?.env ?? {}).toSorted()).toEqual([
+      "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CONFIG_DIR",
+      "HOME",
+      "PATH",
+    ]);
+    expect(reader?.guard("Write", {})).toEqual({ kind: "deny", reason: "the tool Write is not admitted here" });
+    expect(existsSync(reader?.cwd ?? checkout.cwd)).toBe(false);
+    expect(existsSync(dirname(reader?.cwd ?? checkout.cwd))).toBe(false);
+    expect(await worktrees()).toBe(1);
+  });
+
+  test("a failed call still removes the worktree, and its error reaches the caller", async () => {
+    const { checkout, worktrees } = await prRepo();
+    const roots: string[] = [];
+
+    const failing = judgeAt({ kind: "ask" }, checkout, JOB, (reader) => {
+      roots.push(reader.cwd);
+
+      return Promise.reject(new Error("the judge broke"));
+    });
+
+    // oxlint-disable-next-line typescript/await-thenable, typescript/no-confusing-void-expression -- bun-types types rejects matchers as void; Bun returns the promise the test awaits.
+    await expect(failing).rejects.toThrow("the judge broke");
+    expect(roots).toHaveLength(1);
+    expect(existsSync(roots[0] ?? checkout.cwd)).toBe(false);
+    expect(await worktrees()).toBe(1);
+  });
+
+  test("the judge's environment holds the job's PATH, HOME and OAuth token, no memory and a fresh config, and nothing else", () => {
+    const env = judgeEnvOf(JOB);
+
+    expect(env).toMatchObject({
+      PATH: "/usr/bin",
+      HOME: "/home/runner",
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+    });
+    expect(env).not.toHaveProperty("GH_TOKEN");
+    expect(existsSync(env.CLAUDE_CONFIG_DIR)).toBe(true);
+    expect(judgeEnvOf(JOB).CLAUDE_CONFIG_DIR).not.toBe(env.CLAUDE_CONFIG_DIR);
+    expect(() => judgeEnvOf({ ...JOB, CLAUDE_CODE_OAUTH_TOKEN: undefined })).toThrow(
+      "CLAUDE_CODE_OAUTH_TOKEN is unset",
+    );
+    expect(() => judgeEnvOf({ ...JOB, HOME: "" })).toThrow("HOME is unset");
   });
 });

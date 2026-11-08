@@ -1,6 +1,6 @@
 /**
- * The tool guard of the review job: every tool call of the review session is allowed or denied here, by
- * code, and anything the guard does not know is denied. The reviewer reads only under the pull
+ * The tool guards of the review job and of the Routing judge: every tool call of their sessions is allowed
+ * or denied here, by code, and anything a guard does not know is denied. The reviewer reads only under the pull
  * request's checkout, outside `.git`, and runs one read-only git command per Bash call. Paths reach
  * the guard through `resolve`, which follows every link, so a link the pull request commits is judged
  * by where it leads.
@@ -279,35 +279,53 @@ function agentDecision(input: Schema.JsonObject): ToolDecision {
   return refused.length === 0 ? ALLOW : deny(`an Agent call takes no ${AGENT_REFUSED.join(", ")}`);
 }
 
-/** The guard of one review session over the checkout `scope.root`. */
+/** The decision of a read tool, a Bash call or the structured answer; null for any other tool. */
+function readDecision(scope: GuardScope, toolName: string, input: Schema.JsonObject): ToolDecision | null {
+  switch (toolName) {
+    case "Read": {
+      return Option.match(decoded(ReadInput, input), {
+        onNone: () => deny(PATH_REASON),
+        onSome: (read) => pathDecision(scope, read.file_path),
+      });
+    }
+
+    case "Grep": {
+      return Option.match(decoded(PathInput, input), {
+        onNone: () => deny(PATH_REASON),
+        onSome: (grep) => pathDecision(scope, grep.path),
+      });
+    }
+
+    case "Glob": {
+      return globDecision(scope, input);
+    }
+
+    case "Bash": {
+      return Option.match(decoded(BashInput, input), {
+        onNone: () => deny(BASH_REASON),
+        onSome: (bash) => bashGuard(bash.command),
+      });
+    }
+
+    case "StructuredOutput": {
+      return ALLOW;
+    }
+
+    default: {
+      return null;
+    }
+  }
+}
+
+/** The guard of a read-only session over the checkout `scope.root`: Read, Grep, Glob, git and the structured answer. */
+export function readGuardOf(scope: GuardScope): ToolGuard {
+  return (toolName, input) => readDecision(scope, toolName, input) ?? deny(`the tool ${toolName} is not admitted here`);
+}
+
+/** The guard of one review session over the checkout `scope.root`: the read-only guard, plus Agent and the code-review skill. */
 export function guardOf(scope: GuardScope): ToolGuard {
   return (toolName, input) => {
     switch (toolName) {
-      case "Read": {
-        return Option.match(decoded(ReadInput, input), {
-          onNone: () => deny(PATH_REASON),
-          onSome: (read) => pathDecision(scope, read.file_path),
-        });
-      }
-
-      case "Grep": {
-        return Option.match(decoded(PathInput, input), {
-          onNone: () => deny(PATH_REASON),
-          onSome: (grep) => pathDecision(scope, grep.path),
-        });
-      }
-
-      case "Glob": {
-        return globDecision(scope, input);
-      }
-
-      case "Bash": {
-        return Option.match(decoded(BashInput, input), {
-          onNone: () => deny(BASH_REASON),
-          onSome: (bash) => bashGuard(bash.command),
-        });
-      }
-
       case "Agent": {
         return agentDecision(input);
       }
@@ -316,12 +334,8 @@ export function guardOf(scope: GuardScope): ToolGuard {
         return Option.isSome(decoded(SkillInput, input)) ? ALLOW : deny("only the code-review skill runs here");
       }
 
-      case "StructuredOutput": {
-        return ALLOW;
-      }
-
       default: {
-        return deny(`the tool ${toolName} is not admitted in this review`);
+        return readDecision(scope, toolName, input) ?? deny(`the tool ${toolName} is not admitted in this review`);
       }
     }
   };

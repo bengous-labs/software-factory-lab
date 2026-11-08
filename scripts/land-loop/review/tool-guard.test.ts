@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { Schema } from "effect";
 import * as fc from "fast-check";
 
-import { BASH_REASON, bashGuard, guardOf, pathGuard } from "./tool-guard.ts";
+import { resolverOf } from "../lib/resolve.ts";
+import { BASH_REASON, bashGuard, guardOf, pathGuard, readGuardOf } from "./tool-guard.ts";
 import type { Resolve } from "./tool-guard.ts";
 
 const ROOT = "/work/pr";
@@ -262,6 +266,50 @@ describe("guardOf", () => {
 
     for (const name of ["Write", "Edit", "NotebookEdit", "WebFetch", "ReportFindings", "Task"]) {
       expect(guard(name, {})).toEqual({ kind: "deny", reason: `the tool ${name} is not admitted in this review` });
+    }
+  });
+});
+
+describe("readGuardOf", () => {
+  /** A worktree of the PR's head beside a checkout of dev, with a link the PR commits that leads out. */
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), "read-guard-")));
+  const root = join(parent, "pr");
+  mkdirSync(join(root, "app/src"), { recursive: true });
+  mkdirSync(join(root, ".git"));
+  mkdirSync(join(parent, "dev"));
+  writeFileSync(join(root, "app/src/cli.ts"), "x\n");
+  writeFileSync(join(root, ".git/config"), "[core]\n");
+  writeFileSync(join(parent, "dev/AGENTS.md"), "a\n");
+  symlinkSync(join(parent, "dev/AGENTS.md"), join(root, "leak"));
+
+  const readGuard = readGuardOf({ root, resolve: resolverOf(root) });
+  const pathDenied = { kind: "deny", reason: "read only inside the pull request's checkout, outside .git" } as const;
+
+  test("Read in the worktree, Grep with no path, and a read-only git command are allowed", () => {
+    expect(readGuard("Read", { file_path: join(root, "app/src/cli.ts") })).toEqual({ kind: "allow" });
+    expect(readGuard("Read", { file_path: "app/src/cli.ts" })).toEqual({ kind: "allow" });
+    expect(readGuard("Grep", { pattern: "x" })).toEqual({ kind: "allow" });
+    expect(readGuard("Glob", { pattern: "**/*.ts" })).toEqual({ kind: "allow" });
+    expect(readGuard("Bash", { command: "git log --oneline -5" })).toEqual({ kind: "allow" });
+    expect(readGuard("Bash", { command: "git diff HEAD~1 --stat" })).toEqual({ kind: "allow" });
+    expect(readGuard("StructuredOutput", { review: "light" })).toEqual({ kind: "allow" });
+  });
+
+  test("a shell command, a git write or a chained command is denied with bashGuard's reason", () => {
+    for (const command of ["cat app/src/cli.ts", "git push", "git log; env"]) {
+      expect(readGuard("Bash", { command })).toEqual({ kind: "deny", reason: BASH_REASON });
+    }
+  });
+
+  test("a path outside the worktree, up to its parent, into .git, or through a committed link out is denied", () => {
+    for (const file_path of ["/etc/passwd", "../dev/AGENTS.md", join(root, ".git/config"), join(root, "leak")]) {
+      expect(readGuard("Read", { file_path })).toEqual(pathDenied);
+    }
+  });
+
+  test("a write tool, a subagent, a skill, the web and a monitor are not admitted", () => {
+    for (const name of ["Write", "Edit", "Agent", "Skill", "WebFetch", "Monitor"]) {
+      expect(readGuard(name, {})).toEqual({ kind: "deny", reason: `the tool ${name} is not admitted here` });
     }
   });
 });

@@ -1,51 +1,56 @@
 /**
- * One headless model call through the Agent SDK: a prompt in, an answer to a JSON schema out, and no
- * tool. The tool list is empty, no filesystem setting, CLAUDE.md, hook or MCP server is loaded, and a
- * `PreToolUse` hook refuses by code every tool call but the one that returns the schema's answer.
+ * One headless model call through the Agent SDK: a prompt in, an answer to a JSON schema out, and the
+ * read-only tools the caller's guard allows call by call. No filesystem setting, CLAUDE.md, hook or MCP
+ * server is loaded, and the process gets only the environment the call names.
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { HookCallback, Options, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import { Option, Schema } from "effect";
 
 import type { Answer, Ask, Question } from "../ports/ask.ts";
+import type { ToolDecision, ToolGuard } from "../ports/review.ts";
 
 /** The tool Claude Code adds to a session with an output schema, to return the schema's answer. */
 export const STRUCTURED_OUTPUT = "StructuredOutput";
 
-export function toolDecision(toolName: string): "allow" | "deny" {
-  return toolName === STRUCTURED_OUTPUT ? "allow" : "deny";
+const decodeToolInput = Schema.decodeUnknownOption(Schema.JsonObject);
+
+/** A PreToolUse hook that asks `guard` about every tool call and turns its decision into a permission decision. */
+export function guardHook(guard: ToolGuard): HookCallback {
+  return (input) => {
+    if (input.hook_event_name !== "PreToolUse") {
+      return Promise.resolve({});
+    }
+
+    const decision = Option.match(decodeToolInput(input.tool_input), {
+      onNone: (): ToolDecision => ({ kind: "deny", reason: "the tool input is not a JSON object" }),
+      onSome: (toolInput) => guard(input.tool_name, toolInput),
+    });
+
+    return Promise.resolve({
+      hookSpecificOutput:
+        decision.kind === "allow"
+          ? { hookEventName: "PreToolUse", permissionDecision: "allow" }
+          : { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: decision.reason },
+    });
+  };
 }
-
-export const refuseTools: HookCallback = (input) => {
-  if (input.hook_event_name !== "PreToolUse") {
-    return Promise.resolve({});
-  }
-
-  if (toolDecision(input.tool_name) === "allow") {
-    return Promise.resolve({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } });
-  }
-
-  return Promise.resolve({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: "this call runs with no tool",
-    },
-  });
-};
 
 export function optionsOf(question: Question, abortController: AbortController): Options {
   return {
     model: question.model,
     cwd: question.cwd,
     abortController,
-    tools: [],
+    tools: ["Read", "Grep", "Glob", "Bash"],
+    env: { ...question.env },
     strictMcpConfig: true,
     settingSources: [],
+    settings: { disableAllHooks: true },
     persistSession: false,
     permissionMode: "dontAsk",
     outputFormat: { type: "json_schema", schema: question.schema },
-    hooks: { PreToolUse: [{ hooks: [refuseTools], onFailure: "block" }] },
+    hooks: { PreToolUse: [{ hooks: [guardHook(question.guard)], onFailure: "block" }] },
   };
 }
 

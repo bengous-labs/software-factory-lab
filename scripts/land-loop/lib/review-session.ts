@@ -6,11 +6,10 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { HookCallback, Options, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import { Option, Schema } from "effect";
+import type { Options, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 
-import type { ReviewCall, ReviewSession, SessionAnswer, ToolDecision, ToolGuard } from "../ports/review.ts";
-import { modelOf, STRUCTURED_OUTPUT } from "./ask.ts";
+import type { ReviewCall, ReviewSession, SessionAnswer } from "../ports/review.ts";
+import { guardHook, modelOf, STRUCTURED_OUTPUT } from "./ask.ts";
 import type { Stream } from "./ask.ts";
 
 /** The tools of the session. The CLI adds StructuredOutput itself, for `outputFormat`. */
@@ -21,29 +20,6 @@ export const REVIEW_TOOLS: readonly string[] = ["Read", "Grep", "Glob", "Bash", 
  * name: Claude Code writes it, and an answer from any other parent is not the review's.
  */
 export const FORK_PARENT = "forked-command-code-review";
-
-const decodeToolInput = Schema.decodeUnknownOption(Schema.JsonObject);
-
-/** A PreToolUse hook that asks `guard` about every tool call and turns its decision into a permission decision. */
-export function guardHook(guard: ToolGuard): HookCallback {
-  return (input) => {
-    if (input.hook_event_name !== "PreToolUse") {
-      return Promise.resolve({});
-    }
-
-    const decision = Option.match(decodeToolInput(input.tool_input), {
-      onNone: (): ToolDecision => ({ kind: "deny", reason: "the tool input is not a JSON object" }),
-      onSome: (toolInput) => guard(input.tool_name, toolInput),
-    });
-
-    return Promise.resolve({
-      hookSpecificOutput:
-        decision.kind === "allow"
-          ? { hookEventName: "PreToolUse", permissionDecision: "allow" }
-          : { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: decision.reason },
-    });
-  };
-}
 
 export function optionsOf(call: ReviewCall, abortController: AbortController): Options {
   return {

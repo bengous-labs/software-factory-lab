@@ -8,11 +8,12 @@
 
 import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { resolverOf } from "../lib/resolve.ts";
 import { reviewSession } from "../lib/review-session.ts";
 import { EarlierThreads } from "./findings.ts";
 import { promptOf, readsEarlierThreads } from "./review-prompt.ts";
@@ -30,17 +31,6 @@ function required(name: string): string {
   }
 
   return value;
-}
-
-/** A path resolved against the checkout with every link followed; one that does not resolve is denied. */
-function resolverOf(root: string): (path: string) => string | null {
-  return (path) => {
-    try {
-      return realpathSync(isAbsolute(path) ? path : join(root, path));
-    } catch {
-      return null;
-    }
-  };
 }
 
 const workspace = process.cwd();

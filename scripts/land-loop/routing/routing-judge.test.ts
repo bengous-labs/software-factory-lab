@@ -2,10 +2,19 @@ import { describe, expect, test } from "bun:test";
 
 import { Result, Schema } from "effect";
 
-import type { Answer, Ask, Question } from "../ports/ask.ts";
+import type { Answer, Ask, Question, Reader } from "../ports/ask.ts";
 import { ROUTING_JUDGE_MODEL, routingJudge, RoutingJudgeAnswer, routingOf, SCHEMA } from "./routing-judge.ts";
 
 const SAFE = { land: "auto", review: "deep", secondRound: true };
+
+const READER: Reader = {
+  cwd: "/work/pr",
+  guard: () => ({ kind: "deny", reason: "none" }),
+  env: { PATH: "/usr/bin", HOME: "/home/runner" },
+};
+
+const CHECKED_OUT =
+  "The change is checked out at its head in your working directory. You may read it with Read, Grep and Glob, and run one read-only git command per Bash call, to judge the change in its context. You change nothing.";
 
 interface Asked {
   readonly ask: Ask;
@@ -60,10 +69,12 @@ describe("routingJudge", () => {
       model: "claude-haiku-5-5",
     });
 
-    const routing = await routingJudge(ask, "/repo", "1 file changed", "+docs", false);
+    const routing = await routingJudge(ask, READER, "1 file changed", "+docs", false);
 
     expect(questions).toHaveLength(1);
-    expect(questions[0]).toMatchObject({ model: ROUTING_JUDGE_MODEL, cwd: "/repo" });
+    expect(questions[0]).toMatchObject({ model: ROUTING_JUDGE_MODEL, cwd: "/work/pr", env: READER.env });
+    expect(questions[0]?.guard).toBe(READER.guard);
+    expect(questions[0]?.prompt.split("\n")[1]).toBe(CHECKED_OUT);
     expect(questions[0]?.schema).toEqual(SCHEMA);
     expect(SCHEMA.required).toEqual(["review", "second_round", "reason"]);
     expect(Object.keys(SCHEMA.properties)).not.toContain("land");
@@ -87,7 +98,7 @@ describe("routingJudge", () => {
       model: "claude-haiku-5-5",
     });
 
-    const routing = await routingJudge(ask, "/repo", "s", "p", true);
+    const routing = await routingJudge(ask, READER, "s", "p", true);
 
     expect(routing).toMatchObject({ ...SAFE, model: "claude-haiku-5-5" });
     expect(routing.reason).toBe("the Routing judge failed: error_during_execution: overloaded");
@@ -96,7 +107,7 @@ describe("routingJudge", () => {
   test("a call with no result is named after the model asked, never the Routing rules", async () => {
     const { ask } = asking({ kind: "failed", error: "timed out after 180000 ms", costUsd: null, model: null });
 
-    expect(await routingJudge(ask, "/repo", "s", "p", false)).toMatchObject({ ...SAFE, model: ROUTING_JUDGE_MODEL });
+    expect(await routingJudge(ask, READER, "s", "p", false)).toMatchObject({ ...SAFE, model: ROUTING_JUDGE_MODEL });
   });
 
   test("an answer that does not read answers the safe side", async () => {
@@ -107,7 +118,7 @@ describe("routingJudge", () => {
       model: "claude-haiku-5-5",
     });
 
-    const routing = await routingJudge(ask, "/repo", "s", "p", false);
+    const routing = await routingJudge(ask, READER, "s", "p", false);
 
     expect(routing).toMatchObject(SAFE);
     expect(routing.reason).toBe(
