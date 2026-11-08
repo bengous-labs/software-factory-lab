@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import type { HookCallback, Options, PreToolUseHookInput, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Schema } from "effect";
 
 import type { ReviewCall, ToolGuard } from "../ports/review.ts";
 import type { Stream } from "./ask.ts";
-import { FORK_PARENT, guardHook, optionsOf, REVIEW_TOOLS, sessionWith } from "./review-session.ts";
+import { FORK_PARENT, optionsOf, REVIEW_TOOLS, sessionWith } from "./review-session.ts";
 
 const SONNET = "claude-sonnet-5-5";
 
@@ -93,51 +93,6 @@ const untilAborted: Stream = (call) => ({
         });
       }),
   }),
-});
-
-const preToolUse = (toolName: string, toolInput: Schema.Json): PreToolUseHookInput => ({
-  hook_event_name: "PreToolUse",
-  tool_name: toolName,
-  tool_input: toolInput,
-  tool_use_id: "t1",
-  session_id: "s",
-  transcript_path: "/t.jsonl",
-  cwd: "/work/pr",
-});
-
-const hookOf = (hook: HookCallback, input: PreToolUseHookInput): ReturnType<HookCallback> =>
-  hook(input, "t1", { signal: new AbortController().signal });
-
-describe("guardHook", () => {
-  test("the guard's decision becomes the PreToolUse permission decision, allow included", async () => {
-    const hook = guardHook(allowReads);
-
-    expect(await hookOf(hook, preToolUse("Read", { file_path: "/work/pr/a.ts" }))).toEqual({
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
-    });
-    expect(await hookOf(hook, preToolUse("Write", { file_path: "/work/pr/a.ts" }))).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "no Write",
-      },
-    });
-  });
-
-  test("a tool input that is not a JSON object is denied before the guard sees it", async () => {
-    expect(
-      await hookOf(
-        guardHook(() => ({ kind: "allow" })),
-        preToolUse("Read", "a.ts"),
-      ),
-    ).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "the tool input is not a JSON object",
-      },
-    });
-  });
 });
 
 describe("optionsOf", () => {

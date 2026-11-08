@@ -10,25 +10,39 @@ import type {
 import type { Schema } from "effect";
 
 import type { Answer, Question } from "../ports/ask.ts";
-import { answerOf, askWith, modelOf, optionsOf, refuseTools, STRUCTURED_OUTPUT, toolDecision } from "./ask.ts";
+import type { ToolGuard } from "../ports/review.ts";
+import { answerOf, askWith, guardHook, modelOf, optionsOf } from "./ask.ts";
 import type { Stream } from "./ask.ts";
 
 const HAIKU = "claude-haiku-5-5";
 
-const QUESTION: Question = { model: "haiku", prompt: "p", schema: { type: "object" }, cwd: "/repo", timeoutMs: 1000 };
+const allowReads: ToolGuard = (toolName) =>
+  toolName === "Read" ? { kind: "allow" } : { kind: "deny", reason: `no ${toolName}` };
 
-const preToolUse = (toolName: string): PreToolUseHookInput => ({
+const QUESTION: Question = {
+  model: "haiku",
+  prompt: "p",
+  schema: { type: "object" },
+  cwd: "/repo",
+  guard: allowReads,
+  env: { PATH: "/usr/bin", HOME: "/home/runner", CLAUDE_CONFIG_DIR: "/tmp/fresh" },
+  timeoutMs: 1000,
+};
+
+const preToolUse = (toolName: string, toolInput: Schema.Json): PreToolUseHookInput => ({
   hook_event_name: "PreToolUse",
   tool_name: toolName,
-  tool_input: {},
+  tool_input: toolInput,
   tool_use_id: "t1",
   session_id: "s",
   transcript_path: "/t.jsonl",
   cwd: "/repo",
 });
 
-const decisionOf = (toolName: string): ReturnType<HookCallback> =>
-  refuseTools(preToolUse(toolName), "t1", { signal: new AbortController().signal });
+const noHook: HookCallback = () => Promise.resolve({});
+
+const hookOf = (hook: HookCallback, input: PreToolUseHookInput): ReturnType<HookCallback> =>
+  hook(input, "t1", { signal: new AbortController().signal });
 
 function result(fields: Readonly<Record<string, Schema.Json>>): SDKResultMessage {
   // oxlint-disable-next-line anti-slop/no-chained-type-assertions, typescript/no-unsafe-type-assertion -- SAFETY: a test fixture holding only the fields answerOf reads.
@@ -70,53 +84,68 @@ function streamOf(body: (options: Options) => AsyncGenerator<SDKMessage>): Recor
   };
 }
 
-describe("tools", () => {
-  test("every tool is refused but the one that returns the schema's answer", () => {
-    for (const name of [
-      "Bash",
-      "Read",
-      "Write",
-      "Edit",
-      "Glob",
-      "WebFetch",
-      "Agent",
-      "mcp__github__create_pull_request",
-    ]) {
-      expect(toolDecision(name)).toBe("deny");
-    }
+describe("guardHook", () => {
+  test("the guard's decision becomes the PreToolUse permission decision, allow included", async () => {
+    const hook = guardHook(allowReads);
 
-    expect(toolDecision(STRUCTURED_OUTPUT)).toBe("allow");
-  });
-
-  test("the hook turns that decision into a PreToolUse permission decision", async () => {
-    expect(await decisionOf("Write")).toEqual({
+    expect(await hookOf(hook, preToolUse("Read", { file_path: "/repo/a.ts" }))).toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+    });
+    expect(await hookOf(hook, preToolUse("Write", { file_path: "/repo/a.ts" }))).toEqual({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: "this call runs with no tool",
+        permissionDecisionReason: "no Write",
       },
-    });
-    expect(await decisionOf(STRUCTURED_OUTPUT)).toEqual({
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
     });
   });
 
-  test("the options list no tool, load no setting, deny every prompt, and block a failing guard", () => {
+  test("a tool input that is not a JSON object is denied before the guard sees it", async () => {
+    expect(
+      await hookOf(
+        guardHook(() => ({ kind: "allow" })),
+        preToolUse("Read", "a.ts"),
+      ),
+    ).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "the tool input is not a JSON object",
+      },
+    });
+  });
+});
+
+describe("optionsOf", () => {
+  test("the read-only tools under the question's guard, no setting or hook loaded, the question's env alone, every prompt denied", async () => {
     const options = optionsOf(QUESTION, new AbortController());
 
     expect(options).toMatchObject({
       model: "haiku",
       cwd: "/repo",
-      tools: [],
+      tools: ["Read", "Grep", "Glob", "Bash"],
       strictMcpConfig: true,
       settingSources: [],
+      settings: { disableAllHooks: true },
       persistSession: false,
       permissionMode: "dontAsk",
     });
+    expect(options.env).toEqual(QUESTION.env);
+    expect(options.env).not.toBe(QUESTION.env);
     expect(options.outputFormat).toEqual({ type: "json_schema", schema: { type: "object" } });
-    expect(options.hooks?.PreToolUse).toEqual([{ hooks: [refuseTools], onFailure: "block" }]);
     expect(options.canUseTool).toBeUndefined();
     expect(options.allowedTools).toBeUndefined();
+
+    const preToolUseHooks = options.hooks?.PreToolUse ?? [];
+
+    expect(preToolUseHooks).toHaveLength(1);
+    expect(preToolUseHooks[0]?.onFailure).toBe("block");
+
+    const [hook = noHook] = preToolUseHooks[0]?.hooks ?? [];
+
+    expect(await hookOf(hook, preToolUse("Write", {}))).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "no Write" },
+    });
   });
 });
 
@@ -183,7 +212,7 @@ describe("askWith", () => {
       model: HAIKU,
     });
     expect(calls[0]?.prompt).toBe("p");
-    expect(calls[0]?.options).toMatchObject({ model: "haiku", tools: [], permissionMode: "dontAsk" });
+    expect(calls[0]?.options).toMatchObject({ model: "haiku", cwd: "/repo", permissionMode: "dontAsk" });
   });
 
   test("an error result followed by a throw answers with the result's error, not the throw", async () => {
