@@ -54,6 +54,7 @@ const READY: Snapshot = {
   labels: [],
   humanLabelBy: null,
   landApprovalByOwner: false,
+  landApprovalPutByOwner: false,
   openImportant: 0,
   devRed: false,
   conflicting: false,
@@ -1189,9 +1190,11 @@ describe("why a PR is held, where the Owner looks", () => {
     );
   });
 
-  test("a routed push keeps its CI summaries, a rerun's included", () => {
-    expect(gateSummary({ ...READY, ci: null })).toBe("Waiting for validate and mutation.");
-    expect(gateSummary({ ...READY, ci: "failure" })).toBe("validate or mutation is red: the author's turn.");
+  test("a routed push, a rerun's included, and the first push of a PR keep their CI summaries", () => {
+    for (const snapshot of [READY, { ...READY, record: EMPTY_RECORD }]) {
+      expect(gateSummary({ ...snapshot, ci: null })).toBe("Waiting for validate and mutation.");
+      expect(gateSummary({ ...snapshot, ci: "failure" })).toBe("validate or mutation is red: the author's turn.");
+    }
   });
 
   test("a land-ok given for an earlier push is removed with a comment that says so", () => {
@@ -1208,11 +1211,16 @@ describe("why a PR is held, where the Owner looks", () => {
     ]);
   });
 
-  test("a land-ok the Owner gave before a push, which no longer counts, is removed as given for an earlier push", () => {
-    for (const landOkPatch of ["patch-0", P1]) {
-      const pushed = { ...READY, labels: [LAND_APPROVAL_LABEL], record: reviewed(LIGHT, { landOkPatch }) };
+  test("a land-ok the Owner put before a push, which no longer counts, is removed as given for an earlier push, recorded or not", () => {
+    const pushed = { ...READY, labels: [LAND_APPROVAL_LABEL], landApprovalPutByOwner: true, record: reviewed(LIGHT) };
 
-      expect(stepsOf(pushed).slice(0, 3)).toEqual([
+    expect(stepsOf(pushed).slice(0, 2)).toEqual([
+      { kind: "remove-land-approval" },
+      { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+    ]);
+
+    for (const landOkPatch of ["patch-0", P1]) {
+      expect(stepsOf({ ...pushed, record: reviewed(LIGHT, { landOkPatch }) }).slice(0, 3)).toEqual([
         { kind: "remove-land-approval" },
         { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
         { kind: "record", record: reviewed(LIGHT) },
@@ -1220,13 +1228,17 @@ describe("why a PR is held, where the Owner looks", () => {
     }
   });
 
-  test("a land-ok the Owner did not put is removed with a comment that says so", () => {
+  test("a land-ok the Owner did not put is removed with a comment that says so, though the Owner's was recorded before", () => {
     const foreign = { ...READY, labels: [LAND_APPROVAL_LABEL], record: reviewed(LIGHT) };
 
-    expect(stepsOf(foreign).slice(0, 2)).toEqual([
-      { kind: "remove-land-approval" },
-      { kind: "owner-comment", body: NOT_OWNER_COMMENT },
-    ]);
+    for (const snapshot of [foreign, { ...foreign, record: reviewed(LIGHT, { landOkPatch: P1 }) }]) {
+      expect(stepsOf(snapshot).slice(0, 2)).toEqual([
+        { kind: "remove-land-approval" },
+        { kind: "owner-comment", body: NOT_OWNER_COMMENT },
+      ]);
+    }
+
+    expect(kinds(foreign)).not.toContain("record");
   });
 
   test("a PR the Routing rules hold asks the Owner in a comment, then records the patch, before the Land gate", () => {

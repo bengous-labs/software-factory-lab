@@ -189,15 +189,23 @@ export function openedByFactoryOf(
   return login === owner || login === authorLogin;
 }
 
+const lastLandApprovalOf = (events: typeof IssueEvents.Type) =>
+  events.filter((event) => event.event === "labeled" && event.label?.name === LAND_APPROVAL_LABEL).at(-1);
+
+/** Whether the last Land approval label put on the PR was put by `owner`, whenever it was put. */
+export function landApprovalPutByOwnerOf(events: typeof IssueEvents.Type, owner: string): boolean {
+  return lastLandApprovalOf(events)?.actor?.login === owner;
+}
+
 /** Whether the last Land approval label put on the PR was put by `owner` after its head was pushed. */
 export function landApprovalByOwnerOf(
   events: typeof IssueEvents.Type,
   owner: string,
   headPushedAt: string | null,
 ): boolean {
-  const last = events.filter((event) => event.event === "labeled" && event.label?.name === LAND_APPROVAL_LABEL).at(-1);
+  const last = lastLandApprovalOf(events);
 
-  return landApprovalCounts(last?.actor?.login === owner, last?.created_at ?? null, headPushedAt);
+  return landApprovalCounts(landApprovalPutByOwnerOf(events, owner), last?.created_at ?? null, headPushedAt);
 }
 
 /** Who set the PR's `land:human`, by its latest `labeled` event; see `Snapshot["humanLabelBy"]`. */
@@ -457,6 +465,7 @@ async function snapshotOf(
     labels.includes(LAND_APPROVAL_LABEL) || labels.includes(humanLabel) ? await labelEventsOf(env, pr.number) : [];
 
   let landApprovalByOwner = false;
+  let landApprovalPutByOwner = false;
 
   if (labels.includes(LAND_APPROVAL_LABEL)) {
     // The head's first check suite is created when it is pushed: a Land approval put before that was given for another head.
@@ -464,6 +473,7 @@ async function snapshotOf(
 
     const pushedAt = suites.check_suites.map((suite) => suite.created_at).toSorted()[0] ?? null;
     landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, pushedAt);
+    landApprovalPutByOwner = landApprovalPutByOwnerOf(events, env.owner);
   }
 
   const devRuns = await api(env, WorkflowRuns, devCiRunsPathOf(env.repo));
@@ -481,6 +491,7 @@ async function snapshotOf(
     labels,
     humanLabelBy: humanLabelByOf(events, labels, env.appLogin),
     landApprovalByOwner,
+    landApprovalPutByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
     devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
     conflicting: conflictingOf(pr.mergeable_state),

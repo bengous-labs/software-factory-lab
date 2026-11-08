@@ -32,6 +32,7 @@ import {
   judgeEnvOf,
   labelEventsReader,
   landApprovalByOwnerOf,
+  landApprovalPutByOwnerOf,
   linesOfNumstat,
   ListedPrs,
   notFound,
@@ -133,6 +134,8 @@ describe("the GitHub answers the Merge bot reads", () => {
     expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T10:00:00Z")).toBe(true);
     expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T12:00:00Z")).toBe(false);
     expect(landApprovalByOwnerOf(events, "someone", "2026-11-05T10:00:00Z")).toBe(false);
+    expect(landApprovalPutByOwnerOf(events, "owner")).toBe(true);
+    expect(landApprovalPutByOwnerOf(events, "someone")).toBe(false);
 
     const byGhost = decodeJson(
       IssueEvents,

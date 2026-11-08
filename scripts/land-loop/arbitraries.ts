@@ -151,6 +151,7 @@ export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   labels: fc.subarray(LABELS),
   humanLabelBy: HUMAN_LABEL_BY,
   landApprovalByOwner: fc.boolean(),
+  landApprovalPutByOwner: fc.boolean(),
   openImportant: fc.nat({ max: 2 }),
   devRed: fc.boolean(),
   conflicting: fc.boolean(),

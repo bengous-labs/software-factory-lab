@@ -395,7 +395,12 @@ describe("withNitAnswers", () => {
         delta(["scripts/a.ts"], NIT_ANSWER_LINE_CAP),
         AFTER_CLEAN_ROUND_3,
       ),
-    ).toMatchObject({ land: "owner", secondRound: false });
+    ).toEqual({
+      ...READ,
+      land: "owner",
+      secondRound: false,
+      reason: `touches a path a deep review reads; a push after Review round 3 that only answers its Nits: ${NIT_ANSWER_LINE_CAP} lines in scripts/a.ts`,
+    });
   });
 
   test("a delta with a file round 3 posted no Nit on, past the cap, or in a deepReviewPaths path keeps its answer", () => {

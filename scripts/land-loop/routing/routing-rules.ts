@@ -168,11 +168,16 @@ export function withNitAnswers(
     delta.paths.every((path) => nits.has(path)) &&
     matching(policy.deepReviewPaths, delta.paths).length === 0;
 
-  return answersNits
-    ? {
-        ...answer,
-        secondRound: false,
-        reason: `a push after Review round 3 that only answers its Nits: ${delta.lines} lines in ${listed(delta.paths)}`,
-      }
-    : answer;
+  if (!answersNits) {
+    return answer;
+  }
+
+  const nitAnswer = `a push after Review round 3 that only answers its Nits: ${delta.lines} lines in ${listed(delta.paths)}`;
+
+  // The Owner's route keeps its reason: the land-gate and the Owner's comment give it as why the PR is held.
+  return {
+    ...answer,
+    secondRound: false,
+    reason: answer.land === "owner" ? `${answer.reason}; ${nitAnswer}` : nitAnswer,
+  };
 }

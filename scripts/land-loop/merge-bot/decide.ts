@@ -224,6 +224,8 @@ export interface Snapshot {
   readonly humanLabelBy: "merge-bot" | "other" | null;
   /** The Land approval label is on the PR and the owner put it there, after this head was pushed. */
   readonly landApprovalByOwner: boolean;
+  /** The Land approval label is on the PR and the owner put it there, before or after this head was pushed. */
+  readonly landApprovalPutByOwner: boolean;
   readonly openImportant: number;
   readonly devRed: boolean;
   /** GitHub reads the PR as conflicting with its base: no CI runs on it and the queue refuses it. */
@@ -354,11 +356,11 @@ function landApprovalOf(snapshot: Snapshot, record: StateRecord): LandApproval {
     return { next: record.landOkPatch === null ? record : { ...record, landOkPatch: null }, removed: null };
   }
 
-  // A recorded patch means the Owner's label counted once: it no longer counts because a push came after it.
   if (!snapshot.landApprovalByOwner) {
-    return record.landOkPatch === null
-      ? { next: record, removed: "not-owner" }
-      : { next: { ...record, landOkPatch: null }, removed: "earlier-patch" };
+    return {
+      next: record.landOkPatch === null ? record : { ...record, landOkPatch: null },
+      removed: snapshot.landApprovalPutByOwner ? "earlier-patch" : "not-owner",
+    };
   }
 
   if (record.landOkPatch === null) {
@@ -431,9 +433,14 @@ function ownerWaitSteps(next: StateRecord, patch: string, wait: OwnerWait): read
   ];
 }
 
-/** The CI summary, with a sentence more while this push is not routed: the labels a human sees are the previous push's. */
-const ciSummary = (summary: string, routed: boolean): string =>
-  routed ? summary : `${summary} This push is not routed yet: its labels are the previous push's.`;
+/**
+ * The CI summary, with a sentence more while this push is not routed after an earlier push was: the
+ * labels a human sees are the previous push's.
+ */
+const ciSummary = (summary: string, record: StateRecord, patch: string): string =>
+  record.triage[patch] !== undefined || Object.keys(record.triage).length === 0
+    ? summary
+    : `${summary} This push is not routed yet: its labels are the previous push's.`;
 
 /** How long after its dispatch a review the job has not reported counts as failed: past the job's 30-minute timeout. */
 export const REVIEW_DEADLINE_MS = 45 * 60_000;
@@ -725,11 +732,11 @@ export function decide(snapshot: Snapshot): Decision {
   const routing = next.triage[snapshot.patch];
 
   if (snapshot.ci === null) {
-    return finish(pending(ciSummary("Waiting for validate and mutation.", routing !== undefined)));
+    return finish(pending(ciSummary("Waiting for validate and mutation.", next, snapshot.patch)));
   }
 
   if (snapshot.ci === "failure") {
-    return finish(pending(ciSummary("validate or mutation is red: the author's turn.", routing !== undefined)));
+    return finish(pending(ciSummary("validate or mutation is red: the author's turn.", next, snapshot.patch)));
   }
 
   if (routing === undefined) {
