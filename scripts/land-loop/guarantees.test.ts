@@ -263,6 +263,7 @@ export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   draft: fc.boolean(),
   head: HEAD,
   patch: PATCH,
+  empty: fc.oneof({ arbitrary: fc.constant(false), weight: 8 }, fc.constant(true)),
   ci: fc.constantFrom("success", "failure", null),
   labels: fc.subarray(LABELS),
   landApprovalByOwner: fc.boolean(),
@@ -333,6 +334,7 @@ const NEAR_LANDABLE: fc.Arbitrary<Snapshot> = PATCH.chain((patch) =>
     draft: mostly(false, fc.constant(true)),
     head: HEAD,
     patch: fc.constant(patch),
+    empty: mostly(false, fc.constant(true)),
     ci: mostly<Snapshot["ci"]>("success", fc.constantFrom("failure", null)),
     labels: fc.subarray(LABELS),
     landApprovalByOwner: fc.boolean(),
@@ -403,6 +405,7 @@ describe("the Merge bot's guarantees", () => {
         expect(gateStep?.kind === "land-gate" ? gateStep.check.kind : undefined).toBe("success");
         expect(snapshot).toMatchObject({
           draft: false,
+          empty: false,
           ci: "success",
           openImportant: 0,
           devRed: false,

@@ -5,7 +5,7 @@ import { Result, Schema } from "effect";
 import type { Answer, Ask, Question } from "../ports/ask.ts";
 import { ROUTING_JUDGE_MODEL, routingJudge, RoutingJudgeAnswer, routingOf, SCHEMA } from "./routing-judge.ts";
 
-const SAFE = { land: "owner", review: "deep", secondRound: true };
+const SAFE = { land: "auto", review: "deep", secondRound: true };
 
 interface Asked {
   readonly ask: Ask;
@@ -27,9 +27,7 @@ function asking(answer: Answer): Asked {
 
 describe("routingOf", () => {
   test("the schema's answer reads into a Routing answer that carries the exact model that gave it", () => {
-    expect(
-      routingOf({ land: "auto", review: "light", second_round: false, reason: "small" }, "claude-haiku-5-5"),
-    ).toEqual({
+    expect(routingOf({ review: "light", second_round: false, reason: "small" }, "claude-haiku-5-5")).toEqual({
       land: "auto",
       review: "light",
       secondRound: false,
@@ -40,9 +38,9 @@ describe("routingOf", () => {
 
   test("an answer outside the schema does not read", () => {
     const refused = [
-      { land: "maybe", review: "light", second_round: false, reason: "" },
-      { land: "auto", review: "light", reason: "" },
-      { land: "auto", review: "light", second_round: "no", reason: "" },
+      { review: "maybe", second_round: false, reason: "" },
+      { review: "light", reason: "" },
+      { review: "light", second_round: "no", reason: "" },
       null,
       "auto",
     ];
@@ -57,7 +55,7 @@ describe("routingJudge", () => {
   test("Haiku gets the schema and the change, and its answer is the Routing answer", async () => {
     const { ask, questions } = asking({
       kind: "answered",
-      structured: { land: "auto", review: "none", second_round: false, reason: "docs" },
+      structured: { review: "none", second_round: false, reason: "docs" },
       costUsd: 0.003,
       model: "claude-haiku-5-5",
     });
@@ -67,7 +65,11 @@ describe("routingJudge", () => {
     expect(questions).toHaveLength(1);
     expect(questions[0]).toMatchObject({ model: ROUTING_JUDGE_MODEL, cwd: "/repo" });
     expect(questions[0]?.schema).toEqual(SCHEMA);
+    expect(SCHEMA.required).toEqual(["review", "second_round", "reason"]);
+    expect(Object.keys(SCHEMA.properties)).not.toContain("land");
     expect(questions[0]?.prompt).toContain("+docs");
+    expect(questions[0]?.prompt).toContain("Answer these questions.");
+    expect(questions[0]?.prompt).not.toContain("- land:");
     expect(routing).toEqual({
       land: "auto",
       review: "none",
@@ -100,7 +102,7 @@ describe("routingJudge", () => {
   test("an answer that does not read answers the safe side", async () => {
     const { ask } = asking({
       kind: "answered",
-      structured: { land: "soon" },
+      structured: { review: "soon", second_round: false, reason: "" },
       costUsd: 0.003,
       model: "claude-haiku-5-5",
     });
@@ -109,7 +111,7 @@ describe("routingJudge", () => {
 
     expect(routing).toMatchObject(SAFE);
     expect(routing.reason).toBe(
-      'the Routing judge failed: its answer does not read: Expected "auto" | "owner"\n  at ["land"]',
+      'the Routing judge failed: its answer does not read: Expected "none" | "light" | "deep"\n  at ["review"]',
     );
   });
 });

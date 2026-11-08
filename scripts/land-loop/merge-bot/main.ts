@@ -29,7 +29,7 @@ import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from ".
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { routingJudge } from "../routing/routing-judge.ts";
-import { judgeAskOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
+import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
 import {
   afterReview,
   CI_CHECKS,
@@ -388,6 +388,7 @@ async function snapshotOf(
   const ciRuns = await Promise.all(ciRunsPathsOf(env.repo, pr.head.sha).map((path) => api(env, CheckRuns, path)));
 
   const patch = await patchOf(env, range);
+  const empty = (await changedPaths(env, range.base, range.head)).length === 0;
   const labels = pr.labels.map((label) => label.name);
   let landApprovalByOwner = false;
 
@@ -411,6 +412,7 @@ async function snapshotOf(
     draft: pr.draft,
     head: pr.head.sha,
     patch,
+    empty,
     ci: ciOfRuns(ciRuns),
     labels,
     landApprovalByOwner,
@@ -473,18 +475,11 @@ export const changedPathsArgs = (from: string, to: string): readonly string[] =>
   `${from}..${to}`,
 ];
 
-/** The arguments of the `git diff` the Routing judge reads, its `--stat` or its patch, limited to `paths` when given. */
-export const judgeDiffArgs = (
-  from: string,
-  to: string,
-  paths: readonly string[] | null,
-  stat: boolean,
-): readonly string[] => [
-  "--literal-pathspecs",
+/** The arguments of the `git diff` the Routing judge reads, its `--stat` or its patch, over the whole range. */
+export const judgeDiffArgs = (from: string, to: string, stat: boolean): readonly string[] => [
   "diff",
   ...(stat ? ["--stat"] : []),
   `${from}..${to}`,
-  ...(paths === null ? [] : ["--", ...paths]),
 ];
 
 /** The routing policy of the factory config in `checkout`: the Merge bot's own checkout of the Trunk, never a PR's head. */
@@ -521,7 +516,7 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
 
   // The Routing rules hold the labels of the whole PR; whether this Patch delta is read again is its own question.
   const patchDeltaRules = patchDelta
-    ? routingRulesOf(policy, { paths: await changedPaths(env, from, range.head), lines: 0, messages: [] })
+    ? patchDeltaRulesOf(policy, { paths: await changedPaths(env, from, range.head), lines: 0, messages: [] })
     : null;
 
   const question = judgeAskOf(rules, patchDeltaRules);
@@ -532,8 +527,8 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
       : await routingJudge(
           ask,
           env.cwd,
-          await git(env, judgeDiffArgs(from, range.head, question.paths, true)),
-          await git(env, judgeDiffArgs(from, range.head, question.paths, false)),
+          await git(env, judgeDiffArgs(from, range.head, true)),
+          await git(env, judgeDiffArgs(from, range.head, false)),
           patchDelta,
         );
 

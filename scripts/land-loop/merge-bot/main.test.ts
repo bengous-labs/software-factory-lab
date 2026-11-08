@@ -11,7 +11,7 @@ import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
-import { judgeAskOf, routingRulesOf } from "../routing/routing-rules.ts";
+import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
 import type { ReviewState } from "./decide.ts";
 import {
   ActionsRun,
@@ -329,7 +329,7 @@ describe("the routing inputs", () => {
     expect(listed).toEqual([FACTORY_CONFIG_PATH, "scripts/software-factory.json"]);
   });
 
-  test("on a Patch delta, the Routing judge is asked nothing when the delta leaves the paths no rule names alone, and reads their diff when it touches one", async () => {
+  test("the Routing judge is asked about a change no rule names, never about a mixed one, and on a Patch delta only when the delta is judged, reading the whole diff of its range", async () => {
     const { repo, git } = await fixtureRepo("patch-delta-");
     const policy: RoutingPolicy = { ownerPaths: [], factoryPaths: ["scripts/**"], deepReviewPaths: [], lineCap: 400 };
 
@@ -351,38 +351,66 @@ describe("the routing inputs", () => {
         .split("\n")
         .filter((path) => path !== "");
 
+    const rulesOn = async (from: string, to: string) =>
+      routingRulesOf(policy, { paths: await pathsOf(from, to), lines: 0, messages: [] });
+
     const base = await commit({ "README.md": "r\n" });
+    const unruled = await commit({ "docs/u.md": "u\n" });
+
+    expect(judgeAskOf(await rulesOn(base, unruled), null)).toEqual({ kind: "ask" });
+    expect((await git(judgeDiffArgs(base, unruled, false))).text()).toContain("+u");
+
     const reviewed = await commit({ ".gitignore": "a\n", "scripts/a.ts": "1\n" });
 
-    const askOn = async (head: string) =>
-      judgeAskOf(
-        routingRulesOf(policy, { paths: await pathsOf(base, head), lines: 0, messages: [] }),
-        routingRulesOf(policy, { paths: await pathsOf(reviewed, head), lines: 0, messages: [] }),
-      );
+    expect(judgeAskOf(await rulesOn(base, reviewed), null)).toEqual({ kind: "none" });
 
-    expect(await askOn(await commit({ "scripts/a.ts": "2\n" }))).toEqual({ kind: "none" });
+    const askOn = async (from: string, head: string) =>
+      judgeAskOf(await rulesOn(base, head), await rulesOn(from, head));
 
-    const head = await commit({ ".gitignore": "b\n" });
-    const question = await askOn(head);
+    expect(await askOn(reviewed, await commit({ "scripts/a.ts": "2\n" }))).toEqual({ kind: "none" });
 
-    expect(question).toEqual({ kind: "ask", paths: [".gitignore"] });
+    const fixed = await commit({ ".gitignore": "b\n", "scripts/a.ts": "3\n" });
 
-    const diff = await git(judgeDiffArgs(reviewed, head, question.kind === "ask" ? question.paths : null, false));
+    expect(await askOn(reviewed, fixed)).toEqual({ kind: "none" });
 
-    expect(diff.text()).toContain("+b");
-    expect(diff.text()).not.toContain("scripts/a.ts");
+    const head = await commit({ ".gitignore": "c\n", "docs/u.md": "v\n" });
+
+    expect(await askOn(fixed, head)).toEqual({ kind: "ask" });
+
+    const diff = (await git(judgeDiffArgs(fixed, head, false))).text();
+
+    expect(diff).toContain("+c");
+    expect(diff).toContain("+v");
+
+    const same = await commit({ "docs/u.md": "u\n" });
+    const back = await commit({ "docs/u.md": "v\n" });
+    const nothing = patchDeltaRulesOf(policy, { paths: await pathsOf(head, back), lines: 0, messages: [] });
+
+    expect(same).not.toBe(back);
+    expect(judgeAskOf(await rulesOn(base, back), nothing)).toEqual({ kind: "none" });
+    expect(routingOf(await rulesOn(base, back), nothing, null).secondRound).toBe(false);
   });
 
-  test("the Routing judge reads the diff of the paths it is asked about, each path read literally", () => {
-    expect(judgeDiffArgs("b", "h", null, true)).toEqual(["--literal-pathspecs", "diff", "--stat", "b..h"]);
-    expect(judgeDiffArgs("b", "h", ["app/a*.ts", "docs/u.md"], false)).toEqual([
-      "--literal-pathspecs",
-      "diff",
-      "b..h",
-      "--",
-      "app/a*.ts",
-      "docs/u.md",
-    ]);
+  test("a PR whose commits change no file lists no path: its Snapshot is empty", async () => {
+    const { repo, git } = await fixtureRepo("empty-change-");
+
+    writeFileSync(join(repo, "README.md"), "r\n");
+    await git(["add", "."]);
+    await git(["commit", "-q", "-m", "a"]);
+    const base = (await git(["rev-parse", "HEAD"])).text().trim();
+    writeFileSync(join(repo, "x.ts"), "x\n");
+    await git(["add", "."]);
+    await git(["commit", "-q", "-m", "b"]);
+    await git(["rm", "-q", "x.ts"]);
+    await git(["commit", "-q", "-m", "c"]);
+    await git(["commit", "-q", "--allow-empty", "-m", "d"]);
+
+    expect((await git(changedPathsArgs(base, "HEAD"))).text()).toBe("");
+  });
+
+  test("the Routing judge reads the whole diff of its range, its stat or its patch", () => {
+    expect(judgeDiffArgs("b", "h", true)).toEqual(["diff", "--stat", "b..h"]);
+    expect(judgeDiffArgs("b", "h", false)).toEqual(["diff", "b..h"]);
   });
 
   test("a start serves the PR it names, a completed run's commit PRs, or on CI's push completion every open PR", () => {

@@ -40,6 +40,7 @@ const READY: Snapshot = {
   draft: false,
   head: "h1",
   patch: P1,
+  empty: false,
   ci: "success",
   labels: [],
   landApprovalByOwner: false,
@@ -184,6 +185,23 @@ describe("decide", () => {
     expect(step?.kind === "land-gate" && step.check.kind).toBe("failure");
     expect(step?.kind === "land-gate" && step.check.summary).toContain("rebase");
     expect(gate({ ...snapshot, draft: true })).toBe("pending");
+  });
+
+  test("an empty change gets only a red Land gate, whatever its record and its labels: no route, review or auto-merge", () => {
+    for (const snapshot of [
+      { ...READY, empty: true, record: EMPTY_RECORD },
+      { ...READY, empty: true },
+      { ...READY, empty: true, draft: true, ci: null, labels: ["land:human", "land-ok"], landApprovalByOwner: true },
+    ]) {
+      expect(stepsOf(snapshot)).toEqual([
+        { kind: "land-gate", check: { kind: "failure", summary: "Nothing to land: this PR changes no file." } },
+      ]);
+    }
+  });
+
+  test("an empty change that is closed or comes from outside is still ignored", () => {
+    expect(decide({ ...READY, empty: true, state: "CLOSED" }).kind).toBe("ignore");
+    expect(decide({ ...READY, empty: true, openedByOwner: false }).kind).toBe("ignore");
   });
 
   test("a red dev holds a landable PR", () => {

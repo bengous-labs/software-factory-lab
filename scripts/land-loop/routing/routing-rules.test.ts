@@ -6,7 +6,7 @@ import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import { LAB, SEGMENT, UNDER } from "../guarantees.test.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
-import { judgeAskOf, routingOf, routingRulesOf } from "./routing-rules.ts";
+import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "./routing-rules.ts";
 import type { RoutingInput, RulesVerdict } from "./routing-rules.ts";
 
 const lab = (input: RoutingInput): RulesVerdict => routingRulesOf(LAB, input);
@@ -47,9 +47,8 @@ describe("the lab's routing policy", () => {
     });
   });
 
-  test("a change to .github/, to a path the Code review does not read, or to no file goes to the Owner with review:deep", () => {
+  test("a change to .github/ or to a path the Code review does not read goes to the Owner with review:deep", () => {
     for (const [input, reason] of [
-      [{ paths: [], lines: 0, messages: [] }, "touches no file"],
       [
         { paths: [".github/workflows/ci.yml"], lines: 3, messages: [] },
         "a path the Owner lands: .github/workflows/ci.yml",
@@ -57,6 +56,7 @@ describe("the lab's routing policy", () => {
       [{ paths: [FACTORY_CONFIG_PATH, "scripts/a.ts"], lines: 3, messages: [] }, FACTORY_CONFIG_PATH],
       [{ paths: ["bun.lock", "package.json"], lines: 3, messages: [] }, "a path the Owner lands: bun.lock"],
       [{ paths: ["scripts/vendor/anti-slop/a.md"], lines: 3, messages: [] }, "scripts/vendor/anti-slop/a.md"],
+      [{ paths: [".github/a.yml"], lines: 3000, messages: ["feat!: x"] }, "a path the Owner lands: .github/a.yml"],
     ] as const) {
       const verdict = lab(input);
 
@@ -64,6 +64,33 @@ describe("the lab's routing policy", () => {
       expect(answerOf(verdict)).toMatchObject(OWNER_DEEP);
       expect(answerOf(verdict)?.reason).toContain(reason);
     }
+  });
+
+  test("a change that touches no file has no route", () => {
+    expect(() => lab({ paths: [], lines: 0, messages: [] })).toThrow("at least one file");
+  });
+
+  test("a Patch delta that touches no file has nothing to read again: no judge, no second round, the whole PR's route", () => {
+    const nothing = patchDeltaRulesOf(LAB, { paths: [], lines: 0, messages: [] });
+
+    expect(nothing).toEqual({
+      kind: "ruled",
+      answer: { ...AUTO_DEEP, secondRound: false, reason: "the Patch delta touches no file: nothing to read again" },
+    });
+
+    for (const paths of [["scripts/a.ts"], ["app/src/cli.ts"], [".github/a.yml"]]) {
+      const whole = lab({ paths, lines: 3, messages: [] });
+
+      expect(judgeAskOf(whole, nothing)).toEqual({ kind: "none" });
+      expect(routingOf(whole, nothing, null).secondRound).toBe(false);
+      expect(routingOf(whole, nothing, null).land).toBe(answerOf(whole)?.land ?? "auto");
+    }
+
+    expect(patchDeltaRulesOf(LAB, { paths: ["app/src/cli.ts"], lines: 0, messages: [] })).toEqual({ kind: "judged" });
+
+    const delta = { paths: [".github/a.yml", "app/src/cli.ts"], lines: 0, messages: [] };
+
+    expect(patchDeltaRulesOf(LAB, delta)).toEqual(lab(delta));
   });
 
   test("the factory's own code, its session settings, the agent docs and the build and gate configs land auto after a deep review", () => {
@@ -76,12 +103,12 @@ describe("the lab's routing policy", () => {
     }
   });
 
-  test("the task file's format lands auto after a deep review, under the cap and the breaking-commit hold", () => {
+  test("the task file's format lands auto after a deep review, under the breaking-commit hold", () => {
     const paths = ["app/src/store/store.ts"];
 
     expect(lab({ paths, lines: 400, messages: ["fix(store): x"] })).toMatchObject({ kind: "ruled", answer: AUTO_DEEP });
     expect(answerOf(lab({ paths, lines: 3, messages: ["feat(store)!: drop v1"] }))?.land).toBe("owner");
-    expect(answerOf(lab({ paths, lines: 401, messages: [] }))?.land).toBe("owner");
+    expect(lab({ paths, lines: 401, messages: [] })).toMatchObject({ kind: "ruled", answer: AUTO_DEEP });
     expect(answerOf(lab({ paths: [...paths, "scripts/a.ts"], lines: 3, messages: ["feat!: x"] }))?.land).toBe("owner");
   });
 
@@ -99,7 +126,7 @@ describe("the lab's routing policy", () => {
   });
 });
 
-describe("the cap and the breaking commits", () => {
+describe("the breaking commits", () => {
   test("send a change outside the factory's paths to the Owner", () => {
     for (const [input, reason] of [
       [{ paths: ["app/src/cli.ts"], lines: 3, messages: ["feat!: drop list"] }, "a breaking commit: feat!: drop list"],
@@ -107,7 +134,7 @@ describe("the cap and the breaking commits", () => {
         { paths: ["app/src/cli.ts"], lines: 3, messages: ["feat: x\n\nBREAKING CHANGE: y"] },
         "a breaking commit: feat: x",
       ],
-      [{ paths: ["app/src/cli.ts"], lines: 401, messages: [] }, "401 lines changed, past the 400-line cap"],
+      [{ paths: ["app/src/cli.ts"], lines: 3000, messages: ["feat!: x"] }, "a breaking commit: feat!: x"],
     ] as const) {
       expect(lab(input)).toEqual({ kind: "ruled", answer: { ...OWNER_DEEP, reason } });
     }
@@ -119,16 +146,11 @@ describe("the cap and the breaking commits", () => {
     );
   });
 
-  test("hold a change that mixes the factory's paths with other paths, which the Routing judge is then asked about", () => {
+  test("hold a change that mixes the factory's paths with other paths, which otherwise takes the rules' answer", () => {
     const paths = ["scripts/land-loop/pr-watch.ts", "app/src/cli.ts"];
 
-    expect(answerOf(lab({ paths, lines: 401, messages: [] }))?.land).toBe("owner");
     expect(answerOf(lab({ paths, lines: 3, messages: ["fix(app)!: x"] }))?.land).toBe("owner");
-    expect(lab({ paths, lines: 400, messages: ["fix: x"] })).toMatchObject({
-      kind: "ruled-then-judged",
-      answer: AUTO_DEEP,
-      judgedPaths: ["app/src/cli.ts"],
-    });
+    expect(lab({ paths, lines: 400, messages: ["fix: x"] })).toMatchObject({ kind: "ruled", answer: AUTO_DEEP });
   });
 
   test("do not hold a change of the factory's paths only", () => {
@@ -136,14 +158,33 @@ describe("the cap and the breaking commits", () => {
       lab({ paths: ["scripts/land-loop/pr-watch.ts", "AGENTS.md"], lines: 3000, messages: ["feat!: x"] }),
     ).toMatchObject({ kind: "ruled", answer: AUTO_DEEP });
   });
+});
 
-  test("the cap is the policy's", () => {
+describe("the cap", () => {
+  test("gives a change past it a deep review that lands auto, inside the factory's paths and outside, and asks no judge", () => {
+    for (const paths of [
+      ["app/src/cli.ts"],
+      ["scripts/land-loop/pr-watch.ts"],
+      ["scripts/land-loop/pr-watch.ts", "app/src/cli.ts"],
+    ]) {
+      const verdict = lab({ paths, lines: 401, messages: ["feat: x"] });
+
+      expect(verdict).toEqual({
+        kind: "ruled",
+        answer: { ...AUTO_DEEP, reason: "401 lines changed, past the 400-line cap" },
+      });
+      expect(judgeAskOf(verdict, null)).toEqual({ kind: "none" });
+    }
+  });
+
+  test("is the policy's", () => {
     const policy: RoutingPolicy = { ...EMPTY, lineCap: 10 };
 
     expect(routingRulesOf(policy, { paths: ["a.ts"], lines: 10, messages: [] }).kind).toBe("judged");
-    expect(answerOf(routingRulesOf(policy, { paths: ["a.ts"], lines: 11, messages: [] }))?.reason).toBe(
-      "11 lines changed, past the 10-line cap",
-    );
+    expect(routingRulesOf(policy, { paths: ["a.ts"], lines: 11, messages: [] })).toEqual({
+      kind: "ruled",
+      answer: { ...AUTO_DEEP, reason: "11 lines changed, past the 10-line cap" },
+    });
   });
 });
 
@@ -159,40 +200,27 @@ const RULED: RoutingAnswer = { ...AUTO_DEEP, reason: "touches scripts/a.ts" };
 
 const RULED_ONLY: RulesVerdict = { kind: "ruled", answer: RULED };
 
-const MIXED: RulesVerdict = { kind: "ruled-then-judged", answer: RULED, judgedPaths: ["app/b.ts"] };
-
-const mixedOf = (judgedPaths: readonly string[]): RulesVerdict => ({
-  kind: "ruled-then-judged",
-  answer: RULED,
-  judgedPaths,
-});
+const JUDGED: RulesVerdict = { kind: "judged" };
 
 describe("judgeAskOf", () => {
-  test("asks the whole diff of a change no rule names, and only the unruled paths of a mixed one", () => {
-    expect(judgeAskOf({ kind: "judged" }, null)).toEqual({ kind: "ask", paths: null });
-    expect(judgeAskOf(MIXED, null)).toEqual({ kind: "ask", paths: ["app/b.ts"] });
-  });
-
-  test("on a Patch delta, asks about the unruled paths of a mixed change that the delta touches, and nothing when it touches none", () => {
-    const wide = mixedOf(["app/b.ts", "app/c.ts"]);
-
-    expect(judgeAskOf(wide, mixedOf(["app/c.ts", "docs/d.md"]))).toEqual({ kind: "ask", paths: ["app/c.ts"] });
-    expect(judgeAskOf(wide, mixedOf(["docs/d.md"]))).toEqual({ kind: "none" });
-    expect(judgeAskOf(wide, { kind: "judged" })).toEqual({ kind: "ask", paths: ["app/b.ts", "app/c.ts"] });
-    expect(judgeAskOf(wide, RULED_ONLY)).toEqual({ kind: "none" });
-  });
-
-  test("asks nothing of a ruled change, unless its Patch delta is the judge's", () => {
+  test("with no Patch delta, asks about a change no rule names, and nothing of a ruled one", () => {
+    expect(judgeAskOf(JUDGED, null)).toEqual({ kind: "ask" });
     expect(judgeAskOf(RULED_ONLY, null)).toEqual({ kind: "none" });
+  });
+
+  test("on a Patch delta, asks exactly when the delta's own verdict is judged", () => {
+    expect(judgeAskOf(RULED_ONLY, JUDGED)).toEqual({ kind: "ask" });
+    expect(judgeAskOf(JUDGED, JUDGED)).toEqual({ kind: "ask" });
     expect(judgeAskOf(RULED_ONLY, RULED_ONLY)).toEqual({ kind: "none" });
-    expect(judgeAskOf(RULED_ONLY, { kind: "judged" })).toEqual({ kind: "ask", paths: null });
+    expect(judgeAskOf(JUDGED, RULED_ONLY)).toEqual({ kind: "none" });
   });
 });
 
 describe("routingOf", () => {
-  test("a change no rule names takes the Routing judge's answer, on a Patch delta too", () => {
-    expect(routingOf({ kind: "judged" }, null, judge("auto"))).toEqual(judge("auto"));
-    expect(routingOf({ kind: "judged" }, RULED_ONLY, judge("auto"))).toEqual(judge("auto"));
+  test("a change no rule names takes the Routing judge's Review depth, and lands auto whatever the judge answers", () => {
+    expect(routingOf(JUDGED, null, judge("auto"))).toEqual(judge("auto"));
+    expect(routingOf(JUDGED, null, judge("owner"))).toEqual(judge("auto"));
+    expect(routingOf(JUDGED, JUDGED, judge("owner"))).toEqual(judge("auto"));
   });
 
   test("a ruled change keeps the rules' answer, and asks no judge", () => {
@@ -200,53 +228,39 @@ describe("routingOf", () => {
   });
 
   test("a ruled change keeps the rules' route whatever the judge says of its Patch delta, which it only asks whether to read again", () => {
-    expect(routingOf(RULED_ONLY, { kind: "judged" }, judge("owner"))).toEqual({ ...RULED, secondRound: false });
+    expect(routingOf(RULED_ONLY, JUDGED, judge("owner"))).toEqual({ ...RULED, secondRound: false });
+    expect(routingOf(RULED_ONLY, JUDGED, { ...judge("auto"), secondRound: true })).toEqual(RULED);
   });
 
-  test("a mixed change the judge would land auto keeps the rules' answer, deep review included", () => {
-    expect(routingOf(MIXED, null, judge("auto"))).toEqual(RULED);
-  });
-
-  test("a mixed change the judge sends to the Owner goes to the Owner, still with a deep review, naming both reasons", () => {
-    expect(routingOf(MIXED, null, judge("owner"))).toEqual({
+  test("on a ruled Patch delta, a ruled change is read again when the delta's rules say so", () => {
+    expect(routingOf(RULED_ONLY, RULED_ONLY, null)).toEqual(RULED);
+    expect(routingOf(RULED_ONLY, { kind: "ruled", answer: { ...RULED, secondRound: false } }, null)).toEqual({
       ...RULED,
-      land: "owner",
-      reason: "touches scripts/a.ts; the Routing judge: costly to undo",
-      model: "claude-haiku-5-5",
+      secondRound: false,
     });
   });
 
-  test("on a Patch delta, a ruled delta is read again, and a judged one only when the judge says so", () => {
-    expect(routingOf(RULED_ONLY, RULED_ONLY, null).secondRound).toBe(true);
-    expect(routingOf(RULED_ONLY, { kind: "judged" }, judge("auto")).secondRound).toBe(false);
-    expect(routingOf(RULED_ONLY, { kind: "judged" }, { ...judge("auto"), secondRound: true }).secondRound).toBe(true);
-    expect(routingOf(MIXED, mixedOf(["app/b.ts"]), judge("auto")).secondRound).toBe(true);
-    expect(routingOf(MIXED, { kind: "judged" }, judge("auto")).secondRound).toBe(false);
-  });
+  test("a change no rule names whose Patch delta is ruled takes the delta's answer, asks no judge, and lands auto", () => {
+    const delta: RoutingAnswer = { ...RULED, reason: "the delta" };
 
-  test("on a Patch delta that touches none of a mixed change's unruled paths, the rules' answer stands, read again, with no judge", () => {
-    expect(routingOf(MIXED, RULED_ONLY, null)).toEqual(RULED);
-    expect(routingOf(MIXED, mixedOf(["docs/d.md"]), null)).toEqual(RULED);
-  });
-
-  test("on a Patch delta that touches one of them, the judge still has its say", () => {
-    expect(routingOf(MIXED, mixedOf(["app/b.ts"]), judge("owner")).land).toBe("owner");
+    expect(routingOf(JUDGED, { kind: "ruled", answer: delta }, null)).toEqual(delta);
+    expect(routingOf(JUDGED, { kind: "ruled", answer: { ...delta, land: "owner" } }, null)).toEqual(delta);
   });
 
   test("a change the judge was not asked about, though its verdict needs it, fails", () => {
-    expect(() => routingOf({ kind: "judged" }, null, null)).toThrow(
-      "the Routing judge was not asked about a judged change",
-    );
-    expect(() => routingOf(MIXED, null, null)).toThrow("ruled-then-judged");
-    expect(() => routingOf(MIXED, mixedOf(["app/b.ts"]), null)).toThrow("ruled-then-judged");
-    expect(() => routingOf(MIXED, { kind: "judged" }, null)).toThrow("ruled-then-judged");
-    expect(() => routingOf(RULED_ONLY, { kind: "judged" }, null)).toThrow("ruled");
+    expect(() => routingOf(JUDGED, null, null)).toThrow("the Routing judge was not asked about a judged change");
+    expect(() => routingOf(JUDGED, JUDGED, null)).toThrow("judged change");
+    expect(() => routingOf(RULED_ONLY, JUDGED, null)).toThrow("judged change");
   });
 });
 
 describe("under the lab's policy, the Patch delta of a change that mixes the factory's paths with a path no rule names", () => {
   // PR #88's shape: the PR touched .gitignore among the factory's paths, and its round-1 fix touched a factory path only.
   const whole = lab({ paths: [".gitignore", "scripts/land-loop/stop/hook.ts"], lines: 30, messages: ["fix: x"] });
+
+  test("is ruled as a whole, and lands auto after a deep review", () => {
+    expect(whole).toMatchObject({ kind: "ruled", answer: AUTO_DEEP });
+  });
 
   test("that touches the factory's paths only asks the Routing judge nothing and keeps the rules' route", () => {
     const patchDelta = lab({ paths: ["scripts/land-loop/stop/hook.test.ts"], lines: 0, messages: [] });
@@ -255,10 +269,17 @@ describe("under the lab's policy, the Patch delta of a change that mixes the fac
     expect(routingOf(whole, patchDelta, null)).toMatchObject(AUTO_DEEP);
   });
 
-  test("that touches the path no rule names asks the Routing judge about it", () => {
-    for (const paths of [[".gitignore"], [".gitignore", "scripts/land-loop/stop/hook.test.ts"]]) {
-      expect(judgeAskOf(whole, lab({ paths, lines: 0, messages: [] }))).toEqual({ kind: "ask", paths: [".gitignore"] });
-    }
+  test("that touches the path no rule names alone asks the Routing judge whether to read it again, and keeps the rules' route", () => {
+    const patchDelta = lab({ paths: [".gitignore"], lines: 0, messages: [] });
+
+    expect(judgeAskOf(whole, patchDelta)).toEqual({ kind: "ask" });
+    expect(routingOf(whole, patchDelta, judge("owner"))).toMatchObject({ ...AUTO_DEEP, secondRound: false });
+  });
+
+  test("that touches both is ruled, and asks the Routing judge nothing", () => {
+    const patchDelta = lab({ paths: [".gitignore", "scripts/land-loop/stop/hook.test.ts"], lines: 0, messages: [] });
+
+    expect(judgeAskOf(whole, patchDelta)).toEqual({ kind: "none" });
   });
 });
 
@@ -267,40 +288,57 @@ const FACTORY_PATH = fc.oneof(
   fc.constantFrom("scripts/land-loop", "scripts/lint", ".claude").chain(UNDER),
 );
 
-const RULED_PATH = fc.oneof(FACTORY_PATH, UNDER("app/src/store"));
-
 const ANY_PATH = fc.array(SEGMENT, { minLength: 1, maxLength: 4 }).map((segments) => segments.join("/"));
 
-const CHANGE = {
-  others: fc.array(ANY_PATH),
-  at: fc.nat(),
-  lines: fc.integer({ min: 0, max: 2000 }),
-  messages: fc.array(fc.string()),
-};
+const matches = (globs: readonly string[], path: string): boolean =>
+  globs.some((glob) => new Bun.Glob(glob).match(path));
 
-const inserted = (path: string, others: readonly string[], at: number): string[] =>
-  others.toSpliced(at % (others.length + 1), 0, path);
+const NOT_OWNER_PATH = fc
+  .oneof(ANY_PATH, FACTORY_PATH, UNDER("app/src"))
+  .filter((path) => !matches([FACTORY_CONFIG_PATH, ...LAB.ownerPaths], path));
+
+const BREAKING = /^\w+(\([^)]*\))?!:|BREAKING CHANGE/mu;
+
+const JUDGE: fc.Arbitrary<RoutingAnswer> = fc.record({
+  land: fc.constantFrom("auto", "owner"),
+  review: fc.constantFrom("none", "light", "deep"),
+  secondRound: fc.boolean(),
+  reason: fc.string(),
+  model: fc.option(fc.string(), { nil: null }),
+});
+
+const CHANGE = (path: fc.Arbitrary<string>) =>
+  fc.record({
+    paths: fc.array(path, { minLength: 1 }),
+    lines: fc.integer({ min: 0, max: 2000 }),
+    messages: fc.array(fc.oneof(fc.string(), fc.constantFrom("feat!: x", "fix: y\n\nBREAKING CHANGE: z"))),
+  });
 
 describe("under the lab's policy", () => {
   test("a change of the factory's paths only lands auto after a deep review, whatever its size or its messages", () => {
     fc.assert(
-      fc.property(
-        fc.record({ paths: fc.array(FACTORY_PATH, { minLength: 1 }), lines: CHANGE.lines, messages: CHANGE.messages }),
-        (input) => {
-          expect(lab(input)).toMatchObject({ kind: "ruled", answer: AUTO_DEEP });
-        },
-      ),
+      fc.property(CHANGE(FACTORY_PATH), (input) => {
+        expect(lab(input)).toMatchObject({ kind: "ruled", answer: AUTO_DEEP });
+      }),
     );
   });
 
-  test("a path no rule names keeps the Routing judge's say on the route of a change that also touches a ruled path", () => {
+  test("a change with no ownerPaths path, no factory config and no breaking commit outside the factory's paths never goes to the Owner, whatever the Routing judge answers", () => {
     fc.assert(
       fc.property(
-        fc.record({ ruled: RULED_PATH, app: UNDER("app/src/commands"), ...CHANGE }),
-        ({ ruled, app, others, at, lines, messages }) => {
-          const verdict = lab({ paths: [app, ...inserted(ruled, others, at)], lines, messages });
+        fc.record({
+          change: CHANGE(NOT_OWNER_PATH),
+          delta: fc.option(CHANGE(NOT_OWNER_PATH), { nil: null }),
+          judge: JUDGE,
+        }),
+        ({ change, delta, judge: answer }) => {
+          const verdict = lab(change);
+          const patchDelta = delta === null ? null : lab(delta);
+          const routed = routingOf(verdict, patchDelta, judgeAskOf(verdict, patchDelta).kind === "ask" ? answer : null);
+          const factoryOnly = change.paths.every((path) => matches(LAB.factoryPaths, path));
+          const heldBreaking = !factoryOnly && change.messages.some((message) => BREAKING.test(message));
 
-          expect(verdict.kind === "ruled-then-judged" || answerOf(verdict)?.land === "owner").toBe(true);
+          expect(routed.land).toBe(heldBreaking ? "owner" : "auto");
         },
       ),
     );
