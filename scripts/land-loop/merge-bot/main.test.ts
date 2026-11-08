@@ -24,6 +24,7 @@ import {
   ciOfRuns,
   ciRunsPathsOf,
   CommitPulls,
+  deletedPathsArgs,
   devCiRunsPathOf,
   Dispatched,
   humanLabelByOf,
@@ -547,6 +548,55 @@ describe("the routing inputs", () => {
     expect(listed).toEqual([FACTORY_CONFIG_PATH, "scripts/software-factory.json"]);
   });
 
+  test("the deleted paths of a range, renames split, reach the rules for the whole PR and for its Patch delta", async () => {
+    const { repo, git } = await fixtureRepo("deleted-paths-");
+
+    const policy: RoutingPolicy = {
+      ownerPaths: [],
+      factoryPaths: [".claude/**"],
+      deepReviewPaths: [],
+      lineCap: 400,
+    };
+
+    expect(deletedPathsArgs("b", "h")).toEqual(["diff", "--name-only", "--no-renames", "--diff-filter=D", "b..h"]);
+
+    const head = async (): Promise<string> => (await git(["rev-parse", "HEAD"])).text().trim();
+
+    const listed = async (args: readonly string[]): Promise<readonly string[]> =>
+      (await git(args))
+        .text()
+        .split("\n")
+        .filter((path) => path !== "");
+
+    const reviewOn = async (from: string, to: string) => {
+      const verdict = patchDeltaRulesOf(policy, {
+        paths: await listed(changedPathsArgs(from, to)),
+        lines: 0,
+        deletedPaths: await listed(deletedPathsArgs(from, to)),
+        messages: [],
+      });
+
+      return verdict.kind === "ruled" ? verdict.answer.review : "judged";
+    };
+
+    mkdirSync(join(repo, ".claude/skills/foo"), { recursive: true });
+    writeFileSync(join(repo, ".claude/skills/foo/SKILL.md"), "s\n");
+    writeFileSync(join(repo, ".claude/notes.md"), "n\n");
+    await git(["add", "."]);
+    await git(["commit", "-q", "-m", "a"]);
+    const base = await head();
+    await git(["rm", "-q", ".claude/notes.md"]);
+    await git(["commit", "-q", "-m", "b"]);
+    const deleted = await head();
+    await git(["mv", ".claude/skills/foo", ".claude/skills/bar"]);
+    await git(["commit", "-q", "-m", "c"]);
+
+    expect(await listed(deletedPathsArgs(deleted, "HEAD"))).toEqual([".claude/skills/foo/SKILL.md"]);
+    expect(await reviewOn(base, deleted)).toBe("light");
+    expect(await reviewOn(deleted, "HEAD")).toBe("deep");
+    expect(await reviewOn(base, "HEAD")).toBe("deep");
+  });
+
   test("the Routing judge is asked about a change no rule names, never about a mixed one, and on a Patch delta only when the delta is judged, reading the whole diff of its range", async () => {
     const { repo, git } = await fixtureRepo("patch-delta-");
     const policy: RoutingPolicy = { ownerPaths: [], factoryPaths: ["scripts/**"], deepReviewPaths: [], lineCap: 400 };
@@ -570,7 +620,7 @@ describe("the routing inputs", () => {
         .filter((path) => path !== "");
 
     const rulesOn = async (from: string, to: string) =>
-      routingRulesOf(policy, { paths: await pathsOf(from, to), lines: 0, messages: [] });
+      routingRulesOf(policy, { paths: await pathsOf(from, to), lines: 0, deletedPaths: [], messages: [] });
 
     const base = await commit({ "README.md": "r\n" });
     const unruled = await commit({ "docs/u.md": "u\n" });
@@ -602,7 +652,13 @@ describe("the routing inputs", () => {
 
     const same = await commit({ "docs/u.md": "u\n" });
     const back = await commit({ "docs/u.md": "v\n" });
-    const nothing = patchDeltaRulesOf(policy, { paths: await pathsOf(head, back), lines: 0, messages: [] });
+
+    const nothing = patchDeltaRulesOf(policy, {
+      paths: await pathsOf(head, back),
+      lines: 0,
+      deletedPaths: [],
+      messages: [],
+    });
 
     expect(same).not.toBe(back);
     expect(judgeAskOf(await rulesOn(base, back), nothing)).toEqual({ kind: "none" });
@@ -630,6 +686,7 @@ describe("the routing inputs", () => {
       patchDeltaRulesOf(policy, {
         paths: ["notes.md"],
         lines: linesOfNumstat((await git(numstatArgs(from, to))).text()),
+        deletedPaths: [],
         messages: [],
       });
 

@@ -14,9 +14,9 @@ export const FACTORY_CONFIG_PATH = ".github/software-factory.json";
 const RoutingPolicy = Schema.Struct({
   /** Globs whose change lands only with the Owner's Land approval, such as the paths the Code review does not read. */
   ownerPaths: Schema.Array(Schema.String),
-  /** The factory's own code and config: a deep Code review, then land without the Owner, at any size, breaking or not. */
+  /** The factory's own code and config: a deep Code review (a light one when the change only deletes files and those among them are Markdown or text), then land without the Owner, at any size, breaking or not. */
   factoryPaths: Schema.Array(Schema.String),
-  /** Globs whose change gets a deep Code review and lands without the Owner, under the breaking-commit hold. */
+  /** Globs whose change gets a deep Code review (a light one when the change only deletes files and those among them are Markdown or text) and lands without the Owner, under the breaking-commit hold. */
   deepReviewPaths: Schema.Array(Schema.String),
   /** Past this many changed lines, a change gets a deep Code review. */
   lineCap: Schema.Int,

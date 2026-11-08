@@ -2,9 +2,9 @@
  * The Routing rules: what sets a change's Land route and Review depth whatever a model says of it, under
  * the routing policy of the factory config. A path of `ownerPaths`, or the factory config itself, sends
  * the change to the Owner. A path of `factoryPaths` or `deepReviewPaths` gets a deep Code review and
- * lands without the Owner once CI is green and no Important is open. A change that touches a path
- * outside `factoryPaths` goes to the Owner when one of its commits is breaking. A change past `lineCap`
- * gets a deep Code review. The Routing judge answers the Review depth of the paths no rule names; it
+ * lands without the Owner once CI is green and no Important is open. A change that only deletes files,
+ * Markdown or text among them, gets a light review. A change that touches a path outside `factoryPaths`
+ * goes to the Owner when one of its commits is breaking. A change past `lineCap` gets a deep Code review. The Routing judge answers the Review depth of the paths no rule names; it
  * never sets the Land route.
  */
 
@@ -14,18 +14,27 @@ import type { RoutingAnswer, StateRecord } from "../merge-bot/decide.ts";
 
 const BREAKING = /^\w+(\([^)]*\))?!:|BREAKING CHANGE/mu;
 
+/** Markdown and text files, wherever they are: every other file counts as code or configuration. */
+export const NON_EXECUTABLE = /\.(md|mdx|txt)$/u;
+
 export interface RoutingInput {
   readonly paths: readonly string[];
   readonly lines: number;
+  /** The paths of `paths` the change deletes. */
+  readonly deletedPaths: readonly string[];
   readonly messages: readonly string[];
 }
 
 /** What the Routing rules make of a change: `ruled`, their answer stands; `judged`, the Routing judge answers. */
 export type RulesVerdict = { readonly kind: "ruled"; readonly answer: RoutingAnswer } | { readonly kind: "judged" };
 
-const ruled = (land: RoutingAnswer["land"], reason: string): RulesVerdict => ({
+const ruled = (
+  land: RoutingAnswer["land"],
+  reason: string,
+  review: RoutingAnswer["review"] = "deep",
+): RulesVerdict => ({
   kind: "ruled",
-  answer: { land, review: "deep", secondRound: true, reason, model: null },
+  answer: { land, review, secondRound: true, reason, model: null },
 });
 
 function matching(globs: readonly string[], paths: readonly string[]): readonly string[] {
@@ -36,7 +45,10 @@ function matching(globs: readonly string[], paths: readonly string[]): readonly 
 
 const listed = (paths: readonly string[]): string => paths.slice(0, 3).join(", ");
 
-export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }: RoutingInput): RulesVerdict {
+export function routingRulesOf(
+  policy: RoutingPolicy,
+  { paths, lines, deletedPaths, messages }: RoutingInput,
+): RulesVerdict {
   if (paths.length === 0) {
     throw new Error("the Routing rules route a change that touches at least one file");
   }
@@ -59,12 +71,24 @@ export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }
 
   const deep = matching([...policy.factoryPaths, ...policy.deepReviewPaths], paths);
 
-  return deep.length === 0
-    ? { kind: "judged" }
-    : ruled(
-        "auto",
-        `touches a path a deep review reads: ${listed(deep)}; lands once CI is green and no Important is open`,
-      );
+  if (deep.length === 0) {
+    return { kind: "judged" };
+  }
+
+  const deleted = new Set(deletedPaths);
+
+  if (paths.every((path) => deleted.has(path)) && deep.every((path) => NON_EXECUTABLE.test(path))) {
+    return ruled(
+      "auto",
+      `deletes only Markdown and text files under a deep-review path: ${listed(deep)}; lands once CI is green and no Important is open`,
+      "light",
+    );
+  }
+
+  return ruled(
+    "auto",
+    `touches a path a deep review reads: ${listed(deep)}; lands once CI is green and no Important is open`,
+  );
 }
 
 /**
