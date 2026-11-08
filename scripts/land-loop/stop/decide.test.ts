@@ -11,6 +11,7 @@ import {
   afterStopChecks,
   answerOf,
   answersOf,
+  answersRecordName,
   armReason,
   bodyWithBlock,
   closingLineOf,
@@ -21,6 +22,7 @@ import {
   localReviewOf,
   localReviewReason,
   rejectArgsOf,
+  reviewRecordName,
 } from "./decide.ts";
 import type { Answer, LocalFinding, LocalReviewRecord, Snapshot } from "./decide.ts";
 
@@ -468,6 +470,15 @@ describe("rejectArgsOf", () => {
       reason: "the bound is inclusive",
     });
     expect(rejectArgsOf(["reject", "1", "x"], TWO_IMPORTANT)).toEqual({ n: 1, reason: "x" });
+
+    const twelve = reviewOf(Array.from({ length: 12 }, (_, index) => finding("important", "a.ts", index, "x")));
+
+    expect(rejectArgsOf(["reject", "12", "x"], twelve)).toEqual({ n: 12, reason: "x" });
+  });
+
+  test("the records are named after their head", () => {
+    expect(reviewRecordName(HEAD)).toBe(`review-${HEAD}.json`);
+    expect(answersRecordName(HEAD)).toBe(`review-${HEAD}-answers.json`);
   });
 
   test("a missing or malformed number, a number with no Important, an empty reason or another verb is refused", () => {
@@ -495,6 +506,9 @@ describe("the local review records", () => {
     expect(localReviewOf("r.json", JSON.stringify(TWO_IMPORTANT))).toEqual(TWO_IMPORTANT);
     expect(answersOf("a.json", '{"1":"Rejected: x"}')).toEqual({ "1": "Rejected: x" });
     expect(() => localReviewOf("r.json", '{"findings":[]}')).toThrow("r.json");
+    expect(() => localReviewOf("r.json", '{"findings":[{"file":"a.ts"}],"model":null,"tokens":null}')).toThrow(
+      "r.json",
+    );
     expect(() => answersOf("a.json", '{"1":2}')).toThrow("a.json");
   });
 });
@@ -560,10 +574,11 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
         answers: { "2": "Rejected: inclusive" },
         nextHead: HEAD_C,
       },
-      { head: HEAD_C, review: reviewOf([]), answers: {}, nextHead: null },
+      { head: HEAD_C, review: reviewOf([finding("important", "c.ts", 9, "still open")]), answers: {}, nextHead: null },
       { head: HEAD_A, review: { failed: "x" }, answers: {}, nextHead: null },
     ]);
 
+    expect(block).not.toContain("still open");
     expect(block).toContain("Local review (deep, 0c0ffee): 1 Important fixed, 1 rejected, 0 Nit.\n");
     expect(block).toContain(
       "\n\n- a.ts: broken | Author: Fixed in 0c0ffee\n- b.ts:3: off | Author: Rejected: inclusive\n</details>",
@@ -600,5 +615,17 @@ describe("bodyWithBlock", () => {
     expect(bodyWithBlock("Intro.\n\nSee #66.", BLOCK)).toBe(`Intro.\n\nSee #66.\n\n${BLOCK}`);
     expect(bodyWithBlock("Intro.\n\nCloses #66 and more", BLOCK)).toBe(`Intro.\n\nCloses #66 and more\n\n${BLOCK}`);
     expect(bodyWithBlock("", BLOCK)).toBe(BLOCK);
+    expect(bodyWithBlock("Intro.\n", BLOCK)).toBe(`Intro.\n\n${BLOCK}`);
+    expect(bodyWithBlock("Intro.\n\nSee Closes #66", BLOCK)).toBe(`Intro.\n\nSee Closes #66\n\n${BLOCK}`);
+  });
+
+  test("a block at the body's start is replaced; a marker without its pair is no block", () => {
+    expect(bodyWithBlock("<!-- lab-local-review -->\nold\n<!-- /lab-local-review -->\n\nCloses #66", BLOCK)).toBe(
+      `${BLOCK}\n\nCloses #66`,
+    );
+    expect(bodyWithBlock("Intro <!-- lab-local-review -->", BLOCK)).toBe(`Intro <!-- lab-local-review -->\n\n${BLOCK}`);
+    expect(bodyWithBlock("Intro <!-- /lab-local-review -->", BLOCK)).toBe(
+      `Intro <!-- /lab-local-review -->\n\n${BLOCK}`,
+    );
   });
 });

@@ -359,13 +359,7 @@ export function rejectArgsOf(
 ): { readonly n: number; readonly reason: string } | null {
   const [verb, number, reason] = argv;
 
-  if (
-    verb !== "reject" ||
-    number === undefined ||
-    !/^\d+$/u.test(number) ||
-    reason === undefined ||
-    reason.trim() === ""
-  ) {
+  if (verb !== "reject" || !/^\d+$/u.test(number ?? "") || reason === undefined || reason.trim() === "") {
     return null;
   }
 
