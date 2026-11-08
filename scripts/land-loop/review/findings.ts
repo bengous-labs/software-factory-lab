@@ -2,7 +2,7 @@
  * The App's findings as GitHub holds them. Each posted finding carries a marker that names its
  * severity, read back to count the open Important threads and by the author's PR watch. A pull
  * request's review threads come from one GraphQL query: the Merge bot counts them, and the review job
- * gives Review round 2 the earlier findings with the author's answers.
+ * gives every Review round the earlier findings with the author's answers, the local review's included.
  */
 
 import { Option, Schema } from "effect";
@@ -164,7 +164,7 @@ function unmarked(body: string): string {
 
 /**
  * The App's findings, open or resolved, each with the author's answers and whether its thread is
- * resolved: Review round 2 reports again neither a finding the author resolved with a valid reason
+ * resolved: a later Review round reports again neither a finding the author resolved with a valid reason
  * nor one still open. `appLogin` is the App's login as GraphQL prints it.
  */
 export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThread[]): EarlierThread[] {
