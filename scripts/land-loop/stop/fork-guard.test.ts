@@ -32,6 +32,11 @@ function answer(cwd: string, toolName: string, toolInput: Record<string, string>
   return forkGuardAnswer(stdin, scopeOf);
 }
 
+/** A scope that throws, as `scopeOf` does on a worktree that does not resolve. */
+function throwing(cwd: string): never {
+  throw new Error(`no worktree at ${cwd}`);
+}
+
 describe("forkGuardAnswer", () => {
   test("a Read of a file in the Author's worktree is allowed", () => {
     const { cwd } = worktree();
@@ -75,6 +80,13 @@ describe("forkGuardAnswer", () => {
     for (const tool of ["Monitor", "Write", "Edit", "Agent", "Skill"]) {
       expect(answer(cwd, tool, {})).toBe(denied(`the tool ${tool} is not admitted here`));
     }
+  });
+
+  test("a guard that throws, such as on a worktree that does not resolve, denies the call", () => {
+    const stdin = JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push" }, cwd: "/gone" });
+
+    expect(forkGuardAnswer(stdin, throwing)).toBe(denied("the fork guard failed: no worktree at /gone"));
+    expect(forkGuardAnswer(stdin, scopeOf)).toStartWith(denied("the fork guard failed: ENOENT").slice(0, -3));
   });
 
   test("an input that does not decode is denied", () => {

@@ -283,7 +283,7 @@ describe("readGuardOf", () => {
   symlinkSync(join(parent, "dev/AGENTS.md"), join(root, "leak"));
 
   const readGuard = readGuardOf({ root, resolve: resolverOf(root) });
-  const pathDenied = { kind: "deny", reason: "read only inside the pull request's checkout, outside .git" } as const;
+  const pathDenied = { kind: "deny", reason: "read only inside the checkout you work in, outside .git" } as const;
 
   test("Read in the worktree, Grep with no path, and a read-only git command are allowed", () => {
     expect(readGuard("Read", { file_path: join(root, "app/src/cli.ts") })).toEqual({ kind: "allow" });

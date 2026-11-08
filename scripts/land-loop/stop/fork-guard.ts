@@ -42,7 +42,7 @@ function outputOf(decision: ToolDecision): string {
   });
 }
 
-/** The hook's answer to the PreToolUse input `stdin`; an input that does not read is denied. */
+/** The hook's answer to the PreToolUse input `stdin`; an input that does not read, or a guard that throws, is denied. */
 export function forkGuardAnswer(stdin: string, scope: (cwd: string) => GuardScope): string {
   const input = decodeInput(stdin);
 
@@ -52,7 +52,15 @@ export function forkGuardAnswer(stdin: string, scope: (cwd: string) => GuardScop
 
   const { tool_name: toolName, tool_input: toolInput, cwd } = input.success;
 
-  return outputOf(readGuardOf(scope(cwd))(toolName, toolInput));
+  // A hook that exits with an error lets the call through to the permission rules: the guard fails closed here.
+  try {
+    return outputOf(readGuardOf(scope(cwd))(toolName, toolInput));
+  } catch (error) {
+    return outputOf({
+      kind: "deny",
+      reason: `the fork guard failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
 }
 
 if (import.meta.main) {
