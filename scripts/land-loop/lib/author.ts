@@ -52,8 +52,9 @@ export function ghEnv(token: string) {
 }
 
 /**
- * The push of `branch`, run with the environment `{ LAB_AUTHOR_TOKEN: token }`: over HTTPS with the
- * token, never over the SSH key `origin`'s URL would use; `origin` itself does not change.
+ * The push of `branch`, run with the environment `{ LAB_AUTHOR_TOKEN: token }`: it rewrites the
+ * scp-form `git@github.com:` URL `origin` has, with no `pushurl`, to HTTPS with the token, instead of
+ * the SSH key; `origin` itself does not change.
  */
 export function pushArgs(branch: string): string[] {
   return [
