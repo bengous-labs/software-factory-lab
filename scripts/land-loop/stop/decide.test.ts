@@ -130,6 +130,8 @@ describe("answerOf", () => {
       ["YES, HOLD:", { kind: "hold", reason: "(no reason given)" }],
       ["YES, HOLD:   \nthe reason is on the next line", { kind: "hold", reason: "(no reason given)" }],
       [`YES, HOLD: ${"r".repeat(400)}`, { kind: "hold", reason: "r".repeat(300) }],
+      ["YES, HOLD:no space after the colon", { kind: "hold", reason: "no space after the colon" }],
+      ["Maybe YES, HOLD: a hedge", { kind: "no" }],
       ["YES, hold: lower case", { kind: "yes" }],
       ["NO, HOLD: not finished", { kind: "no" }],
     ];
