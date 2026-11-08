@@ -17,6 +17,7 @@ type Pr = {
 type GitHub = {
   prs: Map<string, Pr>;
   failing: Map<string, string>;
+  garbled: Set<string>;
 };
 
 type Seen = {
@@ -41,6 +42,7 @@ const openPr = (n: number, overrides: Partial<Pr> = {}): Pr => ({
 const gitHub = (prs: Record<number, Pr>): GitHub => ({
   prs: new Map(Object.entries(prs)),
   failing: new Map(),
+  garbled: new Set(),
 });
 
 const rollupOf = (gate: Gate): unknown[] =>
@@ -64,6 +66,10 @@ const reply = (github: GitHub, argv: readonly string[]): { stdout: string; stder
 
   if (failure !== undefined) {
     return { stdout: "", stderr: `some context\n${failure}\n`, code: 1 };
+  }
+
+  if (github.garbled.has(argv.join(" "))) {
+    return { stdout: "A new release of gh is available\n", stderr: "", code: 0 };
   }
 
   if (pr === undefined) {
@@ -506,6 +512,51 @@ test("the guard refuses an MCP call whose input holds land-ok", async ($, on) =>
 
   expect(result).toEqual({ deny: DENY });
   expect(seen.passed).toEqual([]);
+});
+
+test("the guard refuses a land-ok write through Monitor, and lets its other commands through", async ($, on) => {
+  const seen = stubEngine(on, gitHub({}));
+
+  const refused = await $.tool.call({
+    tool: "Monitor",
+    command: "gh pr edit 120 --add-label land-ok",
+    description: "label",
+    timeout_ms: 1000,
+  });
+  await $.tool.call({
+    tool: "Monitor",
+    command: "gh pr view 120 --json labels",
+    description: "read",
+    timeout_ms: 1000,
+  });
+
+  expect(refused).toEqual({ deny: DENY });
+  expect(seen.passed).toEqual(["Monitor"]);
+});
+
+test("a pull request whose answer is not JSON does not read, and labels nothing", async ($, on) => {
+  const github = gitHub({ 120: openPr(120) });
+  github.garbled.add("gh pr view 120 --json state,labels,url");
+  const seen = stubEngine(on, github);
+  await start($);
+
+  expect(await land($, "120")).toEqual({});
+  expect(seen.logs).toEqual(["land: #120 does not read: gh pr view 120 answered no JSON"]);
+  expect(github.prs.get("120")?.labels).toEqual([]);
+});
+
+test("a refresh whose answer is not JSON keeps the row and its last state", async ($, on) => {
+  const github = gitHub({ 120: openPr(120) });
+  const seen = stubEngine(on, github);
+  const clock = mock.clock(on);
+  await start($);
+  await land($, "120");
+
+  github.garbled.add("gh pr view 120 --json state,statusCheckRollup");
+  await clock.advance(HALF_MINUTE);
+
+  expect(await rowsOf($)).toEqual(["#120  land-ok  land-gate: in progress"]);
+  expect(seen.logs).toEqual(["land: land-ok is on #120, from your /land 120"]);
 });
 
 test("the guard lets other MCP calls and other tools through", async ($, on) => {

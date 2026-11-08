@@ -74,6 +74,24 @@ const gh = async ($: EngineInterface, args: readonly string[]): Promise<Ran> => 
   }
 };
 
+const view = async <T,>(
+  $: EngineInterface,
+  n: string,
+  fields: string,
+): Promise<{ readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string }> => {
+  const ran = await gh($, ["pr", "view", n, "--json", fields]);
+
+  if (!ran.ok) {
+    return ran;
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(ran.stdout) as T };
+  } catch {
+    return { ok: false, reason: `gh pr view ${n} answered no JSON` };
+  }
+};
+
 const gateOf = (checks: readonly Check[]): string => {
   const check = checks.find((entry) => (entry.name ?? entry.context) === GATE);
 
@@ -115,14 +133,14 @@ const drop = ($: EngineInterface, band: Band, n: string, line?: string): void =>
 };
 
 const read = async ($: EngineInterface, band: Band, n: string, now: number): Promise<void> => {
-  const ran = await gh($, ["pr", "view", n, "--json", "state,statusCheckRollup"]);
+  const viewed = await view<Progress>($, n, "state,statusCheckRollup");
   const row = band.rows.get(n);
 
   if (row === undefined) {
     return;
   }
 
-  const progress = ran.ok ? (JSON.parse(ran.stdout) as Progress) : undefined;
+  const progress = viewed.ok ? viewed.value : undefined;
 
   if (progress !== undefined) {
     row.gate = gateOf(progress.statusCheckRollup);
@@ -161,7 +179,7 @@ const follow = async ($: EngineInterface, band: Band, n: string, url: string): P
 };
 
 const approve = async ($: EngineInterface, band: Band, n: string): Promise<void> => {
-  const viewed = await gh($, ["pr", "view", n, "--json", "state,labels,url"]);
+  const viewed = await view<Approval>($, n, "state,labels,url");
 
   if (!viewed.ok) {
     $.ui.log(`land: #${n} does not read: ${viewed.reason}`);
@@ -169,7 +187,7 @@ const approve = async ($: EngineInterface, band: Band, n: string): Promise<void>
     return;
   }
 
-  const approval = JSON.parse(viewed.stdout) as Approval;
+  const approval = viewed.value;
 
   if (approval.state !== "OPEN") {
     $.ui.log(`land: #${n} is ${approval.state}, nothing to approve`);
@@ -257,6 +275,10 @@ export const register: Register = (on) => {
   });
 
   on("tool.call", { tool: "Bash" }, (_, e, next) => (isLabelWrite(e.command) ? { deny: DENY } : next(e)));
+
+  on("tool.call", { tool: "Monitor" }, (_, e, next) =>
+    e.command !== undefined && isLabelWrite(e.command) ? { deny: DENY } : next(e),
+  );
 
   on("tool.call", (_, e, next) =>
     e.tool.startsWith("mcp__") && JSON.stringify(e).includes(LABEL) ? { deny: DENY } : next(e),
