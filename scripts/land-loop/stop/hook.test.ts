@@ -35,8 +35,8 @@ interface World {
   readonly root: string;
 }
 
-/** A fake of git, gh, bun and claude for the Author's session on `agent/x`, one commit ahead, with the PRs `listed`. */
-function world(doneJudgeAnswer: string, listed = "[]"): World {
+/** A fake of git, gh, bun and claude for the Author's session on `branch`, one commit ahead, with the PRs `listed`. */
+function world(doneJudgeAnswer: string, listed = "[]", branch = "agent/x", forkBody = "Body text."): World {
   const root = mkdtempSync(join(tmpdir(), "stop-"));
   const calls: Call[] = [];
 
@@ -49,7 +49,7 @@ function world(doneJudgeAnswer: string, listed = "[]"): World {
     }
 
     if (line === "git symbolic-ref --short -q HEAD") {
-      return ok("agent/x\n");
+      return ok(`${branch}\n`);
     }
 
     if (line === "git rev-parse HEAD") {
@@ -78,7 +78,7 @@ function world(doneJudgeAnswer: string, listed = "[]"): World {
 
     if (argv[0] === "claude") {
       const prompt = argv.at(-1) ?? "";
-      const result = prompt === DONE_QUESTION ? doneJudgeAnswer : "feat: x\n\nBody text.";
+      const result = prompt === DONE_QUESTION ? doneJudgeAnswer : `feat: x\n\n${forkBody}`;
 
       return ok(JSON.stringify({ result, total_cost_usd: 0.01, usage: { cache_read_input_tokens: 9000 } }));
     }
@@ -103,6 +103,14 @@ function input(root: string): StopInput {
   );
 
   return { session_id: "S1", transcript_path: transcript, cwd: root };
+}
+
+/** The body `gh pr create` reads on stdin when the hook opens the PR from `branch` with the fork's `forkBody`. */
+async function bodyOf(branch: string, forkBody: string): Promise<string | undefined> {
+  const { run, calls, root } = world("YES", "[]", branch, forkBody);
+  await stop(input(root), { run, env: {}, now: () => 0 }, () => {});
+
+  return calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.options.stdin;
 }
 
 describe("stop", () => {
@@ -137,6 +145,14 @@ describe("stop", () => {
       `\`bun ${root}/scripts/land-loop/thread.ts <thread-id> `,
     );
     expect(outcome.kind === "block" && outcome.reason).toContain(`\`bun ${root}/scripts/land-loop/comment.ts 12 "`);
+  });
+
+  test("a branch made for an issue opens a PR whose body ends with its closing line, once", async () => {
+    expect(await bodyOf("fix/89-patch-delta-judge", "Body text.")).toBe("Body text.\n\nCloses #89");
+    expect(await bodyOf("fix/89-patch-delta-judge", "Body text.\n\nfixes #89")).toBe("Body text.\n\nfixes #89");
+    expect(await bodyOf("fix/89-patch-delta-judge", "")).toBe("Closes #89");
+    expect(await bodyOf("chore/tidy-docs", "Body text.")).toBe("Body text.");
+    expect(await bodyOf("chore/tidy-docs", "")).toBe("(no body)");
   });
 
   test("a PR ready at HEAD and not armed yet: the hook asks to arm its PR watch, naming the PR in its commands, and pushes nothing", async () => {

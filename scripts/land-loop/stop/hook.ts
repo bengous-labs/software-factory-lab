@@ -18,7 +18,16 @@ import { Predicate, Result, Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { checked, run as runCli } from "../lib/run.ts";
 import type { Run } from "../ports/run.ts";
-import { admit, afterStopChecks, answerOf, armReason, decide, FORK_MARKER, IGNORED_BRANCH } from "./decide.ts";
+import {
+  admit,
+  afterStopChecks,
+  answerOf,
+  armReason,
+  closingLineOf,
+  decide,
+  FORK_MARKER,
+  IGNORED_BRANCH,
+} from "./decide.ts";
 import type { Action, PullRequest, Snapshot, StopChecks } from "./decide.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
@@ -371,10 +380,13 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
       title: text.title,
     });
 
+    const closing = closingLineOf(branch, text.body);
+    const body = [text.body, closing].filter((part) => part !== null && part !== "").join("\n\n");
+
     const url = await checked(
       deps.run,
       ["gh", "pr", "create", "--base", TRUNK, "--head", branch, "--title", text.title, "--body-file", "-"],
-      { cwd, stdin: text.body === "" ? "(no body)" : text.body },
+      { cwd, stdin: body === "" ? "(no body)" : body },
     );
 
     number = Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
