@@ -189,6 +189,37 @@ export function landApprovalByOwnerOf(
   return landApprovalCounts(last?.actor?.login === owner, last?.created_at ?? null, headPushedAt);
 }
 
+/** Who set the PR's `land:human`, by its latest `labeled` event; see `Snapshot["humanLabelBy"]`. */
+export function humanLabelByOf(
+  events: typeof IssueEvents.Type,
+  labels: readonly string[],
+  appLogin: string,
+): Snapshot["humanLabelBy"] {
+  const humanLabel = `land:${storedLandRouteOf("owner")}`;
+
+  if (!labels.includes(humanLabel)) {
+    return null;
+  }
+
+  const last = events.filter((event) => event.event === "labeled" && event.label?.name === humanLabel).at(-1);
+
+  return last?.actor?.login === appLogin ? "merge-bot" : "other";
+}
+
+/** Every page of `repos/<repo>/issues/<n>/events`: past 100 events, the latest `labeled` is on a later page. */
+export function labelEventsReader(
+  runner: Run,
+): (where: Pick<Env, "repo" | "cwd">, pr: number) => Promise<typeof IssueEvents.Type> {
+  return async (where, pr) => {
+    const path = `repos/${where.repo}/issues/${pr}/events?per_page=100`;
+    const out = await checked(runner, ["gh", "api", "-X", "GET", "--paginate", "--slurp", path], { cwd: where.cwd });
+
+    return decodeJson(Schema.Array(IssueEvents), `gh api ${path}`, out).flat();
+  };
+}
+
+const labelEventsOf = labelEventsReader(run);
+
 /** `repos/<repo>/commits/<sha>/check-suites`, as far as the Merge bot reads it. */
 export const CheckSuites = Schema.Struct({ check_suites: Schema.Array(Schema.Struct({ created_at: Schema.String })) });
 
@@ -390,11 +421,14 @@ async function snapshotOf(
   const patch = await patchOf(env, range);
   const empty = (await changedPaths(env, range.base, range.head)).length === 0;
   const labels = pr.labels.map((label) => label.name);
+  const humanLabel = `land:${storedLandRouteOf("owner")}`;
+
+  const events =
+    labels.includes(LAND_APPROVAL_LABEL) || labels.includes(humanLabel) ? await labelEventsOf(env, pr.number) : [];
+
   let landApprovalByOwner = false;
 
   if (labels.includes(LAND_APPROVAL_LABEL)) {
-    const events = await api(env, IssueEvents, `repos/${env.repo}/issues/${pr.number}/events?per_page=100`);
-
     // The head's first check suite is created when it is pushed: a Land approval put before that was given for another head.
     const suites = await api(env, CheckSuites, `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`);
 
@@ -415,6 +449,7 @@ async function snapshotOf(
     empty,
     ci: ciOfRuns(ciRuns),
     labels,
+    humanLabelBy: humanLabelByOf(events, labels, env.appLogin),
     landApprovalByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
     devRed: devRuns.workflow_runs[0]?.conclusion === "failure",

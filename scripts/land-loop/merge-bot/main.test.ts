@@ -23,9 +23,11 @@ import {
   CommitPulls,
   devCiRunsPathOf,
   Dispatched,
+  humanLabelByOf,
   IssueComments,
   IssueEvents,
   judgeDiffArgs,
+  labelEventsReader,
   landApprovalByOwnerOf,
   ListedPrs,
   notFound,
@@ -227,6 +229,72 @@ const downloaded = (dir: string): Ran => {
 
   return ok("");
 };
+
+type LabelEvent = (typeof IssueEvents.Type)[number];
+
+const labeled = (name: string, login: string | null, at: string): LabelEvent => ({
+  event: "labeled",
+  label: { name },
+  actor: login === null ? null : { login },
+  created_at: at,
+});
+
+const filler = (count: number): LabelEvent[] =>
+  Array.from({ length: count }, () => ({
+    event: "mentioned",
+    actor: { login: "x" },
+    created_at: "2026-11-05T09:00:00Z",
+  }));
+
+describe("humanLabelByOf", () => {
+  const BOT = "agents[bot]";
+
+  test("no land:human on the PR is null, whatever the events say", () => {
+    expect(humanLabelByOf([labeled("land:human", BOT, "2026-11-05T10:00:00Z")], ["land:auto"], BOT)).toBeNull();
+  });
+
+  test("the latest labeled event of land:human decides: the Merge bot's App, or any other login", () => {
+    const botLast = [
+      labeled("land:human", "owner", "2026-11-05T10:00:00Z"),
+      labeled("land:human", BOT, "2026-11-05T11:00:00Z"),
+      labeled("land-ok", "owner", "2026-11-05T12:00:00Z"),
+    ];
+
+    const ownerLast = [
+      labeled("land:human", BOT, "2026-11-05T10:00:00Z"),
+      labeled("land:human", "owner", "2026-11-05T11:00:00Z"),
+    ];
+
+    expect(humanLabelByOf(botLast, ["land:human"], BOT)).toBe("merge-bot");
+    expect(humanLabelByOf(ownerLast, ["land:human"], BOT)).toBe("other");
+  });
+
+  test("an unreadable actor, or no labeled event of land:human, is another login: the safe side", () => {
+    expect(humanLabelByOf([labeled("land:human", null, "2026-11-05T10:00:00Z")], ["land:human"], BOT)).toBe("other");
+    expect(humanLabelByOf([labeled("land-ok", BOT, "2026-11-05T10:00:00Z")], ["land:human"], BOT)).toBe("other");
+  });
+});
+
+describe("labelEventsReader", () => {
+  test("reads every page of the PR's events, so a labeled event past the first 100 is found", async () => {
+    const pages = [filler(100), [...filler(20), labeled("land:human", "agents[bot]", "2026-11-05T11:00:00Z")]];
+    const calls: string[][] = [];
+
+    const runner: Run = (argv) => {
+      calls.push([...argv]);
+
+      return Promise.resolve({ code: 0, stdout: JSON.stringify(pages), stderr: "" });
+    };
+
+    const events = await labelEventsReader(runner)(WHERE, 12);
+
+    expect(calls).toEqual([
+      ["gh", "api", "-X", "GET", "--paginate", "--slurp", "repos/o/r/issues/12/events?per_page=100"],
+    ]);
+    expect(events).toHaveLength(121);
+    expect(humanLabelByOf(events, ["land:human"], "agents[bot]")).toBe("merge-bot");
+  });
+});
 
 describe("reviewJobReader", () => {
   test("no request, or one for another patch, reads no run", async () => {
