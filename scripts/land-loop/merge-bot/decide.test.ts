@@ -1208,6 +1208,18 @@ describe("why a PR is held, where the Owner looks", () => {
     ]);
   });
 
+  test("a land-ok the Owner gave before a push, which no longer counts, is removed as given for an earlier push", () => {
+    for (const landOkPatch of ["patch-0", P1]) {
+      const pushed = { ...READY, labels: [LAND_APPROVAL_LABEL], record: reviewed(LIGHT, { landOkPatch }) };
+
+      expect(stepsOf(pushed).slice(0, 3)).toEqual([
+        { kind: "remove-land-approval" },
+        { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+        { kind: "record", record: reviewed(LIGHT) },
+      ]);
+    }
+  });
+
   test("a land-ok the Owner did not put is removed with a comment that says so", () => {
     const foreign = { ...READY, labels: [LAND_APPROVAL_LABEL], record: reviewed(LIGHT) };
 

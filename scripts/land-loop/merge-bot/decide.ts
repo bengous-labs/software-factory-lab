@@ -222,7 +222,7 @@ export interface Snapshot {
    * (an actor that does not read, or no such event, included), or null when the PR has no `land:human`.
    */
   readonly humanLabelBy: "merge-bot" | "other" | null;
-  /** The Land approval label is on the PR and the owner put it there. */
+  /** The Land approval label is on the PR and the owner put it there, after this head was pushed. */
   readonly landApprovalByOwner: boolean;
   readonly openImportant: number;
   readonly devRed: boolean;
@@ -354,8 +354,11 @@ function landApprovalOf(snapshot: Snapshot, record: StateRecord): LandApproval {
     return { next: record.landOkPatch === null ? record : { ...record, landOkPatch: null }, removed: null };
   }
 
+  // A recorded patch means the Owner's label counted once: it no longer counts because a push came after it.
   if (!snapshot.landApprovalByOwner) {
-    return { next: record, removed: "not-owner" };
+    return record.landOkPatch === null
+      ? { next: record, removed: "not-owner" }
+      : { next: { ...record, landOkPatch: null }, removed: "earlier-patch" };
   }
 
   if (record.landOkPatch === null) {
