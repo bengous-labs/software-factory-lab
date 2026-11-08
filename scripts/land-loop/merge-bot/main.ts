@@ -24,7 +24,7 @@ import { ask } from "../lib/ask.ts";
 import { resolverOf } from "../lib/resolve.ts";
 import { checked, run } from "../lib/run.ts";
 import type { Reader } from "../ports/ask.ts";
-import type { Ran, Run } from "../ports/run.ts";
+import type { Ran, Run, RunOptions } from "../ports/run.ts";
 import { graphqlLogin, nitPathsOf, openImportantOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
 import type { ReviewThread } from "../review/findings.ts";
 import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
@@ -592,35 +592,30 @@ interface Checkout {
 
 /**
  * The git of the worktree's checkout, in a job that holds the App's token: no system or global config,
- * so no filter driver a PR's `.gitattributes` names runs, no LFS smudge, and no hook.
+ * so no filter driver a PR's `.gitattributes` names runs, the LFS one the runner installs included, and
+ * no hook.
  */
 const CHECKOUT_GIT_ENV = {
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_LFS_SKIP_SMUDGE: "1",
   GIT_CONFIG_COUNT: "1",
   GIT_CONFIG_KEY_0: "core.hooksPath",
   GIT_CONFIG_VALUE_0: "/dev/null",
 };
 
-/** `read` over a worktree of the PR's head at `tree`, removed after it; when `read` fails, its error is the one thrown. */
-async function inWorktree<T>(checkout: Checkout, tree: string, read: (root: string) => Promise<T>): Promise<T> {
-  const where = { cwd: checkout.cwd, env: CHECKOUT_GIT_ENV };
-  const removal = ["git", "worktree", "remove", "--force", tree];
+const worktreeAt = (checkout: Checkout): RunOptions => ({ cwd: checkout.cwd, env: CHECKOUT_GIT_ENV });
 
-  await checked(checkout.run, ["git", "worktree", "add", "--detach", tree, checkout.head], where);
+/**
+ * `read` over a worktree of the PR's head at `tree`, removed after it. A failed removal neither hides
+ * `read`'s error nor drops its answer: `judgeAt` deletes the tree's files and prunes its registration.
+ */
+async function inWorktree<T>(checkout: Checkout, tree: string, read: (root: string) => Promise<T>): Promise<T> {
+  await checked(checkout.run, ["git", "worktree", "add", "--detach", tree, checkout.head], worktreeAt(checkout));
 
   try {
-    const value = await read(realpathSync(tree));
-
-    await checked(checkout.run, removal, where);
-
-    return value;
-  } catch (error) {
-    // A second failure of the removal would hide the cause; the caller removes the tree's directory anyway.
-    await checkout.run(removal, where);
-
-    throw error;
+    return await read(realpathSync(tree));
+  } finally {
+    await checkout.run(["git", "worktree", "remove", "--force", tree], worktreeAt(checkout));
   }
 }
 
@@ -656,6 +651,7 @@ export async function judgeAt(
     return judgeFailed(error instanceof Error ? error.message : String(error), ROUTING_JUDGE_MODEL);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    await checkout.run(["git", "worktree", "prune"], worktreeAt(checkout));
   }
 }
 

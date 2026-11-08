@@ -734,6 +734,14 @@ describe("the Routing judge's worktree", () => {
     expect(await judgeAt({ kind: "ask" }, { ...checkout, run: refusingRemoval }, JOB, failing)).toMatchObject({
       reason: "the Routing judge failed: the judge broke",
     });
+    expect(await worktrees()).toBe(1);
+  });
+
+  test("a removal that fails after the judge answered keeps the answer, and the worktree is pruned", async () => {
+    const { checkout, worktrees } = await prRepo();
+
+    expect(await judgeAt({ kind: "ask" }, { ...checkout, run: refusingRemoval }, JOB, answering)).toEqual(ANSWER);
+    expect(await worktrees()).toBe(1);
   });
 
   test("a worktree or an environment that cannot be made answers the safe side, so the Sweep goes on", async () => {
@@ -754,29 +762,40 @@ describe("the Routing judge's worktree", () => {
     expect(unknown?.reason).toStartWith("the Routing judge failed: git worktree add exited");
   });
 
-  test("the checkout runs no filter driver, hook or LFS smudge the PR or the runner's git config would run", async () => {
+  test("the checkout runs no filter driver of the runner's system or global git config, LFS included, and no hook", async () => {
     const { repo, git } = await fixtureRepo("judge-filters-");
     const marks = mkdtempSync(join(tmpdir(), "judge-marks-"));
     const globalConfig = join(marks, "gitconfig");
+    const systemConfig = join(marks, "system-gitconfig");
     const hooks = join(marks, "hooks");
+
+    const filter = (name: string): string =>
+      `[filter "${name}"]\n\tsmudge = sh -c 'touch ${join(marks, `${name}-ran`)}; cat'\n\trequired = true\n`;
 
     mkdirSync(hooks);
     writeFileSync(join(hooks, "post-checkout"), `#!/bin/sh\ntouch ${join(marks, "hook-ran")}\n`, { mode: 0o755 });
-    writeFileSync(globalConfig, `[filter "evil"]\n\tsmudge = sh -c 'touch ${join(marks, "filter-ran")}; cat'\n`);
+    writeFileSync(globalConfig, filter("evil"));
+    writeFileSync(systemConfig, filter("lfs"));
     await git(["config", "core.hooksPath", hooks]);
     writeFileSync(join(repo, "a.txt"), "a\n");
     await git(["add", "."]);
     await git(["commit", "-q", "--no-verify", "-m", "a"]);
-    writeFileSync(join(repo, ".gitattributes"), "* filter=evil\n");
+    writeFileSync(join(repo, ".gitattributes"), "*.txt filter=evil\n*.bin filter=lfs\n");
     writeFileSync(join(repo, "a.txt"), "b\n");
+    writeFileSync(join(repo, "b.bin"), "c\n");
     await git(["add", "."]);
     await git(["commit", "-q", "--no-verify", "-m", "b"]);
     const head = (await git(["rev-parse", "HEAD"])).text().trim();
 
-    const checkout = { run: runOver({ GIT_CONFIG_GLOBAL: globalConfig }), cwd: repo, head };
+    const checkout = {
+      run: runOver({ GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_SYSTEM: systemConfig }),
+      cwd: repo,
+      head,
+    };
 
     expect(await judgeAt({ kind: "ask" }, checkout, JOB, answering)).toEqual(ANSWER);
-    expect(existsSync(join(marks, "filter-ran"))).toBe(false);
+    expect(existsSync(join(marks, "evil-ran"))).toBe(false);
+    expect(existsSync(join(marks, "lfs-ran"))).toBe(false);
     expect(existsSync(join(marks, "hook-ran"))).toBe(false);
   });
 
