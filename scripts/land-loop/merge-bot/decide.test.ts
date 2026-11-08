@@ -161,7 +161,10 @@ describe("decide", () => {
       },
     };
 
-    expect(gate(owner)).toBe("pending");
+    expect(stepsOf(owner).at(-1)).toEqual({
+      kind: "land-gate",
+      check: { kind: "pending", summary: "Landable, land:human: waiting for the Owner's Land approval." },
+    });
     expect(gate({ ...owner, labels: ["land-ok"], landApprovalByOwner: true })).toBe("success");
     expect(kinds({ ...owner, labels: ["land-ok"], landApprovalByOwner: true })).toContain("record");
   });
@@ -246,108 +249,314 @@ describe("decide", () => {
 describe("Review rounds", () => {
   const RISKY = { ...LIGHT, secondRound: true };
 
-  // Rounds run, the patch the last one read (P1 is this one), Routing answer, open Important; then the
-  // Review round asked, the Owner asked, and the Land gate.
-  const rows: Array<[string, number, string | null, RoutingAnswer, number, 1 | 2 | null, boolean, string | null]> = [
-    ["no Review round yet: Review round 1", 0, null, LIGHT, 0, 1, false, "pending"],
-    ["a Nit-only Review round 1, then a risky push: Review round 2", 1, "patch-0", RISKY, 0, 2, false, "pending"],
-    [
-      "a Nit-only Review round 1, then a push that needs no review: landable on its Land route",
-      1,
-      "patch-0",
-      LIGHT,
-      0,
-      null,
-      false,
-      "success",
-    ],
-    [
-      "an Important in Review round 1, then its risky fix: Review round 2, its thread still open",
-      1,
-      "patch-0",
-      RISKY,
-      1,
-      2,
-      false,
-      "pending",
-    ],
-    [
-      "an Important in Review round 1, then a fix that needs no review, resolved: landable",
-      1,
-      "patch-0",
-      LIGHT,
-      0,
-      null,
-      false,
-      "success",
-    ],
-    [
-      "two Review rounds, then a patch that needs another: the Owner, never a third",
-      2,
-      "patch-0",
-      RISKY,
-      0,
-      null,
-      true,
-      "pending",
-    ],
-    [
-      "two Review rounds, then a patch that needs none: it stays on its Land route",
-      2,
-      "patch-0",
-      LIGHT,
-      0,
-      null,
-      false,
-      "success",
-    ],
-    [
-      "two Review rounds, the last on this patch, no Important open: landable on its Land route",
-      2,
-      P1,
-      LIGHT,
-      0,
-      null,
-      false,
-      "success",
-    ],
-    [
-      "two Review rounds, the last on this risky patch: it was read, so no third, landable",
-      2,
-      P1,
-      RISKY,
-      0,
-      null,
-      false,
-      "success",
-    ],
+  interface Row {
+    readonly name: string;
+    readonly reviewRounds: number;
+    /** The patch the last Review round read; P1 is this one. */
+    readonly reviewedPatch: string | null;
+    readonly routing: RoutingAnswer;
+    /** The record's Important counts and Owner hold, when it has them. */
+    readonly record?: Pick<StateRecord, "importantByRound" | "ownerHold">;
+    readonly openImportant?: number;
+    readonly labels?: readonly string[];
+    /** The Review round asked, and at which depth. */
+    readonly round: { readonly round: 1 | 2 | 3; readonly depth: "light" | "deep" } | null;
+    readonly owner: boolean;
+    readonly landGate: string;
+  }
+
+  const rows: readonly Row[] = [
+    {
+      name: "no Review round yet: Review round 1",
+      reviewRounds: 0,
+      reviewedPatch: null,
+      routing: LIGHT,
+      round: { round: 1, depth: "light" },
+      owner: false,
+      landGate: "pending",
+    },
+    {
+      name: "a Nit-only Review round 1, then a push that needs a read: Review round 2",
+      reviewRounds: 1,
+      reviewedPatch: "patch-0",
+      routing: RISKY,
+      record: { importantByRound: [0] },
+      round: { round: 2, depth: "light" },
+      owner: false,
+      landGate: "pending",
+    },
+    {
+      name: "a Nit-only Review round 1, then a push that needs no read: landable on its Land route",
+      reviewRounds: 1,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      record: { importantByRound: [0] },
+      round: null,
+      owner: false,
+      landGate: "success",
+    },
+    {
+      name: "an Important in Review round 1, then a fix that needs no read, resolved: no round 2, landable",
+      reviewRounds: 1,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      record: { importantByRound: [2] },
+      round: null,
+      owner: false,
+      landGate: "success",
+    },
+    {
+      name: "an Important in Review round 1, then its fix that needs a read: Review round 2, its thread still open",
+      reviewRounds: 1,
+      reviewedPatch: "patch-0",
+      routing: RISKY,
+      record: { importantByRound: [1] },
+      openImportant: 1,
+      round: { round: 2, depth: "light" },
+      owner: false,
+      landGate: "pending",
+    },
+    {
+      name: "a Review round 2 with an Important, then any push: Review round 3",
+      reviewRounds: 2,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      record: { importantByRound: [0, 1] },
+      round: { round: 3, depth: "light" },
+      owner: false,
+      landGate: "pending",
+    },
+    {
+      name: "a Review round 2 with no Important, then a push that needs a read: Review round 3",
+      reviewRounds: 2,
+      reviewedPatch: "patch-0",
+      routing: RISKY,
+      record: { importantByRound: [1, 0] },
+      round: { round: 3, depth: "light" },
+      owner: false,
+      landGate: "pending",
+    },
+    {
+      name: "a Review round 2 with no Important, then a push that needs no read: no round 3, landable on its Land route",
+      reviewRounds: 2,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      record: { importantByRound: [3, 0] },
+      round: null,
+      owner: false,
+      landGate: "success",
+    },
+    {
+      name: "a Review round 2 with no Important, then a push that needs no read, on an owner route: it waits for the Owner",
+      reviewRounds: 2,
+      reviewedPatch: "patch-0",
+      routing: { ...LIGHT, land: "owner" },
+      record: { importantByRound: [0, 0] },
+      round: null,
+      owner: true,
+      landGate: "pending",
+    },
+    {
+      name: "a record of two Review rounds with no count of their Important findings: Review round 3",
+      reviewRounds: 2,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      round: { round: 3, depth: "light" },
+      owner: false,
+      landGate: "pending",
+    },
+    {
+      name: "a count of round 1 only: Review round 3",
+      reviewRounds: 2,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      record: { importantByRound: [0] },
+      round: { round: 3, depth: "light" },
+      owner: false,
+      landGate: "pending",
+    },
+    {
+      name: "a round 2 counted as unknown: Review round 3",
+      reviewRounds: 2,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      record: { importantByRound: [0, null] },
+      round: { round: 3, depth: "light" },
+      owner: false,
+      landGate: "pending",
+    },
+    {
+      name: "Review round 3 reads at the PR's review label, never lower than it",
+      reviewRounds: 2,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      record: { importantByRound: [0, 1] },
+      labels: ["review:deep"],
+      round: { round: 3, depth: "deep" },
+      owner: false,
+      landGate: "pending",
+    },
+    {
+      name: "a Review round 2 with an Important the Author rejected, no push: no round, landable on its Land route",
+      reviewRounds: 2,
+      reviewedPatch: P1,
+      routing: RISKY,
+      record: { importantByRound: [0, 1] },
+      round: null,
+      owner: false,
+      landGate: "success",
+    },
+    {
+      name: "a clean Review round 3, then a push that needs no read: landable on its Land route",
+      reviewRounds: 3,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      record: { importantByRound: [1, 1, 0] },
+      round: null,
+      owner: false,
+      landGate: "success",
+    },
+    {
+      name: "a clean Review round 3 on this patch: landable on its Land route",
+      reviewRounds: 3,
+      reviewedPatch: P1,
+      routing: RISKY,
+      record: { importantByRound: [1, 1, 0] },
+      round: null,
+      owner: false,
+      landGate: "success",
+    },
+    {
+      name: "a Review round 3, then a push that needs a read: never a round 4, held for the Owner",
+      reviewRounds: 3,
+      reviewedPatch: "patch-0",
+      routing: RISKY,
+      record: { importantByRound: [1, 1, 0] },
+      round: null,
+      owner: true,
+      landGate: "pending",
+    },
+    {
+      name: "an Owner hold, then a push that needs no read: still held for the Owner",
+      reviewRounds: 3,
+      reviewedPatch: "patch-0",
+      routing: LIGHT,
+      record: { ownerHold: "Review round 3 posted 1 Important finding(s)." },
+      round: null,
+      owner: true,
+      landGate: "pending",
+    },
   ];
 
-  for (const [name, reviewRounds, reviewedPatch, routing, openImportant, reviewRound, toOwner, landGate] of rows) {
-    test(name, () => {
-      const record = {
+  for (const row of rows) {
+    test(row.name, () => {
+      const record: StateRecord = {
         ...EMPTY_RECORD,
-        reviewRounds,
-        reviewedPatch,
-        reviewedHead: reviewedPatch === null ? null : "h0",
-        triage: { [P1]: routing },
+        reviewRounds: row.reviewRounds,
+        reviewedPatch: row.reviewedPatch,
+        reviewedHead: row.reviewedPatch === null ? null : "h0",
+        triage: { [P1]: row.routing },
+        ...row.record,
       };
 
-      const snapshot = { ...READY, openImportant, record };
+      const snapshot = { ...READY, labels: row.labels ?? [], openImportant: row.openImportant ?? 0, record };
       const steps = stepsOf(snapshot);
       const review = steps.find((step) => step.kind === "request-review");
+      const labels = steps.flatMap((step) => (step.kind === "labels" ? [step.route] : []));
 
-      expect(review?.kind === "request-review" ? review.reviewRound : null).toBe(reviewRound);
-      expect(steps.some((step) => step.kind === "needs-owner")).toBe(toOwner);
-      expect(steps.some((step) => step.kind === "labels" && step.route === "owner")).toBe(toOwner);
-      expect(gate(snapshot) ?? null).toBe(landGate);
-      expect(steps.some((step) => step.kind === "auto-merge")).toBe(landGate === "success");
+      expect(review?.kind === "request-review" ? { round: review.reviewRound, depth: review.depth } : null).toEqual(
+        row.round,
+      );
+      expect(labels).toEqual([row.owner ? "owner" : "auto"]);
+      expect(gate(snapshot) ?? null).toBe(row.landGate);
+      expect(steps.some((step) => step.kind === "auto-merge")).toBe(row.landGate === "success");
     });
   }
 
   test("Review round 2 reads the Patch delta from the head Review round 1 read, or the whole PR once that head left its history", () => {
     expect(patchDeltaStart("base", "h0", 0)).toBe("h0");
     expect(patchDeltaStart("base", "h0", 1)).toBe("base");
+  });
+});
+
+/** The record after a clean Review round 3 of an earlier patch, with `routing` for this one. */
+const afterRound3 = (routing: RoutingAnswer, rest: Partial<StateRecord> = {}): StateRecord => ({
+  ...EMPTY_RECORD,
+  reviewRounds: 3,
+  reviewedPatch: "patch-0",
+  reviewedHead: "h0",
+  importantByRound: [1, 1, 0],
+  triage: { [P1]: routing },
+  ...rest,
+});
+
+describe("an Owner hold", () => {
+  const RISKY = { ...LIGHT, secondRound: true };
+
+  test("a push after Review round 3 that needs a read sets the hold in the record written first, with its reason", () => {
+    const record = afterRound3(RISKY);
+    const steps = stepsOf({ ...READY, record });
+
+    expect(steps[0]).toEqual({
+      kind: "record",
+      record: { ...record, ownerHold: "A push after Review round 3 needs a read." },
+    });
+    expect(steps.at(-1)).toEqual({
+      kind: "land-gate",
+      check: {
+        kind: "pending",
+        summary:
+          "Held for the Owner: A push after Review round 3 needs a read. Waiting for the Owner's Land approval (label land-ok).",
+      },
+    });
+  });
+
+  test("a push after Review round 3 that needs no read, or a patch not routed yet, sets no hold", () => {
+    expect(kinds({ ...READY, record: afterRound3(LIGHT) })).not.toContain("record");
+    expect(stepsOf({ ...READY, record: { ...afterRound3(RISKY), triage: {} } })).toEqual([
+      { kind: "route", patch: P1, patchDelta: true },
+    ]);
+  });
+
+  test("a held PR lands only with the Owner's Land approval on its current patch, and a later push removes that approval", () => {
+    const held = {
+      ...READY,
+      record: afterRound3(LIGHT, { ownerHold: "Review round 3 posted 2 Important finding(s)." }),
+    };
+
+    const approved = { ...held, labels: [LAND_APPROVAL_LABEL], landApprovalByOwner: true };
+
+    expect(kinds(held)).not.toContain("auto-merge");
+    expect(stepsOf(held).at(-1)).toEqual({
+      kind: "land-gate",
+      check: {
+        kind: "pending",
+        summary:
+          "Held for the Owner: Review round 3 posted 2 Important finding(s). Waiting for the Owner's Land approval (label land-ok).",
+      },
+    });
+    expect(kinds(approved)).toContain("auto-merge");
+
+    const pushed = { ...approved, record: { ...approved.record, landOkPatch: "patch-0" } };
+
+    expect(kinds(pushed)).toContain("remove-land-approval");
+    expect(kinds(pushed)).not.toContain("auto-merge");
+    expect(stepsOf(pushed)).toContainEqual({ kind: "record", record: { ...pushed.record, landOkPatch: null } });
+  });
+
+  test("the hold keeps a land:human the Merge bot set, in one labels step", () => {
+    const record = afterRound3(LIGHT, { ownerHold: "A push after Review round 3 needs a read." });
+    const steps = stepsOf({ ...READY, labels: ["land:human"], humanLabelBy: "merge-bot", record });
+
+    expect(steps.filter((step) => step.kind === "labels")).toEqual([
+      { kind: "labels", route: "owner", depth: "light" },
+    ]);
+  });
+
+  test("the hold set once stays, and the record is not written again", () => {
+    const record = afterRound3(RISKY, { ownerHold: "Review round 3 posted 1 Important finding(s)." });
+
+    expect(kinds({ ...READY, record })).not.toContain("record");
   });
 });
 
@@ -388,16 +597,6 @@ describe("a land:human label", () => {
 
     expect(landRoute(snapshot)).toBe("owner");
     expect(kinds(snapshot)).not.toContain("auto-merge");
-  });
-
-  test("the Merge bot's App set stays when a third Review round would be needed, in one labels step", () => {
-    const record = reviewed({ ...LIGHT, secondRound: true }, { reviewedPatch: "patch-0", reviewRounds: 2 });
-    const steps = stepsOf({ ...BOT_LABELED, record });
-
-    expect(steps.filter((step) => step.kind === "labels")).toEqual([
-      { kind: "labels", route: "owner", depth: "light" },
-    ]);
-    expect(steps.some((step) => step.kind === "auto-merge")).toBe(false);
   });
 
   test("another login set is the Owner's veto and stays though the route is auto", () => {
@@ -487,7 +686,8 @@ describe("the stored record", () => {
 
     expect(recordOfJson(JSON.stringify(storedOfRecord(record)))).toEqual(record);
     expect(recordOfJson(JSON.stringify({ reviewRounds: 1 })).review).toBeUndefined();
-    expect(() => recordOfJson(JSON.stringify({ review: { ...review, round: 3 } }))).toThrow('at ["review"]');
+    expect(recordOfJson(JSON.stringify({ review: { ...review, round: 3 } })).review?.round).toBe(3);
+    expect(() => recordOfJson(JSON.stringify({ review: { ...review, round: 4 } }))).toThrow('at ["review"]');
   });
 
   test("a record that counted Important findings posted in a review's body still reads, and the count is left out", () => {
@@ -515,6 +715,16 @@ describe("the stored record", () => {
     expect(() => recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, needsFable: "yes" } } }))).toThrow(
       `at ["triage"]["${P1}"]["needsFable"]`,
     );
+  });
+
+  test("a record written before the Important counts and the Owner hold reads with neither, and one with them reads back the same", () => {
+    const old = recordOfJson(JSON.stringify({ reviewRounds: 2, reviewedPatch: P1 }));
+    const record = { ...EMPTY_RECORD, reviewRounds: 3, importantByRound: [null, 0, 2], ownerHold: "why" };
+
+    expect(old).toEqual({ ...EMPTY_RECORD, reviewRounds: 2, reviewedPatch: P1 });
+    expect(recordOfJson(JSON.stringify(storedOfRecord(record)))).toEqual(record);
+    expect(() => recordOfJson(JSON.stringify({ importantByRound: ["1"] }))).toThrow('at ["importantByRound"][0]');
+    expect(() => recordOfJson(JSON.stringify({ ownerHold: 1 }))).toThrow('at ["ownerHold"]');
   });
 
   test("a record is stored with its reviewRounds, and reads back the same", () => {
@@ -805,16 +1015,63 @@ describe("the review job's run", () => {
     ]);
   });
 
-  test("a posted review records the patch and the head it read and its round, and clears the request", () => {
-    const record = { ...asked.record, reviewedPatch: "patch-0", reviewedHead: "h0", reviewRounds: 1 };
-    const round2 = { ...reported(), request: { ...REQUEST, round: 2 as const } };
+  test("a posted review records the patch and the head it read, its round and its Important count, and clears the request", () => {
+    const record = {
+      ...asked.record,
+      reviewedPatch: "patch-0",
+      reviewedHead: "h0",
+      reviewRounds: 1,
+      importantByRound: [3],
+    };
+
+    const round2 = { ...reported(finding("important"), finding("nit")), request: { ...REQUEST, round: 2 as const } };
 
     expect(afterReview(record, round2)).toEqual({
       ...READY.record,
       reviewedPatch: P1,
       reviewedHead: REQUEST.head,
       reviewRounds: 2,
+      importantByRound: [3, 1],
     });
+  });
+
+  test("a review posted again writes its count at its round's index, never appends", () => {
+    const round1 = reported(finding("nit"));
+    const once = afterReview(READY.record, round1);
+
+    expect(once.importantByRound).toEqual([0]);
+    expect(afterReview(once, round1)).toEqual(once);
+  });
+
+  test("a round counted over a record that has no count for an earlier round reads back, the missing one as null", () => {
+    const old = recordOfJson(JSON.stringify({ reviewRounds: 2, reviewedPatch: "patch-0" }));
+    const round3 = { ...reported(), request: { ...REQUEST, round: 3 as const } };
+    const next = afterReview(old, round3);
+
+    expect(next.importantByRound).toEqual([null, null, 0]);
+    expect(recordOfJson(JSON.stringify(storedOfRecord(next)))).toEqual(next);
+    expect(next).not.toHaveProperty("ownerHold");
+  });
+
+  test("a Review round 3 with an Important holds the PR for the Owner, with the count", () => {
+    const round3 = {
+      ...reported(finding("important"), finding("important"), finding("nit")),
+      request: { ...REQUEST, round: 3 as const },
+    };
+
+    const next = afterReview({ ...READY.record, reviewRounds: 2, importantByRound: [0, 1] }, round3);
+
+    expect(next.ownerHold).toBe("Review round 3 posted 2 Important finding(s).");
+    expect(next.importantByRound).toEqual([0, 1, 2]);
+    expect(afterReview(next, round3)).toEqual(next);
+  });
+
+  test("an Important in Review round 1 or 2 sets no hold", () => {
+    for (const round of [1, 2] as const) {
+      const result = { ...reported(finding("important")), request: { ...REQUEST, round } };
+
+      expect(afterReview(READY.record, result)).not.toHaveProperty("ownerHold");
+    }
   });
 });
 

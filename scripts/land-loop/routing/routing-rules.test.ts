@@ -186,6 +186,17 @@ describe("the cap", () => {
       answer: { ...AUTO_DEEP, reason: "11 lines changed, past the 10-line cap" },
     });
   });
+
+  test("a Patch delta past it is read again whatever the judge would say, on a change no rule names or a ruled one", () => {
+    const delta = patchDeltaRulesOf(LAB, { paths: ["docs/usage.md"], lines: LAB.lineCap + 1, messages: [] });
+    const within = patchDeltaRulesOf(LAB, { paths: ["docs/usage.md"], lines: LAB.lineCap, messages: [] });
+
+    expect(delta).toMatchObject({ kind: "ruled", answer: { secondRound: true } });
+    expect(within.kind).toBe("judged");
+    expect(judgeAskOf(JUDGED, delta)).toEqual({ kind: "none" });
+    expect(routingOf(JUDGED, delta, null).secondRound).toBe(true);
+    expect(routingOf(RULED_ONLY, delta, null).secondRound).toBe(true);
+  });
 });
 
 const judge = (land: RoutingAnswer["land"]): RoutingAnswer => ({

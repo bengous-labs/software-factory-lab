@@ -14,7 +14,7 @@ export type Severity = typeof Severity.Type;
 
 const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
 
-const Round = Schema.Literals([1, 2]);
+const Round = Schema.Literals([1, 2, 3]);
 
 const Sha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/u));
 

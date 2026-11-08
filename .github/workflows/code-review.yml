@@ -4,8 +4,8 @@ name: code-review
 # `scripts/land-loop/review/run-review.ts`. The Merge bot dispatches it with the request as inputs and
 # reads the result from the run's artifact. The job holds no App token and writes nothing to GitHub:
 # the pull request's head is checked out under `pr/` as files to read, and nothing of it runs. The
-# inputs reach the steps through `env`, never inside a script. Only the thread step of Review round 2
-# gets the job's token, read-only; the review session gets none.
+# inputs reach the steps through `env`, never inside a script. Only the thread step of Review rounds 2
+# and 3 gets the job's token, read-only; the review session gets none.
 on:
   workflow_dispatch:
     inputs:
@@ -22,7 +22,7 @@ on:
         description: The patch identity the Merge bot keys the review on
         required: true
       round:
-        description: The review round, 1 or 2
+        description: The review round, 1, 2 or 3
         required: true
       model:
         description: The model alias
@@ -42,7 +42,7 @@ run-name: ${{ inputs.pr }}
 
 permissions:
   contents: read
-  # The thread step's only: it reads the earlier review threads on Review round 2.
+  # The thread step's only: it reads the earlier review threads on Review rounds 2 and 3.
   pull-requests: read
 
 jobs:
@@ -80,7 +80,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Read the earlier review threads
-        if: inputs.round == '2'
+        if: inputs.round != '1'
         run: bun scripts/land-loop/review/read-threads.ts
         env:
           GH_TOKEN: ${{ github.token }}

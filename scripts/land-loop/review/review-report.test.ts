@@ -49,13 +49,21 @@ describe("ReviewInputs", () => {
     const inputs = { pr: "80", head: HEAD, base: BASE, patch: "p1", round: "1", model: "sonnet", effort: "medium" };
 
     expect(Schema.decodeUnknownSync(ReviewInputs)(inputs)).toEqual(REQUEST);
+
+    for (const round of [2, 3] as const) {
+      expect(Schema.decodeUnknownSync(ReviewInputs)({ ...inputs, round: String(round) })).toEqual({
+        ...REQUEST,
+        round,
+      });
+    }
   });
 
-  test("a round outside 1 and 2, a number that is not one, a head that is not a SHA or an unknown effort is refused", () => {
+  test("a round outside 1 to 3, a number that is not one, a head that is not a SHA or an unknown effort is refused", () => {
     const inputs = { pr: "80", head: HEAD, base: BASE, patch: "p1", round: "1", model: "sonnet", effort: "medium" };
 
     for (const wrong of [
-      { round: "3" },
+      { round: "0" },
+      { round: "4" },
       { pr: "eighty" },
       { pr: "8.5" },
       { head: "HEAD" },

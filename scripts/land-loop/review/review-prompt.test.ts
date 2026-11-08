@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { promptOf } from "./review-prompt.ts";
+import { promptOf, readsEarlierThreads } from "./review-prompt.ts";
 import type { ReviewRequest } from "./review-report.ts";
 
 const HEAD = "e1249fc0000000000000000000000000000000aa";
@@ -39,10 +39,33 @@ describe("promptOf", () => {
 
     const prompt = promptOf({ ...REQUEST, round: 2 }, GUIDES, threads);
 
-    expect(prompt).toContain(`This is review round 2, the last one. ${BASE} is the head review round 1 read`);
+    expect(prompt).toContain(
+      `\nThis is review round 2. ${BASE} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.\n`,
+    );
+    expect(prompt).not.toContain("the last one");
     expect(prompt).toContain("- app/src/task.ts:22: rename accepts a blank title | Author: Fixed in abc123");
     expect(
       prompt.endsWith("Never report again a finding the author resolved with a valid reason, nor one already open."),
     ).toBe(true);
+  });
+
+  test("round 3, the last, names the head round 2 read and lists the earlier threads with the author's answers", () => {
+    const threads = [{ where: "a.ts:3", finding: "off by one", reply: "Rejected: the bound is inclusive" }];
+    const prompt = promptOf({ ...REQUEST, round: 3 }, GUIDES, threads);
+
+    expect(prompt).toContain(
+      `\nThis is review round 3, the last one. ${BASE} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.\nEarlier findings and the author's answers:\n- a.ts:3: off by one | Author: Rejected: the bound is inclusive\n`,
+    );
+    expect(
+      prompt.endsWith("Never report again a finding the author resolved with a valid reason, nor one already open."),
+    ).toBe(true);
+  });
+});
+
+describe("readsEarlierThreads", () => {
+  test("Review rounds 2 and 3 read the earlier threads, round 1 none", () => {
+    expect(readsEarlierThreads(1)).toBe(false);
+    expect(readsEarlierThreads(2)).toBe(true);
+    expect(readsEarlierThreads(3)).toBe(true);
   });
 });

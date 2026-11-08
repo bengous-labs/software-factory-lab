@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -29,10 +29,13 @@ import {
   judgeDiffArgs,
   labelEventsReader,
   landApprovalByOwnerOf,
+  linesOfNumstat,
   ListedPrs,
   notFound,
+  numstatArgs,
   Pull,
   PullReviews,
+  readsPatchDelta,
   reviewJobReader,
   routingPolicyAt,
   startOf,
@@ -466,6 +469,48 @@ describe("the routing inputs", () => {
     expect(same).not.toBe(back);
     expect(judgeAskOf(await rulesOn(base, back), nothing)).toEqual({ kind: "none" });
     expect(routingOf(await rulesOn(base, back), nothing, null).secondRound).toBe(false);
+  });
+
+  test("a Patch delta's own line count, from git's numstat over its range, reaches the rules: past the cap it is read again", async () => {
+    const { repo, git } = await fixtureRepo("delta-lines-");
+    const policy: RoutingPolicy = { ownerPaths: [], factoryPaths: [], deepReviewPaths: [], lineCap: 4 };
+
+    const commit = async (text: string): Promise<string> => {
+      writeFileSync(join(repo, "notes.md"), text);
+      await git(["add", "."]);
+      await git(["commit", "-q", "-m", "c"]);
+
+      return (await git(["rev-parse", "HEAD"])).text().trim();
+    };
+
+    const base = await commit("a\n");
+    const reviewed = await commit("a\nb\nc\nd\ne\nf\n");
+    const small = await commit("a\nb\nc\nd\ne\nF\n");
+    const large = await commit("1\n2\n3\n4\n5\n6\n");
+
+    const deltaOf = async (from: string, to: string) =>
+      patchDeltaRulesOf(policy, {
+        paths: ["notes.md"],
+        lines: linesOfNumstat((await git(numstatArgs(from, to))).text()),
+        messages: [],
+      });
+
+    expect(linesOfNumstat((await git(numstatArgs(base, reviewed))).text())).toBe(5);
+    expect(linesOfNumstat((await git(numstatArgs(reviewed, small))).text())).toBe(2);
+    expect((await deltaOf(reviewed, small)).kind).toBe("judged");
+    expect(routingOf(await deltaOf(small, large), await deltaOf(small, large), null).secondRound).toBe(true);
+    expect(linesOfNumstat("-\t-\timage.png\n3\t1\ta.ts\n")).toBe(4);
+    expect(linesOfNumstat("")).toBe(0);
+  });
+
+  test("Review rounds 2 and 3 read the Patch delta from the head the last round read; round 1 the whole PR", () => {
+    expect(readsPatchDelta(1)).toBe(false);
+    expect(readsPatchDelta(2)).toBe(true);
+    expect(readsPatchDelta(3)).toBe(true);
+  });
+
+  test("the Merge bot never adds the needs-human label", () => {
+    expect(readFileSync(join(import.meta.dir, "main.ts"), "utf8")).not.toContain("needs-human");
   });
 
   test("a PR whose commits change no file lists no path: its Snapshot is empty", async () => {

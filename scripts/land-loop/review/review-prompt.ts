@@ -14,14 +14,22 @@ export interface Guides {
   readonly project: string;
 }
 
+/** Whether the review job reads the earlier review threads for `round`: every round after the first. */
+export const readsEarlierThreads = (round: ReviewRequest["round"]): boolean => round >= 2;
+
 function roundText(request: ReviewRequest, threads: readonly EarlierThread[]): readonly string[] {
   if (request.round === 1) {
     return [];
   }
 
+  const first =
+    request.round === 2
+      ? `This is review round 2. ${request.base} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.`
+      : `This is review round 3, the last one. ${request.base} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.`;
+
   return [
     "",
-    `This is review round 2, the last one. ${request.base} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.`,
+    first,
     "Earlier findings and the author's answers:",
     ...threads.map((thread) => `- ${thread.where}: ${thread.finding} | Author: ${thread.reply}`),
     "Report only what is wrong now. Never report again a finding the author resolved with a valid reason, nor one already open.",
