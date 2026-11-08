@@ -125,6 +125,22 @@ export function decide(pr: PullRequest | null, answer: Answer): Action {
   return { kind: "push", pr: pr.number, ready: pr.draft };
 }
 
+/** A Worker's branch is `<type>/<N>-<slug>`, made for issue N. */
+const ISSUE_BRANCH = /^[a-z]+\/(\d+)-/u;
+
+/** The line that closes the branch's issue when the PR lands, or null when the branch names none or the body closes it already. */
+export function closingLineOf(branch: string, body: string): string | null {
+  const issue = ISSUE_BRANCH.exec(branch)?.[1];
+
+  if (issue === undefined) {
+    return null;
+  }
+
+  const closes = new RegExp(String.raw`\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?) #${issue}(?!\d)`, "iu");
+
+  return closes.test(body) ? null : `Closes #${issue}`;
+}
+
 /** What the hook tells the author once its PR is ready: arm the PR watch, then stop. */
 export function armReason(pr: number, prWatchCommand: string, threadCommand: string, commentCommand: string): string {
   return [

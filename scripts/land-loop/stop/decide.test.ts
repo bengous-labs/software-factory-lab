@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { admit, afterStopChecks, answerOf, armReason, decide } from "./decide.ts";
+import { admit, afterStopChecks, answerOf, armReason, closingLineOf, decide } from "./decide.ts";
 import type { Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
@@ -119,5 +119,39 @@ describe("armReason", () => {
     expect(reason).toContain("never with `gh pr comment`");
     expect(reason).toContain("Nit and Pre-existing findings never block");
     expect(reason).toContain("Never ask the Owner a question");
+  });
+});
+
+describe("closingLineOf", () => {
+  test("a branch <type>/<N>-<slug> closes issue N; any other branch closes nothing", () => {
+    const cases: Array<[string, string | null]> = [
+      ["fix/89-patch-delta-judge", "Closes #89"],
+      ["feat/48-pr-body", "Closes #48"],
+      ["cc/42-x", "Closes #42"],
+      ["fix/89", null],
+      ["Fix/42-x", null],
+      ["wave2/42-x", null],
+      ["chore/tidy-docs", null],
+      ["worktree-abc", null],
+      ["x/fix/42-y", null],
+    ];
+
+    for (const [branch, line] of cases) {
+      expect(closingLineOf(branch, "Body.")).toBe(line);
+    }
+  });
+
+  test("a body that closes the issue already gets no line, whatever the keyword and its case", () => {
+    for (const keyword of ["close", "Closes", "closed", "FIX", "fixes", "fixed", "resolve", "Resolves", "resolved"]) {
+      expect(closingLineOf("fix/89-x", `Why.\n\n${keyword} #89`)).toBeNull();
+    }
+  });
+
+  test("a keyword for another issue, or no keyword before the number, still gets the line", () => {
+    expect(closingLineOf("fix/89-x", "Closes #8")).toBe("Closes #89");
+    expect(closingLineOf("fix/89-x", "Closes #890")).toBe("Closes #89");
+    expect(closingLineOf("fix/89-x", "Closes #12, see #89")).toBe("Closes #89");
+    expect(closingLineOf("fix/89-x", "encloses #89")).toBe("Closes #89");
+    expect(closingLineOf("fix/89-x", "")).toBe("Closes #89");
   });
 });
