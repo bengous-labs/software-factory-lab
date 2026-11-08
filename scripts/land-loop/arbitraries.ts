@@ -78,6 +78,7 @@ export const recordOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<StateRecord>
       review: reviewStateOf(patch),
       importantByRound: fc.array(fc.option(fc.nat({ max: 2 }), { nil: null }), { maxLength: 3 }),
       ownerHold: fc.string(),
+      ownerAskedPatch: patch,
     },
     {
       requiredKeys: ["reviewedPatch", "reviewedHead", "reviewRounds", "triage", "landOkPatch", "dequeued"],
@@ -150,6 +151,7 @@ export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   labels: fc.subarray(LABELS),
   humanLabelBy: HUMAN_LABEL_BY,
   landApprovalByOwner: fc.boolean(),
+  landApprovalPutByOwner: fc.boolean(),
   openImportant: fc.nat({ max: 2 }),
   devRed: fc.boolean(),
   conflicting: fc.boolean(),

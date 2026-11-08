@@ -32,11 +32,13 @@ import {
   judgeEnvOf,
   labelEventsReader,
   landApprovalByOwnerOf,
+  landApprovalPutByOwnerOf,
   linesOfNumstat,
   ListedPrs,
   notFound,
   numstatArgs,
   openedByFactoryOf,
+  ownerCommenter,
   Pull,
   PullReviews,
   readsPatchDelta,
@@ -132,6 +134,8 @@ describe("the GitHub answers the Merge bot reads", () => {
     expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T10:00:00Z")).toBe(true);
     expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T12:00:00Z")).toBe(false);
     expect(landApprovalByOwnerOf(events, "someone", "2026-11-05T10:00:00Z")).toBe(false);
+    expect(landApprovalPutByOwnerOf(events, "owner")).toBe(true);
+    expect(landApprovalPutByOwnerOf(events, "someone")).toBe(false);
 
     const byGhost = decodeJson(
       IssueEvents,
@@ -337,6 +341,27 @@ describe("labelEventsReader", () => {
     ]);
     expect(events).toHaveLength(121);
     expect(humanLabelByOf(events, ["land:human"], "agents[bot]")).toBe("merge-bot");
+  });
+});
+
+describe("ownerCommenter", () => {
+  test("posts an owner-comment step as a new comment on the PR, with its body as is", async () => {
+    const calls: Array<{ argv: string[]; stdin: string | undefined }> = [];
+
+    const runner: Run = (argv, options) => {
+      calls.push({ argv: [...argv], stdin: options.stdin });
+
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    };
+
+    await ownerCommenter(runner)(WHERE, 12, "Only the Owner's Land approval counts.");
+
+    expect(calls).toEqual([
+      {
+        argv: ["gh", "api", "-X", "POST", "repos/o/r/issues/12/comments", "--input", "-"],
+        stdin: JSON.stringify({ body: "Only the Owner's Land approval counts." }),
+      },
+    ]);
   });
 });
 

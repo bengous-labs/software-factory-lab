@@ -100,6 +100,8 @@ export interface StateRecord {
   readonly importantByRound?: ReadonlyArray<number | null>;
   /** Why the PR is held for the Owner, who alone lands it then. Absent: no hold. Set once, never cleared. */
   readonly ownerHold?: string;
+  /** The patch the Owner was last asked in a comment to give the Land approval for. Absent: never asked. */
+  readonly ownerAskedPatch?: string;
   /** The Routing answer of each patch, keyed by patch identity. */
   readonly triage: Readonly<Record<string, RoutingAnswer>>;
   /** The patch the owner's Land approval was given for. */
@@ -155,6 +157,7 @@ const ReadRecord = Schema.Struct({
   review: Schema.optionalKey(ReviewState),
   importantByRound: Schema.optionalKey(Schema.Array(Schema.NullOr(Schema.Finite))),
   ownerHold: Schema.optionalKey(Schema.String),
+  ownerAskedPatch: Schema.optionalKey(Schema.String),
 });
 
 type ReadRecord = typeof ReadRecord.Type;
@@ -219,8 +222,10 @@ export interface Snapshot {
    * (an actor that does not read, or no such event, included), or null when the PR has no `land:human`.
    */
   readonly humanLabelBy: "merge-bot" | "other" | null;
-  /** The Land approval label is on the PR and the owner put it there. */
+  /** The Land approval label is on the PR and the owner put it there, after this head was pushed. */
   readonly landApprovalByOwner: boolean;
+  /** The Land approval label is on the PR and the owner put it there, before or after this head was pushed. */
+  readonly landApprovalPutByOwner: boolean;
   readonly openImportant: number;
   readonly devRed: boolean;
   /** GitHub reads the PR as conflicting with its base: no CI runs on it and the queue refuses it. */
@@ -296,6 +301,8 @@ export type Step =
   | { readonly kind: "land-gate"; readonly check: CheckState }
   | { readonly kind: "record"; readonly record: StateRecord }
   | { readonly kind: "remove-land-approval" }
+  /** A new comment on the PR, so that GitHub notifies the Owner: it does not notify an edit. */
+  | { readonly kind: "owner-comment"; readonly body: string }
   | { readonly kind: "auto-merge" };
 
 export type Decision =
@@ -335,33 +342,105 @@ const pending = (summary: string): CheckState => ({ kind: "pending", summary });
 
 /**
  * The record after reading the Land approval label, the only change a decision makes to it, and
- * whether the label goes. A label someone else put goes; one given for another patch goes and clears
- * its patch; a patch left in the record without the label is cleared, so a new Land approval counts.
+ * why the label goes, or null when it stays. A label someone else put goes; one given for another
+ * patch goes and clears its patch; a patch left in the record without the label is cleared, so a new
+ * Land approval counts.
  */
 interface LandApproval {
   readonly next: StateRecord;
-  readonly removeLabel: boolean;
+  readonly removed: "earlier-patch" | "not-owner" | null;
 }
 
 function landApprovalOf(snapshot: Snapshot, record: StateRecord): LandApproval {
   if (!snapshot.labels.includes(LAND_APPROVAL_LABEL)) {
-    return { next: record.landOkPatch === null ? record : { ...record, landOkPatch: null }, removeLabel: false };
+    return { next: record.landOkPatch === null ? record : { ...record, landOkPatch: null }, removed: null };
   }
 
   if (!snapshot.landApprovalByOwner) {
-    return { next: record, removeLabel: true };
+    return {
+      next: record.landOkPatch === null ? record : { ...record, landOkPatch: null },
+      removed: snapshot.landApprovalPutByOwner ? "earlier-patch" : "not-owner",
+    };
   }
 
   if (record.landOkPatch === null) {
-    return { next: { ...record, landOkPatch: snapshot.patch }, removeLabel: false };
+    return { next: { ...record, landOkPatch: snapshot.patch }, removed: null };
   }
 
   if (record.landOkPatch !== snapshot.patch) {
-    return { next: { ...record, landOkPatch: null }, removeLabel: true };
+    return { next: { ...record, landOkPatch: null }, removed: "earlier-patch" };
   }
 
-  return { next: record, removeLabel: false };
+  return { next: record, removed: null };
 }
+
+/** The comment that says why the Land approval label went. */
+const REMOVAL_COMMENTS: Readonly<Record<NonNullable<LandApproval["removed"]>, string>> = {
+  "earlier-patch": `The Land approval (${LAND_APPROVAL_LABEL}) was given for an earlier push, so the Merge bot removed it. The ${LAND_GATE} check of this push says whether it waits for the Owner.`,
+  "not-owner": `Only the Owner's Land approval counts: the Merge bot removed a ${LAND_APPROVAL_LABEL} the Owner did not put.`,
+};
+
+const OWNER_WAIT = `Waiting for the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).`;
+
+/**
+ * Why a PR that waits for the Owner's Land approval waits, the first reason that applies: the Owner
+ * hold, a `land:human` the Merge bot did not set, then the Routing rules. `asked` is the reason the
+ * comment that asks the Owner gives, null when no comment asks: the Owner set that label, or the
+ * Author's hold comment already says why.
+ */
+interface OwnerWait {
+  readonly summary: string;
+  readonly asked: string | null;
+}
+
+function ownerWaitOf(ownerHold: string | undefined, humanLabelBy: Snapshot["humanLabelBy"], reason: string): OwnerWait {
+  if (ownerHold !== undefined) {
+    return {
+      summary: `Held for the Owner: ${ownerHold} ${OWNER_WAIT}`,
+      asked: ownerHold.endsWith(".") ? ownerHold.slice(0, -1) : ownerHold,
+    };
+  }
+
+  if (humanLabelBy === "other") {
+    return { summary: `Held for the Owner: a land:human the Merge bot did not set. ${OWNER_WAIT}`, asked: null };
+  }
+
+  return {
+    summary: `Held for the Owner: ${reason}. ${OWNER_WAIT} To keep it held whatever later pushes change, remove land:human and add it back.`,
+    asked: reason,
+  };
+}
+
+/**
+ * The steps that end a decision waiting for the Owner: the comment that asks the Owner, once per
+ * patch, then the record of the patch it was posted for, then the Land gate. The comment goes before
+ * the record, so a run that stops between them posts it again rather than never.
+ */
+function ownerWaitSteps(next: StateRecord, patch: string, wait: OwnerWait): readonly Step[] {
+  const gate: Step = { kind: "land-gate", check: pending(wait.summary) };
+
+  if (wait.asked === null || next.ownerAskedPatch === patch) {
+    return [gate];
+  }
+
+  return [
+    {
+      kind: "owner-comment",
+      body: `This PR waits for the Owner's Land approval: ${wait.asked}. Add the label ${LAND_APPROVAL_LABEL} to land it.`,
+    },
+    { kind: "record", record: { ...next, ownerAskedPatch: patch } },
+    gate,
+  ];
+}
+
+/**
+ * The CI summary, with a sentence more while this push is not routed after an earlier push was: the
+ * labels a human sees are the previous push's.
+ */
+const ciSummary = (summary: string, record: StateRecord, patch: string): string =>
+  record.triage[patch] !== undefined || Object.keys(record.triage).length === 0
+    ? summary
+    : `${summary} This push is not routed yet: its labels are the previous push's.`;
 
 /** How long after its dispatch a review the job has not reported counts as failed: past the job's 30-minute timeout. */
 export const REVIEW_DEADLINE_MS = 45 * 60_000;
@@ -617,8 +696,8 @@ export function decide(snapshot: Snapshot): Decision {
   const machine = reviewStepsOf(snapshot, approval.next);
   const next = heldAfterRound3(machine.record, snapshot.patch);
 
-  if (approval.removeLabel) {
-    steps.push({ kind: "remove-land-approval" });
+  if (approval.removed !== null) {
+    steps.push({ kind: "remove-land-approval" }, { kind: "owner-comment", body: REMOVAL_COMMENTS[approval.removed] });
   }
 
   // Written now: a routing or a review below ends this decision before the Land gate is reached.
@@ -650,15 +729,15 @@ export function decide(snapshot: Snapshot): Decision {
     return finish({ kind: "failure", summary: "This PR conflicts with dev: rebase it onto origin/dev, then stop." });
   }
 
+  const routing = next.triage[snapshot.patch];
+
   if (snapshot.ci === null) {
-    return finish(pending("Waiting for validate and mutation."));
+    return finish(pending(ciSummary("Waiting for validate and mutation.", next, snapshot.patch)));
   }
 
   if (snapshot.ci === "failure") {
-    return finish(pending("validate or mutation is red: the author's turn."));
+    return finish(pending(ciSummary("validate or mutation is red: the author's turn.", next, snapshot.patch)));
   }
-
-  const routing = next.triage[snapshot.patch];
 
   if (routing === undefined) {
     steps.push({ kind: "route", patch: snapshot.patch, patchDelta: next.reviewedPatch !== null });
@@ -718,11 +797,9 @@ export function decide(snapshot: Snapshot): Decision {
     }
   }
 
-  return finish(
-    pending(
-      next.ownerHold === undefined
-        ? "Landable, land:human: waiting for the Owner's Land approval."
-        : `Held for the Owner: ${next.ownerHold} Waiting for the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).`,
-    ),
+  steps.push(
+    ...ownerWaitSteps(next, snapshot.patch, ownerWaitOf(next.ownerHold, snapshot.humanLabelBy, routing.reason)),
   );
+
+  return { kind: "steps", steps };
 }

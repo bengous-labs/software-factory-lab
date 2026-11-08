@@ -54,6 +54,7 @@ const READY: Snapshot = {
   labels: [],
   humanLabelBy: null,
   landApprovalByOwner: false,
+  landApprovalPutByOwner: false,
   openImportant: 0,
   devRed: false,
   conflicting: false,
@@ -157,7 +158,11 @@ describe("decide", () => {
 
     expect(stepsOf(owner).at(-1)).toEqual({
       kind: "land-gate",
-      check: { kind: "pending", summary: "Landable, land:human: waiting for the Owner's Land approval." },
+      check: {
+        kind: "pending",
+        summary:
+          "Held for the Owner: ordinary code. Waiting for the Owner's Land approval (label land-ok). To keep it held whatever later pushes change, remove land:human and add it back.",
+      },
     });
     expect(gate({ ...owner, labels: ["land-ok"], landApprovalByOwner: true })).toBe("success");
     expect(kinds({ ...owner, labels: ["land-ok"], landApprovalByOwner: true })).toContain("record");
@@ -519,7 +524,7 @@ describe("an Owner hold", () => {
 
     expect(kinds(auto)).not.toContain("record");
     expect(kinds(auto)).toContain("auto-merge");
-    expect(kinds(human)).not.toContain("record");
+    expect(stepsOf(human).filter((step) => step.kind === "record" && step.record.ownerHold !== undefined)).toEqual([]);
     expect(kinds(human)).not.toContain("auto-merge");
     expect(gate(human)).toBe("pending");
   });
@@ -560,7 +565,10 @@ describe("an Owner hold", () => {
   });
 
   test("the hold set once stays, and the record is not written again", () => {
-    const record = afterRound3(RISKY, { ownerHold: "Review round 3 posted 1 Important finding(s)." });
+    const record = afterRound3(RISKY, {
+      ownerHold: "Review round 3 posted 1 Important finding(s).",
+      ownerAskedPatch: P1,
+    });
 
     expect(kinds({ ...READY, record })).not.toContain("record");
   });
@@ -799,8 +807,8 @@ describe("Land approval across a patch change", () => {
 
     const steps = stepsOf(snapshot);
 
-    expect(steps.map((step) => step.kind)).toEqual(["remove-land-approval", "record", "route"]);
-    expect(steps[1]).toEqual({ kind: "record", record: { ...EMPTY_RECORD, landOkPatch: null } });
+    expect(steps.map((step) => step.kind)).toEqual(["remove-land-approval", "owner-comment", "record", "route"]);
+    expect(steps[2]).toEqual({ kind: "record", record: { ...EMPTY_RECORD, landOkPatch: null } });
   });
 
   test("a Land approval patch left in the record without the label is cleared, so a new Land approval counts", () => {
@@ -1047,8 +1055,9 @@ describe("the review job's run", () => {
       reviewJob: completed(null),
     };
 
-    expect(stepsOf(snapshot).slice(0, 2)).toEqual([
+    expect(stepsOf(snapshot).slice(0, 3)).toEqual([
       { kind: "remove-land-approval" },
+      { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
       {
         kind: "record",
         record: {
@@ -1120,6 +1129,173 @@ describe("the review job's run", () => {
   });
 });
 
+const EARLIER_PATCH_COMMENT =
+  "The Land approval (land-ok) was given for an earlier push, so the Merge bot removed it. The land-gate check of this push says whether it waits for the Owner.";
+
+const NOT_OWNER_COMMENT =
+  "Only the Owner's Land approval counts: the Merge bot removed a land-ok the Owner did not put.";
+
+const NOT_ROUTED = " This push is not routed yet: its labels are the previous push's.";
+
+const OWNER_PATH = {
+  ...LIGHT,
+  land: "owner" as const,
+  reason: "touches a path the Owner lands: .github/workflows/ci.yml",
+};
+
+const commentsOf = (snapshot: Snapshot): string[] =>
+  stepsOf(snapshot).flatMap((step) => (step.kind === "owner-comment" ? [step.body] : []));
+
+const gateSummary = (snapshot: Snapshot): string | undefined => {
+  const step = stepsOf(snapshot).find((found) => found.kind === "land-gate");
+
+  return step?.kind === "land-gate" ? step.check.summary : undefined;
+};
+
+describe("why a PR is held, where the Owner looks", () => {
+  test("a land:human the Merge bot did not set names itself as the reason", () => {
+    const vetoed = { ...READY, labels: ["land:human"], humanLabelBy: "other" as const, record: reviewed(LIGHT) };
+
+    expect(gateSummary(vetoed)).toBe(
+      "Held for the Owner: a land:human the Merge bot did not set. Waiting for the Owner's Land approval (label land-ok).",
+    );
+    expect(gateSummary({ ...vetoed, record: reviewed(OWNER_PATH) })).toBe(gateSummary(vetoed));
+  });
+
+  test("the Routing rules' reason is named, with the gesture that keeps the PR held", () => {
+    const breaking = { ...OWNER_PATH, reason: "a breaking commit: feat(app)!: drop the v1 task file" };
+
+    expect(gateSummary({ ...READY, record: reviewed(OWNER_PATH) })).toBe(
+      "Held for the Owner: touches a path the Owner lands: .github/workflows/ci.yml. Waiting for the Owner's Land approval (label land-ok). To keep it held whatever later pushes change, remove land:human and add it back.",
+    );
+    expect(gateSummary({ ...READY, record: reviewed(breaking) })).toBe(
+      "Held for the Owner: a breaking commit: feat(app)!: drop the v1 task file. Waiting for the Owner's Land approval (label land-ok). To keep it held whatever later pushes change, remove land:human and add it back.",
+    );
+  });
+
+  test("the Owner hold comes first, before a land:human the Merge bot did not set", () => {
+    const held = reviewed(OWNER_PATH, { ownerHold: "Review round 3 posted 1 Important finding(s)." });
+
+    expect(gateSummary({ ...READY, labels: ["land:human"], humanLabelBy: "other", record: held })).toBe(
+      "Held for the Owner: Review round 3 posted 1 Important finding(s). Waiting for the Owner's Land approval (label land-ok).",
+    );
+  });
+
+  test("a push not routed yet says its labels are the previous push's, while CI runs and once it is red", () => {
+    const unrouted = { ...READY, record: { ...EMPTY_RECORD, triage: { "patch-0": LIGHT } } };
+
+    expect(gateSummary({ ...unrouted, ci: null })).toBe(`Waiting for validate and mutation.${NOT_ROUTED}`);
+    expect(gateSummary({ ...unrouted, ci: "failure" })).toBe(
+      `validate or mutation is red: the author's turn.${NOT_ROUTED}`,
+    );
+  });
+
+  test("a routed push, a rerun's included, and the first push of a PR keep their CI summaries", () => {
+    for (const snapshot of [READY, { ...READY, record: EMPTY_RECORD }]) {
+      expect(gateSummary({ ...snapshot, ci: null })).toBe("Waiting for validate and mutation.");
+      expect(gateSummary({ ...snapshot, ci: "failure" })).toBe("validate or mutation is red: the author's turn.");
+    }
+  });
+
+  test("a land-ok given for an earlier push is removed with a comment that says so", () => {
+    const stale = {
+      ...READY,
+      labels: [LAND_APPROVAL_LABEL],
+      landApprovalByOwner: true,
+      record: reviewed(LIGHT, { landOkPatch: "patch-0" }),
+    };
+
+    expect(stepsOf(stale).slice(0, 2)).toEqual([
+      { kind: "remove-land-approval" },
+      { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+    ]);
+  });
+
+  test("a land-ok the Owner put before a push, which no longer counts, is removed as given for an earlier push, recorded or not", () => {
+    const pushed = { ...READY, labels: [LAND_APPROVAL_LABEL], landApprovalPutByOwner: true, record: reviewed(LIGHT) };
+
+    expect(stepsOf(pushed).slice(0, 2)).toEqual([
+      { kind: "remove-land-approval" },
+      { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+    ]);
+
+    for (const landOkPatch of ["patch-0", P1]) {
+      expect(stepsOf({ ...pushed, record: reviewed(LIGHT, { landOkPatch }) }).slice(0, 3)).toEqual([
+        { kind: "remove-land-approval" },
+        { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+        { kind: "record", record: reviewed(LIGHT) },
+      ]);
+    }
+  });
+
+  test("a land-ok the Owner did not put is removed with a comment that says so, though the Owner's was recorded before", () => {
+    const foreign = { ...READY, labels: [LAND_APPROVAL_LABEL], record: reviewed(LIGHT) };
+
+    for (const snapshot of [foreign, { ...foreign, record: reviewed(LIGHT, { landOkPatch: P1 }) }]) {
+      expect(stepsOf(snapshot).slice(0, 2)).toEqual([
+        { kind: "remove-land-approval" },
+        { kind: "owner-comment", body: NOT_OWNER_COMMENT },
+      ]);
+    }
+
+    expect(kinds(foreign)).not.toContain("record");
+  });
+
+  test("a PR the Routing rules hold asks the Owner in a comment, then records the patch, before the Land gate", () => {
+    const steps = stepsOf({ ...READY, record: reviewed(OWNER_PATH) });
+
+    expect(steps.slice(-3, -1)).toEqual([
+      {
+        kind: "owner-comment",
+        body: "This PR waits for the Owner's Land approval: touches a path the Owner lands: .github/workflows/ci.yml. Add the label land-ok to land it.",
+      },
+      { kind: "record", record: reviewed(OWNER_PATH, { ownerAskedPatch: P1 }) },
+    ]);
+    expect(steps.at(-1)?.kind).toBe("land-gate");
+  });
+
+  test("a PR the Owner hold holds asks the Owner with the hold, its final period left out", () => {
+    const record = reviewed(LIGHT, { ownerHold: "Review round 3 posted 2 Important finding(s)." });
+
+    expect(commentsOf({ ...READY, record })).toEqual([
+      "This PR waits for the Owner's Land approval: Review round 3 posted 2 Important finding(s). Add the label land-ok to land it.",
+    ]);
+  });
+
+  test("the waits comment is posted once per patch, and again on a new patch", () => {
+    const asked = { ...READY, record: reviewed(OWNER_PATH, { ownerAskedPatch: P1 }) };
+
+    expect(commentsOf(asked)).toEqual([]);
+    expect(kinds(asked)).not.toContain("record");
+    expect(commentsOf({ ...asked, record: { ...asked.record, ownerAskedPatch: "patch-0" } })).toHaveLength(1);
+  });
+
+  test("no comment when a land:human the Merge bot did not set holds the PR, or when it lands", () => {
+    const vetoed = { ...READY, labels: ["land:human"], humanLabelBy: "other" as const, record: reviewed(OWNER_PATH) };
+
+    const approved = {
+      ...READY,
+      labels: [LAND_APPROVAL_LABEL],
+      landApprovalByOwner: true,
+      record: reviewed(OWNER_PATH),
+    };
+
+    expect(commentsOf(vetoed)).toEqual([]);
+    expect(commentsOf(approved)).toEqual([]);
+    expect(commentsOf({ ...READY, record: reviewed(LIGHT) })).toEqual([]);
+  });
+
+  test("a record without ownerAskedPatch reads as no comment posted, and one with it reads back the same", () => {
+    const record = { ...EMPTY_RECORD, ownerAskedPatch: P1 };
+
+    expect(recordOfJson(JSON.stringify({ reviewRounds: 1 })).ownerAskedPatch).toBeUndefined();
+    expect(recordOfJson(JSON.stringify(storedOfRecord(record)))).toEqual(record);
+    expect(() => recordOfJson(JSON.stringify({ ownerAskedPatch: 1 }))).toThrow('at ["ownerAskedPatch"]');
+  });
+});
+
+const OWNER_WAIT = /waiting for the owner's land approval/iu;
+
 const MODEL_STEPS: ReadonlySet<Step["kind"]> = new Set(["route"]);
 
 const REVIEW_RANK: Readonly<Record<RoutingAnswer["review"], number>> = { none: 0, light: 1, deep: 2 };
@@ -1143,6 +1319,33 @@ describe("the Merge bot's invariants", () => {
 
         expect(REVIEW_RANK[risen(labels, null, routing).depth]).toBe(deepest);
       }),
+    );
+  });
+
+  test("a decision that ends waiting for the Owner says so in its Land gate, and a waits comment comes only with such a gate", () => {
+    fc.assert(
+      fc.property(SNAPSHOT, (snapshot) => {
+        const steps = stepsOrNone(snapshot);
+        const labels = steps.find((step) => step.kind === "labels");
+        const last = steps.at(-1);
+        const summary = last?.kind === "land-gate" ? last.check.summary : "";
+
+        const waitsForOwner =
+          labels?.kind === "labels" &&
+          labels.route === "owner" &&
+          last?.kind === "land-gate" &&
+          last.check.kind === "pending" &&
+          !steps.some((step) => step.kind === "request-review") &&
+          snapshot.openImportant === 0 &&
+          !snapshot.devRed;
+
+        expect(OWNER_WAIT.test(summary)).toBe(waitsForOwner);
+
+        if (steps.some((step) => step.kind === "owner-comment" && step.body.startsWith("This PR waits"))) {
+          expect(waitsForOwner).toBe(true);
+        }
+      }),
+      RUNS,
     );
   });
 
