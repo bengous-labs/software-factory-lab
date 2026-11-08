@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
 
-import { admit, afterAuthorToken, afterStopChecks, answerOf, armReason, closingLineOf, decide } from "./decide.ts";
-import type { Snapshot } from "./decide.ts";
+import { AUTHOR_MARK } from "../author-mark.ts";
+import {
+  admit,
+  afterAuthorToken,
+  afterStopChecks,
+  answerOf,
+  armReason,
+  closingLineOf,
+  decide,
+  holdStepsOf,
+} from "./decide.ts";
+import type { Answer, Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -43,15 +53,17 @@ describe("admit", () => {
   });
 
   test("a ready PR at this head asks for the PR watch once, then leaves the session alone", () => {
-    const pr = { number: 7, draft: false, headSha: HEAD };
+    const pr = { number: 7, draft: false, headSha: HEAD, labels: [] };
 
     expect(admit({ ...SNAPSHOT, pr })).toEqual({ kind: "arm", pr: 7 });
     expect(admit({ ...SNAPSHOT, pr, armed: true }).kind).toBe("none");
   });
 
   test("a draft PR, or a ready one behind this head, runs the Stop checks again", () => {
-    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({ kind: "stop-checks" });
-    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40) } })).toEqual({
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD, labels: [] } })).toEqual({
+      kind: "stop-checks",
+    });
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40), labels: [] } })).toEqual({
       kind: "stop-checks",
     });
   });
@@ -93,42 +105,91 @@ describe("afterStopChecks", () => {
 
 describe("answerOf", () => {
   test("YES first is yes; NO, a hedge, an empty or a lower-case answer is no", () => {
-    const cases: Array<[string, "yes" | "no"]> = [
-      ["YES, the task is done and tested.", "yes"],
-      ["  **YES** done", "yes"],
-      ["NO: I asked the Owner which file to change.", "no"],
-      ["I think YES", "no"],
-      ["yes", "no"],
-      ["", "no"],
-      ["YESTERDAY", "no"],
+    const cases: Array<[string, Answer]> = [
+      ["YES, the task is done and tested.", { kind: "yes" }],
+      ["  **YES** done", { kind: "yes" }],
+      ["NO: I asked the Owner which file to change.", { kind: "no" }],
+      ["I think YES", { kind: "no" }],
+      ["yes", { kind: "no" }],
+      ["", { kind: "no" }],
+      ["YESTERDAY", { kind: "no" }],
     ];
 
     for (const [text, answer] of cases) {
-      expect(answerOf(text)).toBe(answer);
+      expect(answerOf(text)).toEqual(answer);
+    }
+  });
+
+  test("YES, HOLD: on the first line is a hold with the trimmed rest of that line as its reason", () => {
+    const cases: Array<[string, Answer]> = [
+      [
+        "YES, HOLD: renames the agent-review check, which the dev ruleset requires",
+        { kind: "hold", reason: "renames the agent-review check, which the dev ruleset requires" },
+      ],
+      ["\n **YES,HOLD:   a stored format  \nmore text", { kind: "hold", reason: "a stored format" }],
+      ["YES, HOLD:", { kind: "hold", reason: "(no reason given)" }],
+      ["YES, HOLD:   \nthe reason is on the next line", { kind: "hold", reason: "(no reason given)" }],
+      [`YES, HOLD: ${"r".repeat(400)}`, { kind: "hold", reason: "r".repeat(300) }],
+      ["YES, hold: lower case", { kind: "yes" }],
+      ["NO, HOLD: not finished", { kind: "no" }],
+    ];
+
+    for (const [text, answer] of cases) {
+      expect(answerOf(text)).toEqual(answer);
     }
   });
 });
 
 describe("decide", () => {
+  const draft = { number: 7, draft: true, headSha: HEAD, labels: [] };
+  const ready = { number: 7, draft: false, headSha: HEAD, labels: [] };
+
   test("no from the Done judge changes nothing", () => {
-    expect(decide(null, "no").kind).toBe("none");
+    expect(decide(null, { kind: "no" }).kind).toBe("none");
+    expect(decide(draft, { kind: "no" }).kind).toBe("none");
   });
 
   test("yes opens the PR when there is none, pushes and readies a draft, pushes a ready one", () => {
-    expect(decide(null, "yes")).toEqual({ kind: "open" });
-    expect(decide({ number: 7, draft: true, headSha: HEAD }, "yes")).toEqual({ kind: "push", pr: 7, ready: true });
-    expect(decide({ number: 7, draft: false, headSha: HEAD }, "yes")).toEqual({ kind: "push", pr: 7, ready: false });
+    expect(decide(null, { kind: "yes" })).toEqual({ kind: "open", hold: null });
+    expect(decide(draft, { kind: "yes" })).toEqual({ kind: "push", pr: 7, ready: true, hold: null });
+    expect(decide(ready, { kind: "yes" })).toEqual({ kind: "push", pr: 7, ready: false, hold: null });
+  });
+
+  test("a hold publishes as yes does, carrying its reason", () => {
+    const hold: Answer = { kind: "hold", reason: "a stored format" };
+
+    expect(decide(null, hold)).toEqual({ kind: "open", hold: "a stored format" });
+    expect(decide(draft, hold)).toEqual({ kind: "push", pr: 7, ready: true, hold: "a stored format" });
+    expect(decide(ready, hold)).toEqual({ kind: "push", pr: 7, ready: false, hold: "a stored format" });
+  });
+});
+
+describe("holdStepsOf", () => {
+  test("a hold on a PR without land:human adds the label and posts the Author's marked comment", () => {
+    expect(holdStepsOf("renames the agent-review check, which the dev ruleset requires", ["enhancement"])).toEqual({
+      addLabel: true,
+      comment: `Held for the Owner by the Author: renames the agent-review check, which the dev ruleset requires\n\n${AUTHOR_MARK}`,
+    });
+    expect(holdStepsOf("(no reason given)", [])).toEqual({
+      addLabel: true,
+      comment: "Held for the Owner by the Author: (no reason given)\n\n<!-- lab-author-reply -->",
+    });
+  });
+
+  test("no hold, or a PR that carries land:human already, adds nothing and posts nothing", () => {
+    expect(holdStepsOf(null, [])).toEqual({ addLabel: false, comment: null });
+    expect(holdStepsOf(null, ["land:human"])).toEqual({ addLabel: false, comment: null });
+    expect(holdStepsOf("a stored format", ["land-ok", "land:human"])).toEqual({ addLabel: false, comment: null });
   });
 });
 
 describe("armReason", () => {
   test("names the PR, the PR watch, thread and comment commands, and asks for no question", () => {
-    const reason = armReason(
-      12,
-      "bun /r/scripts/land-loop/pr-watch.ts 12",
-      "bun /r/scripts/land-loop/thread.ts",
-      "bun /r/scripts/land-loop/comment.ts 12",
-    );
+    const reason = armReason(12, {
+      prWatch: "bun /r/scripts/land-loop/pr-watch.ts 12",
+      thread: "bun /r/scripts/land-loop/thread.ts",
+      comment: "bun /r/scripts/land-loop/comment.ts 12",
+    });
 
     expect(reason).toContain("PR #12 is ready");
     expect(reason).toContain("    bun /r/scripts/land-loop/pr-watch.ts 12");
@@ -143,6 +204,18 @@ describe("armReason", () => {
     );
     expect(reason).not.toContain("Nit and Pre-existing findings never block");
     expect(reason).toContain("Never ask the Owner a question");
+    expect(reason).not.toContain("held this PR");
+  });
+
+  test("with a hold, the line right after the first one says why and keeps land:human on", () => {
+    const commands = { prWatch: "w", thread: "t", comment: "c" };
+    const lines = armReason(12, commands, "a stored format").split("\n");
+
+    expect(lines[0]).toStartWith("PR #12 is ready for review.");
+    expect(lines[1]).toBe(
+      "The Done judge held this PR for the Owner's read: a stored format. Do not remove land:human.",
+    );
+    expect(lines.slice(2)).toEqual(armReason(12, commands).split("\n").slice(1));
   });
 });
 

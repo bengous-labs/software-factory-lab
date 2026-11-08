@@ -5,6 +5,8 @@
  * adds; `decide` what the Done judge's answer adds. Each returns the next thing the hook does.
  */
 
+import { AUTHOR_MARK } from "../author-mark.ts";
+
 /**
  * The marker that opens every question the hook puts to a fork, so a fork stays recognisable. The
  * transcripts of earlier forks carry this exact string, so it stays as it is.
@@ -18,6 +20,7 @@ export interface PullRequest {
   readonly number: number;
   readonly draft: boolean;
   readonly headSha: string;
+  readonly labels: readonly string[];
 }
 
 export interface Snapshot {
@@ -50,12 +53,14 @@ export type Next =
   | { readonly kind: "block"; readonly reason: string }
   | { readonly kind: "ask-done-judge" };
 
-export type Answer = "yes" | "no";
+export type Answer =
+  { readonly kind: "yes" } | { readonly kind: "hold"; readonly reason: string } | { readonly kind: "no" };
 
+/** `hold` is the reason the Done judge held the PR for the Owner's read, or null. */
 export type Action =
   | { readonly kind: "none"; readonly reason: string }
-  | { readonly kind: "open" }
-  | { readonly kind: "push"; readonly pr: number; readonly ready: boolean };
+  | { readonly kind: "open"; readonly hold: string | null }
+  | { readonly kind: "push"; readonly pr: number; readonly ready: boolean; readonly hold: string | null };
 
 const none = (reason: string): Extract<Admission, { kind: "none" }> => ({ kind: "none", reason });
 
@@ -125,21 +130,54 @@ export function afterStopChecks(stopChecks: StopChecks, stopHookActive: boolean)
   };
 }
 
-/** The Done judge's text answer: YES first, as a word, is yes; anything else, an empty answer included, is no. */
+/** The label that holds a PR for the Owner; open PRs and GitHub's ruleset carry this spelling. */
+const HUMAN_LABEL = "land:human";
+
+const HOLD_REASON_MAX = 300;
+
+/**
+ * The Done judge's text answer, read on its first line: `YES, HOLD:` is a hold with the rest as its
+ * reason; YES first, as a word, is yes; anything else, an empty answer included, is no.
+ */
 export function answerOf(text: string): Answer {
-  return /^\s*\**YES\b/u.test(text) ? "yes" : "no";
+  const first = text.trimStart().split("\n")[0] ?? "";
+  const hold = /^\**YES,\s*HOLD:\s*(.*)/u.exec(first);
+
+  if (hold !== null) {
+    const reason = (hold[1] ?? "").trim();
+
+    return { kind: "hold", reason: (reason === "" ? "(no reason given)" : reason).slice(0, HOLD_REASON_MAX) };
+  }
+
+  return /^\**YES\b/u.test(first) ? { kind: "yes" } : { kind: "no" };
 }
 
 export function decide(pr: PullRequest | null, answer: Answer): Action {
-  if (answer === "no") {
+  if (answer.kind === "no") {
     return none("the Done judge says the task is not finished");
   }
 
+  const hold = answer.kind === "hold" ? answer.reason : null;
+
   if (pr === null) {
-    return { kind: "open" };
+    return { kind: "open", hold };
   }
 
-  return { kind: "push", pr: pr.number, ready: pr.draft };
+  return { kind: "push", pr: pr.number, ready: pr.draft, hold };
+}
+
+/** What a hold puts on the PR: the label and the Author's comment, both only when the PR lacks the label. */
+export interface HoldSteps {
+  readonly addLabel: boolean;
+  readonly comment: string | null;
+}
+
+export function holdStepsOf(hold: string | null, labels: readonly string[]): HoldSteps {
+  if (hold === null || labels.includes(HUMAN_LABEL)) {
+    return { addLabel: false, comment: null };
+  }
+
+  return { addLabel: true, comment: `Held for the Owner by the Author: ${hold}\n\n${AUTHOR_MARK}` };
 }
 
 /** A Worker's branch is `<type>/<N>-<slug>`, made for issue N. */
@@ -158,10 +196,20 @@ export function closingLineOf(branch: string, body: string): string | null {
   return closes.test(body) ? null : `Closes #${issue}`;
 }
 
+/** The commands the Author runs on its PR: the PR watch, a thread reply, a comment on the conversation. */
+export interface ArmCommands {
+  readonly prWatch: string;
+  readonly thread: string;
+  readonly comment: string;
+}
+
 /** What the hook tells the author once its PR is ready: arm the PR watch, then stop. */
-export function armReason(pr: number, prWatchCommand: string, threadCommand: string, commentCommand: string): string {
+export function armReason(pr: number, commands: ArmCommands, hold: string | null = null): string {
+  const { prWatch: prWatchCommand, thread: threadCommand, comment: commentCommand } = commands;
+
   return [
     `PR #${pr} is ready for review. The Stop hook pushed your branch; you do not push, open or ready anything yourself.`,
+    ...(hold === null ? [] : [`The Done judge held this PR for the Owner's read: ${hold}. Do not remove land:human.`]),
     "",
     "Arm the PR watch on it now with Monitor, with the longest timeout:",
     "",
