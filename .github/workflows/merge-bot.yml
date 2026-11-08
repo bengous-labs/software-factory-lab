@@ -30,11 +30,12 @@ on:
 
 # One Merge bot run per PR at a time, whichever event starts it: a PR event, a CI completion and a
 # dispatch for the same PR all key on its number, so their Merge bot runs follow one another, never
-# side by side. A later event waits, and reads the PR afresh. Every Sweep shares the `sweep` key. A
+# side by side. A later event waits, and reads the PR afresh. Every Sweep shares the `sweep` key, CI's
+# completion on a push first: GitHub fills its `pull_requests` with any open PR whose head is `dev`. A
 # dispatched run names no pull request: the review job's run carries the PR's number as its title. Its
 # `workflow_run.name` is that title too, not the workflow's name, so the review run is known by its path.
 concurrency:
-  group: merge-bot-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || (github.event.workflow_run.path == '.github/workflows/code-review.yml' && github.event.workflow_run.display_title) || inputs.pr || 'sweep' }}
+  group: merge-bot-${{ (github.event.workflow_run.event == 'push' && 'sweep') || github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || (github.event.workflow_run.path == '.github/workflows/code-review.yml' && github.event.workflow_run.display_title) || inputs.pr || 'sweep' }}
   cancel-in-progress: false
 
 permissions: {}

@@ -33,6 +33,7 @@ import {
   PullReviews,
   reviewJobReader,
   routingPolicyAt,
+  startOf,
   WorkflowRuns,
 } from "./main.ts";
 
@@ -382,6 +383,18 @@ describe("the routing inputs", () => {
       "app/a*.ts",
       "docs/u.md",
     ]);
+  });
+
+  test("a start serves the PR it names, a completed run's commit PRs, or on CI's push completion every open PR", () => {
+    expect(startOf({ event: "pull_request_target", pr: "7" })).toEqual({ kind: "pr", number: 7 });
+    expect(startOf({ event: "workflow_run", pr: "7", runEvent: "workflow_dispatch" })).toEqual({
+      kind: "pr",
+      number: 7,
+    });
+    expect(startOf({ event: "workflow_run", pr: "", runEvent: "pull_request" })).toEqual({ kind: "commit-pulls" });
+    expect(startOf({ event: "workflow_run", pr: "", runEvent: "push" })).toEqual({ kind: "sweep" });
+    expect(startOf({ event: "push", pr: "" })).toEqual({ kind: "sweep" });
+    expect(startOf({ event: "schedule" })).toEqual({ kind: "sweep" });
   });
 
   test("dev is red by the latest push run of CI alone, never another workflow's", () => {
