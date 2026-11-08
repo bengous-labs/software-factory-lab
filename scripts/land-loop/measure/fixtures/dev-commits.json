@@ -1,0 +1,1124 @@
+[
+  {
+    "sha": "a3fa28dd416387593725f7ad72f273b9aa80c817",
+    "commit": {
+      "message": "ci(mutation): mutate a landing twice, not three times, and stop each run at its first failure (#98)\n\nMutation testing took 240 of 488 CI job minutes over 2026-11-05..07 (817\nruns), and ran three times per landed PR, once for a reader that does\nnot exist. This keeps the two runs something acts on, makes each\nmutant's test run stop at its first failure, and fixes `devRed`, which\nthe remaining post-merge run depends on.\n\n## Before / After\n\n| Mutation run | Before | After |\n|---|---|---|\n| PR (`pull_request`) | runs; the Land gate requires it green | runs,\nwith `--bail` |\n| Merge queue (`merge_group`) | runs; nothing reads it, the queue lands\non `validate` alone | skipped |\n| Push to `dev` | runs; read by `devRed`, but `devRed` usually read the\nMerge bot's green push run instead | runs, with `--bail`; `devRed` reads\nCI's push runs only |\n\n```ts\n// scripts/land-loop/merge-bot/main.ts\n`repos/${repo}/actions/workflows/ci.yml/runs?branch=dev&event=push&status=completed&per_page=1`\n```\nThe old query took the latest completed push run of any workflow.\n`merge-bot.yml` also runs on push, ends in ~13 s and is green; the API\nlisted it first on each of the last three pushes (43e27e7, 632fed5,\nbcdbaab), so a red `validate` or `mutation` on `dev` could not hold\nlandings.\n\n## Decisions\n\n- **Drop the queue run, keep the push run** rather than drop the push\nrun: the queue's result is read by nothing (Merge bot reads PR-head\nchecks, `repost.ts` re-posts only `agent-review` and `land-gate`, the\nruleset does not require `mutation`). The ruleset refuses\nnon-fast-forward pushes to `dev`, so each push's `before` is an ancestor\nand every PR of a queue group falls in one push's range. Undo: revert\nthe `if:` in `ci.yml`.\n- **Keep `scripts/ci/mutation.ts`** rather than an off-the-shelf tool:\nStrykerJS's incremental mode, with the command runner `bun test` needs,\nsees no test changes and would hide the weakened-tests check; no tool\nfound does the base comparison.\n- **No scheduled full run**: each PR that touches a module already\nmutates it whole with a fixed seed, so a weekly run would repeat the\nsame survivors.\n\n## Checks\n\n- `tier: human` — no `.claude/github-flow.json` in this repository.\n- `/code-review` (high) of the branch: 3 findings. Fixed: a header\ncomment line past the print width. Kept: `snapshotOf`'s use of\n`devCiRunsPathOf` is tested through the path builder only, as\n`ciRunsPathsOf` is. Left open below: `devRed` lag.\n- `bun check`: 474 tests, 0 fail, coverage floor passes.\n- New `devRed` query called on GitHub: returns `CI success 43e27e7`.\n- `bun scripts/ci/mutation.ts run --base HEAD~1` on a throwaway change\nto `app/src/commands/count.ts`: 4 mutants tested, 0 undetected, `--bail`\nin the command.\n- `--bail` on `decide.ts` against `decide.test.ts`, 4 runners, 16-core\nmachine, 3 runs per mode: without 371 s (load 16), 280 s, 264 s (load\n1-6); with 212 s (load 16), 174 s, 182 s (load 6-8). Medians 280 s / 182\ns, -35 %. Same 21 survivors every run by line, column, mutator and\nreplacement.\n\n| Test | Mutant | Seen failing |\n|---|---|---|\n| `dev is red by the latest push run of CI alone, never another\nworkflow's` | the old any-workflow path | unknown |\n| `ci.yml's mutation job skips the merge queue, …` | the `if:` removed |\nunknown |\n\n## Left open\n\n- `devRed` reads the latest *completed* CI push run: while a push's\nmutation runs (up to ~19 min), landings go on reading the previous run.\nPre-existing.\n- `--bail`'s gain in CI is not measured: this PR touches no listed\nmodule, so its own `mutation` job exits in seconds. The first later PR\ntouching `decide.ts` measures it against job 128544857250 (head pass 658\ns, base pass 279 s).\n- The cut from 3 to 2 runs per landed PR is measured after landing, by\ncounting mutation runs per landed PR.\n\n<!-- opened_by: ad2b51d1-85dd-4c3b-86c6-091f737f4280 -->"
+    }
+  },
+  {
+    "sha": "79025793c6e4af3a7464f70a46a9acce4a31eacd",
+    "commit": {
+      "message": "fix(merge-bot): key the CI-push Sweep on `sweep`, and test which PRs a start serves\n\nAnswers the agent review of PR #98. The CI-push Sweep took the concurrency\ngroup of `workflow_run.pull_requests[0]`, which GitHub fills with any open PR\nwhose head is `dev` (a dev -> main release PR): it could run beside another\nSweep and race on that PR's state record. A push `workflow_run` now keys on\n`sweep` first. The choice between the named PR, a completed run's commit PRs\nand every open PR moves into `startOf`, a pure function with its own test;\nmain.ts's header lists RUN_EVENT, and AGENTS.md names the CI-push Sweep."
+    }
+  },
+  {
+    "sha": "a8d03b3aa25ba6d7879f95d5f6a69654d17222b6",
+    "commit": {
+      "message": "docs(ci): say the push mutation run detects, not prevents, what landed together\n\nAnswers the agent review's nit on PR #98: the comment read as if the post-landing\nrun replaced the queue's check; it catches a combination of PRs after landing\nand holds every landing through devRed."
+    }
+  },
+  {
+    "sha": "3eadba858f6049df0dcec9101b18dd1936d9157c",
+    "commit": {
+      "message": "fix(merge-bot): sweep when CI completes on a push to dev\n\n`devRed` reads CI's latest completed push run on dev, but the push's own\nSweep starts while that run is in progress and reads the previous one. CI's\ncompletion on a push was filtered out (`workflow_run.event == 'pull_request'`),\nso a red dev was seen only at the next cron Sweep, up to 30 minutes later,\nand a green-again dev released held PRs only then. CI's push completion now\nstarts a Sweep: `RUN_EVENT` tells the Merge bot to read every open PR, since\nthe PR the commit landed is closed. Found by the agent review of PR #98."
+    }
+  },
+  {
+    "sha": "f6f27ac770bdc402298cb4cd8c56d943e2ccfaf3",
+    "commit": {
+      "message": "ci(mutation): stop each mutant's test run at its first failing test\n\nStryker's command runner reads only the exit code, so the tests after the\nfirst failure add time and nothing to the verdict. On decide.ts with\ndecide.test.ts, 4 test runners, a 16-core machine, three runs per mode:\nwithout `--bail` 371 s (load 16), 280 s and 264 s (load 1-6); with it 212 s\n(load 16), 174 s and 182 s (load 6-8). Medians 280 s and 182 s, -35 %. The\nsame 21 survivors each time, by line, column, mutator and replacement. A\ntest that fails before a timeout turns a Timeout into Killed; both count as\ndetected, and the base and head passes both bail."
+    }
+  },
+  {
+    "sha": "fd18122ee7242d4da470e2cd5bbd16d5e6baf361",
+    "commit": {
+      "message": "ci(mutation): stop mutating in the merge queue, which nothing reads\n\nThe ruleset requires `validate`, not `mutation`, so the queue lands a group\non `validate` alone and the queue's mutation run ends after the merge. No\nreader looks at it: the Merge bot reads the PR head's checks, `repost.ts`\nre-posts only `agent-review` and `land-gate`, and `devRed` reads push runs.\nOver 2026-11-05..07 it cost 46 job minutes across 14 runs.\n\nTwo runs stay: the PR's, which the Land gate requires green, and the push\nto dev's, measured from `before`, which `devRed` reads. The ruleset refuses\nnon-fast-forward pushes to dev, so `before` is an ancestor and every PR of a\nqueue group falls in one push's range.\n\nThe push skip (`testedAlready`) waited for the queue's green check and goes,\nwith the token and `checks: read` it needed and the merge-queue base."
+    }
+  },
+  {
+    "sha": "3d500c999efee9e5d71c9dda201da3c8a61bf021",
+    "commit": {
+      "message": "fix(merge-bot): read dev's red from CI's push runs alone\n\n`devRed` read the latest completed push run on dev of any workflow. The\nMerge bot's own push run starts in the same second as CI's, ends in about\n13 s and is green, so the API listed it first on each of the last three\npushes (43e27e7, 632fed5, bcdbaab): a red `validate` or `mutation` on dev\ncould not hold the landings. The query now names `ci.yml`."
+    }
+  },
+  {
+    "sha": "43e27e7ab78c668940ab836bc806c2050f1f673b",
+    "commit": {
+      "message": "fix(land-loop): ask the Routing judge only about the judged paths a Patch delta touches (#91)\n\n## What changed\n\nOn a Patch delta, the Routing judge reads only the delta's diff. But for\na mixed (`ruled-then-judged`) PR, `judgeAskOf` asked it about the judged\npaths of the whole PR. If the delta left those paths alone, the judge\ngot an empty diff and sent the PR to the Owner. That is what happened on\nPR #88: its round-1 fix touched only a factory path, while `.gitignore`\nwas its judged path.\n\nAll changes to `scripts/land-loop/routing/routing-rules.ts`; `main.ts`\nis unchanged:\n\n- **`judgeAskOf`**: on a mixed PR, it now asks about the judged paths\nthat the delta's own rules still judge.\n  - Delta `ruled` (every path it touches is ruled): asks nothing.\n- Delta `ruled-then-judged`: asks about the judged paths the PR and the\ndelta share, and nothing when they share none.\n- Delta `judged` (no rule names its paths): asks about the PR's judged\npaths, as before. Every path in the delta is judged, so git's pathspec\nalready limits the diff to the paths the delta touches.\n  - No Patch delta: asks about the PR's judged paths, as before.\n- **`routingOf`**: it takes from `judgeAskOf` whether the judge was\nasked, so the two cannot drift.\n  - A mixed PR whose delta asks nothing keeps the rules' answer.\n  - A mixed PR that was asked but has no judge answer still throws.\n\nIn `main.test.ts`, the git fixture setup moves into `fixtureRepo`. The\nmoved-file test and the new Patch delta test both use it.\n\nCloses #89\n\n## How I verified it\n\n- `routing-rules.test.ts`:\n- PR #88's shape under the lab's policy asks the judge nothing and keeps\n`auto` with a deep review.\n  - A delta that touches `.gitignore` still asks about `.gitignore`.\n  - Partial and zero overlap of judged paths each have a test.\n- The `judged`-delta and the `ruled`-delta cases have tests, and so does\na ruled PR whose delta the judge sends to the Owner.\n  - The throws when the judge is missing still hold.\n- `main.test.ts`: a fixture-repo test runs through base, the reviewed\nhead, then two later heads.\n  - A delta that touches only `scripts/a.ts` asks nothing.\n- A delta that touches `.gitignore` asks about `.gitignore`. The judge's\ndiff (`judgeDiffArgs`) is not empty and leaves `scripts/a.ts` out.\n- `bun check` passes: 475 tests, 0 fail.\n- `bun scripts/ci/mutation.ts run` on `routing-rules.ts`: 0 mutants\nsurvive on the changed lines. The first run left one: a judge's `owner`\nanswer on a ruled PR's delta could change its route. A new test now\ncovers it.\n- `guarantees.test.ts` passes without a change: it already passes a\njudge answer only when `judgeAskOf` asks.\n\n## Out of scope\n\nA `judged` PR whose Patch delta is empty still asks the judge over an\nempty diff. It is recorded as a separate finding, outside #89's\nacceptance criteria."
+    }
+  },
+  {
+    "sha": "35a52b28dbdc282d35692e83469160818b27e6d8",
+    "commit": {
+      "message": "fix(land-loop): ask the Routing judge only about the judged paths a Patch delta touches\n\nOn a Patch delta the Routing judge reads the delta's diff, but a mixed\n(ruled-then-judged) change asked it about the judged paths of the whole PR.\nA delta that left those paths alone gave the judge an empty diff, and the\njudge sent the PR to the Owner (PR #88).\n\njudgeAskOf now asks about the judged paths the delta's own rules still judge:\nnone when the delta's rules answer for all of it, the shared ones when the\ndelta is mixed. A delta no rule names keeps its question: all its paths are\njudged, and git's pathspec does the intersection. routingOf takes from\njudgeAskOf whether the judge was asked, so a mixed change whose delta asks\nnothing keeps the rules' answer, and one that asked still needs the judge.\n\nmain.test.ts's git fixture setup moves into fixtureRepo, shared by the\nmoved-file test and the new Patch delta test.\n\nCloses #89"
+    }
+  },
+  {
+    "sha": "632fed5a3e991c83f8ebb63c485148585b78ceda",
+    "commit": {
+      "message": "fix(land-loop): give the Author a marked way to comment on its PR (#88)\n\n## What changed\n\nAn Author that explained its decisions with `gh pr comment` posted an\nunmarked comment, so its PR watch woke it on its own words (PR #86). The\nOwner and the Author post under one gh login, so only `AUTHOR_MARK`\ntells them apart. Until now, only `thread.ts` added the mark, and only\nfor review-thread replies.\n\n- **`scripts/land-loop/comment.ts`** (new): `bun\nscripts/land-loop/comment.ts <pr> \"<comment>\"` posts a conversation\ncomment that ends with `AUTHOR_MARK`, the same way `thread.ts` marks a\nthread reply. A missing PR number, a non-integer one or a blank comment\nprints the usage line.\n- **Stop hook message** (`stop/decide.ts` `armReason`, `stop/hook.ts`):\nthe message that tells the Author to arm its PR watch now names\n`comment.ts` with the PR number. It says to use it to explain a\ndecision, never `gh pr comment`, because the PR watch prints an unmarked\ncomment back as if a human wrote it. This text is read by a model, so it\nsits in its own commit (`38e4da0`) for the Owner to read alone.\n- **Docs and the lists that track scripts:** the header of `pr-watch.ts`\nand `AGENTS.md` now name `comment.ts` next to `thread.ts`. `knip.jsonc`\nlists it as an entry, and `scripts/lint/layers.map.ts` places it in the\nentry layer.\n- **Adjacent fix:** `.gitignore` now ignores `node_modules` instead of\n`node_modules/`. With the trailing slash, git matched only a directory,\nso a worktree whose `node_modules` is a symlink to the main checkout's\nshowed it as untracked. The Stop hook then refused to publish, because\nthe tree was not clean.\n\nCloses #87\n\n## How I verified it\n\n- `scripts/land-loop/comment.test.ts`:\n- `post` runs `gh pr comment <pr> --body \"<comment>\\n\\n<AUTHOR_MARK>\"`.\n  - A failed post throws.\n  - `argsOf` refuses a missing, blank or non-integer argument.\n- One test takes the body `post` actually sends and feeds it to\n`wakesOf` as a comment by `bengous`, next to an unmarked comment by\n`bengous`. Only the unmarked one prints a Wake.\n- `scripts/land-loop/stop/decide.test.ts`: `armReason` contains the\n`comment.ts` command with its PR number and the \"never with `gh pr\ncomment`\" line.\n- `bun check` passes (468 tests).\n- `bun scripts/ci/mutation.ts run` on `stop/decide.ts`: no mutant\nsurvives on the changed lines.\n- `bun scripts/land-loop/comment.ts` with no arguments prints the usage\nerror."
+    }
+  },
+  {
+    "sha": "57a25c2cbc79b4b603fd20db546acd667c388f9c",
+    "commit": {
+      "message": "test(land-loop): check the commands the Stop hook gives the Author\n\nThe hook builds the PR watch, thread and comment commands and passes\nthem to armReason on two paths, the published PR and the arm admission,\nand its tests checked neither: a command that lost its PR number or\npointed at a wrong path would stay green. The published-path test now\nasserts each command, and a new test covers a PR ready at HEAD and not\narmed yet."
+    }
+  },
+  {
+    "sha": "38e4da04cc28de5461bb3e517a5a3e087b02732c",
+    "commit": {
+      "message": "fix(land-loop): name comment.ts in the Stop hook's message to the Author\n\nThe message that tells the Author to arm its PR watch names only\n`thread.ts`, so an Author that explains a decision reaches for\n`gh pr comment`. It now names `comment.ts` with the PR number, and says\nwhy not `gh pr comment`: the PR watch prints an unmarked comment back\nas a human's.\n\nCloses #87"
+    }
+  },
+  {
+    "sha": "d67adfab655826b4406a09152117f2e71153777e",
+    "commit": {
+      "message": "fix(land-loop): give the Author a marked way to comment on its PR\n\nAn Author that explained its decisions with `gh pr comment` posted an\nunmarked comment, and its PR watch woke it on its own words: the Owner\nand the Author post under one gh login, so only the author's mark tells\nthem apart. `comment.ts <pr> \"<comment>\"` posts the comment with\nAUTHOR_MARK, as `thread.ts` does for a thread reply. A test feeds the\nbody it posts to the PR watch: it prints nothing, while an unmarked\ncomment from the same login still wakes the Author.\n\nAdjacent fix: .gitignore ignores `node_modules` without the trailing\nslash, which matched only a directory, so a worktree whose node_modules\nis a symlink to the main checkout's no longer shows it untracked and\nkeeps the clean tree the Stop hook needs."
+    }
+  },
+  {
+    "sha": "bcdbaabbb235ddc0b6ff1655d85e3487c7e2cb36",
+    "commit": {
+      "message": "test(land-loop): state the factory's safety guarantees in a file only the Owner lands (#86)\n\nSince #83, the factory's own code lands without the Owner, including the\ncode that enforces the Owner's paths and veto. This PR writes the Land\nloop's safety guarantees as property tests in one file,\n`scripts/land-loop/guarantees.test.ts`. A change to the Routing rules or\nto the Merge bot's decision that breaks one of them fails `bun check`\nand CI.\n\n**Not routed to the Owner.** The file is a `factoryPaths` path, so a\nchange to it gets the deep Code review and needs no `land-ok`. This\nfollows the Owner's principle: a harness, not a prison. The guarantees\nare there to catch mistakes, not to add a wait on the Owner. Routing the\nfile to the Owner would only stop an agent weakening it on purpose, and\nthe Owner already declined that guard for `bunfig.toml`, `package.json`\nand the test preload. This PR no longer touches\n`.github/software-factory.json` or `AGENTS.md`.\n\n## The guarantees\n\nRouting rules:\n\n| # | Guarantee | Test |\n|---|---|---|\n| 1 | A change that touches an `ownerPaths` path or the factory config\nnever lands auto, whatever the Routing judge answers | \"under the lab's\nconfig, a change that touches an ownerPaths path or the factory config\nnever lands auto, whatever the Routing judge answers\" |\n| 2 | The factory config goes to the Owner under any routing policy |\n\"under any routing policy, a change that touches the factory config\nnever lands auto, whatever the Routing judge answers\" |\n| 3 | A `factoryPaths` or `deepReviewPaths` change always gets a deep\nreview | \"under the lab's config, a change that touches a factoryPaths\nor deepReviewPaths path gets a deep review, whatever the Routing judge\nanswers\" |\n| 4 | The config's parser reads the routing policy as the file holds it\n| \"the routing policy reads as written: the config's parser drops, adds\nor changes no glob\" |\n\nMerge bot (`decide`):\n\n| # | Guarantee | Test |\n|---|---|---|\n| 5 | The veto: a PR held by `land:human` or an owner route merges only\nwith the Owner's Land approval for its patch | \"a PR the Owner holds, by\nland:human or an owner Routing answer, merges only with the Owner's Land\napproval for this very patch\" |\n| 6 | A Patch delta that a third Review round would read goes to the\nOwner | \"a Patch delta a third Review round would read merges only with\nthe Owner's Land approval for this very patch\" |\n| 7 | No merge on a draft, red or pending CI, an open Important, a\nconflict, a red `dev` or an Ejection | \"an auto-merge comes last, after\na green Land gate, on a PR that is ready, green, unblocked and routed\" |\n| 8 | A requested review with no report blocks the merge | \"nothing\nmerges while the review asked for this patch has no report\" |\n| 9 | A change whose depth is not `none` merges only after a Review\nround read it | \"a change whose Review depth is not none merges only\nonce a Review round read it\" |\n| 10 | A Patch delta its Routing answer asks to read again merges only\nafter Review round 2 | \"a Patch delta its Routing answer asks to read\nagain never merges before Review round 2 read it\" |\n\n## Changes\n\n- `scripts/land-loop/guarantees.test.ts` (new). It holds the guarantees\nand the generators they draw from. `pathsOf` turns the config's globs\ninto path generators. It accepts three forms (`dir/**`, a literal path,\none `*` in a file name) and throws on any other form, so a new glob in\nthe config fails loudly instead of being skipped.\n- A second \"near-landable\" snapshot generator. The old one almost never\nreached a merge (about 14 in 20,000 draws), so its invariants missed\nseveral breakages. In the new one each blocker is absent six times in\nseven, which gives about 10% merges. Each Merge bot guarantee runs over\nboth generators, 2,000 runs each.\n- `merge-bot/decide.test.ts` and `routing/routing-rules.test.ts`: the\ninvariants that stated a guarantee moved into the new file. Both files\nimport the shared generators from it, and bun then runs the guarantees\ninside each of them (checked on bun 1.4.4), so each module's mutation\npass still runs the guarantees.\n\n## Verification\n\n- Each of 19 deliberate breakages, applied alone and then reverted,\nturned at least one guarantee red, in repeated runs with random seeds\nand under the CI seed `20261106`:\n- in `routing-rules.ts`: the config path or `ownerPaths` dropped from\nthe owner match; the judge's answer overriding a ruled or mixed change;\nreview depth `light` on owner or factory answers;\n  - in `factory-config.ts`: the parser dropping `.github/**`;\n- in `decide.ts`: `risen` ignoring `land:human`; the approval ignoring\nthe patch or who put the label; no hold on red or pending CI, on a draft\nor on open Importants; a running or failed review not blocking; no\nReview round 1; no Review round 2; a third round not raising to the\nOwner.\n- `bun check`: green, 464 tests with 0 failures.\n- `bun scripts/ci/mutation.ts run`: `decide.ts` 423 mutants,\n`routing-rules.ts` 113, 0 undetected on the changed lines and 0 killed\nat the base now undetected."
+    }
+  },
+  {
+    "sha": "ac952104df9c72207b6ae94f5edb3ffc41357d29",
+    "commit": {
+      "message": "test(land-loop): leave the guarantees file out of ownerPaths, and guarantee Review round 2\n\nThe Owner's harness, not a prison: the guarantees catch a change to the Routing\nrules or the Merge bot that breaks a promise, and that needs no wait on the\nOwner. Routing the file to the Owner only guarded against an agent weakening it\non purpose, a guard the Owner already declined for bunfig.toml, package.json and\nthe test preload. The file leaves ownerPaths, with its routing test, its pinned\nOwner globs and its AGENTS.md mention; a change to it is a factoryPaths change\nand gets the deep Code review.\n\nFrom the review's Nits:\n- a Patch delta its Routing answer asks to read again never merges before Review\n  round 2 read it: a new guarantee, which a decide that skips round 2 turns red;\n- the parser test compares the routing policy only, so a config section the\n  parser does not read yet no longer fails it;\n- the Routing properties go back to fast-check's default runs, which catch every\n  deliberate Routing breakage, and the RUNS comment no longer promises more."
+    }
+  },
+  {
+    "sha": "fa2392ddfafba85027badc9f2600bf4fa696e8d6",
+    "commit": {
+      "message": "test(land-loop): pin the Owner's paths and the config parser in the guarantees, and set their runs\n\nA change to factory-config.ts, which lands without the Owner, could make the\nparser drop a glob from ownerPaths: the ownerPaths guarantee drew only from the\nparsed policy, so it would still pass. The guarantee now also draws from the\nOwner's globs pinned as literals, and a test checks that the parser reads the\nconfig exactly as the file holds it.\n\nThe Routing guarantees pass RUNS, so a global fast-check setting in the test\npreload cannot lower how hard they search. The header states that the files\nthat decide whether this file runs land without the Owner."
+    }
+  },
+  {
+    "sha": "d1f18335508a259072c75fedf73407a74c18f4ee",
+    "commit": {
+      "message": "build: ignore .claude/settings.local.json in the repository (#85)\n\n`bun check` failed at every stop on `.claude/settings.local.json`, a\nper-user file the repository does not own. This PR adds it to the\nrepository's `.gitignore`.\n\n## Why the file slipped through\n\n- Claude Code rewrites `.claude/settings.local.json` itself each time a\npermission is granted. That write is not an Edit or Write tool call, so\nthe PostToolUse format hook (`scripts/hooks/fix-edited.ts`) never runs\non it.\n- The format hook would skip it anyway: it formats only files `git\ncheck-ignore` does not ignore, and the Owner's global git ignore lists\nthis file.\n- `bun fmt --check .` honours the repository's `.gitignore`, not a\nglobal git ignore, so it still read the file and failed.\n\n## Verification\n\n- On a scratch repository: with the file unformatted, `bun fmt --check\n.` fails; with the line in the repository's `.gitignore`, it passes.\n- `bun fmt --check .` here: all 113 files formatted."
+    }
+  },
+  {
+    "sha": "a22f6028bcc7cf8d6b31ccff95135577ad291cf9",
+    "commit": {
+      "message": "build: ignore .claude/settings.local.json in the repository\n\nClaude Code rewrites this per-user file each time a permission is granted,\noutside any Edit or Write call, so the format hook never sees it, and\nbun fmt --check . read it: bun fmt honours the repository's .gitignore,\nnot a global git ignore. Each stop then failed on a file the repository\ndoes not own. Ignoring it here takes it out of the format check."
+    }
+  },
+  {
+    "sha": "e01315a0112b1d507ab20b7497500f5fe50ac7f7",
+    "commit": {
+      "message": "test(land-loop): state the factory's safety guarantees in a file only the Owner lands\n\nThe code that enforces the Land loop's rules lives under scripts/, which lands\nwithout the Owner, so an agent PR could weaken it. scripts/land-loop/guarantees.test.ts\nstates the guarantees as fast-check properties over routingRulesOf, judgeAskOf,\nroutingOf and decide, and joins ownerPaths in .github/software-factory.json, so a\nchange to it needs the Owner's land-ok:\n\n- under the lab's config, an ownerPaths path or the factory config never lands\n  auto, whatever the Routing judge answers;\n- under any routing policy, the factory config never lands auto;\n- a factoryPaths or deepReviewPaths path always gets a deep review;\n- a PR held by land:human or an owner Routing answer, or one a third Review round\n  would read, merges only on the Owner's Land approval for its patch;\n- no auto-merge on a draft, a red or pending CI, an open Important, a conflict,\n  a red dev or an Ejection, nor while the review asked for the patch has no\n  report, nor before any Review round read a change whose depth is not none.\n\nThe config globs become path generators that throw on a glob form they do not\nknow. The snapshot arbitraries move into the file, so no other file can narrow\nwhat the guarantees draw from, plus a near-landable one under which an auto-merge\nis common. The invariants of decide.test.ts and routing-rules.test.ts that stated\nthe same guarantees move here; both files import the arbitraries from it, so each\nmodule's mutation pass still runs the guarantees."
+    }
+  },
+  {
+    "sha": "f3e2dd199915cfd96ac7a1463233730c1ec1d67d",
+    "commit": {
+      "message": "feat(routing): land the factory's own code without the Owner, from a factory config (#83)\n\nThe factory's own code now lands without the Owner's `land-ok`. The\nRouting rules read their policy from a new factory config,\n`.github/software-factory.json`, and the Land gate waits for `mutation`\nas well as `validate`.\n\n**This PR needs the Owner's `land-ok` one last time.** The Merge bot\nroutes it with the rules already on `dev`, and those send `scripts/`,\n`AGENTS.md` and `.github/` to the Owner.\n\n## Routing after this PR\n\n| A PR that touches | Land route | Review |\n|---|---|---|\n| any `ownerPaths` path, or `.github/software-factory.json` | Owner\n(`land-ok`) | deep |\n| only `factoryPaths` | auto, once `validate` and `mutation` are green\nand no Important is open; any size, breaking or not | deep |\n| `factoryPaths` or `deepReviewPaths`, and any path outside\n`factoryPaths` | Owner on a breaking commit or past 400 lines; else auto\nas above, unless the Routing judge, asked about the paths no rule names,\nanswers `owner` | deep |\n| paths no rule names only (`app/` outside `app/src/store/`, `docs/`,\n...) | Owner on a breaking commit or past 400 lines; else the Routing\njudge decides | the Routing judge's |\n\n- `ownerPaths`: `.github/**`, `bun.lock`, `scripts/vendor/**`.\n`REVIEW.md` puts the last two out of the Code review's scope, so no\nreview would read them.\n- `factoryPaths`: `scripts/**`, `.claude/**` (`settings.json` included),\n`AGENTS.md`, `CLAUDE.md`, `REVIEW.md`, `package.json`, `mise.toml`,\n`tsconfig.json`, `bunfig.toml`, `oxlint*.config.ts`, `.oxfmtrc*`,\n`stryker.config.ts`, `knip.json*`, `.mcp.json`.\n- `deepReviewPaths`: `app/src/store/**`. It is app code, so it stays\nunder the cap and the breaking-commit hold.\n\n## Exactly what still reaches the Owner\n\n1. A PR that touches `.github/**`, `bun.lock` or `scripts/vendor/**`.\nThe factory config itself always goes to the Owner, even when a config\ndrops it from `ownerPaths`: the rule is in the code. A rename counts\nunder both its paths, so moving a file out of `.github/` still goes to\nthe Owner.\n2. A PR that touches a path outside `factoryPaths` (`app/src/store/`\nincluded) and has a breaking commit (`type!:` or `BREAKING CHANGE`) or\nmore than 400 changed lines.\n3. A PR that touches a path no rule names, which the Routing judge\n(Haiku) routes `owner`, or for which it fails, even when the PR also\ntouches `factoryPaths`.\n4. A PR with no changed file.\n5. A PR that would need a third Review round: after Review round 2, a\nnew risky push gets `needs-human`. Every push to a ruled path counts as\nrisky, as before.\n\n## The veto\n\nPut `land:human` on any PR. Labels only rise (`risen` in\n`merge-bot/decide.ts`), so the route becomes `owner` whatever the rules\nsaid: the Land gate turns pending, \"waiting for the Owner's Land\napproval\", and the PR lands only on `land-ok` for its patch. The veto\nholds until the merge queue has re-posted the checks on its own commit\n(`queue/repost.ts`); a PR already past that point lands. Converting the\nPR to draft or closing it also stops it.\n\nThe Merge bot never removes `land:human`. A PR that carries it when this\none lands, as every PR the old rules routed to the Owner does, keeps\nwaiting for `land-ok` until the Owner removes the label.\n\n## The residual risk the Owner accepted\n\nThe code that enforces the Owner's paths, the Merge bot and the Routing\nrules under `scripts/`, now lands without the Owner, and it runs from\n`dev` next to the App token and the OAuth secret. A first PR that\nweakens the rules can land after a deep review, and a second one can\nthen touch `.github/`. The deep Code review reads every `scripts/`\nchange, `REVIEW.md` names a change that lets a PR land without the\nreview or the `land-ok` its route requires as Important, and the veto\nstands on any PR.\n\n## The factory config\n\n```json\n{ \"land\": { \"routing\": { \"ownerPaths\": [...], \"factoryPaths\": [...], \"deepReviewPaths\": [...], \"lineCap\": 400 } } }\n```\n\n- One section per subsystem; `land.routing` is the first. Another\nrepository sets its own policy in this file.\n- The Merge bot reads it from its checkout of `dev` (`routingPolicyAt`),\nnever from the PR's head: a PR is routed by the policy already landed.\n- `factoryConfigOf` decodes it with a Schema; a config that does not\nread fails the run, naming the file and the field.\n- `routingRulesOf(policy, input)` stays pure and returns a verdict:\n`ruled`, `judged` or `ruled-then-judged`. `judgeAskOf` says what the\nRouting judge is asked: for a mixed PR, only the diff of the paths no\nrule names. `routingOf` combines its answer with the rules'.\n\n## `mutation` in the Land gate\n\nThe ruleset of `dev` requires `validate`, `agent-review` and\n`land-gate`, not `mutation`, and this PR changes no ruleset. Before it,\na PR with `mutation` red got `land-gate` green. `ciOfRuns` now reads\nGitHub Actions' latest `validate` and `mutation` runs on the head: red\nonce one ended other than green, pending while one runs. The merge\nqueue's own commit still requires only `validate`.\n\n## Decisions taken in this PR\n\n- The Principal judge stays off. It was paused in `ec9bc4c` until the\nJudges can read beyond the diff (#52, open); it still runs with no tool,\nbills a Fable call per patch, and its prompt speaks of the Land loop\nonly. The Owner's policy names CI and the native Code review as the\nconditions. No rule sets `needsFable`; its code is left as it is.\n- `.claude/settings.json`, `.mcp.json` and `app/src/store/` land without\nthe Owner after a deep review, as the Owner chose.\n- `scripts/lint/layers.map.ts` and the `local/layers` rule now land\nwithout the Owner too. `AGENTS.md` and the rule's message still say they\nbelong to the Owner: that holds as guidance, no route enforces it.\n\n## Verification\n\n- `bun check`: green, 458 tests pass. Tests: `routing-rules.test.ts`\n(the lab policy, each `factoryPaths` entry, `bun.lock` and\n`scripts/vendor/`, the store under the holds, the cap and breaking rules\non mixed and factory-only PRs, the config's own route, `judgeAskOf`,\n`routingOf`, three properties), `factory-config.test.ts`, `ciOf` and the\nLand gate's CI summaries in `decide.test.ts`, and in `main.test.ts` the\npolicy read from a checkout, a rename on a git fixture listed under both\npaths, the judge's limited diff and the CI read of both checks.\n- `bun scripts/ci/mutation.ts run`: `decide.ts` 423 mutants and\n`routing-rules.ts` 113 mutants tested, 0 undetected on the changed\nlines."
+    }
+  },
+  {
+    "sha": "298b1758ea9264b50bdaf9e98f7c74cedabd568d",
+    "commit": {
+      "message": "fix(routing): show the Routing judge only the paths no rule names, and test the routing dispatch\n\nAnswer the Code review's Important findings of Review round 2 on #83:\n\n- A mixed PR's verdict carries its judgedPaths; the Routing judge reads\n  the diff limited to them (judgeDiffArgs, literal pathspecs), so the\n  factory code a rule already routes no longer weighs on its answer.\n- judgeAskOf and routingOf take over route()'s dispatch as pure\n  functions: which verdict asks the judge, how its answer combines with\n  the rules', and the Patch delta's second round."
+    }
+  },
+  {
+    "sha": "56ff7c2a5786f8534e8556f4785cc3ce316db294",
+    "commit": {
+      "message": "fix(routing): route unread paths to the Owner, keep the judge's say on mixed PRs, list renames\n\nAnswer the Code review's Important findings on #83:\n\n- bun.lock and scripts/vendor/ go to the Owner: REVIEW.md puts them out\n  of the Code review's scope, so no reader would see them.\n- The config splits factoryPaths, which land at any size, from\n  deepReviewPaths (app/src/store/), which stay under the line cap and\n  the breaking-commit hold.\n- The Routing rules return a verdict; a PR that also touches paths no\n  rule names asks the Routing judge, who may raise it to the Owner.\n- The changed paths list a renamed file under both its paths\n  (--no-renames), so a move out of .github/ still goes to the Owner.\n- routingPolicyAt, changedPathsArgs, ciRunsPathsOf and ciOfRuns move the\n  adapter's new reads where tests reach them."
+    }
+  },
+  {
+    "sha": "2ac5f5cc991b8907a08c69e8f555540f2b9d43b7",
+    "commit": {
+      "message": "feat(routing): land the factory's own code without the Owner, from a factory config\n\nThe Routing rules sent every change to scripts/, .claude/, the agent docs\nand the build and gate configs to the Owner, so almost every lab PR waited\nfor land-ok. They now read a routing policy from the factory config,\n.github/software-factory.json, which the Merge bot reads from its checkout\nof dev:\n\n- ownerPaths (.github/**) and the config itself go to the Owner;\n- deepReviewPaths (scripts/, .claude/, app/src/store/, the agent docs, the\n  build and gate configs) get a deep Code review and land auto;\n- the line cap and the breaking-commit rule hold only a PR that also\n  touches other paths.\n\nThe Land gate now waits for mutation as well as validate: the ruleset\nrequires validate alone, and the Owner's policy lands on both.\n\nThe Principal judge stays off: no rule sets needsFable. AGENTS.md states\nthe new policy."
+    }
+  },
+  {
+    "sha": "631cae6f2ec025b9a9642f4f93debfa1ee59542a",
+    "commit": {
+      "message": "fix(review): fail a cancelled review run instead of asking it again (#82)\n\n## What changed\n\nThe native review of #81, round 2 (run\n[42371270575](https://github.com/bengous-labs/software-factory-lab/actions/runs/42371270575),\nopus/high), reported three Important findings on the last commits of\n#81, which had landed by then. This PR answers all three.\n\n| Finding | Change |\n|---|---|\n| A review run cancelled with no result is dispatched again at once,\nwith no cap: a review that keeps hitting the job's timeout, or that the\nOwner cancels, loops, one paid run each time | `code-review.yml` sets\n`cancel-in-progress: false`: a second dispatch waits for the run in\nprogress, so the review job never cancels one of its runs. `decide.ts`\ntreats a cancelled run as a failure again. A run GitHub answers 404 for\nis its own `ReviewJob` kind, `missing`, and is asked again |\n| The adapter's read of the review run had no test |\n`reviewJobReader(runner)` takes the runner; tests cover no read for\nanother patch, 404 as `missing`, any other failure thrown, a run in\nprogress, and the artifact named `review-<pr>-<round>` |\n| The post's unquoted-path diff had no test | `diffArgsOf` holds the\npost's git arguments, `core.quotePath=false` included; a test pins them\nand reads a non-ASCII path |\n\n```\nbefore (#81)                                 after\nSweep dispatches A, event dispatches B       Sweep dispatches A, event dispatches B\nB cancels A (cancel-in-progress: true)       B waits for A (cancel-in-progress: false)\nrecord keeps A -> A asked again, forever     both finish, the record reads its own run\n                                             Owner cancel or job timeout -> visible failure\n```\n\n## Why\n\nThe Owner chose this over capping the retries: a cancelled run is a\nfailure, as D9 says, and the race that the retry answered no longer\nexists once the job stops cancelling its own runs. The cost: a review\nthat a new push made stale runs to its end, and the next review waits\nfor it (one to two minutes in the runs so far).\n\n## Checks\n\n`bun check` passes, 439 tests."
+    }
+  },
+  {
+    "sha": "a51a832ac88571544eb777a40ade00adf4d8e0c8",
+    "commit": {
+      "message": "fix(merge-bot): keep the Sweep deciding, and let a racing review run finish\n\nA native review of f65ea7c found that dispatching one Merge bot run per\nPR from the Sweep can cancel a pending run that carries a merge queue\nEjection, that other paths still decide a PR outside its group, and that\nthe dispatch had no test. The serialization was not needed: with no\nconcurrency group on the review job, two decisions that both dispatch a\nreview leave two runs that both finish, and the Merge bot reads the one\nits record names. The race costs a review and never fails one.\n\n- main.ts and merge-bot.yml: the Sweep decides every open PR again, as\n  before f65ea7c; sweepOf is gone.\n- code-review.yml: still no concurrency group; the comment now says what\n  the race does."
+    }
+  },
+  {
+    "sha": "f65ea7c643c4172d046400c5a9f6d5f68b594881",
+    "commit": {
+      "message": "fix(merge-bot): serialize a PR's decisions instead of chasing cancelled runs\n\nThe native review of this PR found three more holes in reading a\ncancelled run through its successor: a successor dispatched from a stale\nsnapshot reviews another patch, the lookup saw only the 30 newest runs,\nand an older run's rerun could cancel the current one unseen. They all\ncome from one cause: a Sweep and a PR event decided the same PR side by\nside, each in its own concurrency group, and both dispatched a review.\n\n- main.ts: a Sweep decides nothing itself. It dispatches merge-bot.yml\n  once per open PR, and each run joins its PR's concurrency group, so a\n  PR's decisions run one after another and dispatch one review at a time\n  (sweepOf). successorOf and the runs listing are gone.\n- code-review.yml: no concurrency group, so GitHub never cancels a review\n  run; a cancelled run was stopped by a person or the job's timeout and\n  stays a visible failure. A review a new push made stale runs to its end\n  and its result is ignored."
+    }
+  },
+  {
+    "sha": "88e0251fded4a18267a00972819c293be1a0ff61",
+    "commit": {
+      "message": "fix(review): read a replaced review run through its successor\n\nThe native review of this PR found that cancel-in-progress false does not\nstop the race: GitHub still cancels a pending run when a newer one is\nqueued for the same group, and a fresh review now queued behind a stale\none, against the 45-minute deadline. The comment that the job never\ncancels its own runs was wrong.\n\n- code-review.yml: cancel-in-progress true again, so a stale review stops\n  and a fresh one does not wait.\n- main.ts: when the run the record names ended cancelled, reviewJobReader\n  reads its successor, the newest run of the same PR dispatched after it\n  (successorOf). A cancelled run with no successor was stopped by a person\n  or the job's timeout, and stays a visible failure.\n- decide.ts: the comment says why a cancelled run is a failure.\n- main.test.ts: the successor cases, and the rejection is awaited."
+    }
+  },
+  {
+    "sha": "ce7a36aa70c52565a7f580a22f3c2ded6369a8e6",
+    "commit": {
+      "message": "fix(review): fail a cancelled review run instead of asking it again\n\nThe native review of #81 found that asking again a run cancelled with no\nresult loops: a review that keeps hitting the job's timeout, or that the\nOwner cancels, is dispatched again and again, each run paid, and the\ndeadline never falls since each request is new. The race that rule\nanswered came from the review job cancelling its own runs: a Sweep and a\nPR event dispatch side by side, and the second run cancelled the first.\n\n- code-review.yml: cancel-in-progress false, so a second dispatch waits\n  for the run in progress and the run the record names always finishes.\n- decide.ts: a cancelled run is a failure again; a run GitHub answers 404\n  for is its own ReviewJob kind, missing, and is asked again.\n- main.ts: reviewJobReader takes the runner, so the adapter's read is\n  tested: no read for another patch, 404 as missing, any other failure\n  thrown, the artifact named after the PR and the round.\n- post-plan.ts: diffArgsOf holds the post's git arguments, unquoted paths\n  included, and a test pins them."
+    }
+  },
+  {
+    "sha": "dc1efa8e6437b9e14f2b617dfbf6857d120931c2",
+    "commit": {
+      "message": "feat(review): run the Code review as Claude Code's native /code-review in its own job (#81)\n\n> [!IMPORTANT]\n> **Before `land-ok`: grant the agents' App installation `Actions: Read\nand write`.** `merge-bot.yml` now asks its token for\n`permission-actions: write`, and `actions/create-github-app-token` fails\non a permission the installation does not have (\"Setting a permission\nthat the installation does not have will result in an error\", its\nREADME). Landing this first would stop the Merge bot on every PR.\n\n## What changed\n\nThe Code review moves out of the Merge bot into its own job, and becomes\nClaude Code's native `/code-review`.\n\n```\nMerge bot (App token)                     code-review.yml (no App token)\n  decide: request-review    ──dispatch──>   checkout dev at the root, the PR's head under pr/\n  record: review requested + runId          round 2: read-threads.ts -> review-threads.json\n                                            run-review.ts: query(\"/code-review <effort> --max-findings all base...head\")\n  every decision, Sweep included:  <──────  forked review answers through StructuredOutput\n  read actions/runs/<id> + artifact         upload review-result.json (artifact review-<pr>-<round>)\n  decide: post-review -> inline comments, Important -> draft\n```\n\n| Area | Files |\n|---|---|\n| Review job | `.github/workflows/code-review.yml`,\n`review/run-review.ts`, `review/read-threads.ts`,\n`lib/review-session.ts`, `ports/review.ts` |\n| Guard (every tool call allowed or denied by code) |\n`review/tool-guard.ts`: one read-only git command per Bash call,\nRead/Grep/Glob only under `pr/` and outside `.git` with links followed,\nAgent without `isolation`/`mode`/`team_name`, the `code-review` skill\nonly |\n| Data and prompt | `review/review-report.ts` (request, report schema\nfor `outputFormat`, artifact), `review/review-prompt.ts`,\n`review/review-settings.ts` (light: sonnet/medium, deep: opus/high) |\n| Post | `review/post-plan.ts`: anchors on the diff, `Breaks:` for a\ndefect shown elsewhere, pre-existing findings not posted, at most three\nNits, `<!-- lab-review patch=… round=… -->` against a second post |\n| Merge bot | `merge-bot/decide.ts`: `ReviewState` in the record,\n`reviewStepsOf` (requested, done, failed, 45-minute deadline),\n`request-review` and `post-review` steps. `merge-bot/main.ts`: dispatch\nwith `return_run_details`, read the run and artifact by id, post.\n`merge-bot.yml`: wakes on the review run, known by its path |\n| Removed | `review/code-review.ts` and its test, the retry, the body\nfallback, `bodyImportant` writes |\n\n### Owner files changed\n\n- `scripts/lint/layers.map.ts`: two lines placing `review/run-review.ts`\nand `review/read-threads.ts` in the entry layer.\n- `scripts/lint/exceptions.ts`: `codeReview` and `postFindings` leave;\n`decide` falls from 40 to 34, `perform` from 8 to 7.\n- `AGENTS.md`: the Judges item describes the review job.\n\n## Why\n\nThe old reviewer ran with no tool and saw only the diff, so it guessed\nthe rest of the system. The native `/code-review` reads callers and\ntests, as it does locally. The design and its decisions are in\n`.lab/SPEC-code-review.md`; two of them changed on evidence:\n\n- the skill runs as a forked command whose recipe forbids\n`ReportFindings`, so findings come back through `outputFormat` and\n`StructuredOutput` (Opus answered through `ReportFindings` in 0 of 3\nruns, through `StructuredOutput` in 3 of 3);\n- `actions/checkout` v7 keeps the token in `$RUNNER_TEMP`, included from\n`.git/config`; `persist-credentials: false` removes that include.\n\n## Evidence\n\n- `bun check` passes: 431 tests; coverage lines 75.91 %, functions 84.62\n%.\n- `bun scripts/ci/mutation.ts run`: `decide.ts` 394 mutants, 0\nundetected on the changed lines; `post-plan.ts` 109, 0; `tool-guard.ts`\n275, 0.\n- Run\n[42364772835](https://github.com/bengous-labs/software-factory-lab/actions/runs/42364772835),\ndispatched by hand on a test branch: `200 OK` with `workflow_run_id`,\n`display_title` `80`, artifact `review-80-1` that decodes as\n`ReviewResult`; `review pr=80 round=1 model=claude-sonnet-5-5\neffort=medium claude_code=2.1.318 reported: 0 important, 3 nit, 0\npre_existing`; `~/.claude` absent on the runner; no credential reachable\nfrom `pr/`.\n- Run\n[42369355320](https://github.com/bengous-labs/software-factory-lab/actions/runs/42369355320),\nround 2 on the same PR: the thread step read the review threads with the\njob's `pull-requests: read` token (`review threads pr=80: 0 earlier\nfinding(s)`), then `reported: 0 important, 0 nit, 0 pre_existing`. A PR\nwith App threads is covered by tests only.\n\n## Not verified yet\n\n- A dispatch with the App's token, which needs the permission above.\n- A dispatch with `ref: dev`, possible once `code-review.yml` is on\n`dev`.\n- The whole loop on a real PR: phase 3 of the plan."
+    }
+  },
+  {
+    "sha": "751018a5b3ea6f8cf642a7c3c4b2a6aa72f95999",
+    "commit": {
+      "message": "fix(merge-bot): read only a 404 as a review run gone\n\nreviewJobOf read every failed gh api call as a missing run, so a rate\nlimit, a 5xx or a network error withdrew a live review and dispatched\nanother, whose concurrency cancelled the healthy run. Only a 404 now\nreads as missing; any other failure throws and stops the decision, as\nevery other read of the decision does. notFound is tested on gh's own\n404 output."
+    }
+  },
+  {
+    "sha": "bfa89ef96952b2f32b4981300d655d7261465833",
+    "commit": {
+      "message": "test(merge-bot): let a withdrawn review request be asked again in the invariants\n\nTwo property invariants held that a review asked for this patch is never\nasked again. Since 959c198 a run cancelled with no result, or one GitHub\nno longer gives back, withdraws the request and the same decision asks\nagain, so the invariants failed on the seeds that drew one. They now\nexclude a withdrawn request, and the generator draws the missing run too."
+    }
+  },
+  {
+    "sha": "959c19841dc25b9ebc286a6eb3c48386674f1e75",
+    "commit": {
+      "message": "fix(merge-bot): ask again a review whose run was cancelled or is gone\n\nA Sweep and an event's run can decide the same PR side by side and both\ndispatch Review round 1; the review job's concurrency then cancels the\nfirst run, and the record may keep that run's id. Its cancelled run had\nno result, so the review failed until the next push. A run cancelled\nwith no result, or one GitHub no longer gives back, now clears the\nrequest, and the same decision asks again. The Merge bot skips the run\nof a request for another patch, and a run it cannot read no longer\nstops the decision or the Sweep.\n\nAlso from the native review of this PR: a finding with no line on a\nfile of the diff no longer says it is outside the diff, and the post\nreads the diff with unquoted paths."
+    }
+  },
+  {
+    "sha": "6a89c9ec9c3a7a3f6ac564cfc40220f6666c7842",
+    "commit": {
+      "message": "fix(merge-bot): know the review job's run by its path, not its name\n\nA run's workflow_run.name is its run-name, and the review job names its\nruns after the PR's number: run 42364772835 reads \"name\":\"80\". Matching\nit against 'code-review' never held, so a finished review would not have\nwoken the Merge bot nor joined its PR's concurrency group. Match the\nworkflow's path instead, and pin in the test that no condition reads the\nrun's name."
+    }
+  },
+  {
+    "sha": "6e4bb3b4a6462fb7f8dfd531df4ff01ce6838b14",
+    "commit": {
+      "message": "fix(merge-bot): count the Important threads still open in a posted review's check\n\nOn Review round 2, a report with no new Important set agent-review green\nwhile an Important of round 1 was still open: the next decision turned\nit red again, unless it stopped at a draft first. The check after a post\nnow counts the Important findings it posts plus those already open, as\nthe check of every later decision does."
+    }
+  },
+  {
+    "sha": "6a46a25a5a573bc884109e045e390d3affd58343",
+    "commit": {
+      "message": "test(review): pin the tokens and triggers of the review and Merge bot workflows\n\nA test reads code-review.yml and merge-bot.yml with Bun.YAML.parse: the\nreview job's permissions and only secret, persist-credentials: false on\nboth checkouts, no GitHub token on the Review step and the thread step's\ntoken on round 2 only, the artifact's name, and the Merge bot's wake on\nthe review job, its PR number from the run's title and its Actions write."
+    }
+  },
+  {
+    "sha": "feb6620e560fc41a78c41a9f1e8d6eecb256c5e0",
+    "commit": {
+      "message": "feat(review): give Review round 2 the earlier threads\n\nOn Review round 2, a step of its own reads the PR's review threads with\nthe job's read-only token and writes the App's earlier findings, each\nwith the author's answers and whether its thread is resolved, to\nreview-threads.json outside pr/. run-review.ts reads that file and puts\nthe threads in the prompt; the Review step still gets no GitHub token.\nlayers.map.ts places read-threads.ts in the entry layer."
+    }
+  },
+  {
+    "sha": "efb94554604e5a79386c4e8f9f94833a703a0be7",
+    "commit": {
+      "message": "feat(merge-bot): dispatch the review job and post its findings\n\nThe Merge bot no longer runs the Code review itself. A routed patch that\nneeds a Review round gets a request-review step: the Merge bot dispatches\ncode-review.yml on dev with the request as inputs, then writes the run's\nid in the record's new `review` key, with both checks pending. Each\ndecision, a Sweep's included, reads that run and, once it completed, its\nartifact, before any other exit, a draft included (reviewStepsOf). A\nreport for this PR, patch and round becomes a post-review step: one\ninline comment per Important and per Nit up to three, each anchored on a\nline of the PR's diff (post-plan.ts), a body that counts them and carries\na lab-review marker so a repeated wake posts once, then the record of the\nreviewed patch and head, and a draft on an Important. A failed result, a\nrun with no artifact that reads, an artifact for another request, or no\nreport 45 minutes after the dispatch fails the review: agent-review turns\nred with the cause, and nothing is retried. A new patch clears a stale\nrequest.\n\nfindings.ts takes the finding marker, the review threads query and the\ncount of open Important threads, now threads only: a finding is never\nposted in the body, and `bodyImportant` still reads in older records but\nis dropped. review-settings.ts holds the model and effort per depth.\n\nreview/code-review.ts, its retry, the body fallback of the post and the\nneeds-owner label after two failures go. perform loses its threads\nparameter (8 to 7) and decide falls from 40 to 34 in the ratchet.\nmerge-bot.yml wakes on the review job's runs, keys them on the PR number\ntheir title carries, and asks the App token for Actions write, an\ninstallation setting the Owner grants. post-plan.ts joins stryker.config.ts."
+    }
+  },
+  {
+    "sha": "0861936059a7c35ea8f169ae89951da365b180c3",
+    "commit": {
+      "message": "docs: define review failure by repo area in REVIEW.md (#80)\n\n## What changed\n\n`REVIEW.md` is rewritten. It keeps the three severities and the cap of\nthree Nits, and adds what failure means in each area of the repo:\n\n| Section | Content |\n|---|---|\n| What failure looks like here | One line per area: `app/`,\n`scripts/land-loop/`, `scripts/hooks/` and `.claude/`, `.github/`, the\ngates and lint, the agent docs |\n| Severity | Important (a failure from that list, or a changed behaviour\nwith no test), Nit (at most three), Pre-existing (never blocks) |\n| Evidence | Anchor on the changed line that causes the defect, give the\nfailure scenario, follow callers and tests, name the place where the\nfailure shows |\n| Later rounds | A thread is settled once fixed or rejected with a\nreason; report it again only when the code shows the fix missing or the\nreason wrong |\n| Out of scope | What `bun check` enforces, `bun.lock`,\n`scripts/vendor/` |\n\n## Why\n\nThe old guide defined Important only for the task CLI: a wrong result, a\nlost or unreadable task file, a crash. A change to the Land loop, a hook\nor a workflow had no bar, so the Code review guessed. Both readers of\nthe guide take the new bar: the Code review sets severities from it, and\nthe Principal judge answers OK only when it finds no Important finding\n\"as the guide defines it\" (`review/principal-judge.ts`).\n\nThis is phase 1 of moving the Code review to the native `/code-review`\nrun through the Agent SDK. The current reviewer reads this file until\nthat change lands, and the new one will read it from `dev` in its\nprompt.\n\n## Checks\n\n`bun check` passes locally (363 tests). No code changes."
+    }
+  },
+  {
+    "sha": "a912b56f58dd38230ad571a87c472e44cd1c56be",
+    "commit": {
+      "message": "test(review): pin every rule of the tool guard for mutation testing\n\nThe tool guard joins stryker.config.ts: its tests now cover each\nsubcommand bare and with a flag, each attached option with a whole value\nand refused with a prefix or a suffix, each valued option with and\nwithout its value, a non-git program, a Grep pattern Glob would refuse.\n\nThree behaviour-preserving rewrites remove the mutants no test can kill:\n- `/^X.+$/u` becomes `/^X./u`: these patterns only see tokens TOKEN\n  admitted, which hold no line terminator, so `.+$` and `.` accept the\n  same tokens.\n- `subcommand` defaults to \"\" and goes straight to GIT_RULES.get: no rule\n  has the key \"\", as none had the key undefined.\n- SkillInput holds `skill` to the literal \"code-review\": an Effect struct\n  keeps excess keys, so `Struct({})` decoded the same value and the\n  `skill === \"code-review\"` test alone decided."
+    }
+  },
+  {
+    "sha": "a05c6d6291d6a7559ca9a4dc90aab14708eed7ef",
+    "commit": {
+      "message": "docs: keep a weakened gate in the review's scope\n\nOut of scope excluded \"the gates\", which a reviewer could read as excluding\na change to a gate. Exclude only what bun check reports on its own, a gate\nthat fails among it, and say that a weakened gate stays in scope."
+    }
+  },
+  {
+    "sha": "e113e8716fbc9248915fcccc6b5e03fa358d2c73",
+    "commit": {
+      "message": "build(review): drop the first run's push trigger and credential probe\n\nThe first run registered the workflow and measured the checkouts: with\npersist-credentials false, pr/ holds no credential and git there reads\nnone. Neither part is needed again."
+    }
+  },
+  {
+    "sha": "55c911cc6327e996d259c0ac3e2797b01a84fbbe",
+    "commit": {
+      "message": "feat(review): run the native /code-review in its own job\n\nThe review job checks out the pull request's head under pr/ and runs\nClaude Code's /code-review through the Agent SDK: read-only tools under a\nguard that allows or denies every call by code, nothing loaded from the\ncheckout, a fresh config and a minimal env. The forked review returns its\nfindings through StructuredOutput, and the job uploads the result as an\nartifact. layers.map.ts places run-review.ts in the entry layer.\n\nThe push trigger and the credential probe are for the first run on this\nlab branch, and go before the pull request."
+    }
+  },
+  {
+    "sha": "e1249fcec4b2284c3e573ef0fb0dcf4c8c394843",
+    "commit": {
+      "message": "docs: define review failure by repo area in REVIEW.md\n\nThe guide defined Important only for the app. Pull requests also change the\nLand loop, the hooks and the CI, where failure means something else: a gate\nthat stops failing, a secret reaching a prompt, a change landing without its\nreview. List what failure looks like per area, the three severities, the\nevidence a finding needs, and how later rounds treat settled threads."
+    }
+  },
+  {
+    "sha": "6cf2698a5b2fe952123d95f3b9144b4d74c4c780",
+    "commit": {
+      "message": "docs: point agents at the Agent SDK's types and guide (#79)\n\n## What changed\n\n`AGENTS.md` gains an `## Agent SDK` section, placed after `## Effect`\nand written the same way:\n\n```markdown\n## Agent SDK\n\nThe Judges call Claude Code through `@anthropic-ai/claude-agent-sdk`. Before writing Agent SDK code, read its types in `node_modules/@anthropic-ai/claude-agent-sdk/`: `sdk.d.ts` holds `query`, its `Options` and the messages it streams, and `sdk-tools.d.ts` the input and output of each built-in tool. The guide is https://code.claude.com/docs/en/agent-sdk/typescript.\n```\n\n## Why\n\nThe Judges (`scripts/land-loop/lib/ask.ts`) and the planned move to\ntool-using reviewers (#52) depend on the Agent SDK. Before this change,\n`AGENTS.md` named the SDK once, in the Land loop section, and did not\nsay where its types or its guide live. An agent had to search\n`node_modules` to find `Options` (tools, `allowedTools`,\n`settingSources`, `outputFormat`) or a built-in tool's schema, such as\n`ReportFindingsInput`. The two files named are where those types are\ndeclared. The section names no version, because `package.json` pins it.\n\nThis PR changes `AGENTS.md`, a risky path, so it needs the Owner's\napproval.\n\n## Verification\n\n- `bun check` is green: typecheck, lint, format check, gates, knip, 363\ntests, and the coverage floor.\n- `sdk.d.ts` declares `query` and `Options`, and `sdk-tools.d.ts`\ndeclares the built-in tools' inputs and outputs, including\n`ReportFindingsInput` at line 1044. Both were checked in the installed\n`@anthropic-ai/claude-agent-sdk`."
+    }
+  },
+  {
+    "sha": "85893a37ec5d75896c279f47a5752b55b4bec42c",
+    "commit": {
+      "message": "docs: point agents at the Agent SDK's types and guide"
+    }
+  },
+  {
+    "sha": "812acd2447a840b8d688c852a5befd6e22f5f839",
+    "commit": {
+      "message": "build: refuse a git commit on dev with a PreToolUse hook (#78)\n\n## What changed\n\n- `scripts/hooks/refuse-commit-on-dev.ts`: a new `PreToolUse` hook on\n`Bash`. It finds each `git commit` in the command, including `git -C\n<dir> commit`, and reads the branch in that directory with `git -C <dir>\nsymbolic-ref --short -q HEAD`. When the branch is `dev`, it denies the\ncall with `permissionDecision: \"deny\"`, and the reason tells the agent\nto run `git switch -c <branch>` and commit there. It leaves these alone:\n  - every other command;\n  - a commit on any other branch;\n  - a commit on a detached HEAD;\n  - a commit outside a repository;\n  - a commit whose `-C` directory does not exist.\n- `scripts/hooks/refuse-commit-on-dev.test.ts`: tests for the pure\nfunctions (input decoding, command splitting, commit detection, the\nrefusal), and tests that run the hook against a temporary git\nrepository.\n- `.claude/settings.json`: wires the hook as `PreToolUse` with matcher\n`Bash`, next to the `Stop` and `PostToolUse` hooks.\n\n## Why\n\nThe ruleset on `dev` accepts changes only through a pull request and the\nmerge queue. The Stop hook never publishes `dev`. A commit made on local\n`dev` is therefore never published, and nothing tells the agent. This\nhook replaces the prose rule \"Commit your work on a branch, never on\n`dev`\" with a check that runs before the commit.\n\nThe hook follows `scripts/hooks/fix-edited.ts`. It decodes the input\nwith an Effect `Schema` through `decodeJson`, and it keeps the decision\nin pure exported functions that the colocated test covers.\n`scripts/lint/layers.map.ts` already places `scripts/hooks/*.ts` in the\ntooling entry layer.\n\nThis PR changes `.claude/settings.json`, so it needs the Owner's\napproval.\n\n## Known limit\n\nThe hook does not follow a `cd` inside the command. For `cd ../other &&\ngit commit`, it reads the branch of the tool call's `cwd`, not the\nbranch of `../other`.\n\n## Verification\n\n- `bun check` is green: typecheck, lint with `local/layers`, format\ncheck, gates, knip, 357 tests, and the coverage floor.\n- The hook tests run against a temporary repository created with `git\ninit -b dev`:\n  - `git commit -m \"work\"` on `dev` is denied with the expected JSON;\n  - `git -C <repo> commit` run from another directory is denied;\n  - `git status` on `dev` prints nothing;\n- after `git switch -c tooling/feature`, `git commit` prints nothing and\nexits 0;\n- a commit outside a repository, or with a missing `-C` directory,\nprints nothing and exits 0."
+    }
+  },
+  {
+    "sha": "4940c7ee49569a271bd56b9f79533265d674bd3e",
+    "commit": {
+      "message": "build: check a commit in every directory a cd may leave it in\n\nThe cd tracking took the first word after cd as a literal path and carried\nit across every later command. Options (-L, -P, -e, -@, --) now come\nbefore the target, and $VAR, ${VAR} and ~ are expanded. A target the hook\ncannot know (cd -, $(...), an unset variable) leaves the directory as it\nwas. The command is cut into simple commands and their operators: after\n&& a cd replaces the directories a commit may run in, after ; or || it\nadds to them, in a pipeline or in the background it changes nothing, and\na ( ... ) subshell restores them when it ends. A commit is checked in each\nof those directories."
+    }
+  },
+  {
+    "sha": "566d671586455eace59b920f5ac6a454df613742",
+    "commit": {
+      "message": "build: follow cd before a commit in the refuse-commit-on-dev hook\n\nA `cd <dir> && git commit` ran the commit in <dir> while the hook read\nthe branch of the call's cwd, so a commit on dev passed. commitDirsOf now\ncarries the directory each cd moves to, ~ included, into the commits\nthat follow it."
+    }
+  },
+  {
+    "sha": "f8274b212942120734ca28cca13de076357ba75c",
+    "commit": {
+      "message": "docs: rewrite AGENTS.md around the software factory, drop CLAUDE.md (#77)\n\n## What changed\n\n- `AGENTS.md` opens on the software factory the repository builds:\nOrchestrators, Workers, the Owner's two points of contact, and the Land\nloop as its first subsystem.\n- Your task keeps three rules: a test for each behaviour, the push and\nthe PR left to the Stop hook, no question in the last message.\n- The commands, the Land loop's steps, the stored names, the layer map,\nthe gate rules and the Effect pointer stay.\n- Rules that code or GitHub already enforces leave the file: `bun check`\ngreen (the Stop checks), signed commits and no commit on `dev` (the\n`dev` ruleset), and the edit hook's formatting.\n- `CLAUDE.md` is deleted: Claude Code reads `AGENTS.md` when no\n`CLAUDE.md` exists.\n\n## Verification\n\n- `bun check` is green (346 tests).\n- Every path and command `AGENTS.md` names exists."
+    }
+  },
+  {
+    "sha": "c4579807e650828ed3a7da04096ba782f31d3bf7",
+    "commit": {
+      "message": "build: refuse a git commit on dev with a PreToolUse hook\n\nGitHub's ruleset on dev refuses direct pushes, and the Stop hook never\npublishes dev, so a commit made on local dev is silently lost. The\nPreToolUse hook on Bash finds each `git commit` (including `git -C <dir>\ncommit`) in the command, reads the branch with `git symbolic-ref --short\n-q HEAD` in that directory, and denies the call on dev with a message to\ncommit on a branch instead. Other commands, other branches, a detached\nHEAD and a directory outside a repository pass."
+    }
+  },
+  {
+    "sha": "9ad7c7b74be8a869ddf93ad2e42d6f4956c02714",
+    "commit": {
+      "message": "docs: rewrite AGENTS.md around the software factory, drop CLAUDE.md\n\nAGENTS.md opens on the software factory the repository builds, with the\nLand loop as its first subsystem, then keeps the Author's three rules,\nthe commands, the Land loop's steps across the Stop hook, the Merge bot\nand the Judges, the stored names that keep their spelling, the layer\nmap, the gate rules that only move one way, and where to read the\nEffect API.\n\nRules that code or GitHub already enforces leave the file: bun check\ngreen (the Stop checks), signed commits and no commit on dev (the dev\nruleset), and the edit hook's formatting.\n\nCLAUDE.md goes: Claude Code reads AGENTS.md when no CLAUDE.md exists."
+    }
+  },
+  {
+    "sha": "cd23018b320b4c609af07c31435cfcffbc340ee0",
+    "commit": {
+      "message": "build: drop the vendored effect-ts skill and its lock file (#75)\n\nRemoves `.claude/skills/effect-ts/SKILL.md` and `skills-lock.json`. The\nskill is installed for the user, so the repo copy only duplicated it.\n`bun check` is green."
+    }
+  },
+  {
+    "sha": "c85478ccb918078cddbb74045502164b063dac6a",
+    "commit": {
+      "message": "build: drop the vendored effect-ts skill and its lock file\n\nThe skill is installed for the user, so the repo copy only duplicated it."
+    }
+  },
+  {
+    "sha": "83d6fa8be5e8b2f4158d47ba6804dde383a437c8",
+    "commit": {
+      "message": "build: route gate configs to the Owner, set the coverage floor (#74)\n\n## Routing\n\nThe configs that decide what the gates check join the risky paths, so a\nchange to any of them goes to the owner with a deep review:\n\n| Glob added to `RISKY` | Matches today |\n|---|---|\n| `bunfig.toml` | test and format settings |\n| `oxlint*.config.ts` | `oxlint.config.ts`, `oxlint.style.config.ts` |\n| `.oxfmtrc*` | none yet |\n| `stryker.config.ts` | the mutation scope |\n| `knip.json*` | `knip.jsonc` |\n| `.mcp.json` | the MCP servers |\n\nEach glob matches at the repository root only; one test per path, and\nthe property test's risky files include them.\n\n## Coverage floor\n\n```\ncheck: … && bun test --coverage --coverage-reporter=text --coverage-reporter=lcov\n         && bun scripts/gates/check-coverage-floor.ts\n```\n\n`scripts/gates/check-coverage-floor.ts` sums `LH/LF` and `FNH/FNF` over\nevery file of `coverage/lcov.info` and fails when either total is under\nits floor: 68.8 % of lines (1788/2596 measured) and 80.1 % of functions\n(234/292 measured), rounded down. The failure names the total, the\nmeasure and the floor:\n\n```\nlines coverage is 68.64 % (1782/2596), under its 68.8 % floor. Add a test for the code you left uncovered; the floor never drops.\nfunctions coverage is 79.73 % (232/291), under its 80.1 % floor. Add a test for the code you left uncovered; the floor never drops.\n```\n\nWhy not Bun's `coverageThreshold`: Bun checks it against each file, not\nthe suite's total ([Bun\nguide](https://bun.com/guides/test/coverage-threshold)). With `{ lines =\n0.83, functions = 0.89 }` (below the text report's `All files` row) the\nsuite fails, since `app/src/commands/undone.ts` has 0 % of its functions\ncovered and `scripts/land-loop/merge-bot/main.ts` 19.5 % of its lines.\nCoverage also stays off in `bunfig.toml`: the mutation job's per-module\n`bun test ./<file>` runs load a fraction of the suite and would fall\nunder any floor.\n\n`coverage/` is ignored by git. `bun scripts/ci/mutation.ts run` passes\non `routing-rules.ts` (0 undetected on the changed lines)."
+    }
+  },
+  {
+    "sha": "42368102ef216282b07ce0d32d2b68900b4666a2",
+    "commit": {
+      "message": "build: hold the suite's line and function coverage to a floor\n\n`check` runs the tests with coverage and writes an lcov report, then\nscripts/gates/check-coverage-floor.ts sums its line and function totals\nover every file and fails when either falls under its floor: 68.8 % of\nlines and 80.1 % of functions, the measured totals rounded down.\n\nBun's own coverageThreshold holds each file to the threshold, not the\nsuite's total, so it cannot set a whole-suite floor. Coverage stays off\nin bunfig.toml: the mutation job's per-module `bun test ./<file>` runs\nload a fraction of the suite and would fall under any floor."
+    }
+  },
+  {
+    "sha": "49484107f87a79e66188238e749dfb77c761b72b",
+    "commit": {
+      "message": "ci: send changes to the gate configs to the owner\n\nbunfig.toml, oxlint*.config.ts, .oxfmtrc*, stryker.config.ts, knip.json*\nand .mcp.json join the risky paths: a change to them can switch a gate\noff, so the Routing rules send it to the owner with a deep review."
+    }
+  },
+  {
+    "sha": "ad119b5e8ff89b8742beac5989e8d9d50cf38138",
+    "commit": {
+      "message": "ci: mutation testing on the diff, property tests (#72)\n\n## What changes\n\nA new CI job, `mutation`, runs Stryker on the modules whose lines or\ntests a change alters, and fast-check property tests join `bun test`.\n\n```\nstryker.config.ts             TESTS: each mutated module -> the one test file a pass runs\nscripts/ci/mutation.ts        scope (github-output) and passes (run)\nscripts/ci/mutation.test.ts   parsing, verdicts, bases, fixture repositories, a pass on a fixture\n.github/workflows/ci.yml      + mutation job\n```\n\n### The mutation job\n\n- Mutated modules: `merge-bot/decide.ts`, `stop/decide.ts`,\n`routing/routing-rules.ts` and the `app/src/commands/` files a test\ncovers (`undone.ts` has none, so it is not listed). Each is mutated\nwhole, against its own test file alone.\n- It fails on a mutant that survives on a changed line of a module, and,\nwhen a module's test file changed, on a mutant the tests killed at the\nbase that survives now: the tests were weakened.\n- The base: the merge commit's first parent on a pull request, the\nqueue's base in the merge queue, the push's `before` on a push to `dev`,\n`origin/dev` locally.\n- The scope step imports nothing outside `node:` and `bun`: a change\nthat reaches no listed module passes before `bun install`. A push whose\ncommit already has a green `mutation` check skips the passes.\n- Each pass runs its tests under `FAST_CHECK_SEED`, the same for the\nbase's pass and the head's: `scripts/ci/fast-check-seed.ts`, preloaded\nby `bun test`, then gives every property that seed, so a mutant a random\ninput killed at the base cannot read as weakened tests. A plain `bun\ntest` keeps drawing a new seed.\n- `StringLiteral` mutations are excluded. `tsconfigFile` points at a\nmissing file, which skips Stryker's tsconfig rewrite, the only part of\nStryker that loads the `typescript` package; the repository does not\ninstall it.\n\nRun it locally before pushing:\n\n```bash\nbun scripts/ci/mutation.ts run\n```\n\n### Property tests\n\n- `app/test/store.test.ts`: any task list, serialized then parsed, reads\nback the same.\n- `routing-rules.test.ts`: a change touching a risky path is routed to\nthe owner, never `land:auto`, whatever else it touches, its size or its\nmessages.\n- `merge-bot/decide.test.ts`: `risen` labels never fall below the PR's\nor the answer's; a state record reads back from its stored JSON; a step\nthat waits for a model comes last, with no Land gate before it; at most\none Land gate, followed only by an auto-merge; an auto-merge only after\na green Land gate on a ready, green, unblocked PR, and without the\nowner's Land approval only on an auto route.\n\n### Layers\n\n`scripts/lint/layers.map.ts` lets the tooling layer import\n`@stryker-mutator/core` and the test layer import `fast-check`, and\nplaces `scripts/ci/fast-check-seed.ts` in the tooling package's test\nlayer.\n\n## Dependencies\n\n- `@stryker-mutator/core` 10.1.1 (dev)\n- `fast-check` 4.10.2 (dev)"
+    }
+  },
+  {
+    "sha": "5d5198145825bce869ef395f6efe136a3681e645",
+    "commit": {
+      "message": "test: fix the fast-check seed during the mutation passes\n\nA property draws random inputs, so a mutant it killed at the base by luck\ncould survive at the head and read as weakened tests, failing the\nmutation job by chance. Each Stryker pass now runs its tests under\nFAST_CHECK_SEED, the same for the base's pass and the head's, and\nscripts/ci/fast-check-seed.ts, preloaded by bun test, gives fast-check\nthat seed only when the variable is set: a plain bun test keeps drawing a\nnew seed each run.\n\nscripts/lint/layers.map.ts places scripts/ci/fast-check-seed.ts in the\ntooling package's test layer, since it imports fast-check and reads the\nenvironment."
+    }
+  },
+  {
+    "sha": "9256e4c3c142de525fe1483e324a0d5db5e43196",
+    "commit": {
+      "message": "test: property tests for the store, the Routing rules and the Merge bot\n\nfast-check checks, for any input it generates:\n- a task list serialized then parsed reads back the same;\n- a change that touches a risky path is routed to the owner, never\n  land:auto, whatever else it touches, its size or its messages;\n- the Merge bot's invariants, each named in its test: risen labels never\n  fall below the PR's or the answer's, a state record reads back from its\n  stored JSON, a step that waits for a model comes last with no Land gate\n  before it, at most one Land gate, an auto-merge only after a green Land\n  gate on a ready, green PR, and without the owner's Land approval only\n  on an auto route."
+    }
+  },
+  {
+    "sha": "cd1b8337b8b00ebe340666da1d5844229ffbbbf7",
+    "commit": {
+      "message": "ci: mutation-test the changed lines of the listed modules\n\nscripts/ci/mutation.ts runs Stryker on each module stryker.config.ts lists\nwhose lines or tests the change alters, each module whole against its own\ntest file. It fails on a mutant that survives on a changed line, and, when\nthe tests changed, on a mutant the base's tests killed that survives now.\nThe base is the merge commit's first parent on a pull request, the queue's\nbase in the merge queue, the push's before on a push, origin/dev locally.\n\nThe mutation job in ci.yml runs it. Its scope step imports nothing outside\nnode: and bun, so a change that reaches no listed module passes without an\ninstall. A push whose commit the merge queue already gave a green mutation\ncheck skips the passes.\n\nStryker needs no typescript package: only its tsconfig rewrite loads it,\nand the config points tsconfigFile at a missing file to skip that rewrite."
+    }
+  },
+  {
+    "sha": "a62512d650ab844beae9ea75bf980a0db2289f92",
+    "commit": {
+      "message": "build: let the tooling import Stryker and the tests fast-check\n\nlocal/layers refuses a bare import no EXTERNALS entry names. The mutation\nscript and its Stryker config, in the tooling layer, import\n@stryker-mutator/core; the property tests import fast-check."
+    }
+  },
+  {
+    "sha": "b252e2f38db2cb20fbc4bdebad7f666410ea71e6",
+    "commit": {
+      "message": "build: enforce layers, cognitive complexity and dead code (#71)\n\nThree checks join `bun check`: a layer rule for imports and I/O, budgets\non cognitive complexity and parameters, and knip for dead code.\n\n## Layers: `local/layers`\n\nA local oxlint plugin (`scripts/lint/`) places every linted file by\n`scripts/lint/layers.map.ts` and refuses what its layer may not do:\n\n```\nscripts/\n  lint/\n    index.ts          the `local` plugin\n    layers.ts         the rule\n    layers.map.ts     file -> package and layer, and what each layer may import\n    layers.test.ts    unit tests, and the rule run through oxlint on a fixture tree\n  land-loop/\n    ports/ask.ts      Ask, Question, Answer   (were in lib/ask.ts)\n    ports/run.ts      Run, Ran, RunOptions    (were in lib/run.ts)\n    author-mark.ts    AUTHOR_MARK             (was in thread.ts)\n```\n\n| Layer | Files | May import |\n|---|---|---|\n| domain | `app/src/task.ts`, `app/src/commands/*`,\n`scripts/land-loop/*/decide.ts`, `routing-rules.ts`, `author-mark.ts`,\n`scripts/lib/*` | domain; `effect` values `Schema`, `Data`, `Option`,\n`Result`, `Struct` only |\n| ports | `scripts/land-loop/ports/*` | domain, ports, `effect` |\n| application | `review/*`, `routing-judge.ts` | domain, ports,\napplication, `effect` |\n| infra | `app/src/store/*`, `scripts/land-loop/lib/*` | domain, ports,\ninfra, `node:*`, `bun`, the Agent SDK, I/O globals |\n| entry | `cli.ts`, `merge-bot/main.ts`, `stop/hook.ts`, `pr-watch.ts`,\n`thread.ts`, `queue/repost.ts`, `scripts/hooks/*` | everything except\nanother entry point |\n| tooling | `scripts/gates/*`, `scripts/lint/*`, `scripts/ci/*`,\n`scripts/lab/*`, root `*.config.ts` | tooling, the shared\n`scripts/lib/*`, `node:*`, `bun`, `oxlint`; nothing from the Land loop\nor `app/` |\n| test | `*.test.ts` | anything in their package |\n\n- The packages are `app`, `land-loop` and `tooling`. `scripts/lib/*` is\na shared package that both `land-loop` and `tooling` may import.\n- The rule reports an error for a file the map does not place, a bare\nspecifier it does not know, and a relative import of an unplaced file.\n- It reads `import`, `import = require()`, `require()`,\n`import.meta.require()`, `export … from` (`export {} from` included),\n`export * from`, `import()` and `import(\"…\")` types. An import that\nmixes types and values counts as a value.\n- A file of the repository is placed by its path from the repository\nroot, whatever directory oxlint runs in.\n- A type-only import may also reach the domain, the ports and the\napplication layer, whose types load no code. It never reaches the infra\nor an entry point, so a layer depends on the port and not on the live\nmodule.\n- Outside the infra, the entry points, the tooling and the tests, the\nrule refuses every member of `Bun` except `Bun.Glob`, `Bun` read whole,\n`fetch`, `process`, and `globalThis`, `self`, `global` and `window`\nwhatever follows them. A reference in a type, such as a `Bun.Glob`\nparameter or `typeof process.env`, loads no code and passes.\n- `check-lint-disables` refuses, whatever its reason, any suppression of\n`local/layers` or of a budget rule, in each spelling oxlint reads\n(`local/layers`, `local(layers)`, a bare eslint name). It also refuses\nany directive that names no rule. It reads only the rule list, not the\nreason.\n\nA violation reads:\n\n```\nscripts/land-loop/stop/decide.ts:1:1: `scripts/land-loop/stop/decide.ts` (domain) imports `scripts/land-loop/lib/run.ts` (infra). Fix the import: the entry point does the I/O and passes the result; depend on the port, not the live layer; use `import type` when a type is enough. Do not change the map or the rule: they belong to the Owner. [Error/local(layers)]\n```\n\nThe repository broke the map in two places, both fixed:\n- `pr-watch.ts`, an entry point, imported `AUTHOR_MARK` from\n`thread.ts`, another entry point. The mark now has its own domain\nmodule.\n- The judges imported the `Ask` type from `lib/ask.ts`, which loads the\nAgent SDK. `Ask`, `Question` and `Answer` now live in `ports/ask.ts`.\nThe `Run` contract moved the same way, to `ports/run.ts`.\n\n## Budgets\n\n- `complexity/complexity` (`oxlint-plugin-complexity`) caps cognitive\ncomplexity at 25.\n- `eslint/max-params` caps a function at 4 parameters.\n\n`scripts/lint/exceptions.ts` lists the functions that break these rules\ntoday. `oxlint.config.ts` turns the rule off in each listed file.\n\n| Rule | Function | File |\n|---|---|---|\n| complexity (40) | `decide` | `merge-bot/decide.ts` |\n| max-params | `routingJudge` (5) | `routing/routing-judge.ts` |\n| max-params | `codeReview` (5) | `review/code-review.ts` |\n| max-params | `snapshotOf` (5), `postFindings` (6), `perform` (8) |\n`merge-bot/main.ts` |\n\n`scripts/gates/check-exception-ratchet.ts` runs in `gates`. It lints the\nlisted files with the budget rules alone\n(`scripts/lint/exception-ratchet.oxlint.config.ts`). Each entry records\nits measure: the parameter count or the cognitive complexity. The gate\nfails when:\n- a listed function no longer breaks its rule;\n- its measure differs from the recorded one;\n- a function the list does not name breaks a rule its file is excepted\nfrom.\n\nA function the rule's message does not name, such as an arrow or a\nmethod, never matches an entry. A diagnostic the gate cannot read makes\nit throw. For example:\n\n```\nscripts/land-loop/merge-bot/main.ts: `perform` no longer breaks complexity/complexity; remove its entry from scripts/lint/exceptions.ts.\nscripts/land-loop/merge-bot/main.ts: `wide` breaks eslint/max-params, which the file's exception hides from the lint. Fix the function; the list of exceptions only shrinks.\n```\n\nSo the list can only shrink, and an exception covers its named function,\nnot the rest of its file.\n\n## Dead code: knip\n\n`knip.jsonc` names the entry points knip cannot find on its own:\n- `app/src/cli.ts`, `pr-watch.ts` and `thread.ts`, run by hand;\n- `stop/hook.ts` and `scripts/hooks/fix-edited.ts`, run from\n`.claude/settings.json`;\n- the ratchet's config, read by path.\n\nknip finds the workflow scripts on its own. Its first run found ten\nexports and three exported types that only their own module uses; they\nare no longer exported. A warm run takes about 0.5 s, so `bun run knip`\nruns in `check`.\n\n## Also\n\n- The gate tests run git in temporary fixture repos. They now strip\nevery `GIT_*` variable from git's environment, so an inherited `GIT_DIR`\ncannot point them at the real repository. A test proves that git in a\nfixture ignores a decoy `GIT_DIR`.\n- New dev dependencies: `oxlint-plugin-complexity` 4.1.0 and `knip`\n6.44.1.\n- `bun check` takes about 3.2 s, up from 2.1 s."
+    }
+  },
+  {
+    "sha": "047795b3246b38850f8a94b230696d57d52afd56",
+    "commit": {
+      "message": "build: refuse the global objects whole in the layers that may not do I/O\n\nlocal/layers refused globalThis and self only when the next member was an I/O global, so a longer\nchain such as globalThis.globalThis.process.env or self.globalThis.fetch reached I/O from the domain.\nIn the domain, the ports and the application layer, globalThis, self, global and window are now\nrefused as values whatever follows them. A reference in a type, such as typeof globalThis, still\npasses, and the infra and the entry points keep their access. No file of those three layers uses\nthese names."
+    }
+  },
+  {
+    "sha": "da941f6bf4ea151404c80fdec787aa180dea9e45",
+    "commit": {
+      "message": "test: remove the fixture directories the GIT_DIR tests create"
+    }
+  },
+  {
+    "sha": "3c7f633b260a6c4b2ae2e4327dccc8b9ee2c3677",
+    "commit": {
+      "message": "build: close the loads and globals local/layers let through, and place files from the repository root\n\nThe rule now reads import = require(), require() and import.meta.require() as value imports, and\nexport {} from as one, since it loads its module. Bun is open to every layer through Glob only:\nevery other member, Bun.env and Bun.stdout among them, is I/O. The I/O globals read off globalThis\nor self are refused, and so are those objects read whole. A reference in a type, such as a Bun.Glob\nparameter or typeof process.env, loads no code and is no longer refused. A file of the repository is\nplaced by its path from the repository root, not from the directory oxlint runs in."
+    }
+  },
+  {
+    "sha": "52d76c25050eba3a800f28f6c36ea5c5209e9a0b",
+    "commit": {
+      "message": "build: read the rule list of a suppression, in each spelling, and refuse the budget rules too\n\ncheck-lint-disables matched local/layers anywhere on a directive line. So it missed local(layers),\nwhich oxlint also reads, and it refused a suppression of another rule whose reason named local/layers.\nIt now reads only the rule list, between the directive and its reason, and maps each spelling\noxlint accepts (plugin/rule, plugin(rule), a bare eslint name) to the config's. complexity/complexity\nand eslint/max-params join local/layers: an inline suppression of a budget rule would get around the\nexception list the ratchet holds."
+    }
+  },
+  {
+    "sha": "db3f20dbe764213b221bd2325ca6aeba1a288cda",
+    "commit": {
+      "message": "build: read every message shape the budget rules print, and hold each exception to its measure\n\nThe ratchet read a function's name with ^Function '…', and a diagnostic it could not read became a\nbreach of <unknown>. max-params names only function declarations and named function expressions,\nand says Function or Arrow function for any other, so such a breach shared one key with every other\nand could neither be listed nor told apart. The ratchet now reads each shape max-params and the\ncomplexity plugin print, gives a function the rule does not name no name, so it never matches an\nentry and is always reported in an excepted file, and throws on a diagnostic it cannot read, such\nas a syntax error, instead of guessing.\n\nEach exception records its measure, and the ratchet fails when the function grows past it or falls\nunder it, so a listed function cannot get worse. The gate also refuses a listed file that does not\nexist, lints nothing once the list is empty, and resolves the files from the repository root\nrather than the working directory."
+    }
+  },
+  {
+    "sha": "96512eaac2d894d485209e9b569e0d93a8ddea3c",
+    "commit": {
+      "message": "test: run the gate fixtures' git with no inherited GIT_* variables\n\nThe gate tests run git init and git add in a temporary fixture. An inherited GIT_DIR, which\ngit rebase --exec and git hooks export, pointed that git at the real repository: git init set\ncore.bare there. fixtureEnv drops every GIT_ variable from the environment those git and gate runs\nget, and a test proves a fixture's git ignores a decoy GIT_DIR."
+    }
+  },
+  {
+    "sha": "ee20adf5980b1882b907d955d4582e0c948f8888",
+    "commit": {
+      "message": "build: refuse a suppression that names no rule, which silences local/layers too\n\nA directive with no rule list suppresses every rule, so check-lint-disables refuses it whatever its\nreason, as it refuses a suppression of local/layers."
+    }
+  },
+  {
+    "sha": "7896775a0f050fe2fc6e252ddd41f8f4ff6600bb",
+    "commit": {
+      "message": "build: report unused files, exports and dependencies with knip in the check\n\nknip.jsonc names the scripts run by path that knip cannot find on its own, the ratchet's config among\nthem, which its first run reported as an unused file. That run found no unused dependency, and ten\nexports and three exported types that only their own module uses; they are no longer exported."
+    }
+  },
+  {
+    "sha": "d7396ddd3a433955497110d652ad3b8b41b04c4c",
+    "commit": {
+      "message": "build: limit cognitive complexity and parameters, with a list of exceptions that only shrinks\n\ncomplexity/complexity caps a function at 25 of cognitive complexity and eslint/max-params at 4\nparameters. scripts/lint/exceptions.ts lists the functions that break them today; the lint turns the\nrule off in their files, and check-exception-ratchet.ts, now in the gates, lints those files with the\nbudget rules alone. It fails when a listed function no longer breaks its rule, and when an unlisted\nfunction of a listed file does."
+    }
+  },
+  {
+    "sha": "9f412d07bfbdb2fe4bc4771de91102d98a9b67d5",
+    "commit": {
+      "message": "build: enforce the layers of each package with a local oxlint rule\n\nlocal/layers places every linted file by scripts/lint/layers.map.ts and refuses an import its layer\nmay not make: an unplaced file, an unknown specifier, an edge to a layer or package the map does not\nallow, an effect module outside the domain's list, and an I/O global (Bun.spawn, Bun.file, Bun.write,\nfetch, process) outside the infra, the entry points, the tooling and the tests. It reads import\ndeclarations, export from, import() and import types, and counts an import that mixes types and\nvalues as a value. check-lint-disables refuses any suppression of the rule, whatever its reason."
+    }
+  },
+  {
+    "sha": "e07f53b18ab929276d36314eeb0f421d5b88fd96",
+    "commit": {
+      "message": "refactor: split the Ask and Run contracts into ports, and move the author mark out of an entry point\n\nThe judges depended on lib/ask.ts, which loads the Agent SDK, for the Ask type alone; they now import\nthe contract from ports/. pr-watch.ts imported AUTHOR_MARK from thread.ts, another entry point; the\nmark now lives in its own module."
+    }
+  },
+  {
+    "sha": "027fbe0f203f51458d2422360ce9c14db877ae7f",
+    "commit": {
+      "message": "build: add oxlint-plugin-complexity and knip"
+    }
+  },
+  {
+    "sha": "7b76caeda0ead1859618b7c1c4a25f3f60b26546",
+    "commit": {
+      "message": "refactor: decode every external input with Effect Schema (#70)\n\nEvery input that enters the repository from outside is now decoded by an\nEffect Schema (`effect` 4.1.2) beside the code that reads it. What does\nnot read throws, naming its source, what was expected and the path that\nfailed. The four anti-slop rules that refuse unparsed input go from\n`off` to `error`, and report nothing.\n\n## What is decoded\n\n| Input | Read by | Schema |\n|---|---|---|\n| Task file (`todo.json`) | `app/src/store/store.ts` | `Task` in\n`app/src/task.ts`, `StoreFile` in the store |\n| PostToolUse stdin, `bunfig.toml` `[fmt]` |\n`scripts/hooks/fix-edited.ts` | `PostToolUseInput`, `Bunfig` |\n| `tsgo --showConfig` | `scripts/gates/check-typecheck-coverage.ts` |\n`ShownConfig` |\n| Stop stdin, each transcript line, `claude -p --output-format json`,\n`gh pr list` | `scripts/land-loop/stop/hook.ts` | `StopInput`,\n`TranscriptLine`, `ForkOutput`, `ListedPrs` |\n| `gh pr view`, `gh pr checks`, conversation comments (`--jq`, one per\nline), review threads (GraphQL), `.lab/state/watch-<pr>.json` |\n`scripts/land-loop/pr-watch.ts` | `PrView`, `Check`, `Comment`,\n`ReviewThreads`, `SeenKeys` |\n| `pulls/<n>`, `commits/<sha>/check-runs` |\n`scripts/land-loop/queue/repost.ts` | `Pull`, `CheckRuns` |\n| `pulls/<n>`, issue comments, review threads, check runs, issue events,\ncheck suites, workflow runs, commit pulls, `gh pr list` |\n`scripts/land-loop/merge-bot/main.ts` | one schema per endpoint |\n| The Merge bot's state record (PR comment) |\n`scripts/land-loop/merge-bot/decide.ts` | `ReadRecord`, every field\noptional |\n| Structured answers of the Code review, Principal judge, Routing judge\n| each judge's file | `ReviewAnswer`, `VerdictAnswer`,\n`RoutingJudgeAnswer` |\n\n`thread.ts` reads no output, so it decodes nothing.\n`scripts/lib/json.ts` decodes JSON text with a schema and throws with\nthe source's name. The Merge bot's `api` helper takes the schema of the\nendpoint it reads; calls whose answer it never read go through `send`\nand `mutate`, which decode nothing.\n\n## What changes in behaviour\n\n- **Task file errors.** `todo` prints the schema's report: `todo:\ntodo.json: Expected 1 | 2` then `at [\"version\"]`, or `Missing key` at\n`[\"tasks\"][0][\"done\"]`, in place of `format version 3, expected 1 or 2`\nand `tasks is not a list of tasks`. A file that is not JSON prints\n`Expected a valid JSON string` instead of a `SyntaxError` stack trace.\n`docs/usage.md` shows the new messages.\n- **Unknown task keys.** A key the format does not name is dropped on\nread, and so from the file on the next save; it used to be kept.\n- **Judges.** Each decoder is as strict as the JSON Schema sent with its\ncall, which is unchanged. A verdict with no `reason` or a Routing answer\nwhose `second_round` is not a boolean no longer reads, and lands on that\njudge's safe side, as any unreadable answer does; the failure now names\nthe field.\n- **Transcript.** A transcript line that does not read makes the Stop\nhook throw, naming the transcript and the line, where it used to be\nskipped. A fork whose output does not read still gives no answer, and\nthe reason is logged as `unreadable` in `.lab/stop.log`.\n- **State record.** A Routing answer stored before it named its model\nreads with a null model.\n- **Decode errors** do not quote the refused value, so a large file or\nanswer is never printed whole.\n\n## Configuration\n\n- `oxlint.config.ts`: `no-runtime-typeof`, `no-unknown-parameters`,\n`no-unsafe-dictionary-type`, `no-unknown-returns` to `error`.\n`eslint/no-redeclare` off: it reads `const Task = Schema.Struct(...)`\nbeside `type Task = typeof Task.Type` as a redeclaration, and the\ntypecheck already refuses a real one.\n- `.mcp.json` starts the `effect-mcp` documentation server (0.1.16) for\nsessions in this repository. The review and routing calls run with\n`strictMcpConfig` and no setting source, and the Stop hook's forks with\n`--strict-mcp-config`, so they load no MCP server.\n- `.claude/skills/effect-ts` holds the effect-ts skill of\n`Effect-TS/skills`, pinned in `skills-lock.json`.\n\n## How it was verified\n\n- `bun check` green: typecheck, lint, format, gates, 220 tests.\n- Each schema has a test that refuses a malformed input.\n- Two task file fixtures, version 1 and version 2 as the store writes\nthem, read; the version 2 one reads back byte for byte.\n- Every line of 188 local session transcripts (215,837 lines) decodes\nwith `TranscriptLine`.\n- All 32 state records the App has posted on this repository decode.\n- 74 live GitHub answers, for 8 merged PRs, decode with the Merge bot\nand repost schemas; the PR watch decodes the gh output of 12 PRs.\n- A `typeof` guard planted on an `unknown` parameter fails the lint with\n`no-runtime-typeof` and `no-unknown-parameters`."
+    }
+  },
+  {
+    "sha": "4effddacf862143a646d6406374a7566ad6380a7",
+    "commit": {
+      "message": "fix: read the users, actors and Apps GitHub sends as null\n\nGitHub sends a null actor on the events of a deleted user, a null user\non their PRs and comments, and a null app on some check runs. The\nschemas required each one, so a single such event made the Merge bot's\nwhole decode throw. The Merge bot's issue events (actor, label), PR\n(user), issue comments (user) and check runs (app), the repost job's\ncheck runs (app) and the PR watch's conversation comments (author) now\nread them as null: a null actor never counts as the owner's Land\napproval, a null app never as the App's check, a null author prints as\nunknown, as a deleted thread author already did.\n\nThe Land approval check moves into landApprovalByOwnerOf, unchanged: the\nactor of the last land-ok labeled event, put after the head was pushed."
+    }
+  },
+  {
+    "sha": "7bd8b1b2854323672ba13dc7a6d80071afbe1958",
+    "commit": {
+      "message": "fix(app): keep a task's unknown keys through a load and a save\n\nDecoding each task through Schema.Struct dropped the keys the Task type\ndoes not name, so a command that saved the file lost a hand-added key\nsuch as priority; the parser before the schema kept them. A stored task\nis now the Task struct with a rest record of JSON values, so every key\nis decoded and written back. docs/usage.md says so."
+    }
+  },
+  {
+    "sha": "84db4788799f998d2c0a7f076e8de880a231ee42",
+    "commit": {
+      "message": "test: refuse a malformed answer for every schema at the boundaries\n\nThe Stop input, gh pr list for the Stop hook, gh pr checks for the PR\nwatch and the Merge bot's check runs, issue events, check suites,\nworkflow runs, commit pulls, PR list and review threads each get a case\ntheir schema refuses. The edit hook's header now says it throws when its\ninput or bunfig.toml does not read."
+    }
+  },
+  {
+    "sha": "f0ea8f6cfb390f3e86bcf65744017d15e178f00c",
+    "commit": {
+      "message": "refactor: keep the input out of decode errors, and document the store's messages\n\nA decode error no longer reports the value it refused: on a file or an\nanswer that is not JSON, it printed the whole text. Each error still\nnames its source, what was expected and the path that failed.\n\ndocs/usage.md shows the messages a task file that does not read now\nprints, the version 2 format with createdAt, and that a key the format\ndoes not name is dropped."
+    }
+  },
+  {
+    "sha": "1ff483dc4a46c00f59dc21921681b8ed3c8cc520",
+    "commit": {
+      "message": "refactor: decode JSON numbers as finite, and JSON text with the typed decoder\n\nA trial run of the Effect language service (@effect/tsgo) suggested both.\nJSON holds no NaN or Infinity, so Schema.Finite reads every file and\nanswer Schema.Number read. The JSON text decoders take a string, which\ndecodeResult checks at compile time where decodeUnknownResult accepted\nanything."
+    }
+  },
+  {
+    "sha": "8c8034b4bfbd13a5b963b2af032119bf96f69948",
+    "commit": {
+      "message": "build: refuse unparsed input at the boundaries in the lint\n\nno-runtime-typeof, no-unknown-parameters, no-unsafe-dictionary-type and\nno-unknown-returns go from off to error: every boundary now decodes its\ninput with a schema, and none of the four reports anything."
+    }
+  },
+  {
+    "sha": "4f1aae0574419f1fa5182c68e7ee266418d45b4e",
+    "commit": {
+      "message": "refactor: decode the judges' structured answers with Effect Schema\n\nThe Code review, the Principal judge and the Routing judge each decode\nthe structured output of their call with an Effect schema that mirrors\nthe JSON Schema sent with the call, which is unchanged. The decoders are\nas strict as that JSON Schema: a Principal judge verdict without a\nreason, or a Routing answer whose second_round is not a boolean, no\nlonger reads, and lands on each judge's safe side as any unreadable\nanswer does: the Code review runs again, the Principal judge counts a\nrun with no verdict, the Routing judge answers owner and review:deep.\nEach such failure now says which field did not read.\n\nThe question's JSON Schema is typed as a JSON object, and the Agent SDK\nreceives it as it is."
+    }
+  },
+  {
+    "sha": "e491cab2c08ac0bcb1974c78f2a59720c3266c53",
+    "commit": {
+      "message": "refactor: decode every gh answer the Land loop reads with Effect Schema\n\nThe PR watch decodes gh pr view, gh pr checks, each conversation line,\nthe review threads query and its .lab/state/watch-<pr>.json file. The\nqueue's repost job decodes the PR and its check runs. The Merge bot's api\nhelper takes the schema of the endpoint it reads, and calls whose answer\nit never read go through send and mutate, which decode nothing. Each\nschema names only the fields its adapter reads; an answer outside it\nthrows, naming the endpoint and the field.\n\nThe Merge bot's state record is decoded too, every field optional as\nbefore. A Routing answer stored before it named its model reads with a\nnull model. All 32 records the App has posted on this repository read."
+    }
+  },
+  {
+    "sha": "44530ddaf5862a696ef1138520be5c5bf432fce0",
+    "commit": {
+      "message": "refactor: decode the hooks' stdin, the transcript and the tools' output with Effect Schema\n\nscripts/lib/json.ts decodes JSON text with a schema and throws an error\nthat names the source and the path that failed. The edit hook decodes\nits PostToolUse input and bunfig.toml's [fmt] section; the typecheck\ncoverage gate decodes tsgo --showConfig. The Stop hook decodes its stdin,\ngh pr list, each transcript line and the fork's claude -p output.\n\nA transcript line that does not read now throws, naming the transcript\nand the line, where it used to be skipped: every line of 188 local\ntranscripts (215,837 lines) reads. A fork whose output does not read\nstill gives no answer, so the Done judge is asked again; the reason is\nnow logged as unreadable in .lab/stop.log."
+    }
+  },
+  {
+    "sha": "d37b0fce2b2fc3be1c5c39bc5476c47ffd324801",
+    "commit": {
+      "message": "refactor(app): decode the task file with Effect Schema\n\nThe Task schema lives with the domain in app/src/task.ts and Task is the\ntype it decodes. The store decodes a task file in one pass: JSON, format\nversion, each task, and a check that a version 1 task carries no\ncreatedAt. A file that does not read raises a TaskError with the path and\nthe schema's report, such as `Expected 1 | 2` at `[\"version\"]`, in place\nof `format version 3, expected 1 or 2` or `tasks is not a list of\ntasks`. A file that is not JSON now raises a TaskError with its path\ninstead of a SyntaxError. A key no task carries is dropped on read, and\nso on the next save, where it used to be kept.\n\nFixtures of both readable versions, as the store writes them, prove an\nexisting file still reads: a version 2 file reads back byte for byte."
+    }
+  },
+  {
+    "sha": "6e396ea20c76d47e0ca35b02570f14849f157d75",
+    "commit": {
+      "message": "build: let a schema and its decoded type share one name\n\neslint/no-redeclare reads `const Task = Schema.Struct(...)` beside\n`type Task = typeof Task.Type` as a redeclaration. The typecheck already\nrefuses a real redeclaration, so the rule is off."
+    }
+  },
+  {
+    "sha": "db1d83addc537f8069ce8edf287b1e8d127aa6e5",
+    "commit": {
+      "message": "build: add effect, the Effect docs MCP server and the effect-ts skill\n\neffect 4.1.2 is a runtime dependency: its Schema decodes the external\ninputs. .mcp.json starts the effect-mcp documentation server (0.1.16) for\nsessions opened in this repository; the review and routing calls of the\nLand loop load no MCP server. The effect-ts skill comes from\nEffect-TS/skills, pinned by skills-lock.json."
+    }
+  },
+  {
+    "sha": "273d8332b7f1a5da762cd4b4303f6de45ab27dcf",
+    "commit": {
+      "message": "build: lint with oxlint, format with bun fmt, gate both in bun check (#69)\n\n## What changes\n\n`bun check` is now the one gate, run by CI, the Stop hook and the docs:\n\n```\nbun check\n├── typecheck      tsgo --noEmit\n├── lint           oxlint -c oxlint.config.ts --deny-warnings   (type-aware)\n├── format:check   bun fmt --check .\n├── gates          scripts/gates/check-lint-disables.ts\n│                  scripts/gates/check-typecheck-coverage.ts\n└── bun test\n```\n\n- **Format**: `[fmt]` in `bunfig.toml` (width 120, sorted imports). `bun\nfmt --check .` skips what `.gitignore` and `[fmt].ignorePatterns` skip,\nso that is the only path list.\n- **Lint**: `oxlint.config.ts` turns on the `correctness`, `suspicious`\nand `pedantic` categories, the type-aware rules (`no-floating-promises`,\n`no-unsafe-*`, `strict-boolean-expressions`, ...) and `import/no-cycle`.\n`oxlint.style.config.ts` holds only the rules an autofix applies. Each\nrule is `error` or `off`.\n- **anti-slop**: `dmmulroy/anti-slop` at `c44ef22` is vendored in\n`scripts/vendor/anti-slop/`, without its `effect/` entry. The npm\npackage of that name is not this plugin, so the copy is the only source.\n`anti-slop.sha256` holds one digest per file, and a test compares the\ncopy against it. 14 rules are `error`. The 4 boundary rules\n(`no-runtime-typeof`, `no-unknown-parameters`,\n`no-unsafe-dictionary-type`, `no-unknown-returns`) stay `off` until each\nboundary is decoded by a schema.\n- **Gates on the gates**: an `oxlint-disable` without ` -- reason` on\nthe same line fails, and so does a tracked `.ts` file that the typecheck\nleaves out.\n- **Edit hook**: a `PostToolUse` hook on `Edit|Write` runs\n`scripts/hooks/fix-edited.ts`. It applies the style autofixes and `bun\nfmt` to the edited file, if `format:check` reads that file. It prints\nnothing.\n\n### Rules turned off, and why\n\n| Rule | Reason |\n|---|---|\n| `max-lines`, `max-lines-per-function`, `max-depth`,\n`max-nested-callbacks`, `max-classes-per-file`,\n`import/max-dependencies` | No size limits. Complexity is limited\ninstead. |\n| `typescript/prefer-readonly-parameter-types` | 44 hits, 16 left with\n`ignoreInferredTypes`. They are on parameters typed by libraries\n(`AbortController`, the Agent SDK's `Options`, `ReadonlySet`), which no\nannotation can make readonly. |\n| `typescript/require-await` | It also flags an async generator that\nonly yields. `eslint/require-await` stays on. |\n| `unicorn/no-negated-condition` | It duplicates\n`eslint/no-negated-condition`. |\n| `eslint/no-await-in-loop` | 13 of its 15 sites are sequential on\npurpose: polling, one decision after another, ordered steps, one PR at a\ntime. |\n\n### Code changes\n\nThe commits keep the code's behaviour. Formatting and autofixes are in\ntheir own commits. Where a guard already stood, a real `in` narrowing\nreplaces the assertion: in the store, the Routing and Principal judges,\nand a finding's severity. Assertions on raw JSON from `gh`, Claude Code\nor the Merge bot's own record stay, each under a disable that names\nwhere the shape comes from.\n\n## How it was verified\n\n- `bun check` is green, in about 1.3 s.\n- Each new check was shown to fail on a planted violation: a disable\nwithout a reason, an untracked `.ts` outside `include`, a floating\npromise, a changed byte in the vendored copy, and an unformatted file\npassed to the hook, which came back formatted with empty output.\n- The gates and the hook have permanent tests. The tests run each gate\non a fixture repository and send the hook a real `PostToolUse` input."
+    }
+  },
+  {
+    "sha": "9a3dd6e6f4af94716e48cba8ade1fa75fb4d776b",
+    "commit": {
+      "message": "fix: tighten the suppression gate, cover .mts and .cts, and read .. as a path segment\n\n- check-lint-disables.ts counts ` -- ` as a reason only after the\n  directive, so a decrement before it no longer passes a bare suppression.\n- Both gates read .mts and .cts files, as the edit hook does.\n- fix-edited.ts treats a file as outside the project only when its relative\n  path starts with a .. segment, so a directory named ..drafts is fixed."
+    }
+  },
+  {
+    "sha": "270d3a7158b7a4897e37772c6b14db7c73afea6a",
+    "commit": {
+      "message": "build: fix and format each file an agent edits\n\nA PostToolUse hook on Edit and Write runs scripts/hooks/fix-edited.ts. It\napplies oxlint's style autofixes and bun fmt to the file the tool wrote,\nwhen bun fmt --check . reads that file: not ignored by git and matched by\nno [fmt].ignorePatterns, so the vendored anti-slop copy, node_modules and\n.claude/worktrees stay untouched. It prints nothing, since a PostToolUse\nhook's output reaches the agent's context."
+    }
+  },
+  {
+    "sha": "9c134b2707b2cabf1e5eda4d7da5b797cc6c42e3",
+    "commit": {
+      "message": "build: gate lint, format and the new gates in bun check\n\ncheck now runs the typecheck, oxlint, bun fmt --check, the two gates and\nthe tests. bun fmt --check . reads what .gitignore and [fmt].ignorePatterns\nleave, so that list is the only one. bun check runs the project's check\nscript: CI, the Stop hook and the docs call it instead of bun run check."
+    }
+  },
+  {
+    "sha": "d125dc5d6bc47b458f3cb60a2bc589475f5c92c9",
+    "commit": {
+      "message": "build: gate lint suppressions and typecheck coverage\n\nscripts/gates/check-lint-disables.ts refuses an oxlint-disable (or\neslint-disable) directive that does not give its reason after ` -- ` on the\nsame line. scripts/gates/check-typecheck-coverage.ts refuses a tracked .ts\nfile that tsconfig.json's include and exclude leave out of the typecheck.\nEach has unit tests and a test that runs it on a fixture repository."
+    }
+  },
+  {
+    "sha": "98ff23e2d705967936d9d5318a1d902271cbb3d6",
+    "commit": {
+      "message": "refactor: fix what the type-aware lint reports\n\n- Narrow `unknown` with `in` checks where a guard already stood (the store,\n  the Routing and Principal judges' answers, a finding's severity) instead\n  of asserting a record type.\n- Keep each assertion on raw JSON from gh, Claude Code or the Merge bot's own\n  record under a disable that names where the shape comes from, with the\n  SAFETY: comment anti-slop requires.\n- Name the object types functions return (LandApproval, RisenLabels,\n  Reading, StopLogRecord, test helpers) instead of anonymous literals.\n- toSorted() over a fresh array, braces on Promise executors, no shadowed\n  parameter, test helpers at module scope, typed matchers where bun-types\n  gives `any`.\n\nSwap which require-await runs: typescript/require-await also flags an async\ngenerator that only yields, which the test streams need; eslint/require-await\nexempts it. No behaviour change."
+    }
+  },
+  {
+    "sha": "c71370fbc075ee918943c3ea0b0bf583b5bed622",
+    "commit": {
+      "message": "style: apply oxlint's safe autofixes\n\nRun the style config with --fix, then the full config with --fix (safe\nfixes only), then bun fmt. Braces on every branch, type-only imports at the\ntop level, Array<T> for non-simple element types, blank lines between\nstatements. No behaviour change."
+    }
+  },
+  {
+    "sha": "35473a9e3b5096ed7597a3cf7d63e28b26c80131",
+    "commit": {
+      "message": "build: lint with oxlint and the vendored anti-slop rules\n\nPin oxlint, @oxlint/plugins and oxlint-tsgolint. oxlint.config.ts turns on\nthe correctness, suspicious and pedantic categories with type-aware rules;\noxlint.style.config.ts holds only the rules an autofix can apply.\n\nVendor dmmulroy/anti-slop at c44ef22 into scripts/vendor/anti-slop/,\nwithout its effect/ entry point. The npm package of that name belongs to\nsomeone else, so the copy is the only source. anti-slop.sha256 records one\ndigest per file and a test compares the copy against it. The copy is left\nout of the typecheck, the formatter and the linter.\n\nThe lint is not gated yet: the next commits fix what it reports."
+    }
+  },
+  {
+    "sha": "a3361820fd1fce7fb4654456de16881827763b68",
+    "commit": {
+      "message": "style: format the repository with bun fmt\n\nAdd a [fmt] section to bunfig.toml (print width 120, sorted imports) and\nreformat every file bun fmt reads. No behaviour change."
+    }
+  },
+  {
+    "sha": "f784c44098692e78220af7100e575e99a2b64d35",
+    "commit": {
+      "message": "fix: send changes to scripts/land-loop to the Owner (#68)\n\n## What changed\n\nThe Routing rules no longer have a Principal judge route. A change to\n`scripts/land-loop/**` is now a risky path like any other and goes to\nthe Owner, with `review: deep` and `needsFable: false`.\n\n- `scripts/land-loop/routing/routing-rules.ts`: removed the `LAND_LOOP`\nconstant, the `ownerOnly` filter and the `land: \"auto\"` branch it fed.\nEvery risky path now returns the Owner route. The header comment states\nthe rule as it is now.\n- `scripts/land-loop/routing/routing-rules.test.ts`: replaced the\n`land:auto` test with two tests. One covers a change to\n`scripts/land-loop/**` plus `app/src/cli.ts`. The other covers a change\nto `scripts/land-loop/**` alone. Both expect `land: \"owner\"`, `review:\n\"deep\"` and `needsFable: false`.\n- Removed tests that only exercised the old exception: the line cap and\nbreaking commit checks on `scripts/land-loop/**`, and two table cases\nthat mixed `scripts/land-loop/**` with `.github` or `.claude`. Other\ncases still cover the line cap, breaking commits and risky paths.\n\n## Why\n\nThe Owner paused the Principal judge route until the Judges can read\nbeyond the diff (issue #52). Until then, no route lands a risky path\nwithout the Owner.\n\n## Out of scope\n\nThe Merge bot and the Principal judge code are unchanged. Issue #52\nreopens the route.\n\n`LAND_LOOP` had no importer. The other `LAND_LOOP` names in\n`merge-bot/decide.test.ts` are local constants.\n\n## Verification\n\n- `bun run check` is green: typecheck passes and 174 tests pass with 0\nfailures.\n- The first run failed on the two mixed table cases. They tested the\nremoved exception, so I removed them, and the second run passed."
+    }
+  },
+  {
+    "sha": "ec9bc4c3183c60129a6b1ea1bb76df56b3aa20d7",
+    "commit": {
+      "message": "fix: send changes to scripts/land-loop to the Owner\n\nThe Owner paused the Principal judge route until the Judges can read\nbeyond the diff (issue #52). Until then, a change to scripts/land-loop/**\nis a risky path like any other and goes to the Owner.\n\nRemove the LAND_LOOP exception and the land:auto branch it fed in the\nRouting rules, and state the rule in the file header. The Merge bot and\nthe Principal judge code stay as they are; #52 reopens the route."
+    }
+  },
+  {
+    "sha": "770a1cff258c5d514371895c47a4432aa5b434f2",
+    "commit": {
+      "message": "chore: drop the transition fallbacks to the old state record and scripts path (#51)\n\nRemoves the two fallbacks left by #49 and #50. Neither runs any more.\n\n| Fallback | Where | Why it never runs |\n| --- | --- | --- |\n| Read an old state record's `rounds` as `reviewRounds` |\n`scripts/land-loop/merge-bot/decide.ts` (`recordOfStored`) | No open\npull request carries an old record; every record the Merge bot writes\nhas `reviewRounds`. |\n| Run `scripts/harness/queue/repost.ts` when `scripts/land-loop/` is\nmissing | `.github/workflows/queue-checks.yml` | The default branch,\nwhich the job checks out, has only `scripts/land-loop/`. |\n\nA record with no `reviewRounds` now reads as 0, like every other field a\nrecord lacks. The two tests of the old record go with the code; the\nround-trip test stays.\n\n`bun run check`: typecheck green, 174 tests pass."
+    }
+  },
+  {
+    "sha": "497a670996fcf98eec3db0f10523238890911258",
+    "commit": {
+      "message": "chore: drop the transition fallbacks to the old state record and scripts path\n\nNo open pull request carries a state record with `rounds` and no `reviewRounds`, and the\ndefault branch has only scripts/land-loop, so both fallbacks never run."
+    }
+  },
+  {
+    "sha": "752b33607293858087d5687cbc8a406c5079886f",
+    "commit": {
+      "message": "fix: count every Review round, and two bugs in rejections and the PR watch (#50)\n\n## What changes\n\n| Case | Before | After |\n| --- | --- | --- |\n| Nit-only pass, then a risky push | a second pass labelled Review round\n1, reading the whole PR | Review round 2, reading only the Patch delta |\n| Important, then a risky fix | Review round 2 on the Patch delta |\nunchanged |\n| Two passes, then a patch that needs another | land:human + needs-human\n| unchanged |\n| Two passes, then a patch that needs none | land:human when both posted\nan Important | stays on its Land route |\n| Two passes with no Important open, Land loop code | Principal judge\nskipped once both posted an Important | Principal judge runs |\n\n- `merge-bot/decide.ts`: the state record holds `reviewRounds`, every\nCode review pass run, in place of `rounds` (passes that posted an\nImportant). `recordOfJson` reads a comment's JSON; a record with no\n`reviewRounds` reads it from `rounds` as a floor, at least 1 once a\npatch was reviewed. A third Review round needed is the only thing that\nforces land:human and skips the Principal judge.\n- `merge-bot/main.ts`: writes `reviewRounds` from the step's round\nnumber, so the posted \"Review round N\" and the record agree.\n- `review/code-review.ts`: the round 2 prompt no longer says round 1\nfound an Important. `rejectedOf` moves here as a pure function: a\nresolved App thread counts as rejected only when the last reply not by\nthe App does not start with \"Fixed in\".\n- `pr-watch.ts`: `readingOf` decides each reading; a landed or closed PR\nends the watch at once, even when the end key is already in the seen\nfile, and the end line prints once.\n\n## Tests\n\n`bun run check`: table tests in `decide.test.ts` for each row above plus\nold records; `rejectedOf` with fix, rejection and mixed replies;\n`readingOf` with the end key already seen."
+    }
+  },
+  {
+    "sha": "5c44987a2d90f687e3a415349bcb0ea042731c5f",
+    "commit": {
+      "message": "fix: count every Review round, and two bugs in rejections and the PR watch\n\nThe Merge bot counted in `rounds` only the Code review passes that posted\nan Important, so a pass after a Nit-only one was labelled Review round 1\nagain and re-read the whole PR. The record now holds `reviewRounds`, every\npass run: round 1 reads the PR, round 2 only the Patch delta when its\nRouting answer asks for it, and a patch that would need a third gets\nland:human and needs-human instead. Two passes alone no longer force\nland:human or skip the Principal judge. A record with no `reviewRounds`\nreads it from `rounds` as a floor, at least one when a patch was reviewed.\n\nThe round 2 prompt no longer claims round 1 found an Important.\n\nrejectedOf moves to code-review.ts and hands round 2 only the threads\nwhose last Author reply gives a reason; a reply starting \"Fixed in\" is a\nfix, not a rejection.\n\nThe PR watch exits at once on a landed or closed PR even when its end\nline is already in the seen file, without printing it again."
+    }
+  },
+  {
+    "sha": "842bfa4faff456aa81e074d146275139ebcf1cff",
+    "commit": {
+      "message": "refactor: rename the review and land scripts to the project's terminology (#49)\n\n`scripts/harness/` moves to `scripts/land-loop/`, and the code inside\ntakes the project's terms.\n\n| Old | New |\n|---|---|\n| `scripts/harness/` | `scripts/land-loop/` |\n| `conductor/` | `merge-bot/` |\n| `triage/floor.ts`, `floorOf` | `routing/routing-rules.ts`,\n`routingRulesOf` |\n| `triage/judge.ts`, `judge` | `routing/routing-judge.ts`,\n`routingJudge` |\n| `review/findings.ts`, `review` | `review/code-review.ts`, `codeReview`\n|\n| `review/fable.ts`, `fable`, `FABLE_*` | `review/principal-judge.ts`,\n`principalJudge`, `PRINCIPAL_JUDGE_*` |\n| `watch.ts` | `pr-watch.ts` |\n| `.github/workflows/conductor.yml` (`conductor`) |\n`.github/workflows/merge-bot.yml` (`merge-bot`) |\n| `Triage`, `Level` | `Routing`, `ReviewDepth` |\n| step kinds `triage`, `review`, `agent-review`, `fable`,\n`remove-land-ok` | `route`, `code-review`, `review-check`,\n`principal-judge`, `remove-land-approval` |\n| `delta`, `round`, `level` | `patchDelta`, `reviewRound`, `depth` |\n| fork probe, `forkFailure`, `ask-fork` | Done judge,\n`doneJudgeFailure`, `ask-done-judge` |\n| `DEQUEUE_REASON`, `LAB_FORK_PROBE` | `EJECTION_REASON`,\n`LAB_STOP_FORK` |\n| `stop.log` steps `fork`, `handed` | `done-judge`, `published` |\n| converged, handed over, watcher | landable, published, PR watch |\n| `queue-checks.yml` runs `scripts/harness/queue/repost.ts` | runs\n`scripts/land-loop/queue/repost.ts`, or the old path while the default\nbranch still has it |\n\nStrings kept as they are: the `agent-review` and `land-gate` checks, the\n`land-ok`, `land:*` and `review:*` labels, the `lab-conductor-state`\nmarker and its JSON keys, the `lab-finding` marker, and the\n`[harness:fork-probe]` marker."
+    }
+  },
+  {
+    "sha": "92f04a2b382e4d34d3ef73fff042ba03b53fe6bf",
+    "commit": {
+      "message": "refactor: split the PR watch's end line from its Wakes and rename the routing answer\n\nThe PR watch reads a landed or closed PR through endOf, apart from the\nWakes of an open one; it prints and exits as before. Routing becomes\nRoutingAnswer, the needs-human step kind becomes needs-owner (the label\nkeeps its name), watchCommand becomes prWatchCommand, and the README,\nMerge bot and Sweep comments follow. No behaviour change."
+    }
+  },
+  {
+    "sha": "418f1c987296fab451f84db894e2fc9ae174f3e0",
+    "commit": {
+      "message": "refactor: name the land route, Stop checks, Merge bot runs and Sweeps\n\nThe Routing's land choice becomes LandRoute, \"auto\" or \"owner\" in code;\nthe land:* labels and the stored state record keep \"human\", mapped where\nthe record is read and written and where the labels are read and set.\nThe Routing judge's schema answers \"owner\". Gates become StopChecks,\nMAX_PASSES becomes MAX_DECISIONS, and comments name Merge bot runs and\nSweeps. No behaviour change."
+    }
+  },
+  {
+    "sha": "da59c77305028c84e12fe932dad919b7d38951ea",
+    "commit": {
+      "message": "refactor: align the remaining texts and names with the project's terms\n\nCheck summaries, PR watch lines, Stop hook texts, judge prompts, docs\nand comments use the project's terms. The PR watch prints a human thread\nas a Comment and only an Important one as a Finding. Identifiers follow\n(Wake, wakesOf, prWatch, DIFF_MAX in the routing judge), and the\nneeds-human label gets a named constant. No other behaviour change."
+    }
+  },
+  {
+    "sha": "440b4d19749cb935940d303aa8800362fd922a66",
+    "commit": {
+      "message": "refactor: rename the review and land scripts to the project's terminology\n\nscripts/harness/ moves to scripts/land-loop/: conductor/ becomes\nmerge-bot/, triage/ becomes routing/ (routing-rules.ts,\nrouting-judge.ts), review/findings.ts becomes review/code-review.ts,\nreview/fable.ts becomes review/principal-judge.ts, watch.ts becomes\npr-watch.ts, and the conductor workflow becomes merge-bot.yml. Types,\nfunctions, step kinds, environment variables, log lines, texts, comments\nand test titles follow.\n\nNo behaviour change. The check names, the land-ok, land:* and review:*\nlabels, the state-record marker and its JSON keys, the finding marker\nand the fork marker keep their strings. The queue-checks step falls back\nto the old script path while the default branch still has it."
+    }
+  },
+  {
+    "sha": "5b5ccbad1ef423c21378527ac561ec436f77fb16",
+    "commit": {
+      "message": "ci: conductor sweeps open PRs on every push to dev (#47)\n\nAdds a `push` trigger on `dev` to `conductor.yml`. An event with no PR\nnumber and not `workflow_run` already makes `numbersOf` sweep every open\nPR, the job `if:` lets it through, and the concurrency group falls back\nto `sweep`, so no script change is needed.\n\nA landing can make another open PR conflict; the push sweep re-evaluates\nthem right after. The cron moves from `*/15` to `7,37` as a net, since\nGitHub may drop scheduled runs (none fired for hours). The header\ncomment states both reasons.\n\n`bun run check` passes (153 tests)."
+    }
+  },
+  {
+    "sha": "f9eaecd5275efcdba26ac81ec55bcc59c6b1e215",
+    "commit": {
+      "message": "ci: conductor sweeps open PRs on every push to dev\n\nA landing can make another open PR conflict, and GitHub may drop scheduled runs, so the push event is the main sweep trigger. The cron moves to 7,37 as a net."
+    }
+  },
+  {
+    "sha": "cbcf0ca5c27d062e75494a6c86afdfc0abff176f",
+    "commit": {
+      "message": "feat: harness asks triage, review and Fable through the Agent SDK (#46)\n\nThe triage, the CI review and the Fable review called `claude -p` as a\nsubprocess, with tools absent but nothing refusing them in code, and\nwith CLAUDE.md, the project Stop hook and user settings loaded. They now\ncall `@anthropic-ai/claude-agent-sdk` 0.3.318 (it bundles Claude Code\n2.1.318, the version the conductor installed) through one injected\n`Ask`, with every tool refused by a hook. The Stop hook's fork stays on\n`claude -p`.\n\n## Before / After\n\n```\nscripts/harness/\n├── lib/ask.ts               # new: Ask, toolDecision, optionsOf, modelOf, answerOf (pure); askWith(stream); ask = askWith(query)\n├── lib/ask.test.ts          # new: the pure parts, and the wrapper against a fake stream\n├── triage/judge.ts          # judge(ask, …); triageOf reads the structured answer and the exact model\n├── triage/judge.test.ts\n├── review/findings.ts       # review(ask, …); findingsOf reads the structured answer; usageOf removed; ReviewRun.code -> error\n├── review/findings.test.ts\n├── review/fable.ts          # fable(ask, …); verdictOf reads the structured answer\n├── review/fable.test.ts\n└── conductor/main.ts        # passes ask to judge, review and fable; the review log prints the error, not an exit code\n.github/workflows/conductor.yml   # bun install --frozen-lockfile replaces npm install --global @anthropic-ai/claude-code@2.1.318\npackage.json, bun.lock            # @anthropic-ai/claude-agent-sdk 0.3.318, exact\n```\n\n```ts\nhooks: { PreToolUse: [{ hooks: [refuseTools], onFailure: \"block\" }] },\n```\n\n`canUseTool` runs only when the permission check falls through to a\nprompt, and a read inside the working directory is approved before that.\nThe `PreToolUse` hook runs first, for every call; it allows only\n`StructuredOutput`, the tool Claude Code adds to return the schema's\nanswer, and a guard that throws blocks the call.\n\n### Per call: what the SDK changes, gains and costs\n\n| Call | What the SDK changes | What it gains | What it costs | Verdict\n|\n|---|---|---|---|---|\n| Triage (`triage/judge.ts`, Haiku) | `query()` with `tools: []`,\n`outputFormat`, `settingSources: []`, `strictMcpConfig`,\n`persistSession: false`, `permissionMode: \"dontAsk\"`, and the hook above\n| Tools refused by code, not only left out of the list. A typed result\n(`subtype`, `errors`, `structured_output`, `modelUsage`) instead of\n`JSON.parse(stdout)`. No CLAUDE.md, project Stop hook or user plugin in\nthe call. The Claude Code version is pinned in `bun.lock`, not in the\nworkflow | `bun.lock` goes from 12 to 124 packages, 8 of them\nper-platform binaries, of which `bun install` fetches one (323 MB on\nlinux-x64). The conductor runs `bun install` on every event and on the\n`*/15` sweep, in place of the npm install of the CLI (sizes not\ncompared). `ci.yml`'s `validate` now downloads that binary too and never\nspawns it | Migrated |\n| Review (`review/findings.ts`, Sonnet or Opus) | Same options | Same as\nthe triage | Same as the triage | Migrated |\n| Fable (`review/fable.ts`, `claude-fable-5-1`) | Same options | Same as\nthe triage | Same as the triage | Migrated |\n| Stop fork (`stop/hook.ts`, the session's model, `--tools \"\"`) |\n`query()` with `resume` and `forkSession: true` | A typed result. A hook\ncould refuse every tool while keeping the session's tool list, so the\nfork's prefix could match the session's cache; not measured | The\nbundled binary would drift from the CLI that wrote the session. The\nSDK's default system prompt is the minimal one, not the Claude Code\npreset the session recorded. The hook would load the SDK on every stop |\nNot migrated |\n\nPart of the gain is configuration: `claude -p` has `--system-prompt`,\n`--setting-sources` and `--no-session-persistence` too. Only the SDK\ngives code in the calling process: the hook, the typed messages, and a\nstream a test can replace.\n\n## Decisions\n\n- This PR replaces #32, the same change before its rebase on dev at\n71be8f7: the force-push of that branch was refused, so the rebased\nbranch is `lab/agent-sdk-3`.\n- Fable goes through `ask` like the triage and the review: `fable.ts`\nused `usageOf`, which reads the CLI's stdout. The model and the cost of\nevery call come from the SDK result's `modelUsage` (the entry that cost\nthe most) and `total_cost_usd`.\n- `ask = askWith(query)`: the deep review of #32 noted, as a Nit, that\nthe wrapper had no test because `query` was imported directly.\n- One PR, not a scripts PR and a workflow PR: the floor sends\n`package.json` and `bun.lock` to the owner, and the scripts cannot run\nwithout the dependency they declare.\n- The retries stay in the conductor: the review retries once, and\nFable's tries are counted per patch in the record, across runs.\n- `permissionMode: \"dontAsk\"` and the hook, not `canUseTool`: `dontAsk`\nturns any prompt into a denial without calling `canUseTool`, and the\nhook covers the calls approved before the prompt step.\n- No `--omit=optional` on `validate`'s install: it would also drop\n`tsgo`'s platform binary.\n\n## Checks\n\nTier: not labelled. This repository has no `.claude/github-flow.json`;\nthe floor sets `land:human` on a change to `.github/**`, `package.json`\nor `bun.lock`.\n\nReview:\n- `/code-review` (high) of the branch before its rebase: 6 findings, 3\nfixed (a findings item that is not an object threw out of `review()`; an\n`is_error` success with no text gave an empty error; a workflow\ncomment), 3 left open (listed under *Left open*, the `ask()` test now\ndone).\n- The conductor's deep review of #32 (Opus): 0 Important, 1 Nit, `ask()`\nuntested; fixed in this PR by `askWith`.\n- The rebase and the Fable migration were not reviewed locally; the\nconductor's review reads them here.\n\n`bun run check`: typecheck, then 153 tests pass, 0 fail.\n\n| Test | Mutant | Seen failing |\n|---|---|---|\n| `lib/ask.test.ts` tools: every tool refused but `StructuredOutput`;\nthe hook's decision | `toolDecision` returns `\"allow\"` | yes |\n| `lib/ask.test.ts` the options list no tool… | drop `tools: []` from\n`optionsOf` | yes |\n| `lib/ask.test.ts` a call that ends in time is not aborted | drop\n`clearTimeout` | yes |\n| `lib/ask.test.ts` a call that outlives its timeout reads as timed out\n| drop the `aborted` check | yes |\n| `lib/ask.test.ts` a result read before the timeout still answers |\ndrop the result after an abort | yes |\n| `triage/judge.test.ts` a failed call, or an unreadable answer, answers\nthe safe side | fallback `land: \"auto\"` | yes |\n| `lib/ask.test.ts` answerOf, modelOf; `judge.test.ts`,\n`findings.test.ts`, `fable.test.ts` with a fake `Ask` | the base branch:\nthe functions take a `Run` and stdout there | unknown |\n\nMeasurements: one real call per row, input PR #21's diff\n(`f1185ff^1..f1185ff`) with REVIEW.md where the call reads it. Local\nrows ran on the same machine and login.\n\n| Call | Path | Wall (ms) | `duration_ms` | `duration_api_ms` | Cache\nwrite / read tokens | Output tokens | `total_cost_usd` | Answer |\n|---|---|---:|---:|---:|---:|---:|---:|---|\n| Triage, Haiku | CLI, local, before | 5963 | 3900 | 3423 | 11679 / 0 |\n642 | 0.00266 | `land:auto review:light` |\n| Triage, Haiku | SDK, local, after | 3955 | 2852 | 2597 | 3541 / 0 |\n450 | 0.00093 | `land:auto review:light` |\n| Review, Sonnet | CLI, local, before | 7302 | 5428 | 4937 | 10959 / 0 |\n558 | 0.0494 | 0 findings |\n| Review, Sonnet | SDK, local, after | 3531 | 2482 | 2409 | 3630 / 0 |\n244 | 0.0170 | 0 findings |\n| Review, Sonnet | CLI, CI, conductor run 42070622389 | 2907 | not\nlogged | not logged | not logged | not logged | 0.0140 | 0 findings |\n| Fable | CLI, local, before | 85166 | 83325 | 80257 | 15396 / 12904 |\n1990 | 0.737 | OK |\n| Fable | SDK, local, after | 13524 | 12473 | 10150 | 3599 / 0 | 754 |\n0.110 | OK |\n| Fable | CLI, CI, #43, #44, #45 | not logged | not logged | not logged\n| not logged | not logged | 0.541, 0.093, 0.077 | other diffs |\n\n- The local CLI rows also load the owner's user settings and global\nCLAUDE.md, which CI does not have.\n- The input drop comes from the SDK's minimal system prompt and\n`settingSources: []`.\n- In the three SDK calls, `system:init` lists one tool,\n`StructuredOutput`, and no MCP server; the hook ran once, on\n`StructuredOutput`, and allowed it; `permission_denials` is empty.\n- The two first CLI calls fired the project Stop hook (two `admit`\nrecords in `.lab/stop.log`); the SDK calls fired none.\n\n### Documentation read\n\n-\nhttps://code.claude.com/docs/en/authentication#authentication-precedence\n(item 5, `CLAUDE_CODE_OAUTH_TOKEN`) and #generate-a-long-lived-token\n- https://code.claude.com/docs/en/errors#oauth-token-revoked-or-expired,\nhttps://code.claude.com/docs/en/agent-sdk/claude-code-features#what-settingsources-does-not-control,\nhttps://code.claude.com/docs/en/agent-sdk/typescript (`Options`,\n`CanUseTool`, `PermissionMode`, `SDKResultMessage`, `usage_report`, the\nbundled binary)\n-\nhttps://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use,\nhttps://code.claude.com/docs/en/agent-sdk/overview\n- https://code.claude.com/docs/en/agent-sdk/sessions,\n/structured-outputs, /permissions, /hooks, /cost-tracking (same prefix)\n\nWhat they settle:\n- `CLAUDE_CODE_OAUTH_TOKEN`: the SDK runs the Claude Code binary, which\nreads it (precedence item 5), and three SDK pages describe SDK sessions\nauthenticated with that token. No page says it in one sentence. The\nlegal page asks developers who build products or services on the Agent\nSDK to use API keys, and forbids routing Pro, Max or Ultra credentials\non behalf of their users.\n- `resume` and `forkSession`: `Options` fields; `forkSession: true`\ngives the resumed session a new ID and leaves the original unchanged.\n- Structured output: `outputFormat: { type: \"json_schema\", schema }`;\nthe answer is `structured_output` on the result;\n`error_max_structured_output_retries`, or a success without\n`structured_output`, is a failure; a single-shot `query()` throws after\nan error result.\n- Cost and tokens: `total_cost_usd` (an estimate), `usage` (main loop:\ninput, cache creation, cache read, output), `modelUsage` (per model,\n`costUSD`), `duration_ms`, `duration_api_ms`, `num_turns`,\n`permission_denials`. On a resumed or forked session, `total_cost_usd`\nand `modelUsage` include the spend restored from the session's\ntranscript.\n\n## Left open\n\n- The CI token path: the local runs used the owner's `/login`\ncredential, not `CLAUDE_CODE_OAUTH_TOKEN`; the first conductor run on\n`dev` after this lands runs it.\n- The deny path ran in unit tests only: no real call asked for a tool\nother than `StructuredOutput`.\n- `deep` (Opus) was not measured locally; the conductor's review of #32\nran it on the CLI.\n- The fork on the SDK: whether its bundled binary resumes a Desktop\nsession's transcript, and whether a hook-refused tool list keeps the\nsession's cache, would take one real fork of a session, measured with\n`cacheRead` in `stop.log`.\n- The binary download time in `validate` and in the conductor: not\nmeasured; their CI run times would measure it.\n- The triage's cost is not logged, with the CLI or the SDK.\n- The fork cost in `stop.log` is the fork's `total_cost_usd`, which by\nthe cost-tracking page includes the parent session's restored spend. Not\nmeasured; recorded as a finding.\n- Each row is one sample: the gaps are indicative. The CI Fable costs\nrange from 0.077 to 0.541 on other diffs.\n\n<!-- opened_by: 67a43404-9995-4e3f-ba31-3bab047a573b -->"
+    }
+  },
+  {
+    "sha": "7988824ea681f6960e232ff0565093e229e4c30f",
+    "commit": {
+      "message": "test: the model call's timeout, abort and error paths run against a fake stream\n\n`ask` is `askWith(query)`: the SDK's message stream is injected, so the\ntests drive the wrapper itself. They cover the question reaching the\nstream, an error result followed by a throw, a throw with no result, a\ncall aborted by its timeout, a result read before the abort, and a call\nthat ends in time leaving its timer cleared."
+    }
+  },
+  {
+    "sha": "d2e07e130d336879b1a573d356d61615db4f17a6",
+    "commit": {
+      "message": "feat: harness asks triage, review and Fable through the Agent SDK\n\nThe triage, the CI review and the Fable review call their models\nthrough @anthropic-ai/claude-agent-sdk instead of a `claude -p`\nsubprocess. `lib/ask.ts` runs one schema-bound question with an empty\ntool list and no filesystem setting, so no CLAUDE.md, project Stop hook\nor user plugin reaches the model, and a PreToolUse hook refuses every\ntool call but StructuredOutput, blocking the call if the guard fails.\n`judge`, `review` and `fable` take the injected `Ask`; `triageOf`,\n`findingsOf` and `verdictOf` read the structured answer instead of the\nCLI's stdout, and a findings item that is not an object reads as no\nfindings.\n\nThe exact model and the cost of each call come from the SDK result's\n`modelUsage` and `total_cost_usd`, the model being the entry that cost\nthe most, which replaces `usageOf` and its parse of the CLI's stdout.\n\nThe conductor job installs the dependencies with bun, which bring the\npinned Claude Code binary, instead of installing the CLI with npm. The\nStop hook's fork stays on `claude -p`."
+    }
+  },
+  {
+    "sha": "71be8f7cceaeb498a4d3e27f3f9b6075772239f0",
+    "commit": {
+      "message": "refactor: drop the FABLE_LANDS constant from the triage floor (#45)\n\nRemoves the `FABLE_LANDS` constant and its `false` branch in\n`scripts/harness/triage/floor.ts`. A change whose only risky paths are\n`scripts/harness/**` is always `land:auto`, and its reason reads \"lands\nafter a deep review and a Fable OK\". The floor test asserts `land:auto`\ndirectly."
+    }
+  },
+  {
+    "sha": "a0682d4a5e3cbcea8abd8e00486d4f6d457b1689",
+    "commit": {
+      "message": "refactor: drop the FABLE_LANDS constant, a harness-only change is land:auto"
+    }
+  },
+  {
+    "sha": "3b9756f6caa847973499609e5dc9b85389ff282c",
+    "commit": {
+      "message": "feat: harness-only changes land after a deep review and a Fable OK (#44)\n\nSets `FABLE_LANDS` to `true` in `scripts/harness/triage/floor.ts`. A\nchange whose only risky paths are `scripts/harness/**` is triaged\n`land:auto` instead of `land:human`: it lands once the deep review\nleaves no Important open and the Fable review answers OK. The doc\ncomment states the rule. No test changes: the floor test already follows\nthe constant."
+    }
+  },
+  {
+    "sha": "24a3ccf2cbbc87f67dff8b2eac045c8182765efc",
+    "commit": {
+      "message": "feat: harness-only changes land after a deep review with no Important open and a Fable OK"
+    }
+  },
+  {
+    "sha": "1ad083ed3cdca7993dec8ff5f2093331f605c81d",
+    "commit": {
+      "message": "fix: retry a Fable run that gives no verdict; watch every new comment (#43)\n\nA Fable run that failed or answered outside the schema was stored as a\npermanent NOT OK for its patch. It now records a failure, and the\nconductor asks again up to FABLE_TRIES (2) times per patch before\ncounting it as NOT OK; the record is written before the comment is\nposted.\n\nThe author's watcher read only the first comment of each review thread.\nIt now prints every new reply in an open thread and every PR\nconversation comment except the App's own, keyed by comment id. Replies\nposted through thread.ts carry a hidden marker the watcher skips.\n\nTests: table tests for the retry count and the per-patch scope in\ndecide.test.ts, verdict parsing and failed runs in fable.test.ts,\nreplies and conversation comments in watch.test.ts. 132 tests, typecheck\ngreen."
+    }
+  },
+  {
+    "sha": "94d361c6424ebde76307a8dce73fd1e84761a3e6",
+    "commit": {
+      "message": "test: the record after a Fable run; skip the App's replies in the watcher\n\nReview of #43: the failure counting in the conductor's fable step had\nno test. afterFable holds it as a pure function: a run with no verdict\nadds one failure for its patch and sets no verdict, a verdict is kept;\ntests cover both, per patch, and that two failures end the retries.\nThe watcher now also skips replies the App posts inside a thread."
+    }
+  },
+  {
+    "sha": "fa39cbf799ca9263d127051b6095e92e612f0fa0",
+    "commit": {
+      "message": "fix: retry a Fable run that gives no verdict; watch every new comment\n\nA Fable run that failed, timed out or answered outside the schema was\nstored as a NOT OK for the patch and never asked again. verdictOf now\nreturns a verdict only for an explicit ok true or false; a run without\none records a failure for the patch, and the conductor asks again up to\nFABLE_TRIES (2) times before counting it as NOT OK. The record is\nwritten before the comment is posted, so a failed post does not run\nFable again.\n\nwatch.ts read only the first comment of each thread. It now prints\nevery new reply in an open thread, a Nit thread included, and every PR\nconversation comment except the App's own, keyed by comment id so a\nre-armed watcher repeats nothing. thread.ts marks the author's replies\nwith a hidden comment, which the watcher skips, since an author and a\nhuman reviewer can post under one gh identity."
+    }
+  },
+  {
+    "sha": "8738976a3d6e7856c33732b6369226fdf3b9d936",
+    "commit": {
+      "message": "feat: add todo undone to mark a done task as open again (#38)\n\n## What changed and why\n\n- `todo undone <id>` sets a done task back to open. It is the reverse of\n`todo done <id>`.\n- An unknown id is refused with `no task #<id>`, as `done` does. A\nnon-numeric id is refused with `not a task id`.\n- `app/src/commands/undone.ts` holds the pure function, with the same\nshape as `done.ts`.\n- `app/src/cli.ts` wires the command, and the usage line lists `todo\nundone <id>`.\n- `docs/usage.md` gets one example line.\n\nThis branch also carries earlier commits that are not part of this\nchange: the task CLI, the harness scripts, CI workflows, and docs. The\ndiff against `main` covers 50 files, so review those commits as they\nare.\n\n## How it was verified\n\n- `bun run check` passes: typecheck is clean and 98 tests pass with 0\nfailures.\n- A manual run on a scratch task file: `done 1`, then `undone 1` printed\n`undone #1`, and `count` printed `1 open`.\n- `undone 9` exits with status 1 and prints `todo: no task #9`.\n- No new unit test was added for `undone`, per the issue. This departs\nfrom the repo rule of a test for each behaviour."
+    }
+  },
+  {
+    "sha": "65d43e2371f79ed2ddf6d689b1e3a0f3cc8c47f5",
+    "commit": {
+      "message": "feat: todo undone <id> marks a done task as open again"
+    }
+  },
+  {
+    "sha": "8acefd69f1c9f30e147d18dffdd5780762c28b09",
+    "commit": {
+      "message": "feat: Fable reviews harness-only changes, in measuring mode first (#42)\n\nThe owner's rule: a change whose only risky paths are scripts/harness/**\nlands as land:auto after a deep review with no Important open and an\nindependent Fable OK. FABLE_LANDS is off for now: Fable runs and posts\nits verdict and cost, and the change stays land:human until the owner\nhas seen what Fable costs and where it is billed. Reviewed by an\nindependent Fable reviewer. Touches the harness: land:human."
+    }
+  },
+  {
+    "sha": "77ce3f7516a8f51bd332acf5b1213745553c2105",
+    "commit": {
+      "message": "feat: search the tasks whose title contains a word (#36) (#39)\n\n## What changed\n\n- `todo search <word>` lists the tasks whose title contains the word.\nThe match ignores case. Open and done tasks both match. Each line uses\nthe `list` format.\n- A word that matches no title prints `no match`.\n- A blank word is refused with `a search needs a word`.\n- The command is in `app/src/commands/search.ts`, wired in\n`app/src/cli.ts`, and added to the usage line.\n\nThis branch also carries earlier commits that are not part of #36: the\nharness, the `todo count`, `todo clear`, `todo rename`, `--done` and\ncreation-date work, and the docs. The PR diff against `main` covers all\nof them.\n\n## Verification\n\n- `bun run check` passes: typecheck clean, 103 tests pass across 13\nfiles. The 5 new tests are in `app/test/search.test.ts`.\n- A manual run with a task file in the scratchpad printed the matching\ntasks for `SPEC`, refused a missing word with exit status 1, and printed\n`no match` for an unknown word."
+    }
+  },
+  {
+    "sha": "00b7092e61ac21c5d4674a23ebc38fca7a3dc515",
+    "commit": {
+      "message": "test: cover the search command through the CLI dispatch"
+    }
+  },
+  {
+    "sha": "2b42229a947cc3b0dfe74ce476845332b612a794",
+    "commit": {
+      "message": "feat: search the tasks whose title contains a word (#36)"
+    }
+  },
+  {
+    "sha": "1e623514f6898e87bd25e7f9fcc466b74d8bc4e2",
+    "commit": {
+      "message": "feat: Fable reviews harness-only changes in measuring mode first\n\nThe owner wants to see what Fable costs in CI, and whether it draws on\nthe subscription or on usage credits, before a Fable OK lands anything.\nFABLE_LANDS is off: a harness-only change stays land:human, Fable still\nreviews it once converged and posts its verdict and cost. Turning\nFABLE_LANDS on is the one-line switch to land:auto."
+    }
+  },
+  {
+    "sha": "66d725832942eb5e834796d91215baf4769fe29d",
+    "commit": {
+      "message": "feat: a harness-only change lands after a deep review and a Fable OK\n\nThe owner set the rule while the harness is being built: a change whose\nonly risky paths are scripts/harness/** is land:auto once the deep Opus\nreview leaves no Important open and an independent Fable review answers\nOK; any other Fable answer, a failure included, raises it to land:human.\n.github/**, .claude/** (settings.json included), the store format and\nthe build config stay land:human.\n\nThe floor answers land:auto with needsFable for a harness-only change.\nThe conductor runs Fable, with no tool and a JSON schema, only once the\nPR is converged, posts the verdict through the App and keeps it per\npatch in the record. Labels still only rise."
+    }
+  },
+  {
+    "sha": "410dfc7100ff82af0aa120607371c3c21e3d734e",
+    "commit": {
+      "message": "fix: an unthreaded Important blocks, and a land-ok binds to the head it saw (#41)\n\nTwo gaps an independent Fable review found on dev: an Important posted\nonly in a review body counted as nothing, and a land-ok could bind to a\nhead pushed after the owner's label. Touches the harness: land:human."
+    }
+  },
+  {
+    "sha": "f1add88cff36700537c1a660486c5da41654ccd9",
+    "commit": {
+      "message": "fix: the Stop fork answers with no tool, and a failed fork asks again (#40)\n\nSeen on #38 and #39: the second hand-over fork re-armed the watcher and\nhung until killed, so a committed fix was never pushed. The fork now\nruns with --tools '' and --strict-mcp-config, its question is about the\nchange only, and a fork with no answer blocks the stop once instead of\nreading as NO. Reviewed by an independent Fable reviewer. Touches the\nharness: land:human."
+    }
+  },
+  {
+    "sha": "b5e52c1dfa8783afd48f1aedc95114c4be1dc329",
+    "commit": {
+      "message": "fix: an unthreaded Important blocks, and a land-ok binds to the head it saw\n\nFable review of dev. A finding GitHub would not take inline, or one\nwith no line, went to the review body only: no thread, so openImportant\nread 0 and a land:auto PR could land with it unread. The record keeps,\nper reviewed patch, the Important findings posted with no thread, and\ncounts them open until the patch changes.\n\nA land-ok bound to the patch the conductor read at run time: a push\nbetween the owner's label and that run would bind the approval to a\npatch the owner never saw. The land-ok now counts only when it was put\nafter the head was pushed, read from the head's first check suite."
+    }
+  },
+  {
+    "sha": "719c90d6bf3a63f2f0f5e5593fff1d17cf77f758",
+    "commit": {
+      "message": "fix: a fork that fails asks again instead of reading as NO\n\nFable review: the fork still loaded the user's MCP servers, and a fork\nthat exits non-zero or prints nothing read as NO, so a committed change\nstayed unpushed with nothing to wake anyone. The fork now runs with\n--strict-mcp-config too, and a fork with no answer blocks the stop once\nwith the reason, so the agent stops again and the hook asks again."
+    }
+  },
+  {
+    "sha": "6ab28f99bfff83324fd7dfe250465f0427bd3e7e",
+    "commit": {
+      "message": "fix: the Stop fork runs with no tool and asks about the change only\n\nOn #38 and #39 the second hand-over never came. The fork answered NO,\n'the watch on PR #39 has not reached merged', then re-armed the\nsession's Monitor watcher and waited on it until the hook killed it at\n180 s. The question now says watching the PR is the harness's job, not\npart of the answer, and both forks run with --tools '', so a fork can\nonly answer. The tool list is part of the prompt prefix: the fork loses\nthe warm cache, a cost to measure on the next waves."
+    }
+  },
+  {
+    "sha": "143f4cac04bef253f1156b315cd22395a21fd8af",
+    "commit": {
+      "message": "feat: todo remove deletes the task with that id (#35) (#37)\n\n## What changed\n\n- `todo remove <id>` deletes the task with that id. An unknown id is\nrefused with `no task #<id>`. A non-numeric id is refused with `not a\ntask id: <x>`, the same as `done`.\n- The new `remove` command lives in `app/src/commands/remove.ts`. It is\nwired in `app/src/cli.ts`, and the usage line lists `todo remove <id>`.\n- One existing test changed. The \"unknown command prints the usage\" test\nused `remove` as its unknown word. It now uses `delete`.\n\n## Why\n\nIssue #35 asks for a way to delete a task by id. The command follows the\npattern of `done` and `rename`, so its id checks and error messages\nmatch them.\n\n## Verification\n\n- `bun run check` passes: 103 tests, 0 failures.\n- Unit tests in `app/test/commands.test.ts` cover deleting only the\nnamed task and refusing an unknown id.\n- CLI tests in `app/test/store.test.ts` cover the printed `removed\n#<id>` line, refusing an unknown id with the file unchanged, and\nrefusing a non-numeric id.\n- `docs/usage.md` does not list `remove` yet."
+    }
+  },
+  {
+    "sha": "2ce32d7aa5d417a184288ed614e7b3fae270ee7c",
+    "commit": {
+      "message": "feat: todo remove deletes the task with that id (#35)"
+    }
+  },
+  {
+    "sha": "88a0eb044afb49bdd5dc05b2f6c3eabc2230b091",
+    "commit": {
+      "message": "fix: a land-ok removed for a patch change clears its patch in the record (#33)\n\nSeen on #31: the owner's land-ok was removed at 18:59 and again at\n20:15. The record kept the pre-rebase land-ok patch, because the\ndecision ended on the triage before writing it. 88 tests, typecheck\ngreen. Touches the harness: land:human."
+    }
+  },
+  {
+    "sha": "740c0688dc65ddbc6c5048473229a6177f6a15e1",
+    "commit": {
+      "message": "refactor: the land-ok reading is the decision's only change to the record\n\nReview of #33: with the record step written early, a later change to\nnext would be lost. No such change exists; landOkOf now makes it\nimpossible, by returning the record after the land-ok label as a const\nthat the rest of decide cannot reassign."
+    }
+  },
+  {
+    "sha": "6985176caefc7cb1bfabe1939a889d2edbbc2003",
+    "commit": {
+      "message": "fix: a land-ok removed for a patch change clears its patch in the record\n\nOn #31 the owner's land-ok was removed twice. After a rebase the\ndecision removed the stale label and cleared landOkPatch, then ended on\nthe triage before writing the record, so the record kept the old patch\nand every new land-ok read as given for another patch. The record step\nnow goes out as soon as the land-ok block changes it, and a land-ok\npatch left in the record without the label is cleared."
+    }
+  },
+  {
+    "sha": "c05551f45dd2210837ed8c5f4031a3ae4d95dadb",
+    "commit": {
+      "message": "fix: a delta after a rebase starts from the PR's base (#31)\n\nSeen on #24: after its author rebased, every conductor run crashed on\ngit diff from the pre-rebase head, so #24 never got agent-review.\nTouches the harness: land:human."
+    }
+  },
+  {
+    "sha": "0f1a850ff823951d969359c7f7b1fa59d494fbe4",
+    "commit": {
+      "message": "feat: store the creation date of each task (#24)\n\nEach new task now gets `createdAt`, an ISO 8601 timestamp set when `todo\nadd` runs. The task file moves to format version 2.\n\nWhy: the task file has no record of when a task was created. Version 1\nfiles still load. Their tasks have no `createdAt`, and the next save\nwrites the file as version 2. Loading never rewrites the file.\n\nWhat changed:\n- `app/src/task.ts`: `Task` has an optional `createdAt`.\n- `app/src/store/store.ts`: `FORMAT_VERSION` is 2. Versions 1 and 2\nload. Any other version is refused with the same message as before. A\npresent `createdAt` must be a string.\n- `app/src/commands/add.ts`: `add` takes the timestamp as a parameter,\nso the tests are deterministic.\n- `app/src/cli.ts`: passes `new Date().toISOString()` to `add`.\n- `app/test/commands.test.ts`, `app/test/store.test.ts`: updated `add`\ntests. New tests cover loading a version 1 file, saving it as version 2,\nkeeping `createdAt` through a round trip, refusing versions 0, 3 and 99,\nrefusing a non-string `createdAt`, and `todo add` stamping a date.\n\nVerification:\n- `bun run check` is green: 73 tests pass, up from 67.\n- By hand: a version 1 file, then `todo add`, gives a version 2 file.\nThe old task has no `createdAt`; the new one has it."
+    }
+  },
+  {
+    "sha": "b08172f24a827dd3be2a42b3d53efe3dce20a35b",
+    "commit": {
+      "message": "test: where a delta starts, before and after a rebase\n\nReview of #31: the fallback to the PR's base had no test. deltaStart\nholds the rule as a pure function, tested for an ancestor, a rebase\n(exit 1), an unknown object (exit 128) and no review yet."
+    }
+  },
+  {
+    "sha": "8c105e108cbbfad9098404c54d486cfe87135ced",
+    "commit": {
+      "message": "fix: a delta after a rebase starts from the PR's base\n\nThe sweep crashed on #24: its author rebased onto dev, and the\nconductor diffed from the head the last review read, c87e2d9, which the\nrebase left out of the PR's history (git diff: invalid revision range).\nThe delta now starts at that head only while it is an ancestor of the\ncurrent one; after a rebase it is the whole PR again."
+    }
+  },
+  {
+    "sha": "4df1cbd6d292bb7dc978870a674c81f119fb581d",
+    "commit": {
+      "message": "feat: each CI review and triage names the exact model and effort (#29)\n\nAsked by the owner: show which model and effort made each review. 81\ntests, typecheck green. Touches the harness: land:human."
+    }
+  },
+  {
+    "sha": "1ce57eeb96cf0a6ae77e70ce9d818a2a5605ccdf",
+    "commit": {
+      "message": "feat: land-gate turns red on a PR that conflicts with dev (#28)\n\nSeen on #24 and #27: a conflicting PR gets no CI, stays pending, and\nnobody wakes its author. 81 tests, typecheck green. Touches the harness:\nland:human."
+    }
+  },
+  {
+    "sha": "aaf47bfb83e86369099704cee0f19b24094203db",
+    "commit": {
+      "message": "fix: test the triage's model, and name the model a failed triage asked\n\nReview of #29: triageOf filled model with no test, and a failed Haiku\nrun logged 'by the floor'. judge.test.ts checks the exact model on an\nanswer and the fallback on a failed run, which now names the model\nasked."
+    }
+  },
+  {
+    "sha": "15b3beed0033420230ae33627a6c5cac8dd5b8a1",
+    "commit": {
+      "message": "fix: the conductor re-reads a PR whose mergeability is not computed yet\n\nReview of #28: right after a push GitHub answers mergeable null, state\nunknown, so a conflict could go unseen until the next sweep. The\nconductor reads the single PR again up to three times, 5 s apart. The\ndirty test moves into conflictingOf, with a test of each state."
+    }
+  },
+  {
+    "sha": "38a6d41e2ebc0c4e9f95caa4ad17507a59c6cab1",
+    "commit": {
+      "message": "feat: each CI review and triage names the exact model and effort\n\nThe owner asked to see which model and effort made each review. The\nreview summary now opens with its level, the exact model read from\nmodelUsage in claude -p's JSON output (the alias sonnet or opus does\nnot name the version) and the effort, default since no flag is passed:\n'Review round 1 (deep: claude-opus-5-5, effort default)'. The triage\nrecords the model that answered, or the floor, and logs it."
+    }
+  },
+  {
+    "sha": "991c7e80d0700cf9fa717521633faa3420ff527d",
+    "commit": {
+      "message": "docs: explain TODO_FILE with a two-list example (#27)\n\n## What changed\n\n- `docs/usage.md` explains where tasks live. `todo` uses `todo.json` in\nthe current directory by default. `TODO_FILE` picks another file, a\nrelative path is taken from the current directory, and the file is\ncreated by the first command that adds or changes a task.\n- A new \"Two task lists\" section shows `work.json` and `home.json`. Each\nfile keeps its own list, and its ids start at #1, so the two lists never\nmix.\n- The branch also carries earlier commits from its base (`todo count`,\nthe README command list, the conductor and harness files). This commit\nchanges only `docs/usage.md`.\n\n## Why\n\nA user who keeps two task lists needs to know what `TODO_FILE` does and\nwhat each file holds. The section describes the behaviour the CLI\nalready has, so no code changed.\n\n## How it was verified\n\n- Ran the two-list example against scratch files with `TODO_FILE`. The\n`add`, `list`, `done`, and `count` output matched the examples in the\ndoc. Ids restarted at #1 in `home.json`.\n- Confirmed from `app/src/store/store.ts` that a missing file loads as\nan empty list and is written only on save.\n- `bun run check` is green: typecheck passes, 67 tests pass. No test was\nadded, because no behaviour changed."
+    }
+  },
+  {
+    "sha": "c9b109b40cbec26f6ffbf781c2fed10a386ecb7b",
+    "commit": {
+      "message": "fix: validate creation dates per format version\n\nThe refusal message lists every readable version. A version 1 task may not\ncarry createdAt, and a version 2 creation date must be an ISO timestamp."
+    }
+  },
+  {
+    "sha": "15854af100a56c4f77609347b60c3dae4f912a3e",
+    "commit": {
+      "message": "feat: land-gate turns red on a PR that conflicts with dev\n\n#24 and #27 conflicted with dev after #21 and #22 landed. GitHub runs no\npull_request workflow on a PR it cannot merge, so validate never came,\nland-gate stayed pending (green on #24 after the owner's land-ok), the\nqueue refused the PR, and nothing woke its author. The conductor now\nreads mergeable_state: a ready PR GitHub reads as dirty gets a red\nland-gate that tells its author to rebase, which the watcher reports.\nThe spec turns land-gate red only on a queue removal; a conflict is the\nsame case caught earlier."
+    }
+  },
+  {
+    "sha": "3b1efceaf1335bafc5ea22ca68f8375fe73d8293",
+    "commit": {
+      "message": "feat: store the creation date of each task\n\nEach new task gets createdAt, an ISO 8601 timestamp. The file moves to\nformat version 2. A version 1 file still loads; its tasks have no\ncreatedAt and are written as version 2 on the next save."
+    }
+  },
+  {
+    "sha": "7186a8dfdf6d36b3d7f87b3e222bc491c236ff2c",
+    "commit": {
+      "message": "docs: explain TODO_FILE with a two-list example"
+    }
+  },
+  {
+    "sha": "921fcef38a4cf8b6313f73b5b4991a7d72944aa8",
+    "commit": {
+      "message": "fix: authors act on Important findings only, and can answer them (#25)\n\nThe loop seen on #24 and the two headless workers that stopped on a\nquestion. See the commit message for each fix. 71 tests, typecheck\ngreen. Touches the harness: land:human."
+    }
+  },
+  {
+    "sha": "c2a404dc99625df7b0e2245d113e5bc77cf81ca5",
+    "commit": {
+      "message": "fix: test the author's answer tool and instruction; key runs on the PR number\n\nReview of #25: thread.ts and the new armReason text had no test, and\nthe concurrency group mixed a branch name for PR events with a PR\nnumber for dispatches. Every event now keys on the PR number, read from\nworkflow_run.pull_requests for a CI completion. thread.ts takes its\nrunner, replies before it resolves, and is tested; the watcher skips a\nNit or Pre-existing thread only when the App wrote it, so a human\nquoting the marker is still shown."
+    }
+  },
+  {
+    "sha": "87bcc69dcf1e3b433f72d224c34bb009b743b191",
+    "commit": {
+      "message": "feat: add todo list --done to show only the done tasks (#26)\n\n## What changed\n\n- `todo list --done` shows only the done tasks.\n- `todo list --all` still shows every task.\n- `--done` with `--all` is refused with the message \"--done and --all\ncannot be used together\".\n- The usage line now reads `todo list [--all | --done]`.\n- README and `docs/usage.md` describe the flag and the refusal.\n\n## Why\n\nUsers could not list finished tasks alone. `--all` showed open and done\ntasks together.\n\n## How it was verified\n\n- `bun run check` passes: typecheck clean, 71 tests, 0 failures.\n- New tests in `app/test/commands.test.ts` cover the default list,\n`--all`, `--done`, the refused `--done --all` combination, and an empty\nlist.\n- New tests in `app/test/store.test.ts` run `list --done` through the\nCLI and check that `--done --all` is refused."
+    }
+  },
+  {
+    "sha": "faeea15f79eb4bb79df66ca87447527997150c7e",
+    "commit": {
+      "message": "fix: a later patch is reviewed again only when its delta asks for it\n\nAfter a review with no Important, every new patch ran a full review\nagain: on #24 a push of nit fixes would have cost a second deep review.\nThe spec triages the delta instead. A reviewed PR's new patch is read\nagain only when the triage of its delta answers second_round; under a\nfloor hit, the delta's own paths or Haiku decide that, while the floor\nkeeps the PR's labels. A third round is cut only when one is asked."
+    }
+  },
+  {
+    "sha": "e224555793e0585c63029c121807940f28306e18",
+    "commit": {
+      "message": "fix: authors act on Important findings only, and can answer them\n\nOn #24 the review posted Nits only, yet the watcher printed every open\nthread. The Haiku author tried to answer them, the human-attest hook\nblocked its gh writes, it left a question for the user, and each stop\nasked the fork again, which answered NO: a loop every ten minutes.\n\n- watch.ts prints open Important findings and human comments only,\n  with their thread id; Nit and Pre-existing never block.\n- thread.ts replies in a thread and resolves it; the Stop hook's\n  instruction names it for a fix accepted or a finding rejected.\n- The conductor's concurrency group is the PR's branch for every\n  event: a PR event and a CI completion no longer review the same\n  patch side by side (#24 got the same review twice).\n- AGENTS.md: do only the given issue and end without a question. Two\n  headless workers asked one after their task, and the fork rightly\n  answered NO."
+    }
+  },
+  {
+    "sha": "e4a1239a52f6a53593dcaf84586ff51c5a5c64fb",
+    "commit": {
+      "message": "docs: add CONTRIBUTING.md with install, checks and layout (#23)\n\n## What changed\n\n- Adds `CONTRIBUTING.md` at the repository root (27 lines). It covers:\n  - Install: `bun install`, with Bun 1.4.4 pinned in `mise.toml`.\n- Checks: `bun run check`, which runs `bun run typecheck` and then `bun\ntest`.\n- Layout: `app/src/commands/`, `app/src/cli.ts`, `app/src/store/`,\n`app/test/`, and `docs/usage.md`.\n\n## Why\n\nA new contributor has no single file that says how to install, run the\nchecks, and find the commands and tests. The new file gives that in one\nplace.\n\n## Scope of the branch\n\nThis branch also carries earlier commits that are not in `main`, so the\ndiff against `main` is 46 files. This PR's own change is the single\n`CONTRIBUTING.md` commit, `86cc7d2`.\n\n## Verification\n\n- Docs only. No code changed.\n- `wc -l CONTRIBUTING.md` reports 27 lines, under the 30-line limit.\n- `bun run check` passes: typecheck is clean, 67 tests pass, 0 fail."
+    }
+  },
+  {
+    "sha": "4b5b0baa83f5a9b3f496ac227e265ae158846e9c",
+    "commit": {
+      "message": "docs: add troubleshooting for an unreadable task file (#22)\n\n## What changed\n\n`docs/usage.md` has a new `## Troubleshooting` section. It covers the\nmessages `todo` prints when it cannot read the task file, and what the\nuser can do about each:\n\n- **Invalid JSON:** `todo` prints a Bun `SyntaxError` stack trace, not a\n`todo:` message, and exits 1.\n- **Other format version:** `todo: <path>: format version <found>,\nexpected 1`. Restore the file from a backup or version control. Editing\nthe `version` value by hand does not convert the tasks.\n- **Tasks not a list:** `todo: <path>: tasks is not a list of tasks`.\nEach task needs a numeric `id`, a string `title` and a boolean `done`.\nThe section includes a valid example.\n- **Not an object:** `todo: <path>: not an object`, for a file holding\n`null`, a number or a string.\n\nThe section also says that a refused command writes nothing, so the file\nkeeps its content.\n\n## Why\n\nA user who hits one of these errors had no reference for it. The\nmessages came from `app/src/store/store.ts`, and the doc now matches\nthem.\n\n## How it was verified\n\n- Read `app/src/store/store.ts` and `app/src/cli.ts` to confirm each\nmessage and the error path.\n- Ran the CLI against five bad files in a scratch directory. The output\nmatched the documented messages. The invalid-JSON case printed the\n`SyntaxError` trace and exited 1.\n- `bun run check` passes: typecheck is clean and 67 tests pass.\n\nNo code changed. The diff is documentation only."
+    }
+  },
+  {
+    "sha": "f1185ff5473c26b113ad54880329e0f6fbf2154a",
+    "commit": {
+      "message": "feat: refuse todo add and rename titles over 200 characters (#21)\n\nAdds a length limit to `todo add` and `todo rename`. A title longer than\n200 characters is refused, and the message names the limit.\n\n**What changed**\n- `app/src/task.ts`: a shared `cleanTitle` helper trims the title,\nrefuses a blank title, and refuses a title over 200 characters with `a\ntitle takes at most 200 characters`.\n- `app/src/commands/add.ts` and `app/src/commands/rename.ts` call\n`cleanTitle`. The blank-title check that each command had is now in the\nhelper.\n- Tests in `app/test/commands.test.ts` and `app/test/rename.test.ts`\ncover a 200-character title (kept) and a 201-character title (refused)\nfor both commands.\n\n**Why**\nA single helper keeps the limit and the blank-title rule in one place,\nso `add` and `rename` cannot drift apart.\n\n**Decisions**\n- The length counts Unicode code points, so an emoji counts as one\ncharacter.\n- The length is checked after trimming, so surrounding spaces do not\ncount.\n- `rename` still checks the title before the id. An unknown id with a\ntoo-long title gets the length message.\n\n**Verification**\n- `bun run check` passes: typecheck, then 71 tests with 0 failures (67\nbefore this change)."
+    }
+  },
+  {
+    "sha": "86cc7d267c379f0ba1a275bf11b82eea3b78ae0d",
+    "commit": {
+      "message": "docs: add CONTRIBUTING.md with install, checks and layout\n\nCloses #13\n\nWhy: a new contributor has no single place that says how to install,\nrun the checks and find the commands and tests.\n\nVerification:\n- Docs only, no code change.\n- `bun run check` passes: typecheck clean, 67 tests pass, 0 fail."
+    }
+  },
+  {
+    "sha": "3f229ece86d55166048369cc328febb9c3992444",
+    "commit": {
+      "message": "docs: add troubleshooting for an unreadable task file"
+    }
+  },
+  {
+    "sha": "d96c580a9a0b5a8a6c38f286375a8f3f9bcae613",
+    "commit": {
+      "message": "feat: add todo list --done to show only the done tasks\n\n--all keeps showing every task. --done with --all is refused."
+    }
+  },
+  {
+    "sha": "3ea6b20f471526f11c6edbbb4fdbcab7010a862b",
+    "commit": {
+      "message": "feat: todo add and rename refuse a title over 200 characters\n\nA shared cleanTitle in task.ts trims the title, refuses a blank one and\nrefuses one longer than 200 characters, with the limit in the message."
+    }
+  },
+  {
+    "sha": "d68bdbd8b60811997386ac4d6e3140c83ab01c5c",
+    "commit": {
+      "message": "docs: list todo commands in README (#19)\n\nAdd a Commands section to README.md. It lists each `todo` command\n(`add`, `list`, `done`, `clear`, `rename`) with one line on what it\ndoes, and links to `docs/usage.md` for examples.\n\nWhy: issue #9 asks for a command overview in the README. The examples\nstay in `docs/usage.md`, so the README does not repeat them.\n\nScope: `main..HEAD` also holds the commits from #8 and earlier (from\n`0b82ba3` to `59b23cf`). This PR carries all of them. The README diff\nagainst `main` includes the intro and install block those commits added.\nThe commit for issue #9 is `5205999`.\n\nVerification:\n- Docs only, no code change.\n- `bun run check` passes: typecheck clean, 63 tests pass, 0 fail."
+    }
+  },
+  {
+    "sha": "2cebea20038bf81d3a76c6344e5bb9952fdcc8be",
+    "commit": {
+      "message": "feat: add `todo count` to print the number of open tasks (#20)\n\n## What changed\n\n- `todo count` prints the number of open tasks as `N open`, for example\n`3 open`.\n- `app/src/commands/count.ts` holds a pure function, `count(tasks)`. It\ncounts the tasks that are not done.\n- `app/src/cli.ts` dispatches `count` and lists it in the usage line.\n- `docs/usage.md` shows the command and says what it prints.\n\n## Why\n\nIssue #10 asks for a way to see how many tasks are still open without\nlisting them. The command follows the existing pattern: one pure\nfunction per command, wired in `cli.ts`.\n\n## How it was verified\n\n- `bun run check` passes: the typecheck is clean and all 67 tests pass.\n- `app/test/commands.test.ts` covers an empty list (`0 open`), a mix of\ndone and open tasks (`1 open`), and a list with only done tasks (`0\nopen`).\n- `app/test/store.test.ts` runs `count` through `run()` against a temp\nfile. It checks the output before and after adding and completing tasks."
+    }
+  },
+  {
+    "sha": "1ccf9f49239e1aa7d4b28e28b2b5b39ea88d0e22",
+    "commit": {
+      "message": "fix: the conductor's App token can enable auto-merge (#18)\n\nOn #17 the conductor converged a land:auto PR, then\nenablePullRequestAutoMerge failed: Resource not accessible by\nintegration. The App token asked for contents: read; auto-merge needs\ncontents: write. Touches the harness, so land:human."
+    }
+  },
+  {
+    "sha": "ed769fb8c97aaa0e42e033b1f73b94921a8fb802",
+    "commit": {
+      "message": "feat: todo count prints the number of open tasks\n\nCloses #10"
+    }
+  },
+  {
+    "sha": "5205999fdb3e13343aba03faf2617d9d74d87952",
+    "commit": {
+      "message": "docs: list todo commands in README\n\nAdd a Commands section with one line per command (add, list, done, clear,\nrename) and a link to docs/usage.md for examples."
+    }
+  },
+  {
+    "sha": "bd0576e4e5452caddd931684858a90cd2b8a6c57",
+    "commit": {
+      "message": "fix: the conductor's App token can enable auto-merge\n\nenablePullRequestAutoMerge answered \"Resource not accessible by\nintegration\" with contents: read. The job pushes nothing."
+    }
+  },
+  {
+    "sha": "59b23cfdf38cda326c4e6374b2264ef8787bbf5c",
+    "commit": {
+      "message": "feat: lab harness: Stop hook, PR conductor, CI triage and review (#8)\n\nThe lab's harness, in three commits.\n\n1. The author's Stop hook, the fork probe and the Monitor watcher.\n2. The PR conductor, the CI triage and review, and the re-post of the\nApp's checks on the merge queue's commit.\n3. The conductor finds a CI run's PRs by commit; the tools skip\nDesktop's worktrees under .claude/worktrees.\n\nUnit tests of each decision, one per transition; integration tests of\nthe Stop hook against a fake git, gh and claude. 63 tests, typecheck\ngreen. Field test: the Haiku worker waves.\n\nTouches the harness, so it is land:human by the lab's own floor.\nReplaces #7, whose head branch GitHub stopped accepting pushes on (fatal\nerror in commit_refs_rules)."
+    }
+  },
+  {
+    "sha": "091c1b6416c51e3ee4cdf32d26b6201a2c15ebd9",
+    "commit": {
+      "message": "fix: conductor finds a CI run's PRs by commit; tools skip Desktop worktrees\n\nworkflow_run names a head SHA: the conductor reads its PRs from\ncommits/<sha>/pulls instead of a PR search. Desktop puts session\nworktrees under .claude/worktrees, inside the checkout: the typecheck,\nbun test and git now leave them out."
+    }
+  },
+  {
+    "sha": "d538cc18090bc48d22b601c3a18802066ecea511",
+    "commit": {
+      "message": "feat: PR conductor, CI triage and review, queue check re-post\n\nThe conductor decides from a snapshot of one PR, re-read on every run:\ntriage (the floor in code, then Haiku) labels land:* and review:*, which\nonly rise; the review runs once per patch on a ready PR whose validate\nis green, at Sonnet for light and Opus for deep, with no tool and the\nreview guide in its prompt, and answers with a JSON schema. A script\nposts the findings through the App, moves the PR to draft on an\nImportant, and sets agent-review and land-gate. A second round reads\nthe delta only when the triage judges the fix risky; a third never\nruns. land-gate turns green for a converged land:auto PR, or a\nland:human one with the owner's land-ok for its patch, unless dev is\nred; then the App enables auto-merge.\n\nconductor.yml runs it from the default branch on CI completion and PR\nevents, and sweeps every 15 minutes. queue-checks.yml re-posts the\nApp's checks on the merge queue's commit."
+    }
+  },
+  {
+    "sha": "3ba1aa4e8688fac09581959daef9dcfdae2c4933",
+    "commit": {
+      "message": "feat: Stop hook that hands a finished task over as a ready PR\n\nThe author's Stop hook skips forks (an environment flag, and the marker\nin the transcript), dev, main and lab/* branches, dirty trees and\nbranches with nothing new. It runs the gates once per head, then asks a\nfork of the session, on the session's model read from the transcript,\nwhether the task is finished. On YES it pushes, opens the PR with a body\na second fork writes, or readies the draft, and blocks once to tell the\nagent to arm a Monitor watcher on the PR. Every step goes to\n.lab/stop.log with the fork's latency, cost and cache reads.\n\nwatch.ts is that watcher: one line per failing check, open review\nthread or move to draft, until the PR is merged or closed.\n\nThe Stop probe it replaces showed claude, bun and gh on the hook's PATH\nin a Desktop session."
+    }
+  },
+  {
+    "sha": "215c9e4bdcb1dd61fdd5cd84d3d066c460ae6a84",
+    "commit": {
+      "message": "docs: todo rename (#5)\n\n<sub>Stack created with <a\nhref=\"https://github.com/github/gh-stack\">GitHub Stacks CLI</a> • <a\nhref=\"https://gh.io/stacks-feedback\">Give Feedback 💬</a></sub>"
+    }
+  },
+  {
+    "sha": "7e4288560b9dca61902f212d50b31994103f7224",
+    "commit": {
+      "message": "feat: todo rename in the CLI (#4)\n\n<sub>Stack created with <a\nhref=\"https://github.com/github/gh-stack\">GitHub Stacks CLI</a> • <a\nhref=\"https://gh.io/stacks-feedback\">Give Feedback 💬</a></sub>"
+    }
+  },
+  {
+    "sha": "1785a5967241d1478d8594e0074ad959c9fcd74d",
+    "commit": {
+      "message": "feat: rename a task's title (#3)\n\n<sub>Stack created with <a\nhref=\"https://github.com/github/gh-stack\">GitHub Stacks CLI</a> • <a\nhref=\"https://gh.io/stacks-feedback\">Give Feedback 💬</a></sub>"
+    }
+  },
+  {
+    "sha": "891fe4936a14869e23b2e2dd655163d575da35bc",
+    "commit": {
+      "message": "docs: todo rename"
+    }
+  },
+  {
+    "sha": "f5cb1685c9dd1d8a6f3054d4394192420bce5eb8",
+    "commit": {
+      "message": "feat: todo rename in the CLI"
+    }
+  },
+  {
+    "sha": "1abc14a0ea9e3da8eded5ea1dc14b08abe23a4f9",
+    "commit": {
+      "message": "feat: rename a task's title"
+    }
+  },
+  {
+    "sha": "096c32c89ecb4b089ac730fc49be808289edbe82",
+    "commit": {
+      "message": "feat: todo clear removes the done tasks (#2)\n\nQ1 test: two signed commits through the merge queue."
+    }
+  },
+  {
+    "sha": "524fbc9e938eaf7cc03fc657a94e979e4d10e7e8",
+    "commit": {
+      "message": "docs: say how the task file is written (#1)\n\nQ1 test: one signed commit through the merge queue."
+    }
+  },
+  {
+    "sha": "44bd60b8edcf5a4e93db67827f583178b268aa62",
+    "commit": {
+      "message": "test: todo clear"
+    }
+  },
+  {
+    "sha": "8eeae015c837c009847e9dd3d4e558b751a5a257",
+    "commit": {
+      "message": "feat: todo clear removes the done tasks"
+    }
+  },
+  {
+    "sha": "d272753f80499247ff4d22868965428c3be70311",
+    "commit": {
+      "message": "docs: say how the task file is written"
+    }
+  },
+  {
+    "sha": "dc51ac0659a2ac9ffc51b0c7d33158a11485fb65",
+    "commit": {
+      "message": "chore: Stop hook probe for Desktop sessions\n\nLogs the PATH, which of claude, bun, gh and git resolve, the names of\nthe environment variables and the Stop input, to .lab/stop-probe.log.\nIt tells the real Stop hook what it can count on in a Desktop session."
+    }
+  },
+  {
+    "sha": "0b82ba3d3f5afaf8c401be703253e55588673570",
+    "commit": {
+      "message": "feat: task CLI and its deterministic CI check\n\nA small todo CLI on Bun gives the lab's agents something to change: one\npure function per command, a versioned JSON store, bun tests. The CI\nworkflow runs typecheck and tests as validate, on pull requests, on the\nmerge queue's merge_group event and on pushes to dev."
+    }
+  },
+  {
+    "sha": "831a12e2ee3be08346ba1f9c60dcd43a7c30ae05",
+    "commit": {
+      "message": "Initial commit"
+    }
+  }
+]

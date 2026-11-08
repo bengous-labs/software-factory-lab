@@ -1,0 +1,79 @@
+[
+  {
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "Review round 1 (claude-opus-5-5, /code-review high): 2 important, 3 nit.\n\nReview run: https://github.com/bengous-labs/software-factory-lab/actions/runs/42415013258\n\n<!-- lab-review patch=2d39ddbab33e1bcd18dabb31d25d8f61a870c783 round=1 -->",
+    "submitted_at": "2026-11-07T21:19:17Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T21:22:33Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T21:22:36Z"
+  },
+  {
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "Review round 2 (claude-opus-5-5, /code-review high): 0 important, 3 nit.\n\nReview run: https://github.com/bengous-labs/software-factory-lab/actions/runs/42417069853\n\n<!-- lab-review patch=deaaedbc739d08ee92f9656c3b6e777257037e38 round=2 -->",
+    "submitted_at": "2026-11-07T21:43:54Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T21:59:53Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T21:59:56Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T21:59:58Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T22:00:01Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T22:00:03Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T22:00:07Z"
+  },
+  {
+    "user": {
+      "login": "bengous"
+    },
+    "body": "",
+    "submitted_at": "2026-11-07T22:00:19Z"
+  }
+]

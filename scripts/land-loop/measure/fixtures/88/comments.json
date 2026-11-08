@@ -1,0 +1,52 @@
+[
+  {
+    "id": 4504004368,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Important**: The hook now passes the comment command, `${comment} ${pr}`, to armReason on both block paths (the arm admission at line 312 and the published path at line 392), and no hook test checks it. hook.test.ts only asserts \"PR #12 is ready\", and decide.test.ts passes a hand-written string.\nBreaks: `scripts/land-loop/stop/hook.test.ts:134`\n\nSay a later edit drops the PR number from `${comment} ${number}` at line 392, swaps the order with `thread`, or points `comment` at a wrong path. The Author is then told to run `bun .../comment.ts \"<text>\"`. argsOf returns null and the script throws the usage error, or the comment lands on the wrong PR. bun check stays green because hook.test.ts:134 checks only the PR number line. REVIEW.md counts a behaviour added with no test as Important.\n\n<!-- lab-finding severity=important -->"
+  },
+  {
+    "id": 4504004371,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: argsOf reads only argv[0] and argv[1] and silently drops the rest. It also accepts PR number 0 and numbers with leading zeros.\n\nThe Author runs `bun comment.ts 86 Kept the cap because X` without quotes, or its shell quoting breaks on an embedded `\"`. The script posts only \"Kept\", marked as the author's, so the PR watch never shows it. It prints \"commented on PR #86\" as if it worked. Refusing extra arguments, as USAGE implies, would surface the mistake. `0` passes the integer check and only fails later inside gh.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4504004374,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: The `node_modules/` to `node_modules` change has nothing to do with the comment script and neither commit message explains it. It also moves the PR outside `factoryPaths`, because `.gitignore` is not on that list.\n\nThe change now ignores a file or symlink named node_modules, not just the directory, which silently changes what counts as a clean tree for the Stop hook. Because `.gitignore` is outside `factoryPaths`, the Routing judge is now asked about this PR instead of the factory route. That breaks AGENTS.md: \"Do only the issue you were given.\"\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4504004379,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: argsOf repeats the argv parsing in thread.ts argsOf: destructure two args, reject a missing or blank body, return null. Only the first argument's check differs.\n\nThere are now two copies of the same body check. A fix to one, such as refusing extra args or trimming, will not reach the other. A shared helper next to author-mark.ts that takes a check for the first argument would keep the two scripts the same.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4504008784,
+    "user": {
+      "login": "bengous"
+    },
+    "body": "Fixed in 57a25c2: hook.test.ts now asserts the PR watch, thread and comment commands, each with its PR number and the root's path, on the published path, and a new test covers the arm admission of a PR ready at HEAD and not armed yet.\n\n<!-- lab-author-reply -->",
+    "in_reply_to_id": 4504004368
+  },
+  {
+    "id": 4504014946,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: The new arm-admission test never checks that the hook writes the armed marker (`.lab/state/armed-12-<HEAD>`) or that it skips the Stop checks and the Done judge. A regression in either goes unnoticed.\nBreaks: `scripts/land-loop/stop/hook.ts:308`\n\nSay someone drops `writeFileSync(armedFile(admission.pr), ...)` at hook.ts:308. The test still passes, but every later stop sees `armed: false` and blocks again with the arm reason, so the Author's session stays blocked with no way out. The test also passes if the hook ran `bun check` and the Done judge before arming, because it only asserts that nothing was pushed.\n\n<!-- lab-finding severity=nit -->"
+  },
+  {
+    "id": 4504014949,
+    "user": {
+      "login": "bengous-labs-agents[bot]"
+    },
+    "body": "**Nit**: The same three `toContain` assertions (the pr-watch, thread and comment commands) appear word for word in two tests (lines 135-139 and 146-150).\n\nIf a command path or its quoting changes, both copies must be edited the same way. A small helper such as `expectArmCommands(outcome, root, 12)` would keep the published path and the arm path asserting the same text.\n\n<!-- lab-finding severity=nit -->"
+  }
+]
