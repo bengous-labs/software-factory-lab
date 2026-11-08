@@ -97,8 +97,14 @@ function world(doneJudgeAnswer: string, listed = "[]", branch = "agent/x", forkB
       return ok(
         JSON.stringify({
           result,
-          total_cost_usd: 0.01,
-          usage: { cache_read_input_tokens: 9000, cache_creation_input_tokens: 700 },
+          modelUsage: {
+            "claude-haiku-5-5": {
+              inputTokens: 2,
+              outputTokens: 4,
+              cacheReadInputTokens: 9000,
+              cacheCreationInputTokens: 700,
+            },
+          },
         }),
       );
     }
@@ -169,7 +175,7 @@ describe("stop", () => {
     expect(forks.every((argv) => !(argv[argv.indexOf("--tools") + 1] ?? "").includes("Monitor"))).toBe(true);
   });
 
-  test("the done-judge and body-fork lines log the cache read and the cache creation", async () => {
+  test("the done-judge and body-fork lines log the tokens of each fork", async () => {
     const records: StopLogRecord[] = [];
     const { run, root } = world("YES");
     await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
@@ -177,7 +183,10 @@ describe("stop", () => {
     });
 
     for (const step of ["done-judge", "body-fork"]) {
-      expect(records.find((record) => record.step === step)).toMatchObject({ cacheRead: 9000, cacheCreation: 700 });
+      expect(records.find((record) => record.step === step)).toMatchObject({
+        tokens: { input: 2, output: 4, cacheRead: 9000, cacheCreation: 700 },
+      });
+      expect(Object.keys(records.find((record) => record.step === step) ?? {})).not.toContain("costUsd");
     }
   });
 
@@ -390,28 +399,58 @@ describe("transcript", () => {
 });
 
 describe("forkResultOf", () => {
-  test("reads the answer, cost, cache reads and cache creation `claude -p --output-format json` prints", () => {
+  test("reads the answer and the tokens of every model `claude -p --output-format json` prints", () => {
     expect(
       forkResultOf(
         JSON.stringify({
           result: "YES",
-          total_cost_usd: 0.02,
-          usage: { cache_read_input_tokens: 5, cache_creation_input_tokens: 3 },
+          modelUsage: {
+            "claude-haiku-5-5": {
+              inputTokens: 1,
+              outputTokens: 2,
+              cacheReadInputTokens: 5,
+              cacheCreationInputTokens: 3,
+            },
+            "claude-opus-5-5": {
+              inputTokens: 10,
+              outputTokens: 20,
+              cacheReadInputTokens: 50,
+              cacheCreationInputTokens: 30,
+            },
+          },
         }),
         0,
         9,
       ),
-    ).toEqual({ text: "YES", ms: 9, costUsd: 0.02, cacheRead: 5, cacheCreation: 3, code: 0, unreadable: null });
-    expect(forkResultOf(JSON.stringify({ result: "YES", usage: {} }), 0, 9).cacheCreation).toBeNull();
+    ).toEqual({
+      text: "YES",
+      ms: 9,
+      tokens: { input: 11, output: 22, cacheRead: 55, cacheCreation: 33 },
+      code: 0,
+      unreadable: null,
+    });
+    expect(forkResultOf(JSON.stringify({ result: "YES" }), 0, 9).tokens).toBeNull();
+  });
+
+  test("a modelUsage that does not read loses the tokens, never the answer", () => {
+    const partial = { "claude-haiku-5-5": { inputTokens: 1, outputTokens: 2, cacheReadInputTokens: null } };
+
+    for (const modelUsage of [partial, "none"]) {
+      expect(forkResultOf(JSON.stringify({ result: "YES", modelUsage }), 0, 9)).toEqual({
+        text: "YES",
+        ms: 9,
+        tokens: null,
+        code: 0,
+        unreadable: null,
+      });
+    }
   });
 
   test("output that does not read is no answer, and says why", () => {
     expect(forkResultOf("", 124, 9)).toEqual({
       text: "",
       ms: 9,
-      costUsd: null,
-      cacheRead: null,
-      cacheCreation: null,
+      tokens: null,
       code: 124,
       unreadable: "Expected a valid JSON string",
     });

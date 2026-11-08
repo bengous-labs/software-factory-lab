@@ -172,7 +172,7 @@ const resultOf = (...findings: ReportedFinding[]): ReportedResult => ({
   request: REQUEST,
   model: "claude-sonnet-5-5",
   claudeCodeVersion: "2.1.318",
-  costUsd: 0.03,
+  tokens: null,
   runUrl: "https://github.com/o/r/actions/runs/7",
 });
 

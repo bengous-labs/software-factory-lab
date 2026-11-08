@@ -43,6 +43,7 @@ import {
   PullReviews,
   readsPatchDelta,
   reviewJobReader,
+  routingLineOf,
   routingPolicyAt,
   startOf,
   WorkflowRuns,
@@ -238,7 +239,7 @@ const RESULT = resultOf(
     structured: { findings: [] },
     model: "claude-opus-5-5",
     claudeCodeVersion: "2.1.318",
-    costUsd: 0.5,
+    tokens: null,
   },
   "https://github.com/o/r/actions/runs/7",
 );
@@ -677,7 +678,10 @@ const refusingRemoval: Run = (argv, options) =>
 describe("the Routing judge's worktree", () => {
   const JOB = { PATH: "/usr/bin", HOME: "/home/runner", CLAUDE_CODE_OAUTH_TOKEN: "oauth", GH_TOKEN: "app" };
 
-  const ANSWER = { land: "auto", review: "light", secondRound: false, reason: "r", model: "m" } as const;
+  const ANSWER = {
+    routing: { land: "auto", review: "light", secondRound: false, reason: "r", model: "m" },
+    tokens: { input: 2, output: 58, cacheRead: 1568, cacheCreation: 6770 },
+  } as const;
 
   const answering = (reader: Reader): Promise<typeof ANSWER> => {
     expect(reader.cwd).not.toBe("");
@@ -749,15 +753,14 @@ describe("the Routing judge's worktree", () => {
     };
 
     expect(await judgeAt({ kind: "ask" }, checkout, JOB, failing)).toMatchObject({
-      review: "deep",
-      secondRound: true,
-      reason: "the Routing judge failed: the judge broke",
+      routing: { review: "deep", secondRound: true, reason: "the Routing judge failed: the judge broke" },
+      tokens: null,
     });
     expect(existsSync(roots[0] ?? checkout.cwd)).toBe(false);
     expect(await worktrees()).toBe(1);
 
     expect(await judgeAt({ kind: "ask" }, { ...checkout, run: refusingRemoval }, JOB, failing)).toMatchObject({
-      reason: "the Routing judge failed: the judge broke",
+      routing: { reason: "the Routing judge failed: the judge broke" },
     });
     expect(await worktrees()).toBe(1);
   });
@@ -775,16 +778,19 @@ describe("the Routing judge's worktree", () => {
     expect(
       await judgeAt({ kind: "ask" }, checkout, { ...JOB, CLAUDE_CODE_OAUTH_TOKEN: undefined }, answering),
     ).toMatchObject({
-      review: "deep",
-      secondRound: true,
-      reason: "the Routing judge failed: CLAUDE_CODE_OAUTH_TOKEN is unset",
+      routing: {
+        review: "deep",
+        secondRound: true,
+        reason: "the Routing judge failed: CLAUDE_CODE_OAUTH_TOKEN is unset",
+      },
+      tokens: null,
     });
     expect(await worktrees()).toBe(1);
 
     const unknown = await judgeAt({ kind: "ask" }, { ...checkout, head: "f".repeat(40) }, JOB, answering);
 
-    expect(unknown).toMatchObject({ review: "deep", secondRound: true });
-    expect(unknown?.reason).toStartWith("the Routing judge failed: git worktree add exited");
+    expect(unknown).toMatchObject({ routing: { review: "deep", secondRound: true }, tokens: null });
+    expect(unknown?.routing.reason).toStartWith("the Routing judge failed: git worktree add exited");
   });
 
   test("the checkout runs no filter driver of the runner's system or global git config, LFS included, and no hook", async () => {
@@ -833,5 +839,32 @@ describe("the Routing judge's worktree", () => {
       CLAUDE_CONFIG_DIR: "/tmp/config",
     });
     expect(() => judgeEnvOf({ ...JOB, HOME: "" }, "/tmp/config")).toThrow("HOME is unset");
+  });
+});
+
+describe("routingLineOf", () => {
+  const ANSWER = {
+    land: "auto",
+    review: "light",
+    secondRound: false,
+    reason: "docs",
+    model: "claude-haiku-5-5",
+  } as const;
+
+  const TOKENS = { input: 2, output: 58, cacheRead: 1568, cacheCreation: 6770 };
+
+  test("the Routing judge's tokens close the line when it was asked, and none when its call counted none", () => {
+    expect(routingLineOf(91, "3f2a9c1e00", ANSWER, { routing: ANSWER, tokens: TOKENS })).toBe(
+      "#91 routing 3f2a9c1e: route:auto review:light second:false by claude-haiku-5-5 (docs) tokens in=2 out=58 cache_read=1568 cache_write=6770",
+    );
+    expect(routingLineOf(91, "3f2a9c1e00", ANSWER, { routing: ANSWER, tokens: null })).toBe(
+      "#91 routing 3f2a9c1e: route:auto review:light second:false by claude-haiku-5-5 (docs) tokens none",
+    );
+  });
+
+  test("a route the Routing rules set alone names no tokens", () => {
+    expect(routingLineOf(91, "3f2a9c1e00", { ...ANSWER, model: null, reason: "rules" }, null)).toBe(
+      "#91 routing 3f2a9c1e: route:auto review:light second:false by the Routing rules (rules)",
+    );
   });
 });

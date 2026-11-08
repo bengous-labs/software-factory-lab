@@ -5,6 +5,8 @@ import { Result, Schema } from "effect";
 import type { Answer, Ask, Question, Reader } from "../ports/ask.ts";
 import { ROUTING_JUDGE_MODEL, routingJudge, RoutingJudgeAnswer, routingOf, SCHEMA } from "./routing-judge.ts";
 
+const TOKENS = { input: 2, output: 58, cacheRead: 1568, cacheCreation: 6770 };
+
 const SAFE = { land: "auto", review: "deep", secondRound: true };
 
 const READER: Reader = {
@@ -65,11 +67,11 @@ describe("routingJudge", () => {
     const { ask, questions } = asking({
       kind: "answered",
       structured: { review: "none", second_round: false, reason: "docs" },
-      costUsd: 0.003,
+      tokens: TOKENS,
       model: "claude-haiku-5-5",
     });
 
-    const routing = await routingJudge(ask, READER, "1 file changed", "+docs", false);
+    const { routing, tokens } = await routingJudge(ask, READER, "1 file changed", "+docs", false);
 
     expect(questions).toHaveLength(1);
     expect(questions[0]).toMatchObject({ model: ROUTING_JUDGE_MODEL, cwd: "/work/pr", env: READER.env });
@@ -88,37 +90,42 @@ describe("routingJudge", () => {
       reason: "docs",
       model: "claude-haiku-5-5",
     });
+    expect(tokens).toEqual(TOKENS);
   });
 
   test("a failed call answers the safe side, with the error as its reason, named after the model that ran", async () => {
     const { ask } = asking({
       kind: "failed",
       error: "error_during_execution: overloaded",
-      costUsd: 0.001,
+      tokens: TOKENS,
       model: "claude-haiku-5-5",
     });
 
-    const routing = await routingJudge(ask, READER, "s", "p", true);
+    const { routing, tokens } = await routingJudge(ask, READER, "s", "p", true);
 
     expect(routing).toMatchObject({ ...SAFE, model: "claude-haiku-5-5" });
     expect(routing.reason).toBe("the Routing judge failed: error_during_execution: overloaded");
+    expect(tokens).toEqual(TOKENS);
   });
 
   test("a call with no result is named after the model asked, never the Routing rules", async () => {
-    const { ask } = asking({ kind: "failed", error: "timed out after 180000 ms", costUsd: null, model: null });
+    const { ask } = asking({ kind: "failed", error: "timed out after 180000 ms", tokens: null, model: null });
 
-    expect(await routingJudge(ask, READER, "s", "p", false)).toMatchObject({ ...SAFE, model: ROUTING_JUDGE_MODEL });
+    expect(await routingJudge(ask, READER, "s", "p", false)).toMatchObject({
+      routing: { ...SAFE, model: ROUTING_JUDGE_MODEL },
+      tokens: null,
+    });
   });
 
   test("an answer that does not read answers the safe side", async () => {
     const { ask } = asking({
       kind: "answered",
       structured: { review: "soon", second_round: false, reason: "" },
-      costUsd: 0.003,
+      tokens: TOKENS,
       model: "claude-haiku-5-5",
     });
 
-    const routing = await routingJudge(ask, READER, "s", "p", false);
+    const { routing } = await routingJudge(ask, READER, "s", "p", false);
 
     expect(routing).toMatchObject(SAFE);
     expect(routing.reason).toBe(

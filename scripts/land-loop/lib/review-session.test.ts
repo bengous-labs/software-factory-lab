@@ -60,8 +60,14 @@ const RESULT = message({
   is_error: false,
   result: "Command completed",
   num_turns: 0,
-  total_cost_usd: 0.013,
-  modelUsage: { [SONNET]: { costUSD: 0.013 } },
+  modelUsage: {
+    [SONNET]: {
+      inputTokens: 41_022,
+      outputTokens: 3310,
+      cacheReadInputTokens: 812_400,
+      cacheCreationInputTokens: 60_211,
+    },
+  },
 });
 
 const FINDINGS = { findings: [] };
@@ -120,7 +126,7 @@ describe("optionsOf", () => {
 });
 
 describe("sessionWith", () => {
-  test("the fork's accepted StructuredOutput call is the answer, with the Claude Code version, model and cost", async () => {
+  test("the fork's accepted StructuredOutput call is the answer, with the Claude Code version, model and tokens", async () => {
     const { stream, calls } = streamOf([INIT, structuredCall("c1", FINDINGS), toolResult("c1", false), RESULT]);
 
     expect(await sessionWith(stream)(CALL)).toEqual({
@@ -128,7 +134,7 @@ describe("sessionWith", () => {
       structured: FINDINGS,
       model: SONNET,
       claudeCodeVersion: "2.1.318",
-      costUsd: 0.013,
+      tokens: { input: 41_022, output: 3310, cacheRead: 812_400, cacheCreation: 60_211 },
     });
     expect(calls[0]?.prompt).toBe(CALL.prompt);
   });
@@ -184,7 +190,7 @@ describe("sessionWith", () => {
       error: "timed out after 10 ms",
       model: null,
       claudeCodeVersion: null,
-      costUsd: null,
+      tokens: null,
     });
   });
 });

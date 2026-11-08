@@ -1,5 +1,7 @@
 import type { Schema } from "effect";
 
+import type { TokenCounts } from "../../lib/tokens.ts";
+
 type ReviewEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** The guard's answer to one tool call: allow it, or deny it with a reason the reviewer reads. */
@@ -27,7 +29,7 @@ interface SessionFacts {
   readonly model: string | null;
   /** `claude_code_version` of the session's init message, null when none came. */
   readonly claudeCodeVersion: string | null;
-  readonly costUsd: number | null;
+  readonly tokens: TokenCounts | null;
 }
 
 /** What one review session gave: the input of the fork's accepted StructuredOutput call, or why there is none. */

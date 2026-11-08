@@ -39,6 +39,10 @@ const preToolUse = (toolName: string, toolInput: Schema.Json): PreToolUseHookInp
   cwd: "/repo",
 });
 
+const HAIKU_USAGE = { inputTokens: 2, outputTokens: 4, cacheReadInputTokens: 1568, cacheCreationInputTokens: 6770 };
+
+const TOKENS = { input: 2, output: 4, cacheRead: 1568, cacheCreation: 6770 };
+
 const noHook: HookCallback = () => Promise.resolve({});
 
 const hookOf = (hook: HookCallback, input: PreToolUseHookInput): ReturnType<HookCallback> =>
@@ -51,13 +55,12 @@ function result(fields: Readonly<Record<string, Schema.Json>>): SDKResultMessage
     subtype: "success",
     is_error: false,
     result: "",
-    total_cost_usd: 0.01,
-    modelUsage: { [HAIKU]: { costUSD: 0.01 } },
+    modelUsage: { [HAIKU]: HAIKU_USAGE },
     ...fields,
   } as unknown as SDKResultMessage;
 }
 
-const failedWith = (error: string): Answer => ({ kind: "failed", error, costUsd: 0.01, model: HAIKU });
+const failedWith = (error: string): Answer => ({ kind: "failed", error, tokens: TOKENS, model: HAIKU });
 
 const untilAborted = (options: Options): Promise<never> =>
   new Promise((_, reject) => {
@@ -149,30 +152,35 @@ describe("optionsOf", () => {
   });
 });
 
+const out = (outputTokens: number) => ({ outputTokens });
+
 describe("modelOf", () => {
-  test("the exact model is the one that cost the most", () => {
-    expect(modelOf({ [HAIKU]: { costUSD: 0.001 }, "claude-opus-5-5": { costUSD: 0.049 } })).toBe("claude-opus-5-5");
+  test("the exact model is the one with the most output tokens; a tie goes to the first", () => {
+    expect(modelOf({ [HAIKU]: out(4), "claude-opus-5-5": out(90), "claude-sonnet-5-5": out(10) })).toBe(
+      "claude-opus-5-5",
+    );
+    expect(modelOf({ [HAIKU]: out(7), "claude-opus-5-5": out(7) })).toBe(HAIKU);
     expect(modelOf({})).toBeNull();
   });
 });
 
 describe("answerOf", () => {
-  test("a success with structured output is an answer, with its cost and its model", () => {
+  test("a success with structured output is an answer, with its tokens and its model", () => {
     expect(answerOf(result({ structured_output: { findings: [] } }), null)).toEqual({
       kind: "answered",
       structured: { findings: [] },
-      costUsd: 0.01,
+      tokens: TOKENS,
       model: HAIKU,
     });
   });
 
-  test("an error result fails with its subtype and errors, and keeps its cost and its model", () => {
+  test("an error result fails with its subtype and errors, and keeps its tokens and its model", () => {
     const failed = result({ subtype: "error_max_structured_output_retries", errors: ["no valid output"] });
 
     expect(answerOf(failed, "Claude Code returned an error result")).toEqual({
       kind: "failed",
       error: "error_max_structured_output_retries: no valid output",
-      costUsd: 0.01,
+      tokens: TOKENS,
       model: HAIKU,
     });
   });
@@ -187,13 +195,13 @@ describe("answerOf", () => {
     expect(answerOf(undefined, "timed out after 1000 ms")).toEqual({
       kind: "failed",
       error: "timed out after 1000 ms",
-      costUsd: null,
+      tokens: null,
       model: null,
     });
     expect(answerOf(undefined, null)).toEqual({
       kind: "failed",
       error: "the call ended without a result",
-      costUsd: null,
+      tokens: null,
       model: null,
     });
   });
@@ -208,7 +216,7 @@ describe("askWith", () => {
     expect(await askWith(stream)(QUESTION)).toEqual({
       kind: "answered",
       structured: { ok: true },
-      costUsd: 0.01,
+      tokens: TOKENS,
       model: HAIKU,
     });
     expect(calls[0]?.prompt).toBe("p");
@@ -236,7 +244,7 @@ describe("askWith", () => {
     expect(await askWith(stream)(QUESTION)).toEqual({
       kind: "failed",
       error: "Native CLI binary not found",
-      costUsd: null,
+      tokens: null,
       model: null,
     });
   });
@@ -250,7 +258,7 @@ describe("askWith", () => {
     expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toEqual({
       kind: "failed",
       error: "timed out after 10 ms",
-      costUsd: null,
+      tokens: null,
       model: null,
     });
   });

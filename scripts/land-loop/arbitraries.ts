@@ -106,7 +106,7 @@ const RUN_FACTS = {
   }),
   model: fc.constant(null),
   claudeCodeVersion: fc.constant(null),
-  costUsd: fc.constant(null),
+  tokens: fc.constant(null),
   runUrl: fc.constant("https://github.com/o/r/actions/runs/1"),
 };
 

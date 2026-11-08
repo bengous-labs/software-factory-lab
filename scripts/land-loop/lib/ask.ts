@@ -8,6 +8,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { HookCallback, Options, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Option, Schema } from "effect";
 
+import { tokensOf } from "../../lib/tokens.ts";
 import type { Answer, Ask, Question } from "../ports/ask.ts";
 import type { ToolDecision, ToolGuard } from "../ports/review.ts";
 
@@ -54,20 +55,20 @@ export function optionsOf(question: Question, abortController: AbortController):
   };
 }
 
-/** The exact model of a call: the one that cost the most, when several ran. */
-export function modelOf(modelUsage: Readonly<Record<string, { readonly costUSD: number }>>): string | null {
-  return Object.entries(modelUsage).toSorted((a, b) => b[1].costUSD - a[1].costUSD)[0]?.[0] ?? null;
+/** The exact model of a call: the one with the most output tokens, when several ran; a tie goes to the first. */
+export function modelOf(modelUsage: Readonly<Record<string, { readonly outputTokens: number }>>): string | null {
+  return Object.entries(modelUsage).toSorted((a, b) => b[1].outputTokens - a[1].outputTokens)[0]?.[0] ?? null;
 }
 
 /** The answer a call's result message carries; `thrown` is what the call threw, if it threw. */
 export function answerOf(result: SDKResultMessage | undefined, thrown: string | null): Answer {
   if (result === undefined) {
-    return { kind: "failed", error: thrown ?? "the call ended without a result", costUsd: null, model: null };
+    return { kind: "failed", error: thrown ?? "the call ended without a result", tokens: null, model: null };
   }
 
-  const costUsd = result.total_cost_usd;
+  const tokens = tokensOf(result.modelUsage);
   const model = modelOf(result.modelUsage);
-  const failed = (error: string): Answer => ({ kind: "failed", error, costUsd, model });
+  const failed = (error: string): Answer => ({ kind: "failed", error, tokens, model });
 
   if (result.subtype !== "success") {
     return failed(`${result.subtype}: ${result.errors.join("; ")}`);
@@ -81,7 +82,7 @@ export function answerOf(result: SDKResultMessage | undefined, thrown: string | 
     return failed("the result carries no structured output");
   }
 
-  return { kind: "answered", structured: result.structured_output, costUsd, model };
+  return { kind: "answered", structured: result.structured_output, tokens, model };
 }
 
 /** The messages of one SDK call, as `query()` yields them. */

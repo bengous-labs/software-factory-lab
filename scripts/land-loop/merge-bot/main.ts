@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { tokensText } from "../../lib/tokens.ts";
 import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import { ask } from "../lib/ask.ts";
@@ -39,6 +40,7 @@ import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { readGuardOf } from "../review/tool-guard.ts";
 import { judgeFailed, ROUTING_JUDGE_MODEL, routingJudge } from "../routing/routing-judge.ts";
+import type { RoutingVerdict } from "../routing/routing-judge.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
 import type { JudgeAsk } from "../routing/routing-rules.ts";
 import {
@@ -663,8 +665,8 @@ export async function judgeAt(
   question: JudgeAsk,
   checkout: Checkout,
   job: JobEnv,
-  judge: (reader: Reader) => Promise<RoutingAnswer>,
-): Promise<RoutingAnswer | null> {
+  judge: (reader: Reader) => Promise<RoutingVerdict>,
+): Promise<RoutingVerdict | null> {
   if (question.kind === "none") {
     return null;
   }
@@ -683,7 +685,10 @@ export async function judgeAt(
       });
     });
   } catch (error) {
-    return judgeFailed(error instanceof Error ? error.message : String(error), ROUTING_JUDGE_MODEL);
+    return {
+      routing: judgeFailed(error instanceof Error ? error.message : String(error), ROUTING_JUDGE_MODEL),
+      tokens: null,
+    };
   } finally {
     rmSync(dir, { recursive: true, force: true });
     await checkout.run(["git", "worktree", "prune"], worktreeAt(checkout));
@@ -695,7 +700,7 @@ async function route(
   range: Range,
   record: StateRecord,
   { patchDelta, pr }: { readonly patchDelta: boolean; readonly pr: number },
-): Promise<RoutingAnswer> {
+): Promise<{ readonly answer: RoutingAnswer; readonly judge: RoutingVerdict | null }> {
   const policy = routingPolicyAt(env.cwd);
   const from = await rangeStart(env, range, record, patchDelta);
   const paths = await changedPaths(env, range.base, range.head);
@@ -732,10 +737,10 @@ async function route(
     ),
   );
 
-  const answer = routingOf(rules, patchDeltaRules, judge);
+  const answer = routingOf(rules, patchDeltaRules, judge?.routing ?? null);
 
   if (delta === null) {
-    return answer;
+    return { answer, judge };
   }
 
   const nitPaths = nitPathsOf(
@@ -744,7 +749,14 @@ async function route(
     await threadsOf(env, pr),
   );
 
-  return withNitAnswers(policy, answer, delta, { record, deltaFrom: from, nitPaths });
+  return { answer: withNitAnswers(policy, answer, delta, { record, deltaFrom: from, nitPaths }), judge };
+}
+
+/** The log line of a route; the Routing judge's tokens close it when the judge was asked. */
+export function routingLineOf(pr: number, patch: string, answer: RoutingAnswer, judge: RoutingVerdict | null): string {
+  const line = `#${pr} routing ${patch.slice(0, 8)}: route:${answer.land} review:${answer.review} second:${answer.secondRound} by ${answer.model ?? "the Routing rules"} (${answer.reason})`;
+
+  return judge === null ? line : `${line} ${tokensText(judge.tokens)}`;
 }
 
 // oxlint-disable-next-line typescript/consistent-return -- the switch covers every Step kind, so no path reaches the end.
@@ -759,10 +771,8 @@ async function perform(
 ): Promise<StateRecord | null> {
   switch (step.kind) {
     case "route": {
-      const answer = await route(env, range, record, { patchDelta: step.patchDelta, pr: pr.number });
-      log(
-        `#${pr.number} routing ${step.patch.slice(0, 8)}: route:${answer.land} review:${answer.review} second:${answer.secondRound} by ${answer.model ?? "the Routing rules"} (${answer.reason})`,
-      );
+      const { answer, judge } = await route(env, range, record, { patchDelta: step.patchDelta, pr: pr.number });
+      log(routingLineOf(pr.number, step.patch, answer, judge));
       const next = { ...record, triage: { ...record.triage, [step.patch]: answer } };
       await writeRecord(env, pr.number, recordId, next);
 
