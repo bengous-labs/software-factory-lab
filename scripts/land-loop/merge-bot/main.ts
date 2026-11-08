@@ -11,7 +11,7 @@
  * in its own job, `.github/workflows/code-review.yml`, which the Merge bot dispatches and whose artifact it reads.
  */
 
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,7 +31,7 @@ import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from ".
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { readGuardOf } from "../review/tool-guard.ts";
-import { routingJudge } from "../routing/routing-judge.ts";
+import { judgeFailed, ROUTING_JUDGE_MODEL, routingJudge } from "../routing/routing-judge.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
 import type { JudgeAsk } from "../routing/routing-rules.ts";
 import {
@@ -563,7 +563,7 @@ export const readsPatchDelta = (round: ReviewRound): boolean => round >= 2;
 type JobEnv = Readonly<Partial<Record<string, string>>>;
 
 /** The Routing judge's whole environment, from the job's: its PATH, HOME and model token, and no GitHub token. */
-export function judgeEnvOf(job: JobEnv) {
+export function judgeEnvOf(job: JobEnv, configDir: string) {
   const of = (name: string): string => {
     const value = job[name];
 
@@ -579,7 +579,7 @@ export function judgeEnvOf(job: JobEnv) {
     HOME: of("HOME"),
     CLAUDE_CODE_OAUTH_TOKEN: of("CLAUDE_CODE_OAUTH_TOKEN"),
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-    CLAUDE_CONFIG_DIR: mkdtempSync(join(tmpdir(), "routing-judge-config-")),
+    CLAUDE_CONFIG_DIR: configDir,
   };
 }
 
@@ -591,8 +591,43 @@ interface Checkout {
 }
 
 /**
+ * The git of the worktree's checkout, in a job that holds the App's token: no system or global config,
+ * so no filter driver a PR's `.gitattributes` names runs, no LFS smudge, and no hook.
+ */
+const CHECKOUT_GIT_ENV = {
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_LFS_SKIP_SMUDGE: "1",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "core.hooksPath",
+  GIT_CONFIG_VALUE_0: "/dev/null",
+};
+
+/** `read` over a worktree of the PR's head at `tree`, removed after it; when `read` fails, its error is the one thrown. */
+async function inWorktree<T>(checkout: Checkout, tree: string, read: (root: string) => Promise<T>): Promise<T> {
+  const where = { cwd: checkout.cwd, env: CHECKOUT_GIT_ENV };
+  const removal = ["git", "worktree", "remove", "--force", tree];
+
+  await checked(checkout.run, ["git", "worktree", "add", "--detach", tree, checkout.head], where);
+
+  try {
+    const value = await read(realpathSync(tree));
+
+    await checked(checkout.run, removal, where);
+
+    return value;
+  } catch (error) {
+    // A second failure of the removal would hide the cause; the caller removes the tree's directory anyway.
+    await checkout.run(removal, where);
+
+    throw error;
+  }
+}
+
+/**
  * The Routing judge's answer when `question` asks it, else null. The judge reads a worktree of the PR's
- * head, made for the call and removed after it, failed call included, under the read guard.
+ * head, made for the call and removed after it, under the read guard. A worktree or an environment that
+ * cannot be made, or a call that throws, answers the safe side, so one PR never stops a Sweep.
  */
 export async function judgeAt(
   question: JudgeAsk,
@@ -604,20 +639,21 @@ export async function judgeAt(
     return null;
   }
 
-  const env = judgeEnvOf(job);
   const dir = mkdtempSync(join(tmpdir(), "routing-judge-"));
-  const tree = join(dir, "pr");
+  const configDir = join(dir, "config");
 
   try {
-    await checked(checkout.run, ["git", "worktree", "add", "--detach", tree, checkout.head], { cwd: checkout.cwd });
+    return await inWorktree(checkout, join(dir, "pr"), (root) => {
+      mkdirSync(configDir);
 
-    try {
-      const root = realpathSync(tree);
-
-      return await judge({ cwd: root, guard: readGuardOf({ root, resolve: resolverOf(root) }), env });
-    } finally {
-      await checked(checkout.run, ["git", "worktree", "remove", "--force", tree], { cwd: checkout.cwd });
-    }
+      return judge({
+        cwd: root,
+        guard: readGuardOf({ root, resolve: resolverOf(root) }),
+        env: judgeEnvOf(job, configDir),
+      });
+    });
+  } catch (error) {
+    return judgeFailed(error instanceof Error ? error.message : String(error), ROUTING_JUDGE_MODEL);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

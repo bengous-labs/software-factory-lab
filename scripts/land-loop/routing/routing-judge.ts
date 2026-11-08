@@ -61,6 +61,17 @@ export function routingOf(answer: RoutingJudgeAnswer, model: string | null): Rou
   return { land: "auto", review: answer.review, secondRound: answer.second_round, reason: answer.reason, model };
 }
 
+/** The safe side, when the judge could not answer: a deep review and a second round. */
+export function judgeFailed(why: string, model: string): RoutingAnswer {
+  return {
+    land: "auto",
+    review: "deep",
+    secondRound: true,
+    reason: `the Routing judge failed: ${why.slice(0, 200)}`,
+    model,
+  };
+}
+
 export async function routingJudge(
   ask: Ask,
   reader: Reader,
@@ -76,13 +87,7 @@ export async function routingJudge(
     timeoutMs: 180_000,
   });
 
-  const safeSide = (why: string): RoutingAnswer => ({
-    land: "auto",
-    review: "deep",
-    secondRound: true,
-    reason: `the Routing judge failed: ${why.slice(0, 200)}`,
-    model: answer.model ?? ROUTING_JUDGE_MODEL,
-  });
+  const safeSide = (why: string): RoutingAnswer => judgeFailed(why, answer.model ?? ROUTING_JUDGE_MODEL);
 
   if (answer.kind === "failed") {
     return safeSide(answer.error);

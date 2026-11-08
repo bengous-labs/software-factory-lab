@@ -399,18 +399,27 @@ const FIXTURE_ENV = Object.fromEntries(
   ),
 );
 
-/** A `Run` over the fixture's environment. */
-const fixtureRun: Run = async (argv, options) => {
-  const child = Bun.spawn([...argv], { cwd: options.cwd, env: FIXTURE_ENV, stdout: "pipe", stderr: "pipe" });
+/** A `Run` over the fixture's environment, with `base` under the call's own variables. */
+const runOver =
+  (base: Readonly<Record<string, string>>): Run =>
+  async (argv, options) => {
+    const child = Bun.spawn([...argv], {
+      cwd: options.cwd,
+      env: { ...FIXTURE_ENV, ...base, ...options.env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
 
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
 
-  return { code, stdout, stderr };
-};
+    return { code, stdout, stderr };
+  };
+
+const fixtureRun = runOver({});
 
 /** A new git repository, and a git that runs in it. */
 async function fixtureRepo(prefix: string) {
@@ -636,10 +645,20 @@ async function prRepo() {
   return { checkout: { run: fixtureRun, cwd: repo, head }, worktrees };
 }
 
+/** A git that refuses to remove a worktree. */
+const refusingRemoval: Run = (argv, options) =>
+  argv.includes("remove") ? Promise.resolve({ code: 1, stdout: "", stderr: "locked" }) : fixtureRun(argv, options);
+
 describe("the Routing judge's worktree", () => {
   const JOB = { PATH: "/usr/bin", HOME: "/home/runner", CLAUDE_CODE_OAUTH_TOKEN: "oauth", GH_TOKEN: "app" };
 
   const ANSWER = { land: "auto", review: "light", secondRound: false, reason: "r", model: "m" } as const;
+
+  const answering = (reader: Reader): Promise<typeof ANSWER> => {
+    expect(reader.cwd).not.toBe("");
+
+    return Promise.resolve(ANSWER);
+  };
 
   test("no question makes no worktree and asks nothing", async () => {
     const { checkout, worktrees } = await prRepo();
@@ -666,6 +685,7 @@ describe("the Routing judge's worktree", () => {
       seen.push(
         readFileSync(join(reader.cwd, "app/src/cli.ts"), "utf8"),
         String(await worktrees()),
+        String(existsSync(reader.env.CLAUDE_CONFIG_DIR ?? "")),
         reader.guard("Read", { file_path: "app/src/cli.ts" }).kind,
         reader.guard("Read", { file_path: join(checkout.cwd, "app/src/cli.ts") }).kind,
         reader.guard("Read", { file_path: ".git" }).kind,
@@ -677,7 +697,7 @@ describe("the Routing judge's worktree", () => {
     const [reader] = readers;
 
     expect(answer).toEqual(ANSWER);
-    expect(seen).toEqual(["head\n", "2", "allow", "deny", "deny"]);
+    expect(seen).toEqual(["head\n", "2", "true", "allow", "deny", "deny"]);
     expect(reader?.cwd).not.toBe(checkout.cwd);
     expect(Object.keys(reader?.env ?? {}).toSorted()).toEqual([
       "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
@@ -688,42 +708,86 @@ describe("the Routing judge's worktree", () => {
     ]);
     expect(reader?.guard("Write", {})).toEqual({ kind: "deny", reason: "the tool Write is not admitted here" });
     expect(existsSync(reader?.cwd ?? checkout.cwd)).toBe(false);
+    expect(existsSync(reader?.env.CLAUDE_CONFIG_DIR ?? checkout.cwd)).toBe(false);
     expect(existsSync(dirname(reader?.cwd ?? checkout.cwd))).toBe(false);
     expect(await worktrees()).toBe(1);
   });
 
-  test("a failed call still removes the worktree, and its error reaches the caller", async () => {
+  test("a failed call answers the safe side with its own error, even when the removal fails too, and leaves no worktree", async () => {
     const { checkout, worktrees } = await prRepo();
     const roots: string[] = [];
 
-    const failing = judgeAt({ kind: "ask" }, checkout, JOB, (reader) => {
+    const failing = (reader: Reader): Promise<never> => {
       roots.push(reader.cwd);
 
       return Promise.reject(new Error("the judge broke"));
-    });
+    };
 
-    // oxlint-disable-next-line typescript/await-thenable, typescript/no-confusing-void-expression -- bun-types types rejects matchers as void; Bun returns the promise the test awaits.
-    await expect(failing).rejects.toThrow("the judge broke");
-    expect(roots).toHaveLength(1);
+    expect(await judgeAt({ kind: "ask" }, checkout, JOB, failing)).toMatchObject({
+      review: "deep",
+      secondRound: true,
+      reason: "the Routing judge failed: the judge broke",
+    });
     expect(existsSync(roots[0] ?? checkout.cwd)).toBe(false);
     expect(await worktrees()).toBe(1);
+
+    expect(await judgeAt({ kind: "ask" }, { ...checkout, run: refusingRemoval }, JOB, failing)).toMatchObject({
+      reason: "the Routing judge failed: the judge broke",
+    });
   });
 
-  test("the judge's environment holds the job's PATH, HOME and OAuth token, no memory and a fresh config, and nothing else", () => {
-    const env = judgeEnvOf(JOB);
+  test("a worktree or an environment that cannot be made answers the safe side, so the Sweep goes on", async () => {
+    const { checkout, worktrees } = await prRepo();
 
-    expect(env).toMatchObject({
+    expect(
+      await judgeAt({ kind: "ask" }, checkout, { ...JOB, CLAUDE_CODE_OAUTH_TOKEN: undefined }, answering),
+    ).toMatchObject({
+      review: "deep",
+      secondRound: true,
+      reason: "the Routing judge failed: CLAUDE_CODE_OAUTH_TOKEN is unset",
+    });
+    expect(await worktrees()).toBe(1);
+
+    const unknown = await judgeAt({ kind: "ask" }, { ...checkout, head: "f".repeat(40) }, JOB, answering);
+
+    expect(unknown).toMatchObject({ review: "deep", secondRound: true });
+    expect(unknown?.reason).toStartWith("the Routing judge failed: git worktree add exited");
+  });
+
+  test("the checkout runs no filter driver, hook or LFS smudge the PR or the runner's git config would run", async () => {
+    const { repo, git } = await fixtureRepo("judge-filters-");
+    const marks = mkdtempSync(join(tmpdir(), "judge-marks-"));
+    const globalConfig = join(marks, "gitconfig");
+    const hooks = join(marks, "hooks");
+
+    mkdirSync(hooks);
+    writeFileSync(join(hooks, "post-checkout"), `#!/bin/sh\ntouch ${join(marks, "hook-ran")}\n`, { mode: 0o755 });
+    writeFileSync(globalConfig, `[filter "evil"]\n\tsmudge = sh -c 'touch ${join(marks, "filter-ran")}; cat'\n`);
+    await git(["config", "core.hooksPath", hooks]);
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    await git(["add", "."]);
+    await git(["commit", "-q", "--no-verify", "-m", "a"]);
+    writeFileSync(join(repo, ".gitattributes"), "* filter=evil\n");
+    writeFileSync(join(repo, "a.txt"), "b\n");
+    await git(["add", "."]);
+    await git(["commit", "-q", "--no-verify", "-m", "b"]);
+    const head = (await git(["rev-parse", "HEAD"])).text().trim();
+
+    const checkout = { run: runOver({ GIT_CONFIG_GLOBAL: globalConfig }), cwd: repo, head };
+
+    expect(await judgeAt({ kind: "ask" }, checkout, JOB, answering)).toEqual(ANSWER);
+    expect(existsSync(join(marks, "filter-ran"))).toBe(false);
+    expect(existsSync(join(marks, "hook-ran"))).toBe(false);
+  });
+
+  test("the judge's environment holds the job's PATH, HOME and OAuth token, no memory and the given config, and nothing else", () => {
+    expect(judgeEnvOf(JOB, "/tmp/config")).toEqual({
       PATH: "/usr/bin",
       HOME: "/home/runner",
       CLAUDE_CODE_OAUTH_TOKEN: "oauth",
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+      CLAUDE_CONFIG_DIR: "/tmp/config",
     });
-    expect(env).not.toHaveProperty("GH_TOKEN");
-    expect(existsSync(env.CLAUDE_CONFIG_DIR)).toBe(true);
-    expect(judgeEnvOf(JOB).CLAUDE_CONFIG_DIR).not.toBe(env.CLAUDE_CONFIG_DIR);
-    expect(() => judgeEnvOf({ ...JOB, CLAUDE_CODE_OAUTH_TOKEN: undefined })).toThrow(
-      "CLAUDE_CODE_OAUTH_TOKEN is unset",
-    );
-    expect(() => judgeEnvOf({ ...JOB, HOME: "" })).toThrow("HOME is unset");
+    expect(() => judgeEnvOf({ ...JOB, HOME: "" }, "/tmp/config")).toThrow("HOME is unset");
   });
 });
