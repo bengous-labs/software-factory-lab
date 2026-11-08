@@ -271,11 +271,6 @@ const postOwnerComment = ownerCommenter(run);
 /** `repos/<repo>/commits/<sha>/check-suites`, as far as the Merge bot reads it. */
 export const CheckSuites = Schema.Struct({ check_suites: Schema.Array(Schema.Struct({ created_at: Schema.String })) });
 
-/** `repos/<repo>/actions/runs`, as far as the Merge bot reads it. */
-export const WorkflowRuns = Schema.Struct({
-  workflow_runs: Schema.Array(Schema.Struct({ conclusion: Schema.NullOr(Schema.String) })),
-});
-
 /** `repos/<repo>/commits/<sha>/pulls`, as far as the Merge bot reads it. */
 export const CommitPulls = Schema.Array(Schema.Struct({ number: Schema.Finite, state: Schema.String }));
 
@@ -446,16 +441,29 @@ const reviewJobOf = reviewJobReader(run);
 export const ciRunsPathsOf = (repo: string, sha: string): readonly string[] =>
   CI_CHECKS.map((name) => `repos/${repo}/commits/${sha}/check-runs?check_name=${name}`);
 
-/**
- * The latest completed push run of `ci.yml` on dev. Not of any workflow: the Merge bot's own push run
- * ends first and green, and would hide a red CI.
- */
-export const devCiRunsPathOf = (repo: string): string =>
-  `repos/${repo}/actions/workflows/ci.yml/runs?branch=dev&event=push&status=completed&per_page=1`;
-
 /** The CI of a head from the check runs of each of CI_CHECKS: GitHub Actions' run of each, as `ciOf` reads them. */
 export const ciOfRuns = (runs: ReadonlyArray<typeof CheckRuns.Type>): Snapshot["ci"] =>
   ciOf(runs.map((found) => found.check_runs.find((check) => check.app?.slug === "github-actions")));
+
+/** See `Snapshot["devRed"]`. */
+export const devRedOf = (runs: ReadonlyArray<typeof CheckRuns.Type>): boolean => ciOfRuns(runs) === "failure";
+
+/** The check runs of each of CI_CHECKS on the Trunk's head, as `rangeOf` fetched it. */
+export function devRunsReader(
+  runner: Run,
+): (where: Pick<Env, "repo" | "cwd">) => Promise<ReadonlyArray<typeof CheckRuns.Type>> {
+  return async (where) => {
+    const devHead = (await checked(runner, ["git", "rev-parse", `origin/${TRUNK}`], { cwd: where.cwd })).trim();
+
+    return Promise.all(
+      ciRunsPathsOf(where.repo, devHead).map(async (path) =>
+        decodeJson(CheckRuns, `gh api ${path}`, await checked(runner, ["gh", "api", "-X", "GET", path], where)),
+      ),
+    );
+  };
+}
+
+const devRunsOf = devRunsReader(run);
 
 async function snapshotOf(
   env: Env,
@@ -486,7 +494,7 @@ async function snapshotOf(
     landApprovalPutByOwner = landApprovalPutByOwnerOf(events, env.owner);
   }
 
-  const devRuns = await api(env, WorkflowRuns, devCiRunsPathOf(env.repo));
+  const devRuns = await devRunsOf(env);
 
   return {
     number: pr.number,
@@ -504,7 +512,7 @@ async function snapshotOf(
     landApprovalPutByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
     rejectedImportant: rejectedImportantOf(graphqlLogin(env.appLogin), threads),
-    devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
+    devRed: devRedOf(devRuns),
     conflicting: conflictingOf(pr.mergeable_state),
     record,
     now: new Date().toISOString(),

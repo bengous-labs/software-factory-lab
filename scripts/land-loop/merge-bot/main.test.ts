@@ -25,7 +25,8 @@ import {
   ciRunsPathsOf,
   CommitPulls,
   deletedPathsArgs,
-  devCiRunsPathOf,
+  devRedOf,
+  devRunsReader,
   Dispatched,
   humanLabelByOf,
   IssueComments,
@@ -49,7 +50,6 @@ import {
   routingLineOf,
   routingPolicyAt,
   startOf,
-  WorkflowRuns,
 } from "./main.ts";
 
 const PULL = {
@@ -99,9 +99,6 @@ describe("the GitHub answers the Merge bot reads", () => {
       ).check_runs,
     ).toHaveLength(1);
     expect(decodeJson(CheckSuites, "suites", JSON.stringify({ check_suites: [] })).check_suites).toEqual([]);
-    expect(decodeJson(WorkflowRuns, "runs", JSON.stringify({ workflow_runs: [{ conclusion: null }] }))).toEqual({
-      workflow_runs: [{ conclusion: null }],
-    });
     expect(decodeJson(CommitPulls, "pulls", JSON.stringify([{ number: 3, state: "open" }]))).toEqual([
       { number: 3, state: "open" },
     ]);
@@ -176,7 +173,6 @@ describe("the GitHub answers the Merge bot reads", () => {
       [CheckRuns, { check_runs: [{ name: "validate", status: "completed", conclusion: null }] }],
       [IssueEvents, [{ event: "labeled", label: { name: "land-ok" }, actor: { login: "a" } }]],
       [CheckSuites, { check_suites: [{ created_at: null }] }],
-      [WorkflowRuns, { workflow_runs: null }],
       [CommitPulls, [{ number: "3", state: "open" }]],
       [ListedPrs, [{ id: 3 }]],
       [ActionsRun, { status: "completed" }],
@@ -742,12 +738,6 @@ describe("the routing inputs", () => {
     expect(startOf({ event: "schedule" })).toEqual({ kind: "sweep" });
   });
 
-  test("dev is red by the latest push run of CI alone, never another workflow's", () => {
-    expect(devCiRunsPathOf("o/r")).toBe(
-      "repos/o/r/actions/workflows/ci.yml/runs?branch=dev&event=push&status=completed&per_page=1",
-    );
-  });
-
   test("the CI of a head reads GitHub Actions' validate and mutation runs on it", () => {
     expect(ciRunsPathsOf("o/r", "h1")).toEqual([
       "repos/o/r/commits/h1/check-runs?check_name=validate",
@@ -758,6 +748,74 @@ describe("the routing inputs", () => {
     expect(ciOfRuns([ciRuns("success"), ciRuns("failure")])).toBe("failure");
     expect(ciOfRuns([ciRuns("success"), ciRuns(null)])).toBeNull();
     expect(ciOfRuns([ciRuns("success"), ciRuns("success", "another-app")])).toBeNull();
+  });
+});
+
+const checkRun = (status: string, conclusion: string | null) => ({
+  check_runs: [{ name: "x", status, conclusion, app: { slug: "github-actions" } }],
+});
+
+const NO_CHECK_RUN = { check_runs: [] };
+
+describe("devRedOf", () => {
+  test("validate and mutation completed success: dev is not red", () => {
+    expect(devRedOf([checkRun("completed", "success"), checkRun("completed", "success")])).toBe(false);
+  });
+
+  test("validate completed failure: dev is red, whatever mutation is", () => {
+    expect(devRedOf([checkRun("completed", "failure"), checkRun("in_progress", null)])).toBe(true);
+  });
+
+  test("mutation completed failure after a green validate: dev is red", () => {
+    expect(devRedOf([checkRun("completed", "success"), checkRun("completed", "failure")])).toBe(true);
+  });
+
+  test("validate completed cancelled: dev is red, whatever mutation is", () => {
+    expect(devRedOf([checkRun("completed", "cancelled"), NO_CHECK_RUN])).toBe(true);
+  });
+
+  test("mutation still running after a green validate: dev is not red", () => {
+    expect(devRedOf([checkRun("completed", "success"), checkRun("in_progress", null)])).toBe(false);
+  });
+
+  test("no check run posted yet: dev is not red", () => {
+    expect(devRedOf([NO_CHECK_RUN, NO_CHECK_RUN])).toBe(false);
+  });
+});
+
+describe("devRunsReader", () => {
+  const DEV_HEAD = "43e27e7".padEnd(40, "0");
+
+  /** `origin/dev` is DEV_HEAD, its CI check runs are green, and every workflow run, the Merge bot's among them, failed. */
+  function devRunner() {
+    const calls: string[][] = [];
+
+    const runner: Run = (argv) => {
+      calls.push([...argv]);
+
+      if (argv[0] === "git") {
+        return Promise.resolve(ok(`${DEV_HEAD}\n`));
+      }
+
+      const failedRuns = { workflow_runs: [{ name: "merge-bot", conclusion: "failure" }] };
+      const answer = (argv.at(-1) ?? "").includes("/actions/runs") ? failedRuns : checkRun("completed", "success");
+
+      return Promise.resolve(ok(JSON.stringify(answer)));
+    };
+
+    return { runner, calls };
+  }
+
+  test("reads validate and mutation on origin/dev's head, never a workflow run, so a failed Merge bot run is not read", async () => {
+    const { runner, calls } = devRunner();
+
+    const runs = await devRunsReader(runner)(WHERE);
+
+    expect(calls).toEqual([
+      ["git", "rev-parse", "origin/dev"],
+      ...ciRunsPathsOf("o/r", DEV_HEAD).map((path) => ["gh", "api", "-X", "GET", path]),
+    ]);
+    expect(devRedOf(runs)).toBe(false);
   });
 });
 
