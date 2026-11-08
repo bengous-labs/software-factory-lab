@@ -17,7 +17,7 @@ import { Schema } from "effect";
 import { decodeJson } from "../lib/json.ts";
 
 /** What `tsconfig.json` leaves out on purpose; anything else tracked must be type-checked. */
-const LEFT_OUT = /^scripts\/vendor\/anti-slop\//u;
+const LEFT_OUT = /^(?:scripts\/vendor\/anti-slop|\.claude\/plugins)\//u;
 
 const TSGO = join(import.meta.dir, "..", "..", "node_modules", ".bin", "tsgo");
 

@@ -1,5 +1,5 @@
 [test]
-pathIgnorePatterns = [".claude/worktrees/**"]
+pathIgnorePatterns = [".claude/worktrees/**", ".claude/plugins/**"]
 preload = ["./scripts/ci/fast-check-seed.ts"]
 
 [fmt]

@@ -24,6 +24,12 @@ describe("uncovered", () => {
       "scripts/vendor/x.ts",
     ]);
   });
+
+  test("the mods under .claude/plugins/ are left out on purpose: bun run mods checks them", () => {
+    expect(uncovered("/repo", [".claude/plugins/land/hooks/land.tsx", ".claude/hooks/x.ts"], [])).toEqual([
+      ".claude/hooks/x.ts",
+    ]);
+  });
 });
 
 describe("filesOf", () => {

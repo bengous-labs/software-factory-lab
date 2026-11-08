@@ -13,6 +13,7 @@ The factory is built one subsystem at a time, and its design keeps moving. The L
 ## Commands
 
 - `bun check` is the one check: CI's `validate` job and the Stop hook run it. It chains the typecheck, oxlint, the format check, the gates in `scripts/gates/`, knip, the tests with coverage, then the coverage floor.
+- `bun run mods` validates and tests the mods under `.claude/plugins/` with the Claude Code that `bun install` puts in `node_modules`; `bun check` runs it.
 - `bun test <file>` runs one test file; add `-t <name>` to run the tests whose name matches.
 - `bun scripts/ci/mutation.ts run` is CI's `mutation` job: Stryker on each module `stryker.config.ts` lists that your branch changes, through its lines or its test file. `bun check` does not run it; run it before you stop when your change reaches one of those modules.
 - `bun app/src/cli.ts <command>` runs the CLI on `todo.json`, or on the file `TODO_FILE` names.
@@ -38,7 +39,7 @@ Strings stored outside the code keep their spelling when the code's vocabulary c
 
 ### Identities
 
-The Owner, `bengous`, gives the Land approval and the `land:human` veto, and releases `main`. The Author, every Worker, pushes, opens, readies and answers its PR as the machine account `bengous-labs-author`: the Stop hook, `thread.ts` and `comment.ts` read its fine-grained token from `~/.config/software-factory-lab/author-token` (`LAB_AUTHOR_TOKEN_FILE` overrides the path) and publish nothing without it. A `land-ok` it puts counts for nothing. The Merge bot and the Code review act as the agents' App, `bengous-labs-agents[bot]`. `merge-bot.yml` names the three logins: `OWNER`, `AUTHOR_LOGIN`, `APP_LOGIN`. Every Worker is launched with `GH_TOKEN` set from that file, so any `gh` it runs acts as the machine account.
+The Owner, `bengous`, gives the Land approval, the `land-ok` label, by hand on GitHub or with `/land <n>` in a session whose `gh` acts as `bengous`: the mod `.claude/plugins/land/` puts the label on the Owner's own typing alone, at the terminal or through Remote Control, shows its result in a band the model never reads, and refuses an agent's command that puts the label. A `/land` typed in a Worker's session puts the label as the Author, and counts for nothing. The Owner also gives the `land:human` veto, and releases `main`. The Author, every Worker, pushes, opens, readies and answers its PR as the machine account `bengous-labs-author`: the Stop hook, `thread.ts` and `comment.ts` read its fine-grained token from `~/.config/software-factory-lab/author-token` (`LAB_AUTHOR_TOKEN_FILE` overrides the path) and publish nothing without it. A `land-ok` it puts counts for nothing. The Merge bot and the Code review act as the agents' App, `bengous-labs-agents[bot]`. `merge-bot.yml` names the three logins: `OWNER`, `AUTHOR_LOGIN`, `APP_LOGIN`. Every Worker is launched with `GH_TOKEN` set from that file, so any `gh` it runs acts as the machine account.
 
 The Owner provisions the machine account: a member of `bengous-labs` with the Write role on this repository, and a fine-grained token whose resource owner is `bengous-labs`, limited to this repository, with Contents, Pull requests, Issues and Workflows in read and write. Workflows is needed because the Author pushes branches that change `.github/workflows/`: GitHub refuses such a push from a token without it. The token file is mode 600.
 

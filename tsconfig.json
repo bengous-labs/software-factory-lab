@@ -22,5 +22,5 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["**/*.ts", ".claude/**/*.ts"],
-  "exclude": ["node_modules", ".claude/worktrees", "scripts/vendor/anti-slop"]
+  "exclude": ["node_modules", ".claude/worktrees", "scripts/vendor/anti-slop", ".claude/plugins/**"]
 }
