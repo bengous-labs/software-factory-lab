@@ -177,6 +177,7 @@ export const CheckRuns = Schema.Struct({
       status: Schema.String,
       conclusion: Schema.NullOr(Schema.String),
       app: Schema.NullOr(Schema.Struct({ slug: Schema.String })),
+      check_suite: Schema.Struct({ id: Schema.Finite }),
     }),
   ),
 });
@@ -269,7 +270,16 @@ export function ownerCommenter(
 const postOwnerComment = ownerCommenter(run);
 
 /** `repos/<repo>/commits/<sha>/check-suites`, as far as the Merge bot reads it. */
-export const CheckSuites = Schema.Struct({ check_suites: Schema.Array(Schema.Struct({ created_at: Schema.String })) });
+export const CheckSuites = Schema.Struct({
+  check_suites: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      app: Schema.NullOr(Schema.Struct({ slug: Schema.String })),
+      head_branch: Schema.NullOr(Schema.String),
+      created_at: Schema.String,
+    }),
+  ),
+});
 
 /** `repos/<repo>/commits/<sha>/pulls`, as far as the Merge bot reads it. */
 export const CommitPulls = Schema.Array(Schema.Struct({ number: Schema.Finite, state: Schema.String }));
@@ -448,18 +458,49 @@ export const ciOfRuns = (runs: ReadonlyArray<typeof CheckRuns.Type>): Snapshot["
 /** See `Snapshot["devRed"]`. */
 export const devRedOf = (runs: ReadonlyArray<typeof CheckRuns.Type>): boolean => ciOfRuns(runs) === "failure";
 
-/** The check runs of each of CI_CHECKS on the Trunk's head, as `rangeOf` fetched it. */
+/**
+ * The runs of `runs` that ran in a GitHub Actions suite of a push to `branch`. The merge queue's commit
+ * becomes the Trunk's head, so it also carries the queue's suites, whose `mutation` is skipped.
+ */
+export function pushRunsOf(
+  suites: typeof CheckSuites.Type,
+  runs: ReadonlyArray<typeof CheckRuns.Type>,
+  branch: string,
+): ReadonlyArray<typeof CheckRuns.Type> {
+  const pushSuites = new Set(
+    suites.check_suites
+      .filter((suite) => suite.app?.slug === "github-actions" && suite.head_branch === branch)
+      .map((suite) => suite.id),
+  );
+
+  return runs.map((found) => ({
+    check_runs: found.check_runs.filter((check) => pushSuites.has(check.check_suite.id)),
+  }));
+}
+
+/** The push runs of each of CI_CHECKS on the Trunk's head, fetched by this read. */
 export function devRunsReader(
   runner: Run,
 ): (where: Pick<Env, "repo" | "cwd">) => Promise<ReadonlyArray<typeof CheckRuns.Type>> {
   return async (where) => {
-    const devHead = (await checked(runner, ["git", "rev-parse", `origin/${TRUNK}`], { cwd: where.cwd })).trim();
+    const options = { cwd: where.cwd };
 
-    return Promise.all(
-      ciRunsPathsOf(where.repo, devHead).map(async (path) =>
-        decodeJson(CheckRuns, `gh api ${path}`, await checked(runner, ["gh", "api", "-X", "GET", path], where)),
-      ),
+    const read = async <S extends Schema.ConstraintDecoder<unknown>>(schema: S, path: string): Promise<S["Type"]> =>
+      decodeJson(schema, `gh api ${path}`, await checked(runner, ["gh", "api", "-X", "GET", path], options));
+
+    await checked(
+      runner,
+      ["git", "fetch", "--quiet", "origin", `+refs/heads/${TRUNK}:refs/remotes/origin/${TRUNK}`],
+      options,
     );
+    const devHead = (await checked(runner, ["git", "rev-parse", `origin/${TRUNK}`], options)).trim();
+
+    const [suites, runs] = await Promise.all([
+      read(CheckSuites, `repos/${where.repo}/commits/${devHead}/check-suites?per_page=100`),
+      Promise.all(ciRunsPathsOf(where.repo, devHead).map((path) => read(CheckRuns, path))),
+    ]);
+
+    return pushRunsOf(suites, runs, TRUNK);
   };
 }
 
@@ -472,7 +513,10 @@ async function snapshotOf(
   record: StateRecord,
   threads: readonly ReviewThread[],
 ): Promise<Snapshot> {
-  const ciRuns = await Promise.all(ciRunsPathsOf(env.repo, pr.head.sha).map((path) => api(env, CheckRuns, path)));
+  const [ciRuns, devRuns] = await Promise.all([
+    Promise.all(ciRunsPathsOf(env.repo, pr.head.sha).map((path) => api(env, CheckRuns, path))),
+    devRunsOf(env),
+  ]);
 
   const patch = await patchOf(env, range);
   const empty = (await pathsListed(env, changedPathsArgs(range.base, range.head))).length === 0;
@@ -493,8 +537,6 @@ async function snapshotOf(
     landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, pushedAt);
     landApprovalPutByOwner = landApprovalPutByOwnerOf(events, env.owner);
   }
-
-  const devRuns = await devRunsOf(env);
 
   return {
     number: pr.number,

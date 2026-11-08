@@ -95,10 +95,21 @@ describe("the GitHub answers the Merge bot reads", () => {
       decodeJson(
         CheckRuns,
         "runs",
-        JSON.stringify({ check_runs: [{ name: "validate", status: "queued", conclusion: null, app: { slug: "a" } }] }),
+        JSON.stringify({
+          check_runs: [
+            { name: "validate", status: "queued", conclusion: null, app: { slug: "a" }, check_suite: { id: 1 } },
+          ],
+        }),
       ).check_runs,
     ).toHaveLength(1);
     expect(decodeJson(CheckSuites, "suites", JSON.stringify({ check_suites: [] })).check_suites).toEqual([]);
+    expect(
+      decodeJson(
+        CheckSuites,
+        "suites",
+        JSON.stringify({ check_suites: [{ id: 1, app: null, head_branch: null, created_at: "t" }] }),
+      ).check_suites,
+    ).toEqual([{ id: 1, app: null, head_branch: null, created_at: "t" }]);
     expect(decodeJson(CommitPulls, "pulls", JSON.stringify([{ number: 3, state: "open" }]))).toEqual([
       { number: 3, state: "open" },
     ]);
@@ -149,7 +160,7 @@ describe("the GitHub answers the Merge bot reads", () => {
     expect(landApprovalByOwnerOf(byGhost, "owner", null)).toBe(false);
 
     const runs = JSON.stringify({
-      check_runs: [{ name: "validate", status: "completed", conclusion: "success", app: null }],
+      check_runs: [{ name: "validate", status: "completed", conclusion: "success", app: null, check_suite: { id: 1 } }],
     });
 
     expect(decodeJson(CheckRuns, "runs", runs).check_runs[0]?.app).toBeNull();
@@ -467,7 +478,15 @@ describe("reviewJobReader", () => {
 });
 
 const ciRuns = (conclusion: string | null, slug = "github-actions") => ({
-  check_runs: [{ name: "x", status: conclusion === null ? "in_progress" : "completed", conclusion, app: { slug } }],
+  check_runs: [
+    {
+      name: "x",
+      status: conclusion === null ? "in_progress" : "completed",
+      conclusion,
+      app: { slug },
+      check_suite: { id: 1 },
+    },
+  ],
 });
 
 // An inherited GIT_DIR would point a fixture's git at the real repository; the test layer cannot import fixtureEnv.
@@ -751,9 +770,17 @@ describe("the routing inputs", () => {
   });
 });
 
-const checkRun = (status: string, conclusion: string | null) => ({
-  check_runs: [{ name: "x", status, conclusion, app: { slug: "github-actions" } }],
+type CheckRun = (typeof CheckRuns.Type)["check_runs"][number];
+
+const runIn = (suite: number, status: string, conclusion: string | null): CheckRun => ({
+  name: "x",
+  status,
+  conclusion,
+  app: { slug: "github-actions" },
+  check_suite: { id: suite },
 });
+
+const checkRun = (status: string, conclusion: string | null) => ({ check_runs: [runIn(1, status, conclusion)] });
 
 const NO_CHECK_RUN = { check_runs: [] };
 
@@ -786,19 +813,40 @@ describe("devRedOf", () => {
 describe("devRunsReader", () => {
   const DEV_HEAD = "43e27e7".padEnd(40, "0");
 
-  /** `origin/dev` is DEV_HEAD, its CI check runs are green, and every workflow run, the Merge bot's among them, failed. */
-  function devRunner() {
+  const QUEUE_SUITE = 1;
+  const PUSH_SUITE = 2;
+  const APP_SUITE = 3;
+
+  /** The merge queue's suite, CI's push suite and the App's suite on DEV_HEAD. */
+  const SUITES = {
+    check_suites: [
+      {
+        id: QUEUE_SUITE,
+        app: { slug: "github-actions" },
+        head_branch: "gh-readonly-queue/dev/pr-1-a",
+        created_at: "t",
+      },
+      { id: PUSH_SUITE, app: { slug: "github-actions" }, head_branch: "dev", created_at: "t" },
+      { id: APP_SUITE, app: { slug: "bengous-labs-agents" }, head_branch: "dev", created_at: "t" },
+    ],
+  };
+
+  /** `origin/dev` is DEV_HEAD, with SUITES, and `validate` and `mutation` answer these check runs, the queue's listed first. */
+  function devRunner(validate: readonly CheckRun[], mutation: readonly CheckRun[]) {
     const calls: string[][] = [];
 
     const runner: Run = (argv) => {
       calls.push([...argv]);
 
       if (argv[0] === "git") {
-        return Promise.resolve(ok(`${DEV_HEAD}\n`));
+        return Promise.resolve(ok(argv[1] === "rev-parse" ? `${DEV_HEAD}\n` : ""));
       }
 
-      const failedRuns = { workflow_runs: [{ name: "merge-bot", conclusion: "failure" }] };
-      const answer = (argv.at(-1) ?? "").includes("/actions/runs") ? failedRuns : checkRun("completed", "success");
+      const path = argv.at(-1) ?? "";
+
+      const answer = path.includes("/check-suites")
+        ? SUITES
+        : { check_runs: path.endsWith("=validate") ? validate : mutation };
 
       return Promise.resolve(ok(JSON.stringify(answer)));
     };
@@ -806,16 +854,48 @@ describe("devRunsReader", () => {
     return { runner, calls };
   }
 
-  test("reads validate and mutation on origin/dev's head, never a workflow run, so a failed Merge bot run is not read", async () => {
-    const { runner, calls } = devRunner();
+  test("fetches origin/dev, then reads its check suites and validate and mutation on its head, and no workflow run", async () => {
+    const { runner, calls } = devRunner(
+      [runIn(PUSH_SUITE, "completed", "success")],
+      [runIn(PUSH_SUITE, "completed", "success")],
+    );
 
     const runs = await devRunsReader(runner)(WHERE);
 
     expect(calls).toEqual([
+      ["git", "fetch", "--quiet", "origin", "+refs/heads/dev:refs/remotes/origin/dev"],
       ["git", "rev-parse", "origin/dev"],
+      ["gh", "api", "-X", "GET", `repos/o/r/commits/${DEV_HEAD}/check-suites?per_page=100`],
       ...ciRunsPathsOf("o/r", DEV_HEAD).map((path) => ["gh", "api", "-X", "GET", path]),
     ]);
     expect(devRedOf(runs)).toBe(false);
+  });
+
+  test("the merge queue's skipped mutation, listed first, does not read as red", async () => {
+    const { runner } = devRunner(
+      [runIn(QUEUE_SUITE, "completed", "success"), runIn(PUSH_SUITE, "completed", "success")],
+      [runIn(QUEUE_SUITE, "completed", "skipped"), runIn(PUSH_SUITE, "in_progress", null)],
+    );
+
+    expect(devRedOf(await devRunsReader(runner)(WHERE))).toBe(false);
+  });
+
+  test("the merge queue's green validate, listed first, does not hide a red push validate", async () => {
+    const { runner } = devRunner(
+      [runIn(QUEUE_SUITE, "completed", "success"), runIn(PUSH_SUITE, "completed", "failure")],
+      [runIn(QUEUE_SUITE, "completed", "skipped"), runIn(PUSH_SUITE, "completed", "success")],
+    );
+
+    expect(devRedOf(await devRunsReader(runner)(WHERE))).toBe(true);
+  });
+
+  test("a red run in another app's suite on dev is not read", async () => {
+    const { runner } = devRunner(
+      [runIn(APP_SUITE, "completed", "failure"), runIn(PUSH_SUITE, "completed", "success")],
+      [runIn(APP_SUITE, "completed", "failure"), runIn(PUSH_SUITE, "completed", "success")],
+    );
+
+    expect(devRedOf(await devRunsReader(runner)(WHERE))).toBe(false);
   });
 });
 
