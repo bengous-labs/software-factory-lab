@@ -234,6 +234,22 @@ export function labelEventsReader(
 
 const labelEventsOf = labelEventsReader(run);
 
+/** Posts `body` as a new comment on the PR: GitHub notifies a new comment, never an edit. */
+export function ownerCommenter(
+  runner: Run,
+): (where: Pick<Env, "repo" | "cwd">, pr: number, body: string) => Promise<void> {
+  return async (where, pr, body) => {
+    const path = `repos/${where.repo}/issues/${pr}/comments`;
+
+    await checked(runner, ["gh", "api", "-X", "POST", path, "--input", "-"], {
+      cwd: where.cwd,
+      stdin: JSON.stringify({ body }),
+    });
+  };
+}
+
+const postOwnerComment = ownerCommenter(run);
+
 /** `repos/<repo>/commits/<sha>/check-suites`, as far as the Merge bot reads it. */
 export const CheckSuites = Schema.Struct({ check_suites: Schema.Array(Schema.Struct({ created_at: Schema.String })) });
 
@@ -827,6 +843,12 @@ async function perform(
 
     case "remove-land-approval": {
       await send(env, "DELETE", `repos/${env.repo}/issues/${pr.number}/labels/${LAND_APPROVAL_LABEL}`);
+
+      return record;
+    }
+
+    case "owner-comment": {
+      await postOwnerComment(env, pr.number, step.body);
 
       return record;
     }
