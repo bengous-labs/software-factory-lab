@@ -34,7 +34,7 @@ import {
   holdStepsOf,
   IGNORED_BRANCH,
 } from "./decide.ts";
-import type { Action, PullRequest, Snapshot, StopChecks } from "./decide.ts";
+import type { Action, HoldSteps, PullRequest, Snapshot, StopChecks } from "./decide.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
 
@@ -254,23 +254,25 @@ async function prOf(deps: Deps, cwd: string, branch: string, author: AuthorToken
     : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid, labels: pr.labels.map((label) => label.name) };
 }
 
-/** Puts the Done judge's hold on the PR with the Author's credential, before the Merge bot can read it ready. */
-async function applyHold(
+/** The Done judge's hold on a PR; `created` says `gh pr create` put its label already. */
+interface HoldTarget {
+  readonly pr: number;
+  readonly hold: string | null;
+  readonly steps: HoldSteps;
+  readonly created: boolean;
+}
+
+/** Posts the hold's comment, then puts its label, with the Author's credential, and logs the hold. */
+async function putHold(
   deps: Deps,
   options: RunOptions,
-  target: { readonly pr: number; readonly hold: string | null; readonly labels: readonly string[] },
+  target: HoldTarget,
   log: (record: StopLogRecord) => void,
 ): Promise<void> {
-  const { pr, hold, labels } = target;
+  const { pr, hold, steps, created } = target;
 
   if (hold === null) {
     return;
-  }
-
-  const steps = holdStepsOf(hold, labels);
-
-  if (steps.addLabel) {
-    await checked(deps.run, ["gh", "pr", "edit", String(pr), "--add-label", "land:human"], options);
   }
 
   if (steps.comment !== null) {
@@ -278,6 +280,10 @@ async function applyHold(
       ...options,
       stdin: steps.comment,
     });
+  }
+
+  if (steps.addLabel && !created) {
+    await checked(deps.run, ["gh", "pr", "edit", String(pr), "--add-label", "land:human"], options);
   }
 
   log({ step: "hold", pr, reason: hold, added: steps.addLabel });
@@ -446,6 +452,14 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     return { kind: "allow" };
   }
 
+  // A PR the hook opens carries no label yet.
+  const hold = holdStepsOf(action.hold, action.kind === "push" ? (withArmed.pr?.labels ?? []) : []);
+
+  // The hold goes on before the push, so the Merge bot never reads the new head without it.
+  if (action.kind === "push") {
+    await putHold(deps, ghOptions(cwd, author), { pr: action.pr, hold: action.hold, steps: hold, created: false }, log);
+  }
+
   await checked(deps.run, pushArgs(branch), { cwd, env: { LAB_AUTHOR_TOKEN: author.token }, timeoutMs: 120_000 });
 
   let number: number;
@@ -467,17 +481,28 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
 
     const url = await checked(
       deps.run,
-      ["gh", "pr", "create", "--base", TRUNK, "--head", branch, "--title", text.title, "--body-file", "-"],
+      [
+        "gh",
+        "pr",
+        "create",
+        "--base",
+        TRUNK,
+        "--head",
+        branch,
+        "--title",
+        text.title,
+        "--body-file",
+        "-",
+        // On the create call itself, so the PR is never open without its hold.
+        ...(hold.addLabel ? ["--label", "land:human"] : []),
+      ],
       { ...ghOptions(cwd, author), stdin: body === "" ? "(no body)" : body },
     );
 
     number = Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
-    // A PR the hook just opened carries no label.
-    await applyHold(deps, ghOptions(cwd, author), { pr: number, hold: action.hold, labels: [] }, log);
+    await putHold(deps, ghOptions(cwd, author), { pr: number, hold: action.hold, steps: hold, created: true }, log);
   } else {
     number = action.pr;
-    const labels = withArmed.pr?.labels ?? [];
-    await applyHold(deps, ghOptions(cwd, author), { pr: number, hold: action.hold, labels }, log);
 
     if (action.ready) {
       await checked(deps.run, ["gh", "pr", "ready", String(number)], ghOptions(cwd, author));

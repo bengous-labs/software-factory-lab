@@ -132,6 +132,9 @@ describe("answerOf", () => {
       [`YES, HOLD: ${"r".repeat(400)}`, { kind: "hold", reason: "r".repeat(300) }],
       ["YES, HOLD:no space after the colon", { kind: "hold", reason: "no space after the colon" }],
       ["Maybe YES, HOLD: a hedge", { kind: "no" }],
+      ["**YES, HOLD**: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
+      ["**YES**, HOLD: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
+      ["**YES, HOLD:** renames a stored label", { kind: "hold", reason: "renames a stored label" }],
       ["YES, hold: lower case", { kind: "yes" }],
       ["NO, HOLD: not finished", { kind: "no" }],
     ];
@@ -218,6 +221,9 @@ describe("armReason", () => {
       "The Done judge held this PR for the Owner's read: a stored format. Do not remove land:human.",
     );
     expect(lines.slice(2)).toEqual(armReason(12, commands).split("\n").slice(1));
+    expect(armReason(12, commands, "a stored format.").split("\n")[1]).toBe(
+      "The Done judge held this PR for the Owner's read: a stored format. Do not remove land:human.",
+    );
   });
 });
 

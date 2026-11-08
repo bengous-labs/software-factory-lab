@@ -140,8 +140,9 @@ const HOLD_REASON_MAX = 300;
  * reason; YES first, as a word, is yes; anything else, an empty answer included, is no.
  */
 export function answerOf(text: string): Answer {
-  const first = text.trimStart().split("\n")[0] ?? "";
-  const hold = /^\**YES,\s*HOLD:\s*(.*)/u.exec(first);
+  // Markdown emphasis anywhere on the line, as in `**YES, HOLD**:` or `**YES**, HOLD:`, does not change the answer.
+  const first = (text.trimStart().split("\n")[0] ?? "").replaceAll("*", "");
+  const hold = /^YES,\s*HOLD:\s*(.*)/u.exec(first);
 
   if (hold !== null) {
     const reason = (hold[1] ?? "").trim();
@@ -149,7 +150,7 @@ export function answerOf(text: string): Answer {
     return { kind: "hold", reason: (reason === "" ? "(no reason given)" : reason).slice(0, HOLD_REASON_MAX) };
   }
 
-  return /^\**YES\b/u.test(first) ? { kind: "yes" } : { kind: "no" };
+  return /^YES\b/u.test(first) ? { kind: "yes" } : { kind: "no" };
 }
 
 export function decide(pr: PullRequest | null, answer: Answer): Action {
@@ -209,7 +210,9 @@ export function armReason(pr: number, commands: ArmCommands, hold: string | null
 
   return [
     `PR #${pr} is ready for review. The Stop hook pushed your branch; you do not push, open or ready anything yourself.`,
-    ...(hold === null ? [] : [`The Done judge held this PR for the Owner's read: ${hold}. Do not remove land:human.`]),
+    ...(hold === null
+      ? []
+      : [`The Done judge held this PR for the Owner's read: ${hold.replace(/\.$/u, "")}. Do not remove land:human.`]),
     "",
     "Arm the PR watch on it now with Monitor, with the longest timeout:",
     "",
