@@ -9,7 +9,8 @@
     "gates": "bun scripts/gates/check-lint-disables.ts && bun scripts/gates/check-typecheck-coverage.ts && bun scripts/gates/check-exception-ratchet.ts",
     "knip": "knip",
     "test": "bun test",
-    "check": "bun run typecheck && bun run lint && bun run format:check && bun run gates && bun run knip && bun test --coverage --coverage-reporter=text --coverage-reporter=lcov && bun scripts/gates/check-coverage-floor.ts"
+    "mods": "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude plugin validate .claude/plugins/land && node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude plugin test .claude/plugins/land",
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run gates && bun run knip && bun run mods && bun test --coverage --coverage-reporter=text --coverage-reporter=lcov && bun scripts/gates/check-coverage-floor.ts"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.92.0",

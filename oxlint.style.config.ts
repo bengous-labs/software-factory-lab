@@ -1,6 +1,6 @@
 import { defineConfig } from "oxlint";
 
-export const IGNORE_PATTERNS = ["scripts/vendor/anti-slop/**"];
+export const IGNORE_PATTERNS = ["scripts/vendor/anti-slop/**", ".claude/plugins/**"];
 
 export default defineConfig({
   // The edit hook runs this config alone with --fix: only the rules below may rewrite code.

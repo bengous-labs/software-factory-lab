@@ -15,5 +15,5 @@
     "scripts/lint/exception-ratchet.oxlint.config.ts",
   ],
   "project": ["**/*.ts"],
-  "ignore": ["scripts/vendor/anti-slop/**"],
+  "ignore": ["scripts/vendor/anti-slop/**", ".claude/plugins/**"],
 }

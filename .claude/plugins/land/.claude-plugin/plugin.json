@@ -1,0 +1,5 @@
+{
+  "name": "land",
+  "version": "0.1.0",
+  "description": "/land <n> puts the Owner's land-ok on a pull request and follows it to landing in a band above the prompt, never in the model's context; no agent can put land-ok"
+}

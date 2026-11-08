@@ -35,5 +35,8 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "land@software-factory-lab": true
   }
 }
