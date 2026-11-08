@@ -467,7 +467,7 @@ async function snapshotOf(
   const ciRuns = await Promise.all(ciRunsPathsOf(env.repo, pr.head.sha).map((path) => api(env, CheckRuns, path)));
 
   const patch = await patchOf(env, range);
-  const empty = (await changedPaths(env, range.base, range.head)).length === 0;
+  const empty = (await pathsListed(env, changedPathsArgs(range.base, range.head))).length === 0;
   const labels = pr.labels.map((label) => label.name);
   const humanLabel = `land:${storedLandRouteOf("owner")}`;
 
@@ -573,6 +573,15 @@ export const changedPathsArgs = (from: string, to: string): readonly string[] =>
   `${from}..${to}`,
 ];
 
+/** The arguments of a `git diff` that lists the paths a range deletes, renames split as in `changedPathsArgs`. */
+export const deletedPathsArgs = (from: string, to: string): readonly string[] => [
+  "diff",
+  "--name-only",
+  "--no-renames",
+  "--diff-filter=D",
+  `${from}..${to}`,
+];
+
 /** The arguments of the `git diff` the Routing judge reads, its `--stat` or its patch, over the whole range. */
 export const judgeDiffArgs = (from: string, to: string, stat: boolean): readonly string[] => [
   "diff",
@@ -585,8 +594,8 @@ export function routingPolicyAt(checkout: string): RoutingPolicy {
   return factoryConfigOf(readFileSync(join(checkout, FACTORY_CONFIG_PATH), "utf8")).land.routing;
 }
 
-const changedPaths = async (env: Env, from: string, to: string): Promise<readonly string[]> =>
-  (await git(env, changedPathsArgs(from, to))).split("\n").filter((path) => path !== "");
+const pathsListed = async (env: Env, args: readonly string[]): Promise<readonly string[]> =>
+  (await git(env, args)).split("\n").filter((path) => path !== "");
 
 /** The arguments of the `git diff --numstat` that counts the lines a range changes. */
 export const numstatArgs = (from: string, to: string): readonly string[] => ["diff", "--numstat", `${from}..${to}`];
@@ -715,7 +724,8 @@ async function route(
 ): Promise<{ readonly answer: RoutingAnswer; readonly judge: RoutingVerdict | null }> {
   const policy = routingPolicyAt(env.cwd);
   const from = await rangeStart(env, range, record, patchDelta);
-  const paths = await changedPaths(env, range.base, range.head);
+  const paths = await pathsListed(env, changedPathsArgs(range.base, range.head));
+  const deletedPaths = await pathsListed(env, deletedPathsArgs(range.base, range.head));
   const lines = await linesChanged(env, range.base, range.head);
 
   const messages = (await git(env, ["log", "--format=%B%x00", `${range.base}..${range.head}`]))
@@ -723,14 +733,15 @@ async function route(
     .map((message) => message.trim())
     .filter((message) => message !== "");
 
-  const rules = routingRulesOf(policy, { paths, lines, messages });
+  const rules = routingRulesOf(policy, { paths, lines, deletedPaths, messages });
 
   // The Routing rules hold the labels of the whole PR; whether this Patch delta is read again is its own
   // question, on its own paths and lines. A breaking commit is judged on the whole PR.
   const delta = patchDelta
     ? {
-        paths: await changedPaths(env, from, range.head),
+        paths: await pathsListed(env, changedPathsArgs(from, range.head)),
         lines: await linesChanged(env, from, range.head),
+        deletedPaths: await pathsListed(env, deletedPathsArgs(from, range.head)),
         messages: [],
       }
     : null;

@@ -31,7 +31,7 @@ import { FACTORY_CONFIG_PATH } from "./factory-config.ts";
 import type { RoutingPolicy } from "./factory-config.ts";
 import { LAND_APPROVAL_LABEL } from "./merge-bot/decide.ts";
 import type { RoutingAnswer, Snapshot, StateRecord } from "./merge-bot/decide.ts";
-import { judgeAskOf, routingOf, routingRulesOf } from "./routing/routing-rules.ts";
+import { judgeAskOf, NON_EXECUTABLE, routingOf, routingRulesOf } from "./routing/routing-rules.ts";
 import type { RoutingInput } from "./routing/routing-rules.ts";
 
 const ANY_PATH = fc.array(SEGMENT, { minLength: 1, maxLength: 4 }).map((segments) => segments.join("/"));
@@ -70,7 +70,10 @@ const MESSAGES = fc.array(
 /** Changed lines, as often under the lab's cap as past it. */
 const LINES = fc.oneof(fc.integer({ min: 0, max: LAB.lineCap }), fc.integer({ min: 0, max: 5000 }));
 
-/** A change that touches `path` among arbitrary others, at any size, with any commit messages. */
+/**
+ * A change that touches `path` among arbitrary others, at any size, with any commit messages, deleting
+ * some of its paths: as often all of them as an arbitrary subset.
+ */
 const changeWith = (path: fc.Arbitrary<string>): fc.Arbitrary<RoutingInput> =>
   fc
     .record({
@@ -80,14 +83,19 @@ const changeWith = (path: fc.Arbitrary<string>): fc.Arbitrary<RoutingInput> =>
       lines: LINES,
       messages: MESSAGES,
     })
-    .map(({ path: touched, others, at, lines, messages }) => ({
-      paths: others.toSpliced(at % (others.length + 1), 0, touched),
-      lines,
-      messages,
-    }));
+    .chain(({ path: touched, others, at, lines, messages }) => {
+      const paths = others.toSpliced(at % (others.length + 1), 0, touched);
 
-/** The Routing answer of a change under `policy`, whatever the Routing judge answers and whatever its Patch delta. */
-const routedArbitrarily = (policy: RoutingPolicy, change: fc.Arbitrary<RoutingInput>): fc.Arbitrary<RoutingAnswer> =>
+      return fc
+        .oneof(fc.constant(paths), fc.subarray(paths))
+        .map((deletedPaths) => ({ paths, lines, deletedPaths, messages }));
+    });
+
+/** A change under `policy` and its Routing answer, whatever the Routing judge answers and whatever its Patch delta. */
+const routedArbitrarily = (
+  policy: RoutingPolicy,
+  change: fc.Arbitrary<RoutingInput>,
+): fc.Arbitrary<{ readonly input: RoutingInput; readonly answer: RoutingAnswer }> =>
   fc
     .record({
       change,
@@ -98,8 +106,14 @@ const routedArbitrarily = (policy: RoutingPolicy, change: fc.Arbitrary<RoutingIn
       const verdict = routingRulesOf(policy, input);
       const patchDelta = delta === null ? null : routingRulesOf(policy, delta);
 
-      return routingOf(verdict, patchDelta, judgeAskOf(verdict, patchDelta).kind === "ask" ? judge : null);
+      return {
+        input,
+        answer: routingOf(verdict, patchDelta, judgeAskOf(verdict, patchDelta).kind === "ask" ? judge : null),
+      };
     });
+
+const matches = (globs: readonly string[], path: string): boolean =>
+  globs.some((glob) => new Bun.Glob(glob).match(path));
 
 const GLOBS = fc.array(
   fc.oneof(fc.string(), fc.constantFrom("**", "*", ".github/**", "*.json", ".github/*", FACTORY_CONFIG_PATH)),
@@ -116,7 +130,7 @@ const POLICY: fc.Arbitrary<RoutingPolicy> = fc.record({
 describe("the Routing rules' guarantees", () => {
   test("under the lab's config, a change that touches an ownerPaths path or the factory config never lands auto, whatever the Routing judge answers", () => {
     fc.assert(
-      fc.property(routedArbitrarily(LAB, changeWith(anyOf([FACTORY_CONFIG_PATH, ...LAB.ownerPaths]))), (answer) => {
+      fc.property(routedArbitrarily(LAB, changeWith(anyOf([FACTORY_CONFIG_PATH, ...LAB.ownerPaths]))), ({ answer }) => {
         expect(answer.land).toBe("owner");
       }),
     );
@@ -126,21 +140,28 @@ describe("the Routing rules' guarantees", () => {
     fc.assert(
       fc.property(
         POLICY.chain((policy) => routedArbitrarily(policy, changeWith(fc.constant(FACTORY_CONFIG_PATH)))),
-        (answer) => {
+        ({ answer }) => {
           expect(answer.land).toBe("owner");
         },
       ),
     );
   });
 
-  test("under the lab's config, a change that touches a factoryPaths or deepReviewPaths path gets a deep review, whatever the Routing judge answers", () => {
+  test("under the lab's config, a change that touches a factoryPaths or deepReviewPaths path gets a deep review, or a light one when every path is deleted and every such path is Markdown or text, whatever the Routing judge answers", () => {
+    const deep = [...LAB.factoryPaths, ...LAB.deepReviewPaths];
+
     fc.assert(
-      fc.property(
-        routedArbitrarily(LAB, changeWith(anyOf([...LAB.factoryPaths, ...LAB.deepReviewPaths]))),
-        (answer) => {
-          expect(answer.review).toBe("deep");
-        },
-      ),
+      fc.property(routedArbitrarily(LAB, changeWith(anyOf(deep))), ({ input, answer }) => {
+        const deleted = new Set(input.deletedPaths);
+
+        const light =
+          input.paths.every((path) => deleted.has(path)) &&
+          input.paths.filter((path) => matches(deep, path)).every((path) => NON_EXECUTABLE.test(path));
+
+        const ruledBefore = answer.land === "owner" || input.lines > LAB.lineCap;
+
+        expect(answer.review).toBe(light && !ruledBefore ? "light" : "deep");
+      }),
     );
   });
 
