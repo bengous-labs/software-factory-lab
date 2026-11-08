@@ -10,6 +10,7 @@
     "scripts/land-loop/comment.ts",
     "scripts/land-loop/measure/main.ts",
     "scripts/land-loop/stop/hook.ts",
+    "scripts/land-loop/stop/fork-guard.ts",
     "scripts/hooks/fix-edited.ts",
     "scripts/lint/exception-ratchet.oxlint.config.ts",
   ],

@@ -1,7 +1,7 @@
 /**
- * The tool guards of the review job and of the Routing judge: every tool call of their sessions is allowed
- * or denied here, by code, and anything a guard does not know is denied. The reviewer reads only under the pull
- * request's checkout, outside `.git`, and runs one read-only git command per Bash call. Paths reach
+ * The tool guards of the review job, the Routing judge and the Stop hook forks: every tool call of their
+ * sessions is allowed or denied here, by code, and anything a guard does not know is denied. A session reads
+ * only under its checkout, outside `.git`, and runs one read-only git command per Bash call. Paths reach
  * the guard through `resolve`, which follows every link, so a link the pull request commits is judged
  * by where it leads.
  */
@@ -17,7 +17,7 @@ const deny = (reason: string): ToolDecision => ({ kind: "deny", reason });
 export const BASH_REASON =
   "one read-only git command from the allowed list per call, no shell operators or quotes; use Read and Grep for files";
 
-const PATH_REASON = "read only inside the pull request's checkout, outside .git";
+export const PATH_REASON = "read only inside the checkout you work in, outside .git";
 
 const GLOB_REASON = "a Glob pattern is relative to the checkout, with no `..` segment";
 
