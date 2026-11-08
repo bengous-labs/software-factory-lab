@@ -76,26 +76,49 @@ export function openImportantOf(appLogin: string, threads: readonly ReviewThread
   }).length;
 }
 
-/** The marker a posted review ends with, as `post-plan.ts` `reviewMarkerOf` writes it: it names the review's round. */
-const REVIEW_MARKER_PATTERN = /<!-- lab-review patch=\S+ round=(\d+) -->/u;
+/** The marker a posted review ends with, as `post-plan.ts` `reviewMarkerOf` writes it: it names the review's patch and round. */
+const REVIEW_MARKER_PATTERN = /<!-- lab-review patch=(\S+) round=(\d+) -->/u;
 
-/** The Review round a posted review's body names; null for a body with no marker, such as a human's. */
-export function roundOfReviewBody(body: string): number | null {
-  const round = REVIEW_MARKER_PATTERN.exec(body)?.[1];
+/** The patch and Review round a posted review's body names; null for a body with no marker, such as a human's. */
+export function reviewOfBody(body: string): { readonly patch: string; readonly round: number } | null {
+  const [, patch, round] = REVIEW_MARKER_PATTERN.exec(body) ?? [];
 
-  return round === undefined ? null : Number(round);
+  return patch === undefined || round === undefined ? null : { patch, round: Number(round) };
 }
 
 /**
- * The files of the Nit threads the App posted in Review round `round`, open or resolved, sorted, once
- * each. `appLogin` is the App's login as GraphQL prints it.
+ * The line a finding's comment carries when it anchors away from its own place, `<file>` or
+ * `<file>:<line>`. An external format: posted comments carry it, so the words stay.
  */
-export function nitPathsOf(appLogin: string, round: number, threads: readonly ReviewThread[]): string[] {
+export function movedLineOf(place: string): string {
+  return `At \`${place}\`, outside this diff.`;
+}
+
+const MOVED_LINE_PATTERN = /^At `(.+?)(?::\d+)?`, outside this diff\.$/mu;
+
+/** The file a finding's comment is about: the one its moved line names, else `anchorPath`, the file it sits on. */
+export function findingFileOf(anchorPath: string, body: string): string {
+  return MOVED_LINE_PATTERN.exec(body)?.[1] ?? anchorPath;
+}
+
+/**
+ * The files of the Nit threads the App posted in the review of `review`'s patch and round, open or
+ * resolved, sorted, once each. A Nit anchored on another file than its own, outside the diff, names
+ * neither. `appLogin` is the App's login as GraphQL prints it.
+ */
+export function nitPathsOf(
+  appLogin: string,
+  review: { readonly patch: string | null; readonly round: number },
+  threads: readonly ReviewThread[],
+): string[] {
   const paths = threads.flatMap((thread) => {
     const [finding] = thread.comments.nodes;
-    const posted = roundOfReviewBody(finding?.pullRequestReview?.body ?? "") === round;
+    const posted = reviewOfBody(finding?.pullRequestReview?.body ?? "");
 
-    return posted && finding?.author?.login === appLogin && severityOfBody(finding.body) === "nit" ? [thread.path] : [];
+    const ofReview = posted !== null && posted.patch === review.patch && posted.round === review.round;
+    const nit = finding?.author?.login === appLogin && severityOfBody(finding.body) === "nit";
+
+    return ofReview && nit && findingFileOf(thread.path, finding.body) === thread.path ? [thread.path] : [];
   });
 
   return [...new Set(paths)].toSorted();

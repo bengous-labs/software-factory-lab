@@ -193,28 +193,26 @@ const nearLandableRecord = (patch: string): fc.Arbitrary<StateRecord> =>
  * seven: an auto-merge is common, so a guard that stops holding it back is soon caught merging.
  */
 const NEAR_LANDABLE: fc.Arbitrary<Snapshot> = PATCH.chain((patch) =>
-  fc
-    .record({
-      number: fc.constantFrom(9, 10),
-      state: fc.constant("OPEN"),
-      sameRepository: fc.constant(true),
-      openedByFactory: fc.constant(true),
-      draft: mostly(false, fc.constant(true)),
-      head: HEAD,
-      patch: fc.constant(patch),
-      empty: mostly(false, fc.constant(true)),
-      ci: mostly<Snapshot["ci"]>("success", fc.constantFrom("failure", null)),
-      labels: fc.subarray(LABELS),
-      humanLabelBy: HUMAN_LABEL_BY,
-      landApprovalByOwner: fc.boolean(),
-      openImportant: mostly(0, fc.integer({ min: 1, max: 2 })),
-      devRed: mostly(false, fc.constant(true)),
-      conflicting: mostly(false, fc.constant(true)),
-      record: nearLandableRecord(patch),
-      now: fc.constantFrom("2026-11-07T11:30:00.000Z", "2026-11-07T12:00:00.000Z"),
-      reviewJob: ARBITRARY_JOB,
-    })
-    .map((snapshot) => ({ ...snapshot, nitPaths: [] })),
+  fc.record({
+    number: fc.constantFrom(9, 10),
+    state: fc.constant("OPEN"),
+    sameRepository: fc.constant(true),
+    openedByFactory: fc.constant(true),
+    draft: mostly(false, fc.constant(true)),
+    head: HEAD,
+    patch: fc.constant(patch),
+    empty: mostly(false, fc.constant(true)),
+    ci: mostly<Snapshot["ci"]>("success", fc.constantFrom("failure", null)),
+    labels: fc.subarray(LABELS),
+    humanLabelBy: HUMAN_LABEL_BY,
+    landApprovalByOwner: fc.boolean(),
+    openImportant: mostly(0, fc.integer({ min: 1, max: 2 })),
+    devRed: mostly(false, fc.constant(true)),
+    conflicting: mostly(false, fc.constant(true)),
+    record: nearLandableRecord(patch),
+    now: fc.constantFrom("2026-11-07T11:30:00.000Z", "2026-11-07T12:00:00.000Z"),
+    reviewJob: ARBITRARY_JOB,
+  }),
 );
 
 /** The Review depth of the PR's patch is not none, by its Routing answer or a label on the PR. */

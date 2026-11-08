@@ -222,8 +222,6 @@ export interface Snapshot {
   /** The Land approval label is on the PR and the owner put it there. */
   readonly landApprovalByOwner: boolean;
   readonly openImportant: number;
-  /** The files Review round 3 posted a Nit finding on, open or resolved: the route weighs a push after round 3 against them. */
-  readonly nitPaths: readonly string[];
   readonly devRed: boolean;
   /** GitHub reads the PR as conflicting with its base: no CI runs on it and the queue refuses it. */
   readonly conflicting: boolean;
@@ -290,12 +288,7 @@ export type CheckState =
   | { readonly kind: "failure"; readonly summary: string };
 
 export type Step =
-  | {
-      readonly kind: "route";
-      readonly patch: string;
-      readonly patchDelta: boolean;
-      readonly nitPaths: readonly string[];
-    }
+  | { readonly kind: "route"; readonly patch: string; readonly patchDelta: boolean }
   | { readonly kind: "labels"; readonly route: LandRoute; readonly depth: ReviewDepth }
   | { readonly kind: "request-review"; readonly depth: Exclude<ReviewDepth, "none">; readonly reviewRound: ReviewRound }
   | { readonly kind: "post-review"; readonly result: ReportedResult }
@@ -668,12 +661,7 @@ export function decide(snapshot: Snapshot): Decision {
   const routing = next.triage[snapshot.patch];
 
   if (routing === undefined) {
-    steps.push({
-      kind: "route",
-      patch: snapshot.patch,
-      patchDelta: next.reviewedPatch !== null,
-      nitPaths: snapshot.nitPaths,
-    });
+    steps.push({ kind: "route", patch: snapshot.patch, patchDelta: next.reviewedPatch !== null });
 
     return { kind: "steps", steps };
   }

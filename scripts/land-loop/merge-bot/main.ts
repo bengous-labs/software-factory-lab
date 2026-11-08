@@ -462,7 +462,6 @@ async function snapshotOf(
     humanLabelBy: humanLabelByOf(events, labels, env.appLogin),
     landApprovalByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
-    nitPaths: nitPathsOf(graphqlLogin(env.appLogin), 3, threads),
     devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
     conflicting: conflictingOf(pr.mergeable_state),
     record,
@@ -561,7 +560,7 @@ async function route(
   env: Env,
   range: Range,
   record: StateRecord,
-  { patchDelta, nitPaths }: { readonly patchDelta: boolean; readonly nitPaths: readonly string[] },
+  { patchDelta, pr }: { readonly patchDelta: boolean; readonly pr: number },
 ): Promise<RoutingAnswer> {
   const policy = routingPolicyAt(env.cwd);
   const from = await rangeStart(env, range, record, patchDelta);
@@ -602,7 +601,17 @@ async function route(
 
   const answer = routingOf(rules, patchDeltaRules, judge);
 
-  return delta === null ? answer : withNitAnswers(policy, answer, delta, { record, deltaFrom: from, nitPaths });
+  if (delta === null) {
+    return answer;
+  }
+
+  const nitPaths = nitPathsOf(
+    graphqlLogin(env.appLogin),
+    { patch: record.reviewedPatch, round: 3 },
+    await threadsOf(env, pr),
+  );
+
+  return withNitAnswers(policy, answer, delta, { record, deltaFrom: from, nitPaths });
 }
 
 // oxlint-disable-next-line typescript/consistent-return -- the switch covers every Step kind, so no path reaches the end.
@@ -617,7 +626,7 @@ async function perform(
 ): Promise<StateRecord | null> {
   switch (step.kind) {
     case "route": {
-      const answer = await route(env, range, record, step);
+      const answer = await route(env, range, record, { patchDelta: step.patchDelta, pr: pr.number });
       log(
         `#${pr.number} routing ${step.patch.slice(0, 8)}: route:${answer.land} review:${answer.review} second:${answer.secondRound} by ${answer.model ?? "the Routing rules"} (${answer.reason})`,
       );
