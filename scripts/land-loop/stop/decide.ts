@@ -135,22 +135,36 @@ const HUMAN_LABEL = "land:human";
 
 const HOLD_REASON_MAX = 300;
 
+/** YES first on the line, as a word, after a heading marker or the emphasis it opens. */
+const YES_FIRST = /^[#\s]*([*_]*)YES(?![\p{L}\p{N}])/u;
+
+/** HOLD as a word, then its closing emphasis, a separator and the emphasis that closes it, then the reason. */
+const HOLD_WORD = /(?<![\p{L}\p{N}])HOLD(?![\p{L}\p{N}])[*_]*\s*[:\-–—]?(?:[*_]+(?=\s|$))?\s*(.*)/u;
+
 /**
- * The Done judge's text answer, read on its first line: `YES, HOLD:` is a hold with the rest as its
- * reason; YES first, as a word, is yes; anything else, an empty answer included, is no.
+ * The Done judge's text answer, read on its first line: YES first, as a word, is yes, and a hold when
+ * HOLD follows it, with the rest as its reason; anything else, an empty answer included, is no.
  */
 export function answerOf(text: string): Answer {
   const first = text.trimStart().split("\n")[0] ?? "";
-  // Markdown around the words, as in `# **YES, HOLD**:` or `_YES_, HOLD:`, does not change the answer; the reason keeps its own.
-  const hold = /^[#\s]*[*_]*YES[*_]*,\s*[*_]*HOLD[*_]*:[*_]*\s*(.*)/u.exec(first);
+  const yes = YES_FIRST.exec(first);
 
-  if (hold !== null) {
-    const reason = (hold[1] ?? "").trim();
-
-    return { kind: "hold", reason: (reason === "" ? "(no reason given)" : reason).slice(0, HOLD_REASON_MAX) };
+  if (yes === null) {
+    return { kind: "no" };
   }
 
-  return /^[#\s]*[*_]*YES(?![\p{L}\p{N}])/u.test(first) ? { kind: "yes" } : { kind: "no" };
+  // Any YES line that names HOLD holds, so an answer worded off the `YES, HOLD:` form fails closed.
+  const hold = HOLD_WORD.exec(first.slice(yes[0].length));
+
+  if (hold === null) {
+    return { kind: "yes" };
+  }
+
+  const rest = (hold[1] ?? "").trim();
+  // The emphasis that opened the line closes at its end, as in `**YES, HOLD: reason**`.
+  const reason = (yes[1] === "" ? rest : rest.replace(/[*_]+$/u, "")).trim();
+
+  return { kind: "hold", reason: (reason === "" ? "(no reason given)" : reason).slice(0, HOLD_REASON_MAX) };
 }
 
 export function decide(pr: PullRequest | null, answer: Answer): Action {

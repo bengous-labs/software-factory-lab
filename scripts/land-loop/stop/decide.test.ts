@@ -155,6 +155,46 @@ describe("answerOf", () => {
       expect(answerOf(text)).toEqual(answer);
     }
   });
+
+  test("a YES line that names HOLD off the YES, HOLD: form still holds, so it fails closed", () => {
+    const cases: Array<[string, string]> = [
+      ["YES, HOLD - renames a stored label", "renames a stored label"],
+      ["YES, HOLD — renames a stored label", "renames a stored label"],
+      ["YES, HOLD – renames a stored label", "renames a stored label"],
+      ["YES, HOLD : renames a stored label", "renames a stored label"],
+      ["**YES, HOLD** renames a stored label", "renames a stored label"],
+      ["YES. HOLD: renames a stored label", "renames a stored label"],
+      ["# YES, HOLD — renames a stored label", "renames a stored label"],
+      ["__YES__ - HOLD: renames a stored label", "renames a stored label"],
+      ["YES HOLD", "(no reason given)"],
+    ];
+
+    for (const [text, reason] of cases) {
+      expect(answerOf(text)).toEqual({ kind: "hold", reason });
+    }
+  });
+
+  test("the reason loses the emphasis that closes a bolded line, and keeps its own markup", () => {
+    const cases: Array<[string, string]> = [
+      ["**YES, HOLD: renames a stored label**", "renames a stored label"],
+      ["__YES, HOLD: renames a stored label.__", "renames a stored label."],
+      ["YES, HOLD:_id field renamed", "_id field renamed"],
+      ["YES, HOLD: renames the id_", "renames the id_"],
+      ["YES, HOLD:** renames a stored label", "renames a stored label"],
+      ["YES, HOLD:**", "(no reason given)"],
+    ];
+
+    for (const [text, reason] of cases) {
+      expect(answerOf(text)).toEqual({ kind: "hold", reason });
+    }
+  });
+
+  test("HOLD inside a longer word is no hold", () => {
+    expect(answerOf("YES, the THRESHOLD is met")).toEqual({ kind: "yes" });
+    expect(answerOf("YES, HOLDS up")).toEqual({ kind: "yes" });
+    expect(answerOf("YES, HOLD7 is a name")).toEqual({ kind: "yes" });
+    expect(answerOf("YES, 7HOLD is a name")).toEqual({ kind: "yes" });
+  });
 });
 
 describe("decide", () => {

@@ -400,6 +400,37 @@ describe("stop", () => {
     );
   });
 
+  test("a label that fails on a held PR just opened leaves it a draft, and the next stop asks the Done judge again", async () => {
+    const { run, calls, root } = world(`YES, HOLD: ${REASON}`);
+
+    const labelFails: Run = (argv, options) =>
+      argv.join(" ").startsWith("gh pr edit")
+        ? Promise.resolve({ code: 1, stdout: "", stderr: "HTTP 502" })
+        : run(argv, options);
+
+    // oxlint-disable-next-line typescript/await-thenable, typescript/no-confusing-void-expression -- bun-types types rejects matchers as void; Bun returns the promise the test awaits.
+    await expect(stop(input(root), { run: labelFails, env: TOKEN_ENV, now: () => 0 }, () => {})).rejects.toThrow(
+      "HTTP 502",
+    );
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv.at(-1)).toBe("--draft");
+    expect(calls.some((call) => /^gh pr (comment|ready)/u.test(call.argv.join(" ")))).toBe(false);
+
+    const next = world(
+      `YES, HOLD: ${REASON}`,
+      JSON.stringify([{ number: 12, isDraft: true, headRefOid: HEAD, labels: [] }]),
+    );
+
+    await stop(input(next.root), { run: next.run, env: TOKEN_ENV, now: () => 0 }, () => {});
+
+    expect(next.calls.some((call) => call.argv[0] === "claude" && call.argv.at(-1) === DONE_QUESTION)).toBe(true);
+    expect(publishing(next.calls).map(([line]) => line)).toEqual([
+      "gh pr edit 12",
+      "gh pr comment 12",
+      "push",
+      "gh pr ready 12",
+    ]);
+  });
+
   test("a hold on the push path: the label, then the comment, go out before the push and gh pr ready", async () => {
     const records: StopLogRecord[] = [];
 
