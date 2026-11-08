@@ -16,9 +16,9 @@ const RoutingPolicy = Schema.Struct({
   ownerPaths: Schema.Array(Schema.String),
   /** The factory's own code and config: a deep Code review, then land without the Owner, at any size, breaking or not. */
   factoryPaths: Schema.Array(Schema.String),
-  /** Globs whose change gets a deep Code review and lands without the Owner, under the cap and the breaking-commit hold. */
+  /** Globs whose change gets a deep Code review and lands without the Owner, under the breaking-commit hold. */
   deepReviewPaths: Schema.Array(Schema.String),
-  /** Past this many changed lines, a change that touches a path outside `factoryPaths` goes to the Owner. */
+  /** Past this many changed lines, a change gets a deep Code review. */
   lineCap: Schema.Int,
 });
 

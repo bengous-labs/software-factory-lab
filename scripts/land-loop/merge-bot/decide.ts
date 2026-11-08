@@ -199,6 +199,8 @@ export interface Snapshot {
   readonly draft: boolean;
   readonly head: string;
   readonly patch: string;
+  /** The PR changes no file between its merge base and its head: it has nothing to land, and no route. */
+  readonly empty: boolean;
   /** CI_CHECKS on the head, as `ciOf` reads them: null while one has not completed. */
   readonly ci: "success" | "failure" | null;
   readonly labels: readonly string[];
@@ -512,15 +514,32 @@ function roundNeedOf(record: StateRecord, routing: RoutingAnswer, depth: ReviewD
   return record.reviewRounds === 1 ? { kind: "request", depth, round: 2 } : { kind: "third" };
 }
 
-export function decide(snapshot: Snapshot): Decision {
-  const { record } = snapshot;
-
+/** The decision on a PR that gets no route: one closed or from outside is ignored, an empty one has nothing to land. */
+function unroutedOf(snapshot: Snapshot): Decision | null {
   if (snapshot.state !== "OPEN") {
     return { kind: "ignore", reason: `#${snapshot.number} is ${snapshot.state.toLowerCase()}` };
   }
 
   if (!snapshot.sameRepository || !snapshot.openedByOwner) {
     return { kind: "ignore", reason: `#${snapshot.number} comes from outside the Owner's own branches` };
+  }
+
+  if (snapshot.empty) {
+    return {
+      kind: "steps",
+      steps: [{ kind: "land-gate", check: { kind: "failure", summary: "Nothing to land: this PR changes no file." } }],
+    };
+  }
+
+  return null;
+}
+
+export function decide(snapshot: Snapshot): Decision {
+  const { record } = snapshot;
+  const unrouted = unroutedOf(snapshot);
+
+  if (unrouted !== null) {
+    return unrouted;
   }
 
   const steps: Step[] = [];
