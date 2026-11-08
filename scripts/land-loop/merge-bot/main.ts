@@ -76,6 +76,7 @@ const TRUNK = "dev";
 interface Env {
   readonly repo: string;
   readonly owner: string;
+  readonly authorLogin: string;
   readonly appLogin: string;
   readonly cwd: string;
 }
@@ -175,6 +176,14 @@ export const IssueEvents = Schema.Array(
     created_at: Schema.String,
   }),
 );
+
+/** Whether the PR's opener, as REST gives it, is the Owner or the Author's machine account; see `Snapshot["openedByFactory"]`. */
+export function openedByFactoryOf(
+  login: string | undefined,
+  { owner, authorLogin }: { readonly owner: string; readonly authorLogin: string },
+): boolean {
+  return login === owner || login === authorLogin;
+}
 
 /** Whether the last Land approval label put on the PR was put by `owner` after its head was pushed. */
 export function landApprovalByOwnerOf(
@@ -443,7 +452,7 @@ async function snapshotOf(
     number: pr.number,
     state: pr.merged ? "MERGED" : pr.state === "open" ? "OPEN" : "CLOSED",
     sameRepository: pr.head.repo?.full_name === env.repo,
-    openedByOwner: pr.user?.login === env.owner,
+    openedByFactory: openedByFactoryOf(pr.user?.login, env),
     draft: pr.draft,
     head: pr.head.sha,
     patch,
@@ -831,6 +840,7 @@ if (import.meta.main) {
   const env: Env = {
     repo: required("GITHUB_REPOSITORY"),
     owner: required("OWNER"),
+    authorLogin: required("AUTHOR_LOGIN"),
     appLogin: required("APP_LOGIN"),
     cwd: process.cwd(),
   };

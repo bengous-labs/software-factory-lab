@@ -36,6 +36,12 @@ Each step splits into a pure decision over a snapshot (`stop/decide.ts`, `merge-
 
 Strings stored outside the code keep their spelling when the code's vocabulary changes: the labels `land-ok`, `land:auto` and `land:human`, the check names `agent-review` and `land-gate`, `FORK_MARKER`, the state record's keys and the file names under `.lab/state/`. Open PRs, existing records and GitHub's ruleset read them.
 
+### Identities
+
+The Owner, `bengous`, gives the Land approval and the `land:human` veto, and releases `main`. The Author, every Worker, pushes, opens, readies and answers its PR as the machine account `bengous-labs-author`: the Stop hook, `thread.ts` and `comment.ts` read its fine-grained token from `~/.config/software-factory-lab/author-token` (`LAB_AUTHOR_TOKEN_FILE` overrides the path) and publish nothing without it. A `land-ok` it puts counts for nothing. The Merge bot and the Code review act as the agents' App, `bengous-labs-agents[bot]`. `merge-bot.yml` names the three logins: `OWNER`, `AUTHOR_LOGIN`, `APP_LOGIN`. Every Worker is launched with `GH_TOKEN` set from that file, so any `gh` it runs acts as the machine account.
+
+The Owner provisions the machine account: a member of `bengous-labs` with the Write role on this repository, and a fine-grained token whose resource owner is `bengous-labs`, limited to this repository, with Contents, Pull requests, Issues and Workflows in read and write. Workflows is needed because the Author pushes branches that change `.github/workflows/`: GitHub refuses such a push from a token without it. The token file is mode 600.
+
 ### The app
 
 `app/src/commands/` holds one pure function over the task list per command; `app/src/cli.ts` parses argv, loads the store and saves the result. `app/src/store/` is the task file format: a change there can make existing task files unreadable, and both format versions in `app/test/fixtures/` must still read.

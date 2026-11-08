@@ -89,7 +89,7 @@ describe("wakesOf", () => {
         body: nit,
         replies: [
           { id: "C1", author: "bengous", body: "please fix this one anyway" },
-          { id: "C2", author: "bengous", body: `Fixed in abc.\n\n${AUTHOR_MARK}` },
+          { id: "C2", author: "bengous-labs-author", body: `Fixed in abc.\n\n${AUTHOR_MARK}` },
           { id: "C4", author: "bengous-labs-agents", body: "re-checked" },
         ],
       },
@@ -113,7 +113,7 @@ describe("wakesOf", () => {
     const comments = [
       { id: "11", author: "bengous", body: "rename the command to reopen" },
       { id: "12", author: "bengous-labs-agents", body: "Merge bot state for this PR" },
-      { id: "13", author: "bengous", body: `done\n\n${AUTHOR_MARK}` },
+      { id: "13", author: "bengous-labs-author", body: `done\n\n${AUTHOR_MARK}` },
     ];
 
     expect(wakesOf(7, { ...OPEN, comments })).toEqual([

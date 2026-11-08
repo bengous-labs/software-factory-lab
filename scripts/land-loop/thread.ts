@@ -2,12 +2,13 @@
 
 /**
  * The author's answer to a review finding: replies in the thread with the text given, then resolves
- * it. The PR watch prints each finding with the thread id this takes.
+ * it, as the Author's machine account. The PR watch prints each finding with the thread id this takes.
  *
  *   bun scripts/land-loop/thread.ts <thread-id> "<reply>"
  */
 
 import { AUTHOR_MARK } from "./author-mark.ts";
+import { ghEnv, requiredAuthorToken } from "./lib/author.ts";
 import { checked, run } from "./lib/run.ts";
 import type { Run } from "./ports/run.ts";
 
@@ -30,13 +31,20 @@ export function argsOf(argv: readonly string[]): { id: string; body: string } | 
 }
 
 /** Replies first, so a thread is never resolved without the author's answer in it. */
-export async function answer(runner: Run, cwd: string, id: string, body: string): Promise<void> {
+export async function answer(
+  runner: Run,
+  cwd: string,
+  token: string,
+  { id, body }: { readonly id: string; readonly body: string },
+): Promise<void> {
+  const options = { cwd, env: ghEnv(token) };
+
   await checked(
     runner,
     ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", `id=${id}`, "-f", `body=${body}\n\n${AUTHOR_MARK}`],
-    { cwd },
+    options,
   );
-  await checked(runner, ["gh", "api", "graphql", "-f", `query=${RESOLVE}`, "-f", `id=${id}`], { cwd });
+  await checked(runner, ["gh", "api", "graphql", "-f", `query=${RESOLVE}`, "-f", `id=${id}`], options);
 }
 
 if (import.meta.main) {
@@ -46,6 +54,6 @@ if (import.meta.main) {
     throw new Error(USAGE);
   }
 
-  await answer(run, process.cwd(), args.id, args.body);
+  await answer(run, process.cwd(), requiredAuthorToken(process.env), args);
   console.log(`replied to ${args.id} and resolved it`);
 }

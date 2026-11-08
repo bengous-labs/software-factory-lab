@@ -33,6 +33,7 @@ import {
   ListedPrs,
   notFound,
   numstatArgs,
+  openedByFactoryOf,
   Pull,
   PullReviews,
   readsPatchDelta,
@@ -180,6 +181,34 @@ describe("the GitHub answers the Merge bot reads", () => {
 
 /** A `gh api` read that exited 1 with `stderr`. */
 const failedRead = (stderr: string) => ({ code: 1, stdout: "", stderr });
+
+describe("the Owner and the Author", () => {
+  const logins = { owner: "bengous", authorLogin: "bengous-labs-author" };
+
+  test("a PR the Author's machine account opened is served as one the Owner opened; any other login's is not", () => {
+    expect(openedByFactoryOf("bengous", logins)).toBe(true);
+    expect(openedByFactoryOf("bengous-labs-author", logins)).toBe(true);
+    expect(openedByFactoryOf("someone", logins)).toBe(false);
+    expect(openedByFactoryOf(undefined, logins)).toBe(false);
+  });
+
+  test("a land-ok the Author's machine account put is no Land approval", () => {
+    const events = decodeJson(
+      IssueEvents,
+      "events",
+      JSON.stringify([
+        {
+          event: "labeled",
+          label: { name: "land-ok" },
+          actor: { login: "bengous-labs-author" },
+          created_at: "2026-11-05T11:00:00Z",
+        },
+      ]),
+    );
+
+    expect(landApprovalByOwnerOf(events, "bengous", "2026-11-05T10:00:00Z")).toBe(false);
+  });
+});
 
 describe("notFound", () => {
   test("only a read GitHub answered 404 is a run gone; a rate limit, a 5xx or a network error is not", () => {

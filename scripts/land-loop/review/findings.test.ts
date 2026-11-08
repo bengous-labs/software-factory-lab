@@ -123,6 +123,14 @@ describe("earlierThreadsOf", () => {
     ]);
   });
 
+  test("the Author's machine account answers as the author: its replies reach the earlier findings", () => {
+    expect(
+      earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous-labs-author", "Fixed in abc: bound checked"]])]),
+    ).toEqual([
+      { where: "a.ts:3", finding: "**Important**: off by one", reply: "Fixed in abc: bound checked (thread open)" },
+    ]);
+  });
+
   test("a thread a human or a deleted user opened is not an earlier finding", () => {
     expect(
       earlierThreadsOf(APP, [thread(IMPORTANT, [], { by: "bengous" }), thread(IMPORTANT, [], { by: null })]),

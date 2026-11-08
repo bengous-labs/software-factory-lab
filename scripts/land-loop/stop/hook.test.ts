@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { decodeJson } from "../../lib/json.ts";
+import { pushArgs } from "../lib/author.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
 import { FORK_MARKER } from "./decide.ts";
 import {
@@ -19,8 +20,20 @@ import {
   stop,
   StopInput,
 } from "./hook.ts";
+import type { StopLogRecord } from "./hook.ts";
 
 const HEAD = "d".repeat(40);
+
+const TOKEN = "t0k";
+
+function tokenFile(): string {
+  const path = join(mkdtempSync(join(tmpdir(), "author-")), "author-token");
+  writeFileSync(path, `${TOKEN}\n`);
+
+  return path;
+}
+
+const TOKEN_ENV = { LAB_AUTHOR_TOKEN_FILE: tokenFile() };
 
 interface Call {
   readonly argv: readonly string[];
@@ -108,7 +121,7 @@ function input(root: string): StopInput {
 /** The body `gh pr create` reads on stdin when the hook opens the PR from `branch` with the fork's `forkBody`. */
 async function bodyOf(branch: string, forkBody: string): Promise<string | undefined> {
   const { run, calls, root } = world("YES", "[]", branch, forkBody);
-  await stop(input(root), { run, env: {}, now: () => 0 }, () => {});
+  await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
 
   return calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.options.stdin;
 }
@@ -116,7 +129,7 @@ async function bodyOf(branch: string, forkBody: string): Promise<string | undefi
 describe("stop", () => {
   test("a finished task: the Done judge's fork runs on the session's model with the flag, then the branch is pushed and the PR opened", async () => {
     const { run, calls, root } = world("YES, done and tested.");
-    const outcome = await stop(input(root), { run, env: {}, now: () => 0 }, () => {});
+    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
 
     const doneJudge = calls.find((call) => call.argv[0] === "claude" && call.argv.at(-1) === DONE_QUESTION);
 
@@ -127,11 +140,7 @@ describe("stop", () => {
     expect(doneJudge?.options.env?.[FORK_FLAG]).toBe("1");
     expect(doneJudge?.argv[doneJudge.argv.indexOf("--tools") + 1]).toBe("");
     expect(doneJudge?.argv).toContain("--strict-mcp-config");
-    expect(
-      calls.some((call) =>
-        call.argv.join(" ").startsWith("git push --force-with-lease -u origin HEAD:refs/heads/agent/x"),
-      ),
-    ).toBe(true);
+    expect(calls.some((call) => call.argv.join(" ") === pushArgs("agent/x").join(" "))).toBe(true);
 
     const create = calls.find((call) => call.argv.join(" ").startsWith("gh pr create"));
 
@@ -155,9 +164,87 @@ describe("stop", () => {
     expect(await bodyOf("chore/tidy-docs", "")).toBe("(no body)");
   });
 
+  test("the push and every gh call carry the Author's credential; git fetch and the forks do not", async () => {
+    const { run, calls, root } = world(
+      "YES",
+      JSON.stringify([{ number: 12, isDraft: true, headRefOid: "e".repeat(40) }]),
+    );
+
+    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
+
+    const envOf = (prefix: string): RunOptions["env"] =>
+      calls.find((call) => call.argv.join(" ").startsWith(prefix))?.options.env;
+
+    expect(calls.find((call) => call.argv.includes("push"))?.argv).toEqual(pushArgs("agent/x"));
+    expect(envOf("git -c")).toEqual({ LAB_AUTHOR_TOKEN: TOKEN });
+    expect(envOf("gh pr list")).toEqual({ GH_TOKEN: TOKEN });
+    expect(envOf("gh pr ready 12")).toEqual({ GH_TOKEN: TOKEN });
+    expect(envOf("git fetch")).toBeUndefined();
+    expect(calls.filter((call) => call.argv[0] === "claude").map((call) => call.options.env)).toEqual([
+      { [FORK_FLAG]: "1" },
+    ]);
+
+    const opened = world("YES");
+    await stop(input(opened.root), { run: opened.run, env: TOKEN_ENV, now: () => 0 }, () => {});
+
+    expect(opened.calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.options.env).toEqual({
+      GH_TOKEN: TOKEN,
+    });
+    expect(opened.calls.filter((call) => call.argv[0] === "claude").map((call) => call.options.env)).toEqual([
+      { [FORK_FLAG]: "1" },
+      { [FORK_FLAG]: "1" },
+    ]);
+  });
+
+  test("no Author token: the hook blocks once with the reason, then lets the session end, and runs no Stop check, fork or push", async () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "author-")), "absent");
+    const records: StopLogRecord[] = [];
+    const first = world("YES");
+
+    const blocked = await stop(
+      input(first.root),
+      { run: first.run, env: { LAB_AUTHOR_TOKEN_FILE: missing }, now: () => 0 },
+      (record) => {
+        records.push(record);
+      },
+    );
+
+    expect(blocked).toEqual({
+      kind: "block",
+      reason: `The Stop hook found no Author token at ${missing}, so nothing was published. The Owner provisions it (AGENTS.md, Identities). Stop, and ask no question.`,
+    });
+    expect(records).toContainEqual({ step: "author-token", found: false, path: missing });
+
+    const second = world("YES");
+
+    const ended = await stop(
+      { ...input(second.root), stop_hook_active: true },
+      { run: second.run, env: { LAB_AUTHOR_TOKEN_FILE: missing }, now: () => 0 },
+      () => {},
+    );
+
+    expect(ended).toEqual({ kind: "allow" });
+
+    for (const { calls } of [first, second]) {
+      expect(
+        calls.some((call) => call.argv[0] === "claude" || call.argv[0] === "bun" || call.argv.includes("push")),
+      ).toBe(false);
+    }
+  });
+
+  test("a token found is logged with its path", async () => {
+    const records: StopLogRecord[] = [];
+    const { run, root } = world("YES");
+    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
+      records.push(record);
+    });
+
+    expect(records).toContainEqual({ step: "author-token", found: true, path: TOKEN_ENV.LAB_AUTHOR_TOKEN_FILE });
+  });
+
   test("a PR ready at HEAD and not armed yet: the hook asks to arm its PR watch, naming the PR in its commands, and pushes nothing", async () => {
     const { run, calls, root } = world("YES", JSON.stringify([{ number: 12, isDraft: false, headRefOid: HEAD }]));
-    const outcome = await stop(input(root), { run, env: {}, now: () => 0 }, () => {});
+    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
 
     expect(outcome.kind === "block" && outcome.reason).toContain(`bun ${root}/scripts/land-loop/pr-watch.ts 12`);
     expect(outcome.kind === "block" && outcome.reason).toContain(
@@ -169,7 +256,7 @@ describe("stop", () => {
 
   test("a stop that asks the Owner a question: the Done judge says NO and nothing is pushed", async () => {
     const { run, calls, root } = world("NO, I asked the Owner which command to add.");
-    const outcome = await stop(input(root), { run, env: {}, now: () => 0 }, () => {});
+    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
 
     expect(outcome).toEqual({ kind: "allow" });
     expect(calls.some((call) => call.argv[1] === "push")).toBe(false);

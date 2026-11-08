@@ -54,7 +54,7 @@ const READY: Snapshot = {
   number: 9,
   state: "OPEN",
   sameRepository: true,
-  openedByOwner: true,
+  openedByFactory: true,
   draft: false,
   head: "h1",
   patch: P1,
@@ -90,10 +90,13 @@ const gate = (snapshot: Snapshot): string | undefined => {
 };
 
 describe("decide", () => {
-  test("closed PRs, PRs from forks and PRs not opened by the Owner are ignored", () => {
+  test("closed PRs, PRs from forks and PRs opened by neither the Owner nor the Author are ignored", () => {
     expect(decide({ ...READY, state: "MERGED" }).kind).toBe("ignore");
     expect(decide({ ...READY, sameRepository: false }).kind).toBe("ignore");
-    expect(decide({ ...READY, openedByOwner: false }).kind).toBe("ignore");
+    expect(decide({ ...READY, openedByFactory: false })).toEqual({
+      kind: "ignore",
+      reason: `#${READY.number} was not opened by the Owner or the Author`,
+    });
   });
 
   test("a draft, a pending CI or a red CI leaves the Land gate pending and runs no model", () => {
@@ -190,7 +193,7 @@ describe("decide", () => {
     }
   });
 
-  test("a Land approval label that someone else put, or one given for another patch, is removed", () => {
+  test("a Land approval label that someone else put, the Author's machine account included, or one given for another patch, is removed", () => {
     const owner = { ...READY, labels: ["land-ok"], record: { ...READY.record, reviewedPatch: P1 } };
 
     expect(kinds({ ...owner, landApprovalByOwner: false })).toContain("remove-land-approval");
@@ -223,7 +226,7 @@ describe("decide", () => {
 
   test("an empty change that is closed or comes from outside is still ignored", () => {
     expect(decide({ ...READY, empty: true, state: "CLOSED" }).kind).toBe("ignore");
-    expect(decide({ ...READY, empty: true, openedByOwner: false }).kind).toBe("ignore");
+    expect(decide({ ...READY, empty: true, openedByFactory: false }).kind).toBe("ignore");
   });
 
   test("a red dev holds a landable PR", () => {
@@ -1112,7 +1115,7 @@ describe("the Merge bot's invariants", () => {
   test("decide ignores exactly the PRs that are not open or not from the Owner's own branches", () => {
     fc.assert(
       fc.property(SNAPSHOT, (snapshot) => {
-        const ignored = snapshot.state !== "OPEN" || !snapshot.sameRepository || !snapshot.openedByOwner;
+        const ignored = snapshot.state !== "OPEN" || !snapshot.sameRepository || !snapshot.openedByFactory;
 
         expect(decide(snapshot).kind).toBe(ignored ? "ignore" : "steps");
       }),

@@ -203,8 +203,8 @@ export interface Snapshot {
   readonly number: number;
   readonly state: "OPEN" | "CLOSED" | "MERGED";
   readonly sameRepository: boolean;
-  /** The PR was opened under the Owner's GitHub login, the only one this public lab works for. */
-  readonly openedByOwner: boolean;
+  /** The PR was opened by the Owner or by the Author's machine account, the only logins this public lab works for. */
+  readonly openedByFactory: boolean;
   readonly draft: boolean;
   readonly head: string;
   readonly patch: string;
@@ -589,8 +589,8 @@ function unroutedOf(snapshot: Snapshot): Decision | null {
     return { kind: "ignore", reason: `#${snapshot.number} is ${snapshot.state.toLowerCase()}` };
   }
 
-  if (!snapshot.sameRepository || !snapshot.openedByOwner) {
-    return { kind: "ignore", reason: `#${snapshot.number} comes from outside the Owner's own branches` };
+  if (!snapshot.sameRepository || !snapshot.openedByFactory) {
+    return { kind: "ignore", reason: `#${snapshot.number} was not opened by the Owner or the Author` };
   }
 
   if (snapshot.empty) {

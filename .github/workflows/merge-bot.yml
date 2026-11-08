@@ -82,6 +82,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OWNER: bengous
+          AUTHOR_LOGIN: bengous-labs-author
           APP_LOGIN: bengous-labs-agents[bot]
           EVENT_NAME: ${{ github.event_name }}
           # `|| ''` last: a false `&&` would otherwise reach the Merge bot as "false".
