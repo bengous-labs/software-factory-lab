@@ -67,6 +67,15 @@ export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }
       );
 }
 
+/**
+ * The rules' verdict on a Patch delta, or null when it touches no file: a head whose tree the last review
+ * read, over a base that has since taken in some of the PR's change, has no Patch delta, and the PR is
+ * routed whole.
+ */
+export function patchDeltaRulesOf(policy: RoutingPolicy, delta: RoutingInput): RulesVerdict | null {
+  return delta.paths.length === 0 ? null : routingRulesOf(policy, delta);
+}
+
 /** Whether the Routing judge is asked about a change: it then reads the whole diff of its range. */
 export type JudgeAsk = { readonly kind: "none" } | { readonly kind: "ask" };
 

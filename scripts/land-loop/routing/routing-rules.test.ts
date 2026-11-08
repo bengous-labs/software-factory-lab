@@ -6,7 +6,7 @@ import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import { LAB, SEGMENT, UNDER } from "../guarantees.test.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
-import { judgeAskOf, routingOf, routingRulesOf } from "./routing-rules.ts";
+import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "./routing-rules.ts";
 import type { RoutingInput, RulesVerdict } from "./routing-rules.ts";
 
 const lab = (input: RoutingInput): RulesVerdict => routingRulesOf(LAB, input);
@@ -68,6 +68,15 @@ describe("the lab's routing policy", () => {
 
   test("a change that touches no file has no route", () => {
     expect(() => lab({ paths: [], lines: 0, messages: [] })).toThrow("at least one file");
+  });
+
+  test("a Patch delta that touches no file is no Patch delta: the PR is routed whole", () => {
+    expect(patchDeltaRulesOf(LAB, { paths: [], lines: 0, messages: [] })).toBeNull();
+    expect(patchDeltaRulesOf(LAB, { paths: ["app/src/cli.ts"], lines: 0, messages: [] })).toEqual({ kind: "judged" });
+
+    const delta = { paths: [".github/a.yml", "app/src/cli.ts"], lines: 0, messages: [] };
+
+    expect(patchDeltaRulesOf(LAB, delta)).toEqual(lab(delta));
   });
 
   test("the factory's own code, its session settings, the agent docs and the build and gate configs land auto after a deep review", () => {

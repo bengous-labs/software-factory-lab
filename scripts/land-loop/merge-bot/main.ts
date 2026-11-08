@@ -29,7 +29,7 @@ import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from ".
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { routingJudge } from "../routing/routing-judge.ts";
-import { judgeAskOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
+import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
 import {
   afterReview,
   CI_CHECKS,
@@ -516,8 +516,10 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
 
   // The Routing rules hold the labels of the whole PR; whether this Patch delta is read again is its own question.
   const patchDeltaRules = patchDelta
-    ? routingRulesOf(policy, { paths: await changedPaths(env, from, range.head), lines: 0, messages: [] })
+    ? patchDeltaRulesOf(policy, { paths: await changedPaths(env, from, range.head), lines: 0, messages: [] })
     : null;
+
+  const start = patchDeltaRules === null ? range.base : from;
 
   const question = judgeAskOf(rules, patchDeltaRules);
 
@@ -527,9 +529,9 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
       : await routingJudge(
           ask,
           env.cwd,
-          await git(env, judgeDiffArgs(from, range.head, true)),
-          await git(env, judgeDiffArgs(from, range.head, false)),
-          patchDelta,
+          await git(env, judgeDiffArgs(start, range.head, true)),
+          await git(env, judgeDiffArgs(start, range.head, false)),
+          patchDeltaRules !== null,
         );
 
   return routingOf(rules, patchDeltaRules, judge);
