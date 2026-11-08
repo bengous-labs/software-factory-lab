@@ -10,8 +10,10 @@ import { join } from "node:path";
 /** Under `homedir()`, which reads HOME and falls back to the user's passwd entry: never a path relative to the work tree. */
 export const AUTHOR_TOKEN_PATH = join(homedir(), ".config", "software-factory-lab", "author-token");
 
+/** `path` is the file read, found or not. */
 export type AuthorToken =
-  { readonly kind: "found"; readonly token: string } | { readonly kind: "missing"; readonly path: string };
+  | { readonly kind: "found"; readonly token: string; readonly path: string }
+  | { readonly kind: "missing"; readonly path: string };
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -32,7 +34,7 @@ export function authorTokenOf(env: Env): AuthorToken {
     return { kind: "missing", path };
   }
 
-  return token === "" ? { kind: "missing", path } : { kind: "found", token };
+  return token === "" ? { kind: "missing", path } : { kind: "found", token, path };
 }
 
 /** The token `authorTokenOf` finds; none throws, so a command that posts as the Author posts nothing. */

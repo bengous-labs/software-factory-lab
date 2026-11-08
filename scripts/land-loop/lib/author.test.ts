@@ -8,11 +8,11 @@ import { AUTHOR_TOKEN_PATH, authorTokenOf, authorTokenPathOf, ghEnv, pushArgs, r
 const dir = (): string => mkdtempSync(join(tmpdir(), "author-"));
 
 describe("authorTokenOf", () => {
-  test("reads the file LAB_AUTHOR_TOKEN_FILE names, trimmed", () => {
+  test("reads the file LAB_AUTHOR_TOKEN_FILE names, trimmed, naming its path", () => {
     const path = join(dir(), "token");
     writeFileSync(path, "  github_pat_x \n");
 
-    expect(authorTokenOf({ LAB_AUTHOR_TOKEN_FILE: path })).toEqual({ kind: "found", token: "github_pat_x" });
+    expect(authorTokenOf({ LAB_AUTHOR_TOKEN_FILE: path })).toEqual({ kind: "found", token: "github_pat_x", path });
   });
 
   test("a missing, unreadable or empty file is missing, naming its path", () => {

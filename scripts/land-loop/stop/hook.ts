@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { Predicate, Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
-import { authorTokenOf, authorTokenPathOf, ghEnv, pushArgs } from "../lib/author.ts";
+import { authorTokenOf, ghEnv, pushArgs } from "../lib/author.ts";
 import type { AuthorToken } from "../lib/author.ts";
 import { checked, run as runCli } from "../lib/run.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
@@ -333,9 +333,8 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     };
   }
 
-  const tokenPath = authorTokenPathOf(deps.env);
-  const noToken = afterAuthorToken(author.kind === "found", tokenPath, withArmed.stopHookActive);
-  log({ step: "author-token", found: author.kind === "found", path: tokenPath });
+  const noToken = afterAuthorToken(author.kind === "found", author.path, withArmed.stopHookActive);
+  log({ step: "author-token", found: author.kind === "found", path: author.path });
 
   if (author.kind === "missing") {
     return noToken?.kind === "block" ? { kind: "block", reason: noToken.reason } : { kind: "allow" };
@@ -402,7 +401,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     const url = await checked(
       deps.run,
       ["gh", "pr", "create", "--base", TRUNK, "--head", branch, "--title", text.title, "--body-file", "-"],
-      { cwd, env: ghEnv(author.token), stdin: body === "" ? "(no body)" : body },
+      { ...ghOptions(cwd, author), stdin: body === "" ? "(no body)" : body },
     );
 
     number = Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
@@ -410,7 +409,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     number = action.pr;
 
     if (action.ready) {
-      await checked(deps.run, ["gh", "pr", "ready", String(number)], { cwd, env: ghEnv(author.token) });
+      await checked(deps.run, ["gh", "pr", "ready", String(number)], ghOptions(cwd, author));
     }
   }
 
