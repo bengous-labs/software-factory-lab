@@ -174,10 +174,6 @@ export function withNitAnswers(
 
   const nitAnswer = `a push after Review round 3 that only answers its Nits: ${delta.lines} lines in ${listed(delta.paths)}`;
 
-  // The Owner's route keeps its reason: the land-gate and the Owner's comment give it as why the PR is held.
-  return {
-    ...answer,
-    secondRound: false,
-    reason: answer.land === "owner" ? `${answer.reason}; ${nitAnswer}` : nitAnswer,
-  };
+  // The Owner's route keeps its reason alone: the land-gate and the Owner's comment give it as why the PR is held.
+  return { ...answer, secondRound: false, reason: answer.land === "owner" ? answer.reason : nitAnswer };
 }

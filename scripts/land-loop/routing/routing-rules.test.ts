@@ -399,7 +399,7 @@ describe("withNitAnswers", () => {
       ...READ,
       land: "owner",
       secondRound: false,
-      reason: `touches a path a deep review reads; a push after Review round 3 that only answers its Nits: ${NIT_ANSWER_LINE_CAP} lines in scripts/a.ts`,
+      reason: "touches a path a deep review reads",
     });
   });
 
