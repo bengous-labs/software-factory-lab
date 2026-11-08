@@ -140,9 +140,9 @@ const HOLD_REASON_MAX = 300;
  * reason; YES first, as a word, is yes; anything else, an empty answer included, is no.
  */
 export function answerOf(text: string): Answer {
-  // Markdown emphasis anywhere on the line, as in `**YES, HOLD**:` or `**YES**, HOLD:`, does not change the answer.
-  const first = (text.trimStart().split("\n")[0] ?? "").replaceAll("*", "");
-  const hold = /^YES,\s*HOLD:\s*(.*)/u.exec(first);
+  const first = text.trimStart().split("\n")[0] ?? "";
+  // Markdown around the words, as in `# **YES, HOLD**:` or `_YES_, HOLD:`, does not change the answer; the reason keeps its own.
+  const hold = /^[#\s]*[*_]*YES[*_]*,\s*[*_]*HOLD[*_]*:[*_]*\s*(.*)/u.exec(first);
 
   if (hold !== null) {
     const reason = (hold[1] ?? "").trim();
@@ -150,7 +150,7 @@ export function answerOf(text: string): Answer {
     return { kind: "hold", reason: (reason === "" ? "(no reason given)" : reason).slice(0, HOLD_REASON_MAX) };
   }
 
-  return /^YES\b/u.test(first) ? { kind: "yes" } : { kind: "no" };
+  return /^[#\s]*[*_]*YES(?![\p{L}\p{N}])/u.test(first) ? { kind: "yes" } : { kind: "no" };
 }
 
 export function decide(pr: PullRequest | null, answer: Answer): Action {

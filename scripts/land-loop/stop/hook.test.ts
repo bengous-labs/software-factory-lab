@@ -362,7 +362,7 @@ describe("stop", () => {
 
   const COMMENT = `Held for the Owner by the Author: ${REASON}\n\n<!-- lab-author-reply -->`;
 
-  test("a hold on the open path: gh pr create puts the label itself, the comment follows with the Author's credential, then the hold is logged", async () => {
+  test("a hold on the open path: the PR opens as a draft, gets the label and the comment with the Author's credential, then is readied", async () => {
     const records: StopLogRecord[] = [];
     const { run, calls, root } = world(`YES, HOLD: ${REASON}`);
 
@@ -373,10 +373,17 @@ describe("stop", () => {
     expect(publishing(calls)).toEqual([
       ["push", { LAB_AUTHOR_TOKEN: TOKEN }, undefined],
       ["gh pr create --base", { GH_TOKEN: TOKEN }, undefined],
+      ["gh pr edit 12", { GH_TOKEN: TOKEN }, undefined],
       ["gh pr comment 12", { GH_TOKEN: TOKEN }, COMMENT],
+      ["gh pr ready 12", { GH_TOKEN: TOKEN }, undefined],
     ]);
-    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv.slice(-2)).toEqual([
-      "--label",
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv.at(-1)).toBe("--draft");
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr edit"))?.argv).toEqual([
+      "gh",
+      "pr",
+      "edit",
+      "12",
+      "--add-label",
       "land:human",
     ]);
     expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr comment"))?.argv).toEqual([
@@ -393,7 +400,7 @@ describe("stop", () => {
     );
   });
 
-  test("a hold on the push path: the comment, then the label, go out before the push and gh pr ready", async () => {
+  test("a hold on the push path: the label, then the comment, go out before the push and gh pr ready", async () => {
     const records: StopLogRecord[] = [];
 
     const { run, calls, root } = world(
@@ -406,12 +413,12 @@ describe("stop", () => {
     });
 
     expect(publishing(calls)).toEqual([
+      ["gh pr edit 12", { GH_TOKEN: TOKEN }, undefined],
       [
         "gh pr comment 12",
         { GH_TOKEN: TOKEN },
         "Held for the Owner by the Author: (no reason given)\n\n<!-- lab-author-reply -->",
       ],
-      ["gh pr edit 12", { GH_TOKEN: TOKEN }, undefined],
       ["push", { LAB_AUTHOR_TOKEN: TOKEN }, undefined],
       ["gh pr ready 12", { GH_TOKEN: TOKEN }, undefined],
     ]);
@@ -451,7 +458,7 @@ describe("stop", () => {
     });
 
     expect(publishing(calls).map(([line]) => line)).toEqual(["push", "gh pr create --base"]);
-    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv).not.toContain("--label");
+    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv).not.toContain("--draft");
     expect(records.some((record) => record.step === "hold")).toBe(false);
     expect(outcome.kind === "block" && outcome.reason).not.toContain("held this PR");
   });

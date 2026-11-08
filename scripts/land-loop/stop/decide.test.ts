@@ -135,6 +135,17 @@ describe("answerOf", () => {
       ["**YES, HOLD**: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
       ["**YES**, HOLD: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
       ["**YES, HOLD:** renames a stored label", { kind: "hold", reason: "renames a stored label" }],
+      ["__YES, HOLD__: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
+      ["_YES_, HOLD: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
+      ["# YES, HOLD: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
+      [
+        "YES, HOLD: changes the scripts/**/*.ts glob in layers.map.ts",
+        { kind: "hold", reason: "changes the scripts/**/*.ts glob in layers.map.ts" },
+      ],
+      ["__YES__ done", { kind: "yes" }],
+      ["# YES done", { kind: "yes" }],
+      ["YESÉ", { kind: "no" }],
+      ["YES7", { kind: "no" }],
       ["YES, hold: lower case", { kind: "yes" }],
       ["NO, HOLD: not finished", { kind: "no" }],
     ];

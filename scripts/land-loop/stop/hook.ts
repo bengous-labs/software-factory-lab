@@ -254,25 +254,32 @@ async function prOf(deps: Deps, cwd: string, branch: string, author: AuthorToken
     : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid, labels: pr.labels.map((label) => label.name) };
 }
 
-/** The Done judge's hold on a PR; `created` says `gh pr create` put its label already. */
+/** The Done judge's hold on a PR, and what it puts there; `ready` readies the draft a held PR opened as. */
 interface HoldTarget {
   readonly pr: number;
   readonly hold: string | null;
   readonly steps: HoldSteps;
-  readonly created: boolean;
+  readonly ready: boolean;
 }
 
-/** Posts the hold's comment, then puts its label, with the Author's credential, and logs the hold. */
+/**
+ * Puts the hold's label, then posts its comment, with the Author's credential, and logs the hold. The
+ * label goes first: a failure after it leaves the PR held, never a hold comment with no hold behind it.
+ */
 async function putHold(
   deps: Deps,
   options: RunOptions,
   target: HoldTarget,
   log: (record: StopLogRecord) => void,
 ): Promise<void> {
-  const { pr, hold, steps, created } = target;
+  const { pr, hold, steps, ready } = target;
 
   if (hold === null) {
     return;
+  }
+
+  if (steps.addLabel) {
+    await checked(deps.run, ["gh", "pr", "edit", String(pr), "--add-label", "land:human"], options);
   }
 
   if (steps.comment !== null) {
@@ -282,11 +289,11 @@ async function putHold(
     });
   }
 
-  if (steps.addLabel && !created) {
-    await checked(deps.run, ["gh", "pr", "edit", String(pr), "--add-label", "land:human"], options);
-  }
-
   log({ step: "hold", pr, reason: hold, added: steps.addLabel });
+
+  if (ready) {
+    await checked(deps.run, ["gh", "pr", "ready", String(pr)], options);
+  }
 }
 
 async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: string): Promise<StopChecks> {
@@ -457,7 +464,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
 
   // The hold goes on before the push, so the Merge bot never reads the new head without it.
   if (action.kind === "push") {
-    await putHold(deps, ghOptions(cwd, author), { pr: action.pr, hold: action.hold, steps: hold, created: false }, log);
+    await putHold(deps, ghOptions(cwd, author), { pr: action.pr, hold: action.hold, steps: hold, ready: false }, log);
   }
 
   await checked(deps.run, pushArgs(branch), { cwd, env: { LAB_AUTHOR_TOKEN: author.token }, timeoutMs: 120_000 });
@@ -493,14 +500,14 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
         text.title,
         "--body-file",
         "-",
-        // On the create call itself, so the PR is never open without its hold.
-        ...(hold.addLabel ? ["--label", "land:human"] : []),
+        // A held PR opens as a draft and is readied once held: a failure in between leaves a draft, which the next stop asks about again.
+        ...(hold.addLabel ? ["--draft"] : []),
       ],
       { ...ghOptions(cwd, author), stdin: body === "" ? "(no body)" : body },
     );
 
     number = Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
-    await putHold(deps, ghOptions(cwd, author), { pr: number, hold: action.hold, steps: hold, created: true }, log);
+    await putHold(deps, ghOptions(cwd, author), { pr: number, hold: action.hold, steps: hold, ready: true }, log);
   } else {
     number = action.pr;
 
