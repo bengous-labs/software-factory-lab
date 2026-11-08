@@ -462,7 +462,7 @@ async function snapshotOf(
     humanLabelBy: humanLabelByOf(events, labels, env.appLogin),
     landApprovalByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
-    nitPaths: nitPathsOf(graphqlLogin(env.appLogin), threads),
+    nitPaths: nitPathsOf(graphqlLogin(env.appLogin), 3, threads),
     devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
     conflicting: conflictingOf(pr.mergeable_state),
     record,
@@ -602,13 +602,7 @@ async function route(
 
   const answer = routingOf(rules, patchDeltaRules, judge);
 
-  return delta === null
-    ? answer
-    : withNitAnswers(answer, delta, {
-        reviewRounds: record.reviewRounds,
-        importantByRound: record.importantByRound,
-        nitPaths,
-      });
+  return delta === null ? answer : withNitAnswers(policy, answer, delta, { record, deltaFrom: from, nitPaths });
 }
 
 // oxlint-disable-next-line typescript/consistent-return -- the switch covers every Step kind, so no path reaches the end.

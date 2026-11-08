@@ -11,10 +11,13 @@ import {
   nitPathsOf,
   openImportantOf,
   ReviewThreads,
+  roundOfReviewBody,
   severityOfBody,
   threadsQueryOf,
 } from "./findings.ts";
 import type { ReviewThread } from "./findings.ts";
+import { reviewMarkerOf } from "./post-plan.ts";
+import type { ReviewRequest } from "./review-report.ts";
 
 const APP = "bengous-labs-agents";
 
@@ -62,6 +65,7 @@ describe("the review threads", () => {
   test("the query names the PR and takes the repository as variables", () => {
     expect(threadsQueryOf(12)).toContain("query($owner:String!,$name:String!){repository(owner:$owner,name:$name)");
     expect(threadsQueryOf(12)).toContain("pullRequest(number:12)");
+    expect(threadsQueryOf(12)).toContain("comments(first:20){nodes{author{login} body pullRequestReview{body}}}");
   });
 
   test("a thread whose author was deleted reads with a null author; an answer outside the schema is refused", () => {
@@ -99,19 +103,55 @@ describe("openImportantOf", () => {
   });
 });
 
+/** `found` as Review round `round` posted it: its finding sits in the review whose body carries that round's marker. */
+const postedIn = (found: ReviewThread, round: 1 | 2 | 3, path: string): ReviewThread => ({
+  ...found,
+  path,
+  comments: {
+    nodes: found.comments.nodes.map((comment, index) =>
+      index === 0
+        ? {
+            ...comment,
+            pullRequestReview: { body: `Review round ${round}\n\n${reviewMarkerOf({ ...REQUEST, round })}` },
+          }
+        : comment,
+    ),
+  },
+});
+
+const REQUEST: ReviewRequest = {
+  pr: 7,
+  head: "a".repeat(40),
+  base: "b".repeat(40),
+  patch: "p1",
+  round: 1,
+  model: "claude-opus-5-5",
+  effort: "high",
+};
+
+describe("roundOfReviewBody", () => {
+  test("reads the round of the marker a posted review ends with; a body without one has none", () => {
+    expect(roundOfReviewBody(`Review round 3\n\n${reviewMarkerOf({ ...REQUEST, round: 3 })}`)).toBe(3);
+    expect(roundOfReviewBody(reviewMarkerOf({ ...REQUEST, round: 1 }))).toBe(1);
+    expect(roundOfReviewBody("Looks good")).toBeNull();
+  });
+});
+
 describe("nitPathsOf", () => {
-  test("the files of the App's Nit threads, open or resolved, once each; none of an Important's or a human's", () => {
+  test("the files of the App's Nit threads Review round `round` posted, open or resolved, once each; none of another round's, an Important's or a human's", () => {
     expect(
-      nitPathsOf(APP, [
-        { ...thread(NIT), path: "b.ts" },
-        { ...thread(NIT, [], { isResolved: true }), path: "a.ts" },
-        { ...thread(NIT), path: "b.ts" },
-        { ...thread(IMPORTANT), path: "c.ts" },
-        { ...thread(NIT, [], { by: "bengous" }), path: "d.ts" },
-        { ...thread(NIT, [], { by: null }), path: "e.ts" },
+      nitPathsOf(APP, 3, [
+        postedIn(thread(NIT), 3, "b.ts"),
+        postedIn(thread(NIT, [], { isResolved: true }), 3, "a.ts"),
+        postedIn(thread(NIT), 3, "b.ts"),
+        postedIn(thread(NIT), 2, "f.ts"),
+        postedIn(thread(IMPORTANT), 3, "c.ts"),
+        postedIn(thread(NIT, [], { by: "bengous" }), 3, "d.ts"),
+        postedIn(thread(NIT, [], { by: null }), 3, "e.ts"),
+        { ...thread(NIT), path: "g.ts" },
       ]),
     ).toEqual(["a.ts", "b.ts"]);
-    expect(nitPathsOf(APP, [])).toEqual([]);
+    expect(nitPathsOf(APP, 3, [])).toEqual([]);
   });
 });
 

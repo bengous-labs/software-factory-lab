@@ -222,7 +222,7 @@ export interface Snapshot {
   /** The Land approval label is on the PR and the owner put it there. */
   readonly landApprovalByOwner: boolean;
   readonly openImportant: number;
-  /** The files the App posted a Nit finding on, open or resolved: the route weighs a push after Review round 3 against them. */
+  /** The files Review round 3 posted a Nit finding on, open or resolved: the route weighs a push after round 3 against them. */
   readonly nitPaths: readonly string[];
   readonly devRed: boolean;
   /** GitHub reads the PR as conflicting with its base: no CI runs on it and the queue refuses it. */

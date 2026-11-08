@@ -34,7 +34,14 @@ const ReviewThread = Schema.Struct({
   path: Schema.String,
   line: Schema.NullOr(Schema.Finite),
   comments: Schema.Struct({
-    nodes: Schema.Array(Schema.Struct({ author: Schema.NullOr(Login), body: Schema.String })),
+    nodes: Schema.Array(
+      Schema.Struct({
+        author: Schema.NullOr(Login),
+        body: Schema.String,
+        /** The review the comment was posted in: an App finding's carries its round's marker. */
+        pullRequestReview: Schema.optionalKey(Schema.NullOr(Schema.Struct({ body: Schema.String }))),
+      }),
+    ),
   }),
 });
 
@@ -52,7 +59,7 @@ export const ReviewThreads = Schema.Struct({
 
 /** The GraphQL query of the review threads of PR `pr`, over the variables `owner` and `name`. */
 export function threadsQueryOf(pr: number): string {
-  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{author{login} body}}}}}}}`;
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{author{login} body pullRequestReview{body}}}}}}}}`;
 }
 
 /** The App's login as GraphQL prints it, without REST's `[bot]` suffix. */
@@ -69,12 +76,26 @@ export function openImportantOf(appLogin: string, threads: readonly ReviewThread
   }).length;
 }
 
-/** The files of the App's Nit threads, open or resolved, sorted, once each. `appLogin` is the App's login as GraphQL prints it. */
-export function nitPathsOf(appLogin: string, threads: readonly ReviewThread[]): string[] {
+/** The marker a posted review ends with, as `post-plan.ts` `reviewMarkerOf` writes it: it names the review's round. */
+const REVIEW_MARKER_PATTERN = /<!-- lab-review patch=\S+ round=(\d+) -->/u;
+
+/** The Review round a posted review's body names; null for a body with no marker, such as a human's. */
+export function roundOfReviewBody(body: string): number | null {
+  const round = REVIEW_MARKER_PATTERN.exec(body)?.[1];
+
+  return round === undefined ? null : Number(round);
+}
+
+/**
+ * The files of the Nit threads the App posted in Review round `round`, open or resolved, sorted, once
+ * each. `appLogin` is the App's login as GraphQL prints it.
+ */
+export function nitPathsOf(appLogin: string, round: number, threads: readonly ReviewThread[]): string[] {
   const paths = threads.flatMap((thread) => {
     const [finding] = thread.comments.nodes;
+    const posted = roundOfReviewBody(finding?.pullRequestReview?.body ?? "") === round;
 
-    return finding?.author?.login === appLogin && severityOfBody(finding.body) === "nit" ? [thread.path] : [];
+    return posted && finding?.author?.login === appLogin && severityOfBody(finding.body) === "nit" ? [thread.path] : [];
   });
 
   return [...new Set(paths)].toSorted();
