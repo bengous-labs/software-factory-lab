@@ -2,7 +2,16 @@ import { describe, expect, test } from "bun:test";
 
 import * as fc from "fast-check";
 
-import { LABELS, recordOf, ROUTING, RUNS, SNAPSHOT, stepsOrNone, withdrawn } from "../guarantees.test.ts";
+import {
+  HUMAN_LABEL_BY,
+  LABELS,
+  recordOf,
+  ROUTING,
+  RUNS,
+  SNAPSHOT,
+  stepsOrNone,
+  withdrawn,
+} from "../guarantees.test.ts";
 import type { ReportedFinding, ReportedResult, ReviewResult } from "../review/review-report.ts";
 import {
   afterReview,
@@ -20,7 +29,16 @@ import {
   risen,
   storedOfRecord,
 } from "./decide.ts";
-import type { CheckState, ReviewJob, ReviewState, RoutingAnswer, Snapshot, Step, StoredRecord } from "./decide.ts";
+import type {
+  CheckState,
+  ReviewJob,
+  ReviewState,
+  RoutingAnswer,
+  Snapshot,
+  StateRecord,
+  Step,
+  StoredRecord,
+} from "./decide.ts";
 
 const P1 = "patch-1";
 
@@ -43,6 +61,7 @@ const READY: Snapshot = {
   empty: false,
   ci: "success",
   labels: [],
+  humanLabelBy: null,
   landApprovalByOwner: false,
   openImportant: 0,
   devRed: false,
@@ -333,9 +352,79 @@ describe("Review rounds", () => {
 });
 
 describe("risen", () => {
-  test("labels only rise: a later Routing answer cannot lower land:human or review:deep", () => {
-    expect(risen(["land:human", "review:deep"], LIGHT)).toEqual({ route: "owner", depth: "deep" });
-    expect(risen(["review:none"], LIGHT)).toEqual({ route: "auto", depth: "light" });
+  test("the review label only rises: a later Routing answer cannot lower review:deep", () => {
+    expect(risen(["review:deep"], null, LIGHT)).toEqual({ route: "auto", depth: "deep" });
+    expect(risen(["review:none"], null, LIGHT)).toEqual({ route: "auto", depth: "light" });
+  });
+});
+
+const BOT_LABELED = { ...READY, labels: ["land:human"], humanLabelBy: "merge-bot" as const };
+
+const landRoute = (snapshot: Snapshot): string | undefined => {
+  const step = stepsOf(snapshot).find((found) => found.kind === "labels");
+
+  return step?.kind === "labels" ? step.route : undefined;
+};
+
+const reviewed = (routing: RoutingAnswer, rest: Partial<StateRecord> = {}): StateRecord => ({
+  ...EMPTY_RECORD,
+  reviewedPatch: P1,
+  reviewedHead: "h0",
+  reviewRounds: 1,
+  triage: { [P1]: routing },
+  ...rest,
+});
+
+describe("a land:human label", () => {
+  test("the Merge bot's App set falls to land:auto when the route decide computes is auto", () => {
+    const snapshot = { ...BOT_LABELED, record: reviewed(LIGHT) };
+
+    expect(landRoute(snapshot)).toBe("auto");
+    expect(kinds(snapshot)).toContain("auto-merge");
+  });
+
+  test("the Merge bot's App set stays when the Routing answer says owner", () => {
+    const snapshot = { ...BOT_LABELED, record: reviewed({ ...LIGHT, land: "owner" }) };
+
+    expect(landRoute(snapshot)).toBe("owner");
+    expect(kinds(snapshot)).not.toContain("auto-merge");
+  });
+
+  test("the Merge bot's App set stays when a third Review round would be needed, in one labels step", () => {
+    const record = reviewed({ ...LIGHT, secondRound: true }, { reviewedPatch: "patch-0", reviewRounds: 2 });
+    const steps = stepsOf({ ...BOT_LABELED, record });
+
+    expect(steps.filter((step) => step.kind === "labels")).toEqual([
+      { kind: "labels", route: "owner", depth: "light" },
+    ]);
+    expect(steps.some((step) => step.kind === "auto-merge")).toBe(false);
+  });
+
+  test("another login set is the Owner's veto and stays though the route is auto", () => {
+    const snapshot = { ...BOT_LABELED, humanLabelBy: "other" as const, record: reviewed(LIGHT) };
+
+    expect(landRoute(snapshot)).toBe("owner");
+    expect(gate(snapshot)).toBe("pending");
+    expect(kinds(snapshot)).not.toContain("auto-merge");
+  });
+
+  test("an unreadable actor, or no labeled event, reads as another login: the label stays", () => {
+    const snapshot = { ...READY, labels: ["land:human"], humanLabelBy: "other" as const, record: reviewed(LIGHT) };
+
+    expect(landRoute(snapshot)).toBe("owner");
+    expect(kinds(snapshot)).not.toContain("auto-merge");
+  });
+
+  test("with no land:human on the PR, an owner route puts it", () => {
+    expect(landRoute({ ...READY, record: reviewed({ ...LIGHT, land: "owner" }) })).toBe("owner");
+  });
+
+  test("a label that fell rises again when a later patch routes to owner", () => {
+    const fell = { ...BOT_LABELED, record: reviewed(LIGHT) };
+    const later = { ...READY, labels: ["land:auto"], record: reviewed({ ...LIGHT, land: "owner" }) };
+
+    expect(landRoute(fell)).toBe("auto");
+    expect(landRoute(later)).toBe("owner");
   });
 });
 
@@ -734,12 +823,12 @@ const MODEL_STEPS: ReadonlySet<Step["kind"]> = new Set(["route"]);
 const REVIEW_RANK: Readonly<Record<RoutingAnswer["review"], number>> = { none: 0, light: 1, deep: 2 };
 
 describe("the Merge bot's invariants", () => {
-  test("risen: the route is owner exactly when the PR carries land:human or the answer says owner", () => {
+  test("risen: the route is owner exactly when another login set land:human or the route given is owner", () => {
     fc.assert(
-      fc.property(fc.subarray(LABELS), ROUTING, (labels, routing) => {
-        const expected = labels.includes("land:human") || routing.land === "owner" ? "owner" : "auto";
+      fc.property(fc.subarray(LABELS), HUMAN_LABEL_BY, ROUTING, (labels, by, routing) => {
+        const expected = by === "other" || routing.land === "owner" ? "owner" : "auto";
 
-        expect(risen(labels, routing).route).toBe(expected);
+        expect(risen(labels, by, routing).route).toBe(expected);
       }),
     );
   });
@@ -750,7 +839,7 @@ describe("the Merge bot's invariants", () => {
         const onPr = (["none", "light", "deep"] as const).filter((depth) => labels.includes(`review:${depth}`));
         const deepest = Math.max(REVIEW_RANK[routing.review], ...onPr.map((depth) => REVIEW_RANK[depth]));
 
-        expect(REVIEW_RANK[risen(labels, routing).depth]).toBe(deepest);
+        expect(REVIEW_RANK[risen(labels, null, routing).depth]).toBe(deepest);
       }),
     );
   });

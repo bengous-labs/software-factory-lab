@@ -254,6 +254,9 @@ const ARBITRARY_JOB: fc.Arbitrary<ReviewJob | null> = fc.option(
 
 export const LABELS = ["land:auto", "land:human", "review:none", "review:light", "review:deep", LAND_APPROVAL_LABEL];
 
+/** Who set the PR's land:human: the Merge bot's App, another login, or nobody. */
+export const HUMAN_LABEL_BY: fc.Arbitrary<Snapshot["humanLabelBy"]> = fc.constantFrom("merge-bot", "other", null);
+
 /** Mostly open PRs from the Owner's own branches, the ones `decide` does more than ignore. */
 export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   number: fc.constantFrom(9, 10),
@@ -266,6 +269,7 @@ export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   empty: fc.oneof({ arbitrary: fc.constant(false), weight: 8 }, fc.constant(true)),
   ci: fc.constantFrom("success", "failure", null),
   labels: fc.subarray(LABELS),
+  humanLabelBy: HUMAN_LABEL_BY,
   landApprovalByOwner: fc.boolean(),
   openImportant: fc.nat({ max: 2 }),
   devRed: fc.boolean(),
@@ -337,6 +341,7 @@ const NEAR_LANDABLE: fc.Arbitrary<Snapshot> = PATCH.chain((patch) =>
     empty: mostly(false, fc.constant(true)),
     ci: mostly<Snapshot["ci"]>("success", fc.constantFrom("failure", null)),
     labels: fc.subarray(LABELS),
+    humanLabelBy: HUMAN_LABEL_BY,
     landApprovalByOwner: fc.boolean(),
     openImportant: mostly(0, fc.integer({ min: 1, max: 2 })),
     devRed: mostly(false, fc.constant(true)),
@@ -367,9 +372,9 @@ function holdsForSnapshots(check: (snapshot: Snapshot) => void): void {
 }
 
 describe("the Merge bot's guarantees", () => {
-  test("a PR the Owner holds, by land:human or an owner Routing answer, merges only with the Owner's Land approval for this very patch", () => {
+  test("a PR the Owner holds, by a land:human another login than the Merge bot's App set or an owner Routing answer, merges only with the Owner's Land approval for this very patch", () => {
     holdsForSnapshots((snapshot) => {
-      const held = snapshot.labels.includes("land:human") || snapshot.record.triage[snapshot.patch]?.land !== "auto";
+      const held = snapshot.humanLabelBy === "other" || snapshot.record.triage[snapshot.patch]?.land !== "auto";
 
       if (merges(snapshot) && held) {
         expectLandApproval(snapshot);

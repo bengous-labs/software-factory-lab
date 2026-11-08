@@ -27,10 +27,6 @@ export const storedLandRouteOf = (route: LandRoute): StoredLandRoute => (route =
 
 export type ReviewDepth = "none" | "light" | "deep";
 
-const LAND_ROUTE_RANK: Record<LandRoute, number> = { auto: 0, owner: 1 };
-
-const DEPTH_RANK: Record<ReviewDepth, number> = { none: 0, light: 1, deep: 2 };
-
 /** The label of a Land approval. An external name: the owner puts it by hand, so the string stays. */
 export const LAND_APPROVAL_LABEL = "land-ok";
 
@@ -204,6 +200,11 @@ export interface Snapshot {
   /** CI_CHECKS on the head, as `ciOf` reads them: null while one has not completed. */
   readonly ci: "success" | "failure" | null;
   readonly labels: readonly string[];
+  /**
+   * Who set the PR's `land:human`, by its latest `labeled` event: the Merge bot's App, any other login
+   * (an actor that does not read, or no such event, included), or null when the PR has no `land:human`.
+   */
+  readonly humanLabelBy: "merge-bot" | "other" | null;
   /** The Land approval label is on the PR and the owner put it there. */
   readonly landApprovalByOwner: boolean;
   readonly openImportant: number;
@@ -288,22 +289,32 @@ export type Decision =
   { readonly kind: "ignore"; readonly reason: string } | { readonly kind: "steps"; readonly steps: readonly Step[] };
 
 /**
- * Labels only rise: the higher of what is on the PR and what the Routing answer says. The `land:*` and
- * `review:*` labels, read here and quoted in the check summaries below, are external names: open PRs
- * carry them, so the strings stay.
+ * The `land:*` label follows the route the decision computes, except a `land:human` that a login other
+ * than the Merge bot's App set: the Owner's veto, which stays. The `review:*` label only rises. The
+ * `land:*` and `review:*` labels, read here and quoted in the check summaries below, are external names:
+ * open PRs carry them, so the strings stay.
  */
 export interface RisenLabels {
   readonly route: LandRoute;
   readonly depth: ReviewDepth;
 }
 
-export function risen(labels: readonly string[], routing: RoutingAnswer): RisenLabels {
-  const onPrRoute: LandRoute = labels.includes(`land:${storedLandRouteOf("owner")}`) ? "owner" : "auto";
-  const onPrDepth = (["deep", "light", "none"] as const).find((depth) => labels.includes(`review:${depth}`));
+function risenDepth(labels: readonly string[], review: ReviewDepth): ReviewDepth {
+  return (
+    (["deep", "light", "none"] as const).find((depth) => depth === review || labels.includes(`review:${depth}`)) ??
+    review
+  );
+}
 
+/** `routing.land` is the route the decision computes, every hold included. */
+export function risen(
+  labels: readonly string[],
+  humanLabelBy: Snapshot["humanLabelBy"],
+  routing: Pick<RoutingAnswer, "land" | "review">,
+): RisenLabels {
   return {
-    route: LAND_ROUTE_RANK[onPrRoute] > LAND_ROUTE_RANK[routing.land] ? onPrRoute : routing.land,
-    depth: onPrDepth !== undefined && DEPTH_RANK[onPrDepth] > DEPTH_RANK[routing.review] ? onPrDepth : routing.review,
+    route: humanLabelBy === "other" ? "owner" : routing.land,
+    depth: risenDepth(labels, routing.review),
   };
 }
 
@@ -596,10 +607,15 @@ export function decide(snapshot: Snapshot): Decision {
     return { kind: "steps", steps };
   }
 
-  const labels = risen(snapshot.labels, routing);
-  steps.push({ kind: "labels", ...labels });
+  const need = roundNeedOf(next, routing, risenDepth(snapshot.labels, routing.review), snapshot.patch);
+  const thirdRoundNeeded = need?.kind === "third";
 
-  const need = roundNeedOf(next, routing, labels.depth, snapshot.patch);
+  const labels = risen(snapshot.labels, snapshot.humanLabelBy, {
+    land: thirdRoundNeeded ? "owner" : routing.land,
+    review: routing.review,
+  });
+
+  steps.push({ kind: "labels", ...labels });
 
   if (need?.kind === "request") {
     steps.push({ kind: "request-review", depth: need.depth, reviewRound: need.round }, ...runningSteps(need.round));
@@ -607,13 +623,8 @@ export function decide(snapshot: Snapshot): Decision {
     return { kind: "steps", steps };
   }
 
-  const thirdRoundNeeded = need?.kind === "third";
-
   if (thirdRoundNeeded) {
-    steps.push(
-      { kind: "labels", route: "owner", depth: labels.depth },
-      { kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." },
-    );
+    steps.push({ kind: "needs-owner", reason: "A third Review round would be needed: the Owner decides." });
   }
 
   if (snapshot.openImportant > 0) {
@@ -633,7 +644,7 @@ export function decide(snapshot: Snapshot): Decision {
     },
   });
 
-  const route: LandRoute = thirdRoundNeeded ? "owner" : labels.route;
+  const { route } = labels;
 
   if (snapshot.devRed) {
     return finish(pending("dev is red: landing is on hold."));
