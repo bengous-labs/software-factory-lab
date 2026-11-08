@@ -227,6 +227,8 @@ export interface Snapshot {
   /** The Land approval label is on the PR and the owner put it there, before or after this head was pushed. */
   readonly landApprovalPutByOwner: boolean;
   readonly openImportant: number;
+  /** The App's Important findings the Author resolved with a rejection. */
+  readonly rejectedImportant: number;
   readonly devRed: boolean;
   /** GitHub reads the PR as conflicting with its base: no CI runs on it and the queue refuses it. */
   readonly conflicting: boolean;
@@ -567,18 +569,22 @@ function failedOf(record: StateRecord, review: ReviewState, cause: string): Revi
  * posts and those of an earlier round still open.
  */
 function postedSteps(snapshot: Snapshot, result: ReportedResult): readonly Step[] {
-  const open = importantOf(result) + snapshot.openImportant;
-
   return [
     { kind: "post-review", result },
     {
       kind: "review-check",
-      check:
-        open === 0
-          ? { kind: "success", summary: "No Important finding open." }
-          : { kind: "failure", summary: `${open} Important finding(s) open.` },
+      check: importantCheckOf(importantOf(result) + snapshot.openImportant, snapshot.rejectedImportant),
     },
   ];
+}
+
+/** The Review check of the Important findings: red while one is open, and it counts those the Author rejected apart. */
+function importantCheckOf(open: number, rejected: number): CheckState {
+  const rejectedText = rejected === 0 ? "" : `; ${rejected} rejected by the Author`;
+
+  return open === 0
+    ? { kind: "success", summary: `No Important finding open${rejectedText}.` }
+    : { kind: "failure", summary: `${open} Important finding(s) open${rejectedText}.` };
 }
 
 /** A review whose run has not completed: a request waits up to the deadline, a failed review stays failed. */
@@ -761,20 +767,17 @@ export function decide(snapshot: Snapshot): Decision {
   }
 
   if (snapshot.openImportant > 0) {
-    steps.push({
-      kind: "review-check",
-      check: { kind: "failure", summary: `${snapshot.openImportant} Important finding(s) open.` },
-    });
+    steps.push({ kind: "review-check", check: importantCheckOf(snapshot.openImportant, snapshot.rejectedImportant) });
 
     return finish(pending("Not landable: Important findings are open."));
   }
 
   steps.push({
     kind: "review-check",
-    check: {
-      kind: "success",
-      summary: labels.depth === "none" ? "review:none, nothing to read." : "No Important finding open.",
-    },
+    check:
+      labels.depth === "none"
+        ? { kind: "success", summary: "review:none, nothing to read." }
+        : importantCheckOf(0, snapshot.rejectedImportant),
   });
 
   const { route } = labels;

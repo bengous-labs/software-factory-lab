@@ -300,6 +300,12 @@ describe("stop", () => {
     expect(outcome.kind === "block" && outcome.reason).toContain(
       `\`bun ${root}/scripts/land-loop/thread.ts <thread-id> `,
     );
+    expect(outcome.kind === "block" && outcome.reason).toContain(
+      `\`bun ${root}/scripts/land-loop/thread.ts <thread-id> --reject "<your reason>"\``,
+    );
+    expect(outcome.kind === "block" && outcome.reason).toContain(
+      '- A finding you fix in part: it is a fix; start with "Fixed in <sha>: " and name what stays as is.',
+    );
     expect(outcome.kind === "block" && outcome.reason).toContain(`\`bun ${root}/scripts/land-loop/comment.ts 12 "`);
     expect(calls.some((call) => call.argv[1] === "push")).toBe(false);
   });

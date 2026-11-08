@@ -25,7 +25,14 @@ import { resolverOf } from "../lib/resolve.ts";
 import { checked, run } from "../lib/run.ts";
 import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
-import { graphqlLogin, nitPathsOf, openImportantOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
+import {
+  graphqlLogin,
+  nitPathsOf,
+  openImportantOf,
+  rejectedImportantOf,
+  ReviewThreads,
+  threadsQueryOf,
+} from "../review/findings.ts";
 import type { ReviewThread } from "../review/findings.ts";
 import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
@@ -493,6 +500,7 @@ async function snapshotOf(
     landApprovalByOwner,
     landApprovalPutByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
+    rejectedImportant: rejectedImportantOf(graphqlLogin(env.appLogin), threads),
     devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
     conflicting: conflictingOf(pr.mergeable_state),
     record,

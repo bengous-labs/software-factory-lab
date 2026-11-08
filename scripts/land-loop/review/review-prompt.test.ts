@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
+import { earlierThreadsOf, markerOf } from "./findings.ts";
 import { promptOf, readsEarlierThreads } from "./review-prompt.ts";
 import type { ReviewRequest } from "./review-report.ts";
 
@@ -16,6 +18,8 @@ const REQUEST: ReviewRequest = {
   model: "sonnet",
   effort: "medium",
 };
+
+const APP = "bengous-labs-agents";
 
 const GUIDES = { review: "# Review guide\n\nThe bar.\n", project: "# Project\n\nThe map.\n" };
 
@@ -47,6 +51,30 @@ describe("promptOf", () => {
     expect(
       prompt.endsWith("Never report again a finding the author resolved with a valid reason, nor one already open."),
     ).toBe(true);
+  });
+
+  test("round 2 shows a rejected thread's reply, marked as a rejection", () => {
+    const [rejected] = earlierThreadsOf(APP, [
+      {
+        id: "T",
+        isResolved: true,
+        path: "a.ts",
+        line: 3,
+        comments: {
+          nodes: [
+            { author: { login: APP }, body: `**Important**: off by one\n\n${markerOf("important")}` },
+            {
+              author: { login: "bengous-labs-author" },
+              body: `Rejected: the bound is inclusive\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`,
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(promptOf({ ...REQUEST, round: 2 }, GUIDES, rejected === undefined ? [] : [rejected])).toContain(
+      "- a.ts:3: **Important**: off by one | Author: Rejected: the bound is inclusive (thread resolved: rejected by the Author)\n",
+    );
   });
 
   test("round 3, the last, names the head round 2 read and lists the earlier threads with the author's answers", () => {

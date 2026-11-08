@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
 
 /**
- * The author's answer to a review finding: replies in the thread with the text given, then resolves
+ * The author's answer to a review finding, a fix or a rejection: replies in the thread, then resolves
  * it, as the Author's machine account. The PR watch prints each finding with the thread id this takes.
  *
- *   bun scripts/land-loop/thread.ts <thread-id> "<reply>"
+ *   bun scripts/land-loop/thread.ts <thread-id> "Fixed in <sha>: <what changed>"
+ *   bun scripts/land-loop/thread.ts <thread-id> --reject "<reason>"
  */
 
-import { AUTHOR_MARK } from "./author-mark.ts";
+import { AUTHOR_MARK, REJECT_MARK } from "./author-mark.ts";
 import { ghEnv, requiredAuthorToken } from "./lib/author.ts";
 import { checked, run } from "./lib/run.ts";
 import type { Run } from "./ports/run.ts";
@@ -17,17 +18,33 @@ export const REPLY =
 
 export const RESOLVE = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}";
 
-export const USAGE = 'usage: bun scripts/land-loop/thread.ts <thread-id> "<reply>"';
+export const USAGE =
+  'usage: bun scripts/land-loop/thread.ts <thread-id> "Fixed in <sha>: <what changed>" | bun scripts/land-loop/thread.ts <thread-id> --reject "<reason>"';
 
-/** The thread id and the reply, or null when either is missing or blank. */
-export function argsOf(argv: readonly string[]): { id: string; body: string } | null {
-  const [id, body] = argv;
+const FIX_PREFIX = "Fixed in ";
 
-  if (id === undefined || id.trim() === "" || body === undefined || body.trim() === "") {
-    return null;
+const REJECT_PREFIX = "Rejected: ";
+
+/** The reply the arguments after the thread id ask for, without its marks; null for a blank reason or a reply that is not a fix. */
+function bodyOf([first, reason]: readonly string[]): string | null {
+  if (first === "--reject") {
+    return reason === undefined || reason.trim() === "" ? null : `${REJECT_PREFIX}${reason}`;
   }
 
-  return { id, body };
+  return first?.startsWith(FIX_PREFIX) === true && first.slice(FIX_PREFIX.length).trim() !== "" ? first : null;
+}
+
+/** The thread id and the reply without its marks, or null for a refused form. */
+export function argsOf(argv: readonly string[]): { id: string; body: string } | null {
+  const [id, ...rest] = argv;
+  const body = bodyOf(rest);
+
+  return id === undefined || id.trim() === "" || body === null ? null : { id, body };
+}
+
+/** The reply as posted: a rejection carries `REJECT_MARK`, then every answer `AUTHOR_MARK`. */
+function postedOf(body: string): string {
+  return body.startsWith(REJECT_PREFIX) ? `${body}\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}` : `${body}\n\n${AUTHOR_MARK}`;
 }
 
 /** Replies first, so a thread is never resolved without the author's answer in it. */
@@ -41,7 +58,7 @@ export async function answer(
 
   await checked(
     runner,
-    ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", `id=${id}`, "-f", `body=${body}\n\n${AUTHOR_MARK}`],
+    ["gh", "api", "graphql", "-f", `query=${REPLY}`, "-f", `id=${id}`, "-f", `body=${postedOf(body)}`],
     options,
   );
   await checked(runner, ["gh", "api", "graphql", "-f", `query=${RESOLVE}`, "-f", `id=${id}`], options);

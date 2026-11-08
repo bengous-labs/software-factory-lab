@@ -56,6 +56,7 @@ const READY: Snapshot = {
   landApprovalByOwner: false,
   landApprovalPutByOwner: false,
   openImportant: 0,
+  rejectedImportant: 0,
   devRed: false,
   conflicting: false,
   record: { ...EMPTY_RECORD, triage: { [P1]: LIGHT } },
@@ -853,6 +854,25 @@ describe("landApprovalCounts", () => {
     ]);
   });
 
+  test("the Review check of a read PR counts the Importants the Author rejected apart; its conclusion follows the open count alone", () => {
+    const read = { ...READY, record: { ...READY.record, reviewedPatch: P1, reviewRounds: 1 } };
+
+    const rows: Array<[number, number, CheckState]> = [
+      [0, 0, { kind: "success", summary: "No Important finding open." }],
+      [0, 2, { kind: "success", summary: "No Important finding open; 2 rejected by the Author." }],
+      [1, 0, { kind: "failure", summary: "1 Important finding(s) open." }],
+      [1, 2, { kind: "failure", summary: "1 Important finding(s) open; 2 rejected by the Author." }],
+    ];
+
+    for (const [openImportant, rejectedImportant, check] of rows) {
+      expect(stepsOf({ ...read, openImportant, rejectedImportant })).toContainEqual({ kind: "review-check", check });
+    }
+
+    const unread = { ...READY, record: { ...READY.record, triage: { [P1]: { ...LIGHT, review: "none" as const } } } };
+
+    expect(checksOf({ ...unread, rejectedImportant: 2 })[0]).toBe("review:none, nothing to read.");
+  });
+
   test("an owner's Land approval already recorded for the current patch stays, and lands it", () => {
     const approved = {
       ...READY,
@@ -976,6 +996,28 @@ describe("the review job's run", () => {
     expect(
       stepsOf({ ...asked, openImportant: 1, reviewJob: completed(reported(finding("important"))) }),
     ).toContainEqual({ kind: "review-check", check: { kind: "failure", summary: "2 Important finding(s) open." } });
+  });
+
+  test("the posted review's Review check counts the Importants the Author rejected apart; its conclusion follows the open count alone", () => {
+    const rows: Array<[number, number, CheckState]> = [
+      [0, 0, { kind: "success", summary: "No Important finding open." }],
+      [0, 2, { kind: "success", summary: "No Important finding open; 2 rejected by the Author." }],
+      [1, 0, { kind: "failure", summary: "1 Important finding(s) open." }],
+      [1, 2, { kind: "failure", summary: "1 Important finding(s) open; 2 rejected by the Author." }],
+    ];
+
+    for (const [openImportant, rejectedImportant, check] of rows) {
+      expect(
+        stepsOf({ ...asked, openImportant, rejectedImportant, reviewJob: completed(reported(finding("nit"))) }),
+      ).toContainEqual({ kind: "review-check", check });
+    }
+
+    expect(
+      stepsOf({ ...asked, rejectedImportant: 2, reviewJob: completed(reported(finding("important"))) }),
+    ).toContainEqual({
+      kind: "review-check",
+      check: { kind: "failure", summary: "1 Important finding(s) open; 2 rejected by the Author." },
+    });
   });
 
   test("a failed result, a run with no result that reads, or an artifact of another PR, patch or round fails the review, with the cause", () => {

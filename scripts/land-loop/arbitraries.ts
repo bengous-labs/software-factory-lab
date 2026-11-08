@@ -153,6 +153,7 @@ export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   landApprovalByOwner: fc.boolean(),
   landApprovalPutByOwner: fc.boolean(),
   openImportant: fc.nat({ max: 2 }),
+  rejectedImportant: fc.nat({ max: 2 }),
   devRed: fc.boolean(),
   conflicting: fc.boolean(),
   record: recordOf(PATCH),

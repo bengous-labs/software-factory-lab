@@ -133,7 +133,9 @@ describe("armReason", () => {
     expect(reason).toContain("PR #12 is ready");
     expect(reason).toContain("    bun /r/scripts/land-loop/pr-watch.ts 12");
     expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "Fixed in <sha>: <what changed>"`');
-    expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "<your reason>"`');
+    expect(reason).toContain(
+      '- A finding you reject: reply with your reason and resolve: `bun /r/scripts/land-loop/thread.ts <thread-id> --reject "<your reason>"`. Then stop.\n- A finding you fix in part: it is a fix; start with "Fixed in <sha>: " and name what stays as is.\n',
+    );
     expect(reason).toContain('`bun /r/scripts/land-loop/comment.ts 12 "<what you decided and why>"`');
     expect(reason).toContain("never with `gh pr comment`");
     expect(reason).toContain(
