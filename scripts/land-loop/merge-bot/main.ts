@@ -519,8 +519,6 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
     ? patchDeltaRulesOf(policy, { paths: await changedPaths(env, from, range.head), lines: 0, messages: [] })
     : null;
 
-  const start = patchDeltaRules === null ? range.base : from;
-
   const question = judgeAskOf(rules, patchDeltaRules);
 
   const judge =
@@ -529,9 +527,9 @@ async function route(env: Env, range: Range, record: StateRecord, patchDelta: bo
       : await routingJudge(
           ask,
           env.cwd,
-          await git(env, judgeDiffArgs(start, range.head, true)),
-          await git(env, judgeDiffArgs(start, range.head, false)),
-          patchDeltaRules !== null,
+          await git(env, judgeDiffArgs(from, range.head, true)),
+          await git(env, judgeDiffArgs(from, range.head, false)),
+          patchDelta,
         );
 
   return routingOf(rules, patchDeltaRules, judge);

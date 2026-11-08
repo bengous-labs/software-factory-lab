@@ -11,7 +11,7 @@ import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
-import { judgeAskOf, routingRulesOf } from "../routing/routing-rules.ts";
+import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
 import type { ReviewState } from "./decide.ts";
 import {
   ActionsRun,
@@ -381,6 +381,14 @@ describe("the routing inputs", () => {
 
     expect(diff).toContain("+c");
     expect(diff).toContain("+v");
+
+    const same = await commit({ "docs/u.md": "u\n" });
+    const back = await commit({ "docs/u.md": "v\n" });
+    const nothing = patchDeltaRulesOf(policy, { paths: await pathsOf(head, back), lines: 0, messages: [] });
+
+    expect(same).not.toBe(back);
+    expect(judgeAskOf(await rulesOn(base, back), nothing)).toEqual({ kind: "none" });
+    expect(routingOf(await rulesOn(base, back), nothing, null).secondRound).toBe(false);
   });
 
   test("a PR whose commits change no file lists no path: its Snapshot is empty", async () => {

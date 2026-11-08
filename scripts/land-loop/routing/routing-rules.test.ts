@@ -70,8 +70,22 @@ describe("the lab's routing policy", () => {
     expect(() => lab({ paths: [], lines: 0, messages: [] })).toThrow("at least one file");
   });
 
-  test("a Patch delta that touches no file is no Patch delta: the PR is routed whole", () => {
-    expect(patchDeltaRulesOf(LAB, { paths: [], lines: 0, messages: [] })).toBeNull();
+  test("a Patch delta that touches no file has nothing to read again: no judge, no second round, the whole PR's route", () => {
+    const nothing = patchDeltaRulesOf(LAB, { paths: [], lines: 0, messages: [] });
+
+    expect(nothing).toEqual({
+      kind: "ruled",
+      answer: { ...AUTO_DEEP, secondRound: false, reason: "the Patch delta touches no file: nothing to read again" },
+    });
+
+    for (const paths of [["scripts/a.ts"], ["app/src/cli.ts"], [".github/a.yml"]]) {
+      const whole = lab({ paths, lines: 3, messages: [] });
+
+      expect(judgeAskOf(whole, nothing)).toEqual({ kind: "none" });
+      expect(routingOf(whole, nothing, null).secondRound).toBe(false);
+      expect(routingOf(whole, nothing, null).land).toBe(answerOf(whole)?.land ?? "auto");
+    }
+
     expect(patchDeltaRulesOf(LAB, { paths: ["app/src/cli.ts"], lines: 0, messages: [] })).toEqual({ kind: "judged" });
 
     const delta = { paths: [".github/a.yml", "app/src/cli.ts"], lines: 0, messages: [] };
@@ -218,9 +232,12 @@ describe("routingOf", () => {
     expect(routingOf(RULED_ONLY, JUDGED, { ...judge("auto"), secondRound: true })).toEqual(RULED);
   });
 
-  test("on a ruled Patch delta, a ruled change is read again", () => {
+  test("on a ruled Patch delta, a ruled change is read again when the delta's rules say so", () => {
     expect(routingOf(RULED_ONLY, RULED_ONLY, null)).toEqual(RULED);
-    expect(routingOf(RULED_ONLY, { kind: "ruled", answer: { ...RULED, secondRound: false } }, null)).toEqual(RULED);
+    expect(routingOf(RULED_ONLY, { kind: "ruled", answer: { ...RULED, secondRound: false } }, null)).toEqual({
+      ...RULED,
+      secondRound: false,
+    });
   });
 
   test("a change no rule names whose Patch delta is ruled takes the delta's answer, asks no judge, and lands auto", () => {

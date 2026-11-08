@@ -68,12 +68,22 @@ export function routingRulesOf(policy: RoutingPolicy, { paths, lines, messages }
 }
 
 /**
- * The rules' verdict on a Patch delta, or null when it touches no file: a head whose tree the last review
- * read, over a base that has since taken in some of the PR's change, has no Patch delta, and the PR is
- * routed whole.
+ * The rules' verdict on a Patch delta. One that touches no file, a head whose tree the last review read
+ * over a base that has since taken in some of the PR's change, has nothing to read again.
  */
-export function patchDeltaRulesOf(policy: RoutingPolicy, delta: RoutingInput): RulesVerdict | null {
-  return delta.paths.length === 0 ? null : routingRulesOf(policy, delta);
+export function patchDeltaRulesOf(policy: RoutingPolicy, delta: RoutingInput): RulesVerdict {
+  return delta.paths.length === 0
+    ? {
+        kind: "ruled",
+        answer: {
+          land: "auto",
+          review: "deep",
+          secondRound: false,
+          reason: "the Patch delta touches no file: nothing to read again",
+          model: null,
+        },
+      }
+    : routingRulesOf(policy, delta);
 }
 
 /** Whether the Routing judge is asked about a change: it then reads the whole diff of its range. */
@@ -91,8 +101,8 @@ export function judgeAskOf(verdict: RulesVerdict, patchDelta: RulesVerdict | nul
 /**
  * The Routing answer of a change from its rules' verdicts and the judge's answer to `judgeAskOf`, null
  * when it asked nothing. The rules alone set the Land route: the judge's answer lands `auto`. On a Patch
- * delta, a ruled change keeps the rules' answer and is read again when its delta is ruled, when the
- * judge says so when it is judged; a judged change whose delta is ruled takes the delta's Review depth,
+ * delta, a ruled change keeps the rules' answer and is read again when its ruled delta says so, when
+ * the judge says so when it is judged; a judged change whose delta is ruled takes the delta's Review depth,
  * and still lands `auto`.
  */
 export function routingOf(
@@ -116,5 +126,8 @@ export function routingOf(
     return patchDelta.kind === "ruled" ? { ...patchDelta.answer, land: "auto" } : judged();
   }
 
-  return { ...verdict.answer, secondRound: patchDelta.kind === "ruled" || judged().secondRound };
+  return {
+    ...verdict.answer,
+    secondRound: patchDelta.kind === "ruled" ? patchDelta.answer.secondRound : judged().secondRound,
+  };
 }
