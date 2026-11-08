@@ -177,6 +177,9 @@ describe("answerOf", () => {
   test("the reason loses the emphasis that closes a bolded line, and keeps its own markup", () => {
     const cases: Array<[string, string]> = [
       ["**YES, HOLD: renames a stored label**", "renames a stored label"],
+      ["**YES, HOLD: renames a stored label**  ", "renames a stored label"],
+      ["**YES, HOLD: renames a stored label **", "renames a stored label"],
+      ["**YES, HOLD: changes the scripts/**/*.ts glob**", "changes the scripts/**/*.ts glob"],
       ["__YES, HOLD: renames a stored label.__", "renames a stored label."],
       ["YES, HOLD:_id field renamed", "_id field renamed"],
       ["YES, HOLD: renames the id_", "renames the id_"],

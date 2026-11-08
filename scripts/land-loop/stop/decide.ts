@@ -154,15 +154,15 @@ export function answerOf(text: string): Answer {
   }
 
   // Any YES line that names HOLD holds, so an answer worded off the `YES, HOLD:` form fails closed.
-  const hold = HOLD_WORD.exec(first.slice(yes[0].length));
+  const hold = HOLD_WORD.exec(first);
 
   if (hold === null) {
     return { kind: "yes" };
   }
 
-  const rest = (hold[1] ?? "").trim();
+  const rest = hold[1] ?? "";
   // The emphasis that opened the line closes at its end, as in `**YES, HOLD: reason**`.
-  const reason = (yes[1] === "" ? rest : rest.replace(/[*_]+$/u, "")).trim();
+  const reason = (yes[1] === "" ? rest : rest.replace(/[*_]+\s*$/u, "")).trim();
 
   return { kind: "hold", reason: (reason === "" ? "(no reason given)" : reason).slice(0, HOLD_REASON_MAX) };
 }
