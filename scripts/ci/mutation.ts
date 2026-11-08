@@ -11,10 +11,10 @@
  *   bun scripts/ci/mutation.ts github-output   `mutate=true` when the change reaches a listed module
  *
  * The change is the working tree against its merge-base with the base: `--base <ref>`, else on a pull
- * request's run the first parent of the merge commit it checks out, on a merge queue's run the queue's
- * base (`MERGE_GROUP_BASE_SHA`), on a push the commit the push moved the branch from (`PUSH_BEFORE`),
- * else `origin/dev`. Stryker is imported only once the change reaches a listed module, and nothing
- * else outside `node:` and `bun` is imported, so CI installs the dependencies only then.
+ * request's run the first parent of the merge commit it checks out, on a push the commit the push
+ * moved the branch from (`PUSH_BEFORE`), else `origin/dev`. Stryker is imported only once the change
+ * reaches a listed module, and nothing else outside `node:` and `bun` is imported, so CI installs the
+ * dependencies only then.
  */
 
 import { appendFile, mkdtemp, rm, symlink } from "node:fs/promises";
@@ -307,10 +307,6 @@ export function baseOf(explicit: string | undefined, env: Env): string {
     return eventFact(env, "PUSH_BEFORE");
   }
 
-  if (eventName === "merge_group") {
-    return eventFact(env, "MERGE_GROUP_BASE_SHA");
-  }
-
   return DEFAULT_BASE;
 }
 
@@ -384,31 +380,6 @@ export async function snapshotAt(repoRoot: string, sha: string): Promise<string>
   await $`git archive --format=tar ${sha} | tar -x -C ${dir}`.cwd(repoRoot).env(fixtureEnv(process.env)).quiet();
 
   return dir;
-}
-
-export type Gh = (args: readonly string[]) => Promise<string>;
-
-/**
- * Whether a push's commit already has a green `mutation` check: a commit the merge queue tested
- * carries that run's verdict, and the push need not run it again.
- */
-export async function testedAlready(env: Env, gh: Gh): Promise<boolean> {
-  if (env["GITHUB_EVENT_NAME"] !== "push") {
-    return false;
-  }
-
-  const answer = await gh([
-    "api",
-    `repos/${eventFact(env, "GITHUB_REPOSITORY")}/commits/${eventFact(env, "GITHUB_SHA")}/check-runs?check_name=mutation`,
-    "--jq",
-    '[.check_runs[] | select(.conclusion == "success")] | length > 0',
-  ]);
-
-  return answer.trim() === "true";
-}
-
-function ghCli(args: readonly string[]): Promise<string> {
-  return $`gh ${args}`.quiet().text();
 }
 
 /**
@@ -549,13 +520,7 @@ if (import.meta.main) {
       throw new Error("GITHUB_OUTPUT is unset");
     }
 
-    const tested = await testedAlready(process.env, ghCli);
-
-    if (tested) {
-      console.error(`mutation: ${process.env["GITHUB_SHA"] ?? ""} has a green mutation check already`);
-    }
-
-    await appendFile(outputPath, githubOutput(tested ? [] : change.hunks));
+    await appendFile(outputPath, githubOutput(change.hunks));
     process.exit(0);
   }
 

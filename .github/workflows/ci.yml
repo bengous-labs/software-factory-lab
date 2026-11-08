@@ -29,18 +29,15 @@ jobs:
         run: bun check
 
   # Mutation testing on the lines a change alters in the modules `stryker.config.ts` lists, or in
-  # their tests (`scripts/ci/mutation.ts`): a pull request's since its base, a merge queue's since the
-  # queue's base, a push's since its `before`. A push whose commit has a green `mutation` check from
-  # the merge queue skips the passes. With nothing to mutate it passes before installing anything.
+  # their tests (`scripts/ci/mutation.ts`): a pull request's since its base, a push's since its
+  # `before`. Not in the merge queue: the queue lands on `validate` alone, nothing reads the result
+  # there, and the push of the queue's commit to `dev` mutates it after. With nothing to mutate it
+  # passes before installing anything.
   mutation:
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
-    permissions:
-      checks: read
-      contents: read
     env:
-      GH_TOKEN: ${{ github.token }}
       PUSH_BEFORE: ${{ github.event.before }}
-      MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
