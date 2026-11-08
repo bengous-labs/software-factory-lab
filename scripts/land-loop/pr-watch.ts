@@ -2,8 +2,8 @@
 
 /**
  * The author's PR watch, armed with Monitor on its PR: every 30 s it reads the PR and prints one line
- * per Wake: a failing check, a new open Important finding, a new comment in an open thread or in the
- * PR's conversation, the PR moved to draft. The App's own Nit and Pre-existing findings and its
+ * per Wake: a failing check, a new open Important or Nit finding, a new comment in an open thread or in
+ * the PR's conversation, the PR moved to draft. The App's own Pre-existing findings and its
  * conversation comments (state record, verdicts) print nothing; nor do the author's own replies and
  * comments, which `thread.ts` and `comment.ts` mark, since an author and a human reviewer can post
  * under one gh identity.
@@ -26,7 +26,7 @@ import { severityOfBody } from "./review/findings.ts";
 
 const POLL_MS = 30_000;
 
-/** The App's login as GraphQL prints it: only its own Nit and Pre-existing findings are skipped. */
+/** The App's login as GraphQL prints it: only its own Pre-existing findings are skipped. */
 export const APP_LOGIN = "bengous-labs-agents";
 
 /** One check as `gh pr checks --json name,bucket,link` prints it. */
@@ -110,8 +110,8 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
     const severity = thread.author === APP_LOGIN ? severityOfBody(thread.body) : null;
     const where = thread.line === null ? thread.path : `${thread.path}:${thread.line}`;
 
-    if (severity !== "nit" && severity !== "pre_existing") {
-      const kind = severity === "important" ? "Finding" : "Comment";
+    if (severity !== "pre_existing") {
+      const kind = severity === "important" || severity === "nit" ? "Finding" : "Comment";
       wakes.push({
         key: `thread:${thread.id}`,
         line: `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}`,

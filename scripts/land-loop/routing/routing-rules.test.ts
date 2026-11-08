@@ -6,7 +6,14 @@ import { LAB, SEGMENT, UNDER } from "../arbitraries.ts";
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import type { RoutingAnswer } from "../merge-bot/decide.ts";
-import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "./routing-rules.ts";
+import {
+  judgeAskOf,
+  NIT_ANSWER_LINE_CAP,
+  patchDeltaRulesOf,
+  routingOf,
+  routingRulesOf,
+  withNitAnswers,
+} from "./routing-rules.ts";
 import type { RoutingInput, RulesVerdict } from "./routing-rules.ts";
 
 const lab = (input: RoutingInput): RulesVerdict => routingRulesOf(LAB, input);
@@ -353,5 +360,49 @@ describe("under the lab's policy", () => {
         },
       ),
     );
+  });
+});
+
+const delta = (paths: readonly string[], lines: number): RoutingInput => ({ paths, lines, messages: [] });
+
+describe("withNitAnswers", () => {
+  const READ: RoutingAnswer = { ...AUTO_DEEP, reason: "touches a path a deep review reads" };
+
+  const AFTER_CLEAN_ROUND_3 = {
+    reviewRounds: 3,
+    importantByRound: [1, 0, 0],
+    nitPaths: ["scripts/a.ts", "scripts/a.test.ts"],
+  } as const;
+
+  test("after a Review round 3 with no Important, a delta in the Nits' files within the cap needs no read, and keeps its route", () => {
+    expect(withNitAnswers(READ, delta(["scripts/a.ts", "scripts/a.test.ts"], 42), AFTER_CLEAN_ROUND_3)).toEqual({
+      ...READ,
+      secondRound: false,
+      reason: "a push after Review round 3 that only answers its Nits: 42 lines in scripts/a.ts, scripts/a.test.ts",
+    });
+    expect(
+      withNitAnswers({ ...READ, land: "owner" }, delta(["scripts/a.ts"], NIT_ANSWER_LINE_CAP), AFTER_CLEAN_ROUND_3),
+    ).toMatchObject({ land: "owner", secondRound: false });
+  });
+
+  test("a delta with a file the App posted no Nit on, or past the cap, keeps its answer", () => {
+    expect(withNitAnswers(READ, delta(["scripts/a.ts", "scripts/b.ts"], 10), AFTER_CLEAN_ROUND_3)).toBe(READ);
+    expect(withNitAnswers(READ, delta(["scripts/a.ts"], NIT_ANSWER_LINE_CAP + 1), AFTER_CLEAN_ROUND_3)).toBe(READ);
+  });
+
+  test("before Review round 3, or after one that posted an Important or whose count is unknown, a delta keeps its answer", () => {
+    const inNits = delta(["scripts/a.ts"], 10);
+
+    expect(withNitAnswers(READ, inNits, { ...AFTER_CLEAN_ROUND_3, reviewRounds: 2 })).toBe(READ);
+    expect(withNitAnswers(READ, inNits, { ...AFTER_CLEAN_ROUND_3, importantByRound: [1, 0, 1] })).toBe(READ);
+    expect(withNitAnswers(READ, inNits, { ...AFTER_CLEAN_ROUND_3, importantByRound: [1, 0, null] })).toBe(READ);
+    expect(withNitAnswers(READ, inNits, { ...AFTER_CLEAN_ROUND_3, importantByRound: [1, 0] })).toBe(READ);
+    expect(withNitAnswers(READ, inNits, { ...AFTER_CLEAN_ROUND_3, importantByRound: undefined })).toBe(READ);
+  });
+
+  test("a delta that needs no read already keeps its answer and its reason", () => {
+    const unread = { ...READ, secondRound: false, reason: "the Patch delta touches no file: nothing to read again" };
+
+    expect(withNitAnswers(unread, delta(["scripts/a.ts"], 10), AFTER_CLEAN_ROUND_3)).toBe(unread);
   });
 });

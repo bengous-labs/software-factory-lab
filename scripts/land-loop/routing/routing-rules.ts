@@ -131,3 +131,39 @@ export function routingOf(
     secondRound: patchDelta.kind === "ruled" ? patchDelta.answer.secondRound : judged().secondRound,
   };
 }
+
+/** The most lines a push after Review round 3 changes and still only answers its Nits. */
+export const NIT_ANSWER_LINE_CAP = 100;
+
+/** What a Patch delta after Review round 3 is weighed against: the rounds posted, their Important counts, the files of the App's Nits. */
+export interface NitAnswerInput {
+  readonly reviewRounds: number;
+  /** As the state record keeps it: index 2 for round 3; a missing or null count reads as an Important posted. */
+  readonly importantByRound: ReadonlyArray<number | null> | undefined;
+  readonly nitPaths: readonly string[];
+}
+
+/**
+ * The Routing answer of a Patch delta that only answers the Nits after a Review round 3 that posted no
+ * Important: it touches only files the App posted a Nit on, in at most NIT_ANSWER_LINE_CAP lines. It
+ * needs no read, so it holds nothing for the Owner and the change keeps its Land route. Any other
+ * answer stands.
+ */
+export function withNitAnswers(answer: RoutingAnswer, delta: RoutingInput, input: NitAnswerInput): RoutingAnswer {
+  const nits = new Set(input.nitPaths);
+
+  const answersNits =
+    answer.secondRound &&
+    input.reviewRounds === 3 &&
+    input.importantByRound?.[2] === 0 &&
+    delta.lines <= NIT_ANSWER_LINE_CAP &&
+    delta.paths.every((path) => nits.has(path));
+
+  return answersNits
+    ? {
+        ...answer,
+        secondRound: false,
+        reason: `a push after Review round 3 that only answers its Nits: ${delta.lines} lines in ${listed(delta.paths)}`,
+      }
+    : answer;
+}

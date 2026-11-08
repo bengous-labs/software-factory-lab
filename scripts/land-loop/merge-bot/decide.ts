@@ -45,7 +45,8 @@ export interface RoutingAnswer {
   readonly review: ReviewDepth;
   /**
    * On a Patch delta: whether the delta deserves another read on its own: it touches a path a Routing
-   * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names. After Review
+   * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names; never when it
+   * only answers the Nits after a Review round 3 with no Important (`withNitAnswers`). After Review
    * round 1 it runs Review round 2, after Review round 2 Review round 3; after Review round 3 it holds the
    * change for the Owner.
    */
@@ -221,6 +222,8 @@ export interface Snapshot {
   /** The Land approval label is on the PR and the owner put it there. */
   readonly landApprovalByOwner: boolean;
   readonly openImportant: number;
+  /** The files the App posted a Nit finding on, open or resolved: the route weighs a push after Review round 3 against them. */
+  readonly nitPaths: readonly string[];
   readonly devRed: boolean;
   /** GitHub reads the PR as conflicting with its base: no CI runs on it and the queue refuses it. */
   readonly conflicting: boolean;
@@ -287,7 +290,12 @@ export type CheckState =
   | { readonly kind: "failure"; readonly summary: string };
 
 export type Step =
-  | { readonly kind: "route"; readonly patch: string; readonly patchDelta: boolean }
+  | {
+      readonly kind: "route";
+      readonly patch: string;
+      readonly patchDelta: boolean;
+      readonly nitPaths: readonly string[];
+    }
   | { readonly kind: "labels"; readonly route: LandRoute; readonly depth: ReviewDepth }
   | { readonly kind: "request-review"; readonly depth: Exclude<ReviewDepth, "none">; readonly reviewRound: ReviewRound }
   | { readonly kind: "post-review"; readonly result: ReportedResult }
@@ -660,7 +668,12 @@ export function decide(snapshot: Snapshot): Decision {
   const routing = next.triage[snapshot.patch];
 
   if (routing === undefined) {
-    steps.push({ kind: "route", patch: snapshot.patch, patchDelta: next.reviewedPatch !== null });
+    steps.push({
+      kind: "route",
+      patch: snapshot.patch,
+      patchDelta: next.reviewedPatch !== null,
+      nitPaths: snapshot.nitPaths,
+    });
 
     return { kind: "steps", steps };
   }

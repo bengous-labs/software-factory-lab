@@ -55,6 +55,7 @@ const READY: Snapshot = {
   humanLabelBy: null,
   landApprovalByOwner: false,
   openImportant: 0,
+  nitPaths: [],
   devRed: false,
   conflicting: false,
   record: { ...EMPTY_RECORD, triage: { [P1]: LIGHT } },
@@ -110,8 +111,13 @@ describe("decide", () => {
     ]);
   });
 
-  test("a ready PR with green CI and a patch with no Routing answer is routed first", () => {
-    expect(stepsOf({ ...READY, record: EMPTY_RECORD })).toEqual([{ kind: "route", patch: P1, patchDelta: false }]);
+  test("a ready PR with green CI and a patch with no Routing answer is routed first, with the files of the App's Nits", () => {
+    expect(stepsOf({ ...READY, record: EMPTY_RECORD })).toEqual([
+      { kind: "route", patch: P1, patchDelta: false, nitPaths: [] },
+    ]);
+    expect(stepsOf({ ...READY, nitPaths: ["a.ts"], record: EMPTY_RECORD })).toEqual([
+      { kind: "route", patch: P1, patchDelta: false, nitPaths: ["a.ts"] },
+    ]);
   });
 
   test("a routed patch nobody reviewed asks the review job for Review round 1 at its Review depth, both checks pending", () => {
@@ -508,8 +514,20 @@ describe("an Owner hold", () => {
   test("a push after Review round 3 that needs no read, or a patch not routed yet, sets no hold", () => {
     expect(kinds({ ...READY, record: afterRound3(LIGHT) })).not.toContain("record");
     expect(stepsOf({ ...READY, record: { ...afterRound3(RISKY), triage: {} } })).toEqual([
-      { kind: "route", patch: P1, patchDelta: true },
+      { kind: "route", patch: P1, patchDelta: true, nitPaths: [] },
     ]);
+  });
+
+  test("a push after a clean Review round 3 routed as only answering its Nits sets no hold: it lands on land:auto, and waits for the Owner on land:human", () => {
+    const answered = { ...RISKY, secondRound: false, reason: "a push after Review round 3 that only answers its Nits" };
+    const auto = { ...READY, record: afterRound3(answered) };
+    const human = { ...READY, record: afterRound3({ ...answered, land: "owner" }) };
+
+    expect(kinds(auto)).not.toContain("record");
+    expect(kinds(auto)).toContain("auto-merge");
+    expect(kinds(human)).not.toContain("record");
+    expect(kinds(human)).not.toContain("auto-merge");
+    expect(gate(human)).toBe("pending");
   });
 
   test("a held PR lands only with the Owner's Land approval on its current patch, and a later push removes that approval", () => {

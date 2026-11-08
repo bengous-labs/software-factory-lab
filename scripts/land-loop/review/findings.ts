@@ -69,6 +69,17 @@ export function openImportantOf(appLogin: string, threads: readonly ReviewThread
   }).length;
 }
 
+/** The files of the App's Nit threads, open or resolved, sorted, once each. `appLogin` is the App's login as GraphQL prints it. */
+export function nitPathsOf(appLogin: string, threads: readonly ReviewThread[]): string[] {
+  const paths = threads.flatMap((thread) => {
+    const [finding] = thread.comments.nodes;
+
+    return finding?.author?.login === appLogin && severityOfBody(finding.body) === "nit" ? [thread.path] : [];
+  });
+
+  return [...new Set(paths)].toSorted();
+}
+
 const EarlierThread = Schema.Struct({ where: Schema.String, finding: Schema.String, reply: Schema.String });
 
 /** A thread of an earlier round: where its finding sits, the finding's first line, and the author's answers with the thread's state. */

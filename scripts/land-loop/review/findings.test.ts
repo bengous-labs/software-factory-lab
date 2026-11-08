@@ -8,6 +8,7 @@ import {
   earlierThreadsOf,
   graphqlLogin,
   markerOf,
+  nitPathsOf,
   openImportantOf,
   ReviewThreads,
   severityOfBody,
@@ -95,6 +96,22 @@ describe("openImportantOf", () => {
       ]),
     ).toBe(2);
     expect(openImportantOf(APP, [])).toBe(0);
+  });
+});
+
+describe("nitPathsOf", () => {
+  test("the files of the App's Nit threads, open or resolved, once each; none of an Important's or a human's", () => {
+    expect(
+      nitPathsOf(APP, [
+        { ...thread(NIT), path: "b.ts" },
+        { ...thread(NIT, [], { isResolved: true }), path: "a.ts" },
+        { ...thread(NIT), path: "b.ts" },
+        { ...thread(IMPORTANT), path: "c.ts" },
+        { ...thread(NIT, [], { by: "bengous" }), path: "d.ts" },
+        { ...thread(NIT, [], { by: null }), path: "e.ts" },
+      ]),
+    ).toEqual(["a.ts", "b.ts"]);
+    expect(nitPathsOf(APP, [])).toEqual([]);
   });
 });
 

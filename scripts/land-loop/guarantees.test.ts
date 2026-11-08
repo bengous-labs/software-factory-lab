@@ -207,6 +207,7 @@ const NEAR_LANDABLE: fc.Arbitrary<Snapshot> = PATCH.chain((patch) =>
     humanLabelBy: HUMAN_LABEL_BY,
     landApprovalByOwner: fc.boolean(),
     openImportant: mostly(0, fc.integer({ min: 1, max: 2 })),
+    nitPaths: fc.subarray(["a.ts", "b.ts"]),
     devRed: mostly(false, fc.constant(true)),
     conflicting: mostly(false, fc.constant(true)),
     record: nearLandableRecord(patch),
