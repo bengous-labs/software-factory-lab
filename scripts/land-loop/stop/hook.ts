@@ -5,7 +5,7 @@
  * `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the session
  * whether the task is finished, then publishes: pushes the branch, opens or readies the PR, and tells
  * the Author to arm its PR watch. Every step is appended to `.lab/stop.log` as one JSON line, with the
- * fork's latency and cost.
+ * fork's latency and tokens.
  *
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
@@ -154,20 +154,23 @@ export function prTextOf(text: string): { title: string; body: string } | null {
 /** What `claude -p --output-format json` prints, as far as this hook reads it. */
 export const ForkOutput = Schema.Struct({
   result: Schema.optionalKey(Schema.String),
-  modelUsage: Schema.optionalKey(
-    Schema.Record(
-      Schema.String,
-      Schema.Struct({
-        inputTokens: Schema.Finite,
-        outputTokens: Schema.Finite,
-        cacheReadInputTokens: Schema.Finite,
-        cacheCreationInputTokens: Schema.Finite,
-      }),
-    ),
-  ),
+  // Read on its own: a usage that does not read loses the tokens, never the fork's answer.
+  modelUsage: Schema.optionalKey(Schema.Unknown),
 });
 
+const ModelUsage = Schema.Record(
+  Schema.String,
+  Schema.Struct({
+    inputTokens: Schema.Finite,
+    outputTokens: Schema.Finite,
+    cacheReadInputTokens: Schema.Finite,
+    cacheCreationInputTokens: Schema.Finite,
+  }),
+);
+
 const decodeForkOutput = Schema.decodeResult(Schema.fromJsonString(ForkOutput));
+
+const decodeModelUsage = Schema.decodeUnknownResult(ModelUsage);
 
 /** `unreadable` says why the fork's output did not read: such a fork gave no answer. */
 export interface ForkResult {
@@ -189,7 +192,7 @@ export function forkResultOf(stdout: string, code: number, ms: number): ForkResu
   return {
     text: out.success.result ?? "",
     ms,
-    tokens: out.success.modelUsage === undefined ? null : tokensOf(out.success.modelUsage),
+    tokens: Result.match(decodeModelUsage(out.success.modelUsage), { onFailure: () => null, onSuccess: tokensOf }),
     code,
     unreadable: null,
   };

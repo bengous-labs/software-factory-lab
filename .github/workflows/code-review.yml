@@ -100,7 +100,7 @@ jobs:
             --arg runUrl "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             '{kind: "failed", cause: "the review job stopped before the runner wrote its result",
               request: {pr: $pr, head: $head, base: $base, patch: $patch, round: $round, model: $model, effort: $effort},
-              model: null, claudeCodeVersion: null, costUsd: null, runUrl: $runUrl}' > review-result.json
+              model: null, claudeCodeVersion: null, tokens: null, runUrl: $runUrl}' > review-result.json
 
       - name: Upload the result
         if: always()

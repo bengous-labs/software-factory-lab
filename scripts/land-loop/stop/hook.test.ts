@@ -432,6 +432,20 @@ describe("forkResultOf", () => {
     expect(forkResultOf(JSON.stringify({ result: "YES" }), 0, 9).tokens).toBeNull();
   });
 
+  test("a modelUsage that does not read loses the tokens, never the answer", () => {
+    const partial = { "claude-haiku-5-5": { inputTokens: 1, outputTokens: 2, cacheReadInputTokens: null } };
+
+    for (const modelUsage of [partial, "none"]) {
+      expect(forkResultOf(JSON.stringify({ result: "YES", modelUsage }), 0, 9)).toEqual({
+        text: "YES",
+        ms: 9,
+        tokens: null,
+        code: 0,
+        unreadable: null,
+      });
+    }
+  });
+
   test("output that does not read is no answer, and says why", () => {
     expect(forkResultOf("", 124, 9)).toEqual({
       text: "",
