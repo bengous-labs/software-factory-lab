@@ -31,8 +31,9 @@ jobs:
   # Mutation testing on the lines a change alters in the modules `stryker.config.ts` lists, or in
   # their tests (`scripts/ci/mutation.ts`): a pull request's since its base, a push's since its
   # `before`. Not in the merge queue: the queue lands on `validate` alone, nothing reads the result
-  # there, and the push of the queue's commit to `dev` mutates it after. With nothing to mutate it
-  # passes before installing anything.
+  # there. The push of the queue's commit to `dev` mutates it after landing: that run detects what
+  # PRs landed together broke, it does not prevent it, and its red holds every landing (`devRed`).
+  # With nothing to mutate it passes before installing anything.
   mutation:
     if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
