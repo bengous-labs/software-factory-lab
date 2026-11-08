@@ -224,6 +224,9 @@ describe("armReason", () => {
     expect(armReason(12, commands, "a stored format.").split("\n")[1]).toBe(
       "The Done judge held this PR for the Owner's read: a stored format. Do not remove land:human.",
     );
+    expect(armReason(12, commands, "renames .lab/state files").split("\n")[1]).toBe(
+      "The Done judge held this PR for the Owner's read: renames .lab/state files. Do not remove land:human.",
+    );
   });
 });
 
