@@ -279,8 +279,8 @@ function agentDecision(input: Schema.JsonObject): ToolDecision {
   return refused.length === 0 ? ALLOW : deny(`an Agent call takes no ${AGENT_REFUSED.join(", ")}`);
 }
 
-/** The decision of a read tool, a Bash call or the structured answer; null for any other tool. */
-function readDecision(scope: GuardScope, toolName: string, input: Schema.JsonObject): ToolDecision | null {
+/** The decision of a read tool, a Bash call or the structured answer; any other tool is denied with `refused`. */
+function readDecision(scope: GuardScope, toolName: string, input: Schema.JsonObject, refused: string): ToolDecision {
   switch (toolName) {
     case "Read": {
       return Option.match(decoded(ReadInput, input), {
@@ -312,14 +312,14 @@ function readDecision(scope: GuardScope, toolName: string, input: Schema.JsonObj
     }
 
     default: {
-      return null;
+      return deny(refused);
     }
   }
 }
 
 /** The guard of a read-only session over the checkout `scope.root`: Read, Grep, Glob, git and the structured answer. */
 export function readGuardOf(scope: GuardScope): ToolGuard {
-  return (toolName, input) => readDecision(scope, toolName, input) ?? deny(`the tool ${toolName} is not admitted here`);
+  return (toolName, input) => readDecision(scope, toolName, input, `the tool ${toolName} is not admitted here`);
 }
 
 /** The guard of one review session over the checkout `scope.root`: the read-only guard, plus Agent and the code-review skill. */
@@ -335,7 +335,7 @@ export function guardOf(scope: GuardScope): ToolGuard {
       }
 
       default: {
-        return readDecision(scope, toolName, input) ?? deny(`the tool ${toolName} is not admitted in this review`);
+        return readDecision(scope, toolName, input, `the tool ${toolName} is not admitted in this review`);
       }
     }
   };

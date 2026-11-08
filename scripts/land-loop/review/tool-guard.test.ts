@@ -307,6 +307,16 @@ describe("readGuardOf", () => {
     }
   });
 
+  test("an input outside its tool's shape is denied with that tool's reason", () => {
+    expect(readGuard("Read", {})).toEqual(pathDenied);
+    expect(readGuard("Grep", { pattern: "x", path: 3 })).toEqual(pathDenied);
+    expect(readGuard("Bash", {})).toEqual({ kind: "deny", reason: BASH_REASON });
+    expect(readGuard("Glob", {})).toEqual({
+      kind: "deny",
+      reason: "a Glob pattern is relative to the checkout, with no `..` segment",
+    });
+  });
+
   test("a write tool, a subagent, a skill, the web and a monitor are not admitted", () => {
     for (const name of ["Write", "Edit", "Agent", "Skill", "WebFetch", "Monitor"]) {
       expect(readGuard(name, {})).toEqual({ kind: "deny", reason: `the tool ${name} is not admitted here` });
