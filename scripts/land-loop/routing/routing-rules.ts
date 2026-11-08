@@ -28,9 +28,13 @@ export interface RoutingInput {
 /** What the Routing rules make of a change: `ruled`, their answer stands; `judged`, the Routing judge answers. */
 export type RulesVerdict = { readonly kind: "ruled"; readonly answer: RoutingAnswer } | { readonly kind: "judged" };
 
-const ruled = (land: RoutingAnswer["land"], reason: string): RulesVerdict => ({
+const ruled = (
+  land: RoutingAnswer["land"],
+  reason: string,
+  review: RoutingAnswer["review"] = "deep",
+): RulesVerdict => ({
   kind: "ruled",
-  answer: { land, review: "deep", secondRound: true, reason, model: null },
+  answer: { land, review, secondRound: true, reason, model: null },
 });
 
 function matching(globs: readonly string[], paths: readonly string[]): readonly string[] {
@@ -74,16 +78,11 @@ export function routingRulesOf(
   const deleted = new Set(deletedPaths);
 
   if (paths.every((path) => deleted.has(path)) && deep.every((path) => NON_EXECUTABLE.test(path))) {
-    return {
-      kind: "ruled",
-      answer: {
-        land: "auto",
-        review: "light",
-        secondRound: true,
-        reason: `deletes only Markdown and text files under a deep-review path: ${listed(deep)}; lands once CI is green and no Important is open`,
-        model: null,
-      },
-    };
+    return ruled(
+      "auto",
+      `deletes only Markdown and text files under a deep-review path: ${listed(deep)}; lands once CI is green and no Important is open`,
+      "light",
+    );
   }
 
   return ruled(
