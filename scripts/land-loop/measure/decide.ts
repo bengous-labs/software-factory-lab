@@ -49,7 +49,12 @@ type CheckRun = typeof CheckRun.Type;
 
 const CheckRunsPage = Schema.Struct({ check_runs: Schema.Array(CheckRun) });
 
-const Review = Schema.Struct({ user: Login, body: Schema.String, submitted_at: Schema.NullOr(Schema.String) });
+/** A pending review comes without `submitted_at`. */
+const Review = Schema.Struct({
+  user: Login,
+  body: Schema.String,
+  submitted_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
 
 type Review = typeof Review.Type;
 
@@ -210,11 +215,14 @@ export function findingAnswersOf(comments: PrData["comments"]): FindingAnswers {
   return { fixed, rejected };
 }
 
+/** The commit `git revert` names ends its sentence there, or, for a merge commit, goes on with the changes it reverses. */
+const REVERTED_SHA = /This reverts commit ([0-9a-f]{40})[.,]/gu;
+
 export function revertedByOf(pr: PrData, devCommits: readonly DevCommit[]): string | null {
-  const shas = [pr.pull.merge_commit_sha, ...pr.commits].filter((sha) => sha !== null);
+  const shas = new Set([pr.pull.merge_commit_sha, ...pr.commits]);
 
   const revert = devCommits.find((commit) =>
-    shas.some((sha) => commit.commit.message.includes(`This reverts commit ${sha}.`)),
+    [...commit.commit.message.matchAll(REVERTED_SHA)].some(([, sha]) => shas.has(sha ?? null)),
   );
 
   return revert === undefined ? null : revert.sha.slice(0, 7);

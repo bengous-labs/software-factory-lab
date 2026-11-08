@@ -190,6 +190,15 @@ describe("Rounds and Important found", () => {
     expect(roundsOf(reviews)).toBe(3);
     expect(importantFoundOf(reviews)).toBe(3);
   });
+
+  test("a pending review, which GitHub sends without submitted_at, reads and counts no round", () => {
+    const reviews = decodeReviewsPages(
+      JSON.stringify([[...PR86.reviews, { user: { login: "bengous" }, body: "", state: "PENDING" }]]),
+    );
+
+    expect(reviews).toHaveLength(PR86.reviews.length + 1);
+    expect(roundsOf(reviews)).toBe(2);
+  });
 });
 
 describe("fixed and rejected", () => {
@@ -252,6 +261,20 @@ describe("Reverted by", () => {
     expect(revertedByOf(PR91, [...DEV, revert(PR91.pull.merge_commit_sha ?? "")])).toBe("deadbee");
     expect(revertedByOf(PR86, [revert(PR86.commits[1] ?? "")])).toBe("deadbee");
     expect(revertedByOf(PR86, [revert(PR91.pull.merge_commit_sha ?? "")])).toBeNull();
+  });
+
+  test("a revert of the merge commit, which says the changes it reverses, is read too", () => {
+    const merge = PR91.pull.merge_commit_sha ?? "";
+
+    const mergeRevert: DevCommit = {
+      sha: "feedfacecafe0000000000000000000000000000",
+      commit: {
+        message: `Revert "x"\n\nThis reverts commit ${merge}, reversing\nchanges made to ${"0".repeat(40)}.\n`,
+      },
+    };
+
+    expect(revertedByOf(PR91, [mergeRevert])).toBe("feedfac");
+    expect(revertedByOf(PR91, [revert(`${merge}0`)])).toBeNull();
   });
 });
 
