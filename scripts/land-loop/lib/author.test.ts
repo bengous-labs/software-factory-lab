@@ -53,7 +53,7 @@ describe("the Author's credential", () => {
     expect(ghEnv("t0k")).toEqual({ GH_TOKEN: "t0k" });
   });
 
-  test("the push goes over HTTPS with the token from LAB_AUTHOR_TOKEN, never over the SSH remote", () => {
+  test("the push rewrites the scp-form git@github.com: origin to HTTPS with the token from LAB_AUTHOR_TOKEN", () => {
     expect(pushArgs("feat/95-x")).toEqual([
       "git",
       "-c",
