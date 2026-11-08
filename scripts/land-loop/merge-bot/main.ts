@@ -7,7 +7,7 @@
  * decides again after a model step, until no model step is left.
  *
  * Reads GITHUB_REPOSITORY, OWNER (the only GitHub login whose PRs are served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
- * RUN_HEAD_SHA, EJECTION_REASON; calls gh and git, and the models through the Agent SDK. The Code review runs
+ * RUN_HEAD_SHA, RUN_EVENT, EJECTION_REASON; calls gh and git, and the models through the Agent SDK. The Code review runs
  * in its own job, `.github/workflows/code-review.yml`, which the Merge bot dispatches and whose artifact it reads.
  */
 
@@ -370,6 +370,13 @@ const reviewJobOf = reviewJobReader(run);
 export const ciRunsPathsOf = (repo: string, sha: string): readonly string[] =>
   CI_CHECKS.map((name) => `repos/${repo}/commits/${sha}/check-runs?check_name=${name}`);
 
+/**
+ * The latest completed push run of `ci.yml` on dev. Not of any workflow: the Merge bot's own push run
+ * ends first and green, and would hide a red CI.
+ */
+export const devCiRunsPathOf = (repo: string): string =>
+  `repos/${repo}/actions/workflows/ci.yml/runs?branch=dev&event=push&status=completed&per_page=1`;
+
 /** The CI of a head from the check runs of each of CI_CHECKS: GitHub Actions' run of each, as `ciOf` reads them. */
 export const ciOfRuns = (runs: ReadonlyArray<typeof CheckRuns.Type>): Snapshot["ci"] =>
   ciOf(runs.map((found) => found.check_runs.find((check) => check.app?.slug === "github-actions")));
@@ -397,11 +404,7 @@ async function snapshotOf(
     landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, pushedAt);
   }
 
-  const devRuns = await api(
-    env,
-    WorkflowRuns,
-    `repos/${env.repo}/actions/runs?branch=dev&event=push&status=completed&per_page=1`,
-  );
+  const devRuns = await api(env, WorkflowRuns, devCiRunsPathOf(env.repo));
 
   return {
     number: pr.number,
@@ -766,15 +769,40 @@ async function advance(
   }
 }
 
-async function numbersOf(env: Env): Promise<number[]> {
-  const event = required("EVENT_NAME");
-  const pr = process.env["PR_NUMBER"];
+export type Start =
+  { readonly kind: "pr"; readonly number: number } | { readonly kind: "commit-pulls" } | { readonly kind: "sweep" };
+
+/**
+ * Which PRs a start serves: the one it names, else on a completed run the open PRs of its commit, else
+ * every open PR. CI's completion on a push to dev is a Sweep: the PR that landed is closed, and the others
+ * need dev's red, which that run sets.
+ */
+export function startOf(given: {
+  readonly event: string;
+  readonly pr?: string | undefined;
+  readonly runEvent?: string | undefined;
+}): Start {
+  const { event, pr, runEvent } = given;
 
   if (pr !== undefined && pr !== "") {
-    return [Number(pr)];
+    return { kind: "pr", number: Number(pr) };
   }
 
-  if (event === "workflow_run") {
+  return event === "workflow_run" && runEvent !== "push" ? { kind: "commit-pulls" } : { kind: "sweep" };
+}
+
+async function numbersOf(env: Env): Promise<number[]> {
+  const start = startOf({
+    event: required("EVENT_NAME"),
+    pr: process.env["PR_NUMBER"],
+    runEvent: process.env["RUN_EVENT"],
+  });
+
+  if (start.kind === "pr") {
+    return [start.number];
+  }
+
+  if (start.kind === "commit-pulls") {
     const sha = required("RUN_HEAD_SHA");
     const listed = await api(env, CommitPulls, `repos/${env.repo}/commits/${sha}/pulls`);
 

@@ -125,6 +125,21 @@ describe("the Merge bot's workflow", () => {
     );
   });
 
+  test("CI's completion on a push to dev starts a Sweep, which reads dev's red from that run", async () => {
+    const workflow = await workflowOf("merge-bot.yml");
+    const job = workflow.jobs["merge-bot"];
+
+    expect(job?.if).toContain(
+      "(github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.event == 'push')",
+    );
+    expect(workflow.concurrency?.group).toStartWith(
+      "merge-bot-${{ (github.event.workflow_run.event == 'push' && 'sweep') ||",
+    );
+    expect(stepNamed(job?.steps ?? [], "Run the Merge bot").env?.["RUN_EVENT"]).toBe(
+      "${{ github.event.workflow_run.event }}",
+    );
+  });
+
   test("the App's token may dispatch the review job and read its runs and artifacts", async () => {
     const { steps } = (await workflowOf("merge-bot.yml")).jobs["merge-bot"] ?? { steps: [] };
 

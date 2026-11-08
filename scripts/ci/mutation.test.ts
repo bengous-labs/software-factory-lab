@@ -22,7 +22,6 @@ import {
   rangeOf,
   runOptions,
   snapshotAt,
-  testedAlready,
   testFileOf,
   undetected,
 } from "./mutation.ts";
@@ -170,7 +169,7 @@ test("CI's output says whether a listed module or its tests changed", () => {
 test("a pass mutates one module whole, against its own tests alone, on the fixed fast-check seed", () => {
   expect(runOptions("app/src/commands/add.ts")).toEqual({
     mutate: ["app/src/commands/add.ts"],
-    commandRunner: { command: "FAST_CHECK_SEED=20261106 bun test ./app/test/commands.test.ts" },
+    commandRunner: { command: "FAST_CHECK_SEED=20261106 bun test --bail ./app/test/commands.test.ts" },
   });
 });
 
@@ -388,7 +387,7 @@ describe("moduleVerdict", () => {
 });
 
 describe("baseOf", () => {
-  test("an explicit base wins; outside a pull request, a merge queue or a push the base is origin/dev", () => {
+  test("an explicit base wins; outside a pull request or a push the base is origin/dev", () => {
     expect(baseOf("HEAD~3", { GITHUB_EVENT_NAME: "push", PUSH_BEFORE: "abc" })).toBe("HEAD~3");
     expect(baseOf(undefined, NO_ACTIONS)).toBe("origin/dev");
     expect(baseOf(undefined, { GITHUB_EVENT_NAME: "workflow_dispatch" })).toBe("origin/dev");
@@ -398,17 +397,13 @@ describe("baseOf", () => {
     expect(baseOf(undefined, { GITHUB_EVENT_NAME: "pull_request" })).toBe("HEAD^1");
   });
 
-  test("a push from the commit it moved the branch from, a merge queue's run from the queue's base", () => {
+  test("a push measures from the commit it moved the branch from", () => {
     expect(baseOf(undefined, { GITHUB_EVENT_NAME: "push", PUSH_BEFORE: "abc" })).toBe("abc");
-    expect(baseOf(undefined, { GITHUB_EVENT_NAME: "merge_group", MERGE_GROUP_BASE_SHA: "def" })).toBe("def");
   });
 
-  test("a push or a merge queue's run without its base fails, naming the variable", () => {
+  test("a push without its base fails, naming the variable", () => {
     expect(() => baseOf(undefined, { GITHUB_EVENT_NAME: "push", PUSH_BEFORE: "" })).toThrow(
       "PUSH_BEFORE is unset on a push run",
-    );
-    expect(() => baseOf(undefined, { GITHUB_EVENT_NAME: "merge_group" })).toThrow(
-      "MERGE_GROUP_BASE_SHA is unset on a merge_group run",
     );
   });
 });
@@ -560,7 +555,7 @@ describe("changeSince", () => {
     ]);
   });
 
-  test("outside a pull request, a merge queue or a push the base is origin/dev", async () => {
+  test("outside a pull request or a push the base is origin/dev", async () => {
     expect(await failureOf(linesSince(root, LISTED, undefined, NO_ACTIONS))).toStartWith(
       "no merge-base with origin/dev",
     );
@@ -577,64 +572,21 @@ const Workflow = Schema.Struct({
   jobs: Schema.Record(
     Schema.String,
     Schema.Struct({
+      if: Schema.optionalKey(Schema.String),
       permissions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
       env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
     }),
   ),
 });
 
-test("ci.yml's mutation job reads the checks and the contents, and passes the bases a push and a merge queue need", async () => {
+test("ci.yml's mutation job skips the merge queue, reads the workflow's contents, and passes a push's base", async () => {
   const source = await Bun.file(join(import.meta.dir, "../../.github/workflows/ci.yml")).text();
   const { jobs } = Schema.decodeUnknownSync(Workflow)(Bun.YAML.parse(source));
   const job = jobs["mutation"];
 
-  expect(job?.permissions).toEqual({ checks: "read", contents: "read" });
-  expect(job?.env).toEqual({
-    GH_TOKEN: "${{ github.token }}",
-    PUSH_BEFORE: "${{ github.event.before }}",
-    MERGE_GROUP_BASE_SHA: "${{ github.event.merge_group.base_sha }}",
-  });
-});
-
-function fakeGh(answer: string) {
-  const calls: string[][] = [];
-
-  const gh = (args: readonly string[]): Promise<string> => {
-    calls.push([...args]);
-
-    return Promise.resolve(answer);
-  };
-
-  return { gh, calls };
-}
-
-describe("testedAlready", () => {
-  const push = { GITHUB_EVENT_NAME: "push", GITHUB_REPOSITORY: "o/r", GITHUB_SHA: "abc123" };
-
-  test("a push whose commit has a green mutation check, from the merge queue, is tested already", async () => {
-    const { gh, calls } = fakeGh("true\n");
-
-    expect(await testedAlready(push, gh)).toBe(true);
-    expect(calls).toEqual([
-      [
-        "api",
-        "repos/o/r/commits/abc123/check-runs?check_name=mutation",
-        "--jq",
-        '[.check_runs[] | select(.conclusion == "success")] | length > 0',
-      ],
-    ]);
-  });
-
-  test("a push whose commit has no green mutation check is not", async () => {
-    expect(await testedAlready(push, fakeGh("false\n").gh)).toBe(false);
-  });
-
-  test("any other event asks nothing", async () => {
-    const { gh, calls } = fakeGh("true\n");
-
-    expect(await testedAlready({ ...push, GITHUB_EVENT_NAME: "pull_request" }, gh)).toBe(false);
-    expect(calls).toEqual([]);
-  });
+  expect(job?.if).toBe("github.event_name != 'merge_group'");
+  expect(job?.permissions).toBeUndefined();
+  expect(job?.env).toEqual({ PUSH_BEFORE: "${{ github.event.before }}" });
 });
 
 describe("a pass leaves the checkout as it found it", () => {
