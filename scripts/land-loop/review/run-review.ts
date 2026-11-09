@@ -19,9 +19,8 @@ import { resolverOf } from "../lib/resolve.ts";
 import { reviewSession } from "../lib/review-session.ts";
 import type { SessionAnswer } from "../ports/review.ts";
 import { EarlierThreads } from "./findings.ts";
-import { promptOf } from "./review-prompt.ts";
-import { mergedResultOf, OUTPUT_SCHEMA, ReviewInputs, summaryOf } from "./review-report.ts";
-import { securityPromptOf } from "./security-prompt.ts";
+import { OUTPUT_SCHEMA, ReviewInputs, summaryOf } from "./review-report.ts";
+import { reviewRunOf } from "./review-run.ts";
 import { guardOf } from "./tool-guard.ts";
 
 /** Per session, two of them under the job's 50 minutes: the runner writes its own timeout before GitHub cancels the job. */
@@ -81,14 +80,10 @@ const sessionOf = (prompt: string): Promise<SessionAnswer> =>
     env,
   });
 
-const code = await sessionOf(promptOf(request, guides, threads));
-
-const security = request.security ? await sessionOf(securityPromptOf(request, guides, threads)) : null;
-
-const result = mergedResultOf(
+const result = await reviewRunOf(
   request,
-  code,
-  security,
+  { guides, threads },
+  sessionOf,
   `${required("GITHUB_SERVER_URL")}/${required("GITHUB_REPOSITORY")}/actions/runs/${required("GITHUB_RUN_ID")}`,
 );
 
