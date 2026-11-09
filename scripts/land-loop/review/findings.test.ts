@@ -224,6 +224,13 @@ describe("findingFileOf", () => {
     expect(findingFileOf("a.ts", NIT)).toBe("a.ts");
   });
 
+  test("a moved line with long backtick runs reads in one pass, and an unclosed fence names no file", () => {
+    const run = "`".repeat(20_000);
+
+    expect(findingFileOf("a.ts", `At ${run}x${run}, outside this diff.`)).toBe("x");
+    expect(findingFileOf("a.ts", `At ${run}x${run.slice(1)}, outside this diff.`)).toBe("a.ts");
+  });
+
   test("a place that holds backticks reads back from the longer fence movedLineOf writes", () => {
     expect(findingFileOf("AGENTS.md", MOVED_NIT("a`b.ts:4"))).toBe("a`b.ts");
     expect(findingFileOf("AGENTS.md", MOVED_NIT("`a.ts`"))).toBe("`a.ts`");

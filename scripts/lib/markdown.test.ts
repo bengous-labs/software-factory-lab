@@ -132,6 +132,12 @@ describe("escapeHtml", () => {
       String.raw`see www.x.com${NBSP}\`&lt;img>\` y`,
     ],
     ["math cannot take it", "$a`$ <b> `", "\\$a`$ <b> `"],
+    ["a URL keeps its brackets", "see https://example.com/api?ids[]=1", "see https://example.com/api?ids[]=1"],
+    [
+      "an autolink runs through what was a <, so its < and backticks are escaped",
+      "https://<``<b>``",
+      String.raw`https://&lt;\`\`&lt;b>\`\``,
+    ],
     ["U+2028 starts no line", "a \u2028```\n<b>\n```", "a \u2028\\`\\`\\`\n&lt;b>\n\\`\\`\\`"],
     ["a carriage return ends a line", "x\r```\r<b>\r```", "x\n```\n<b>\n```"],
   ])("%s", (_, text, escaped) => {

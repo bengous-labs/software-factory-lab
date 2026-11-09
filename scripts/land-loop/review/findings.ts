@@ -120,11 +120,26 @@ export function movedLineOf(place: string): string {
   return `At ${codeSpan(place)}, outside this diff.`;
 }
 
-const MOVED_LINE_PATTERN = /^At (?<fence>`+) ?(.+?)(?::\d+)? ?\k<fence>, outside this diff\.$/mu;
+/** The moved line, its fence the whole first backtick run, so a long run cannot make the match backtrack. */
+const MOVED_LINE_PATTERN = /^At (?<fence>`+)(?!`)(?<rest>.*), outside this diff\.$/mu;
+
+/** The place `movedLineOf` wrote in `body`, without its line number; null when no moved line closes its fence. */
+function movedPlaceOf(body: string): string | null {
+  const { fence = "", rest = "" } = MOVED_LINE_PATTERN.exec(body)?.groups ?? {};
+
+  if (fence === "" || !rest.endsWith(fence)) {
+    return null;
+  }
+
+  const place = rest.slice(0, -fence.length);
+  const unpadded = place.startsWith(" ") && place.endsWith(" ") && place.length > 1 ? place.slice(1, -1) : place;
+
+  return unpadded.replace(/:\d+$/u, "");
+}
 
 /** The file a finding's comment is about: the one its moved line names, else `anchorPath`, the file it sits on. */
 export function findingFileOf(anchorPath: string, body: string): string {
-  return MOVED_LINE_PATTERN.exec(body)?.[2] ?? anchorPath;
+  return movedPlaceOf(body) ?? anchorPath;
 }
 
 /**
