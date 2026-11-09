@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { AUTHOR_MARK } from "../author-mark.ts";
 import { factoryConfigOf } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
+import { localReviewEntriesOf } from "../review/findings.ts";
 import {
   admit,
   afterAuthorToken,
@@ -26,6 +27,9 @@ import {
   rejectArgsOf,
   reviewRecordName,
   riskyPathsOf,
+  shownOf,
+  shownRecordName,
+  unansweredNumbersOf,
 } from "./decide.ts";
 import type { Answer, LocalFinding, LocalReviewContext, LocalReviewRecord, Snapshot } from "./decide.ts";
 
@@ -400,7 +404,7 @@ describe("localReviewNeeded", () => {
 
 const REJECT = "bun scripts/land-loop/local-review.ts";
 
-const CONTEXT: LocalReviewContext = { stopHookActive: false, reviewedNow: false, rejectCommand: REJECT };
+const CONTEXT: LocalReviewContext = { stopHookActive: false, shown: null, rejectCommand: REJECT };
 
 describe("localReviewReason", () => {
   test("two unanswered Importants and one Nit give the block text, word for word", () => {
@@ -462,28 +466,42 @@ describe("afterLocalReview", () => {
     });
   });
 
-  test("an unanswered Important blocks with the block text, then lets the session end with nothing published", () => {
+  test("an unanswered Important blocks with the block text, then a stop right after with no new answer ends the session", () => {
     const answers = { "1": "Rejected: a" };
 
     expect(afterLocalReview(TWO_IMPORTANT, answers, CONTEXT)).toEqual({
       kind: "block",
       reason: localReviewReason(TWO_IMPORTANT, answers, REJECT),
     });
-    expect(afterLocalReview(TWO_IMPORTANT, answers, { ...CONTEXT, stopHookActive: true })).toEqual({
+    expect(afterLocalReview(TWO_IMPORTANT, answers, { ...CONTEXT, stopHookActive: true, shown: [2] })).toEqual({
       kind: "none",
       reason: "the local review is still red after a block: nothing is published",
     });
+    expect(afterLocalReview(TWO_IMPORTANT, answers, { ...CONTEXT, shown: [2] })).toEqual({
+      kind: "block",
+      reason: localReviewReason(TWO_IMPORTANT, answers, REJECT),
+    });
   });
 
-  test("a review that ran in this stop blocks even right after a block: the Author never saw its findings", () => {
-    expect(afterLocalReview(TWO_IMPORTANT, {}, { ...CONTEXT, stopHookActive: true, reviewedNow: true })).toEqual({
+  test("right after a block, a review never shown, or a new answer, blocks again with what is left", () => {
+    const left = { kind: "block", reason: localReviewReason(TWO_IMPORTANT, { "1": "Rejected: a" }, REJECT) } as const;
+
+    expect(afterLocalReview(TWO_IMPORTANT, {}, { ...CONTEXT, stopHookActive: true })).toEqual({
       kind: "block",
       reason: localReviewReason(TWO_IMPORTANT, {}, REJECT),
     });
-    expect(afterLocalReview(TWO_IMPORTANT, {}, { ...CONTEXT, reviewedNow: true })).toEqual({
-      kind: "block",
-      reason: localReviewReason(TWO_IMPORTANT, {}, REJECT),
-    });
+    expect(
+      afterLocalReview(TWO_IMPORTANT, { "1": "Rejected: a" }, { ...CONTEXT, stopHookActive: true, shown: [1, 2] }),
+    ).toEqual(left);
+    expect(
+      afterLocalReview(TWO_IMPORTANT, { "1": "Rejected: a" }, { ...CONTEXT, stopHookActive: true, shown: [] }),
+    ).toEqual(left);
+  });
+
+  test("the numbers a block shows are the unanswered Importants, in order", () => {
+    expect(unansweredNumbersOf(TWO_IMPORTANT, {})).toEqual([1, 2]);
+    expect(unansweredNumbersOf(TWO_IMPORTANT, { "1": "Rejected: a" })).toEqual([2]);
+    expect(unansweredNumbersOf(reviewOf([]), {})).toEqual([]);
   });
 
   test("a failed session blocks once with its error cut at 200 characters, then lets the session end, even just run", () => {
@@ -496,14 +514,7 @@ describe("afterLocalReview", () => {
     } as const;
 
     expect(afterLocalReview({ failed: error }, {}, CONTEXT)).toEqual({ kind: "block", reason });
-    expect(afterLocalReview({ failed: error }, {}, { ...CONTEXT, reviewedNow: true })).toEqual({
-      kind: "block",
-      reason,
-    });
     expect(afterLocalReview({ failed: error }, {}, { ...CONTEXT, stopHookActive: true })).toEqual(ended);
-    expect(afterLocalReview({ failed: error }, {}, { ...CONTEXT, stopHookActive: true, reviewedNow: true })).toEqual(
-      ended,
-    );
   });
 });
 
@@ -523,6 +534,12 @@ describe("rejectArgsOf", () => {
   test("the records are named after their head", () => {
     expect(reviewRecordName(HEAD)).toBe(`review-${HEAD}.json`);
     expect(answersRecordName(HEAD)).toBe(`review-${HEAD}-answers.json`);
+    expect(shownRecordName(HEAD)).toBe(`review-${HEAD}-shown.json`);
+  });
+
+  test("the shown record reads back as numbers; anything else throws, naming it", () => {
+    expect(shownOf("s.json", "[2,3]")).toEqual([2, 3]);
+    expect(() => shownOf("s.json", '["2"]')).toThrow("s.json");
   });
 
   test("a missing or malformed number, a number with no Important, an empty reason or another verb is refused", () => {
@@ -652,7 +669,32 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
       },
     ]);
 
-    expect(block).toContain("\n- a.ts:1: x | Author: Rejected: kept <!-- /lab-local-review --> because\n</details>");
+    expect(block).toContain("\n- a.ts:1: x | Author: Rejected: kept /lab-local-review because\n</details>");
+  });
+
+  test("a marker inside a finding or an answer is dropped, so the block reads back whole and is replaced whole", () => {
+    const block =
+      localReviewBlockOf([
+        {
+          head: HEAD_B,
+          review: reviewOf([
+            finding("important", "a.ts", 1, "x <!-- lab-local-review --> y"),
+            finding("important", "b.ts", 2, "z"),
+          ]),
+          answers: { "1": "Rejected: kept <!-- /lab-local-review --> because" },
+          nextHead: HEAD_C,
+        },
+      ]) ?? "";
+
+    expect(localReviewEntriesOf(`Intro.\n\n${block}\n\nCloses #66`)).toEqual([
+      {
+        where: "a.ts:1",
+        finding: "x lab-local-review y",
+        reply: "Rejected: kept /lab-local-review because (local review)",
+      },
+      { where: "b.ts:2", finding: "z", reply: "Fixed in 0c0ffee (local review)" },
+    ]);
+    expect(bodyWithBlock(`Intro.\n\n${block}\n\nCloses #66`, "NEW")).toBe("Intro.\n\nNEW\n\nCloses #66");
   });
 });
 

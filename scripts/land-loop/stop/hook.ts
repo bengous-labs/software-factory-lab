@@ -49,11 +49,13 @@ import {
   holdStepsOf,
   IGNORED_BRANCH,
   localReviewBlockOf,
-  localReviewNeeded,
   localReviewOf,
   nitLinesOf,
   reviewRecordName,
   riskyPathsOf,
+  shownOf,
+  shownRecordName,
+  unansweredNumbersOf,
 } from "./decide.ts";
 import type {
   Action,
@@ -507,21 +509,30 @@ async function localReviewHold(
   const config = await gitOut(deps, cwd, ["show", `origin/${TRUNK}:${FACTORY_CONFIG_PATH}`]);
   const policy = factoryConfigOf(config).land.routing;
 
-  if (!localReviewNeeded(paths, policy)) {
+  const riskyPaths = riskyPathsOf(paths, policy).length;
+
+  if (riskyPaths === 0) {
     return null;
   }
 
+  const shownFile = join(stateDir, shownRecordName(head));
+  // A review the hook runs now was never shown, whatever a shown record of an earlier run says.
   const stored = storedReview(stateDir, head);
-  const riskyPaths = riskyPathsOf(paths, policy).length;
+  const shown = stored !== null && existsSync(shownFile) ? shownOf(shownFile, readFileSync(shownFile, "utf8")) : null;
   const review = stored ?? (await runLocalReview(deps, { ...scope, riskyPaths }, log));
+  const answers = storedAnswers(stateDir, head);
 
-  return outcomeOf(
-    afterLocalReview(review, storedAnswers(stateDir, head), {
-      stopHookActive,
-      reviewedNow: stored === null,
-      rejectCommand: `bun ${join(scope.root, "scripts", "land-loop", "local-review.ts")}`,
-    }),
-  );
+  const next = afterLocalReview(review, answers, {
+    stopHookActive,
+    shown,
+    rejectCommand: `bun ${join(scope.root, "scripts", "land-loop", "local-review.ts")}`,
+  });
+
+  if (next.kind === "block" && !("failed" in review)) {
+    writeFileSync(shownFile, `${JSON.stringify(unansweredNumbersOf(review, answers))}\n`);
+  }
+
+  return outcomeOf(next);
 }
 
 /** What Claude Code is told on a `Next` that ends the stop; null on one that lets the hook go on. */

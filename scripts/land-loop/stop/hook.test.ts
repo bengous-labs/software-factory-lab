@@ -703,6 +703,24 @@ describe("the local review", () => {
     );
   });
 
+  test("a partial answer right after a block blocks again with what is left; no further answer then ends the session", async () => {
+    const { run, calls, root } = worldOf({ paths: RISKY });
+    const fake = fakeSession(answered(TWO_AND_A_NIT), calls);
+    const deps = { run, env: RISKY_ENV, now: () => 0, reviewSession: fake.session };
+
+    await stop(input(root), deps, () => {});
+    writeFileSync(join(stateOf(root), `review-${HEAD}-answers.json`), JSON.stringify({ "1": "Rejected: a" }));
+
+    const partial = await stop({ ...input(root), stop_hook_active: true }, deps, () => {});
+    const idle = await stop({ ...input(root), stop_hook_active: true }, deps, () => {});
+
+    expect(partial.kind === "block" && partial.reason).toStartWith("The local review found 1 Important finding(s)");
+    expect(partial.kind === "block" && partial.reason).toContain("\n2. scripts/land-loop/stop/hook.ts:20: B breaks.");
+    expect(idle).toEqual({ kind: "allow" });
+    expect(readFileSync(join(stateOf(root), `review-${HEAD}-shown.json`), "utf8")).toBe("[2]\n");
+    expect(publishing(calls)).toEqual([]);
+  });
+
   test("a new head reviewed right after a block still shows its Importants once, then lets the session end", async () => {
     const { run, calls, root } = worldOf({ paths: RISKY });
     const fake = fakeSession(answered(TWO_AND_A_NIT), calls);

@@ -300,12 +300,21 @@ export const reviewRecordName = (head: string): string => `review-${head}.json`;
 
 export const answersRecordName = (head: string): string => `review-${head}-answers.json`;
 
+/** The numbers of the Importants the last block on that head showed open, which the hook writes when it blocks. */
+export const shownRecordName = (head: string): string => `review-${head}-shown.json`;
+
+const ShownNumbers = Schema.Array(Schema.Int);
+
 export function localReviewOf(source: string, json: string): LocalReviewRecord {
   return decodeJson(LocalReviewRecord, source, json);
 }
 
 export function answersOf(source: string, json: string): LocalReviewAnswers {
   return decodeJson(LocalReviewAnswers, source, json);
+}
+
+export function shownOf(source: string, json: string): readonly number[] {
+  return decodeJson(ShownNumbers, source, json);
 }
 
 /** The Importants of `review`, each with its 1-based number, the one the block text and `local-review.ts` name. */
@@ -319,6 +328,11 @@ const placeOf = (found: LocalFinding): string => (found.line === null ? found.fi
 
 const unanswered = (review: LocalReviewRecord, answers: LocalReviewAnswers): ReturnType<typeof importantsOf> =>
   importantsOf(review).filter(({ n }) => answers[String(n)] === undefined);
+
+/** The numbers of the Importants of `review` without an answer, in order: what a block shows. */
+export function unansweredNumbersOf(review: LocalReviewRecord, answers: LocalReviewAnswers): number[] {
+  return unanswered(review, answers).map(({ n }) => n);
+}
 
 /** The Nits of `review`, one line each, as the hook logs them. */
 export function nitLinesOf(review: LocalReviewRecord): string[] {
@@ -354,16 +368,17 @@ const LOCAL_REVIEW_ERROR_MAX = 200;
 export interface LocalReviewContext {
   /** Claude Code's `stop_hook_active`: this stop follows a block of this hook. */
   readonly stopHookActive: boolean;
-  /** The review ran in this stop: its findings were never shown to the Author. */
-  readonly reviewedNow: boolean;
+  /** The numbers of the Importants the last block on this head showed open; null when no block showed this head's review. */
+  readonly shown: readonly number[] | null;
   /** The command that runs `local-review.ts`. */
   readonly rejectCommand: string;
 }
 
 /**
- * A local review with every Important answered publishes. An open one blocks, and a stop right after a
- * block lets the session end, unless the review just ran: findings the Author never saw always block
- * once. A failed session blocks once, then lets the session end.
+ * A local review with every Important answered publishes. An open one blocks; a stop right after a
+ * block lets the session end only when the Author answered none of what that block showed, so a fresh
+ * review, or a new answer, always blocks again with what is left. A failed session blocks once, then
+ * lets the session end.
  */
 export function afterLocalReview(review: LocalReview, answers: LocalReviewAnswers, context: LocalReviewContext): Next {
   if ("failed" in review) {
@@ -375,11 +390,15 @@ export function afterLocalReview(review: LocalReview, answers: LocalReviewAnswer
         };
   }
 
-  if (unanswered(review, answers).length === 0) {
+  const open = unansweredNumbersOf(review, answers);
+
+  if (open.length === 0) {
     return { kind: "publish" };
   }
 
-  if (context.stopHookActive && !context.reviewedNow) {
+  const unchanged = context.shown !== null && open.join(",") === context.shown.join(",");
+
+  if (context.stopHookActive && unchanged) {
     return none("the local review is still red after a block: nothing is published");
   }
 
@@ -418,7 +437,9 @@ export const LOCAL_REVIEW_CLOSE = "<!-- /lab-local-review -->";
 const reviewedOf = (reviews: readonly ReviewedHead[]): Array<ReviewedHead & { readonly review: LocalReviewRecord }> =>
   reviews.flatMap((entry) => ("failed" in entry.review ? [] : [{ ...entry, review: entry.review }]));
 
-const oneLine = (text: string): string => text.replaceAll(/\s+/gu, " ").trim();
+/** `text` on one line with no comment delimiter, so an entry can never open or close the block. */
+const oneLine = (text: string): string =>
+  text.replaceAll("<!--", "").replaceAll("-->", "").replaceAll(/\s+/gu, " ").trim();
 
 /** An answered Important of a reviewed head, as an earlier finding; `rejected` tells a rejection from a fix. */
 export type AnsweredImportant = EarlierThread & { readonly rejected: boolean };
@@ -437,7 +458,7 @@ export function answeredImportantsOf(reviews: readonly ReviewedHead[]): Answered
         ? []
         : [
             {
-              where: placeOf(found),
+              where: oneLine(placeOf(found)),
               finding: oneLine(found.summary),
               reply: oneLine(answer),
               rejected: rejection !== undefined,
