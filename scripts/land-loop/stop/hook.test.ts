@@ -646,7 +646,7 @@ describe("the local review", () => {
     expect(fake.calls).toHaveLength(1);
     expect(call).toMatchObject({
       prompt: promptOf(
-        { pr: 0, head: HEAD, base: BASE, patch: "local", round: 1, model: "opus", effort: "high" },
+        { pr: 0, head: HEAD, base: BASE, patch: "local", round: 1, model: "opus", effort: "high", security: false },
         { review: "# Review guide\n", project: "# Project\n" },
         [],
       ),

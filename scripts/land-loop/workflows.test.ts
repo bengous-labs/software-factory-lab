@@ -22,6 +22,7 @@ const Workflow = Schema.Struct({
     Schema.String,
     Schema.Struct({
       if: Schema.optionalKey(Schema.String),
+      "timeout-minutes": Schema.optionalKey(Schema.Int),
       env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
       steps: Schema.Array(Step),
     }),
@@ -93,6 +94,27 @@ describe("the review job's workflow", () => {
     expect(tokened[0]?.if).toBeUndefined();
     expect(steps.indexOf(stepNamed(steps, "Read the earlier review threads"))).toBeLessThan(
       steps.indexOf(stepNamed(steps, "Review")),
+    );
+  });
+
+  test("the security flag is a required input that reaches the runner through env, and the job's timeout leaves room for two passes", async () => {
+    const workflow = await workflowOf("code-review.yml");
+    const { steps, env } = workflow.jobs["review"] ?? { steps: [] };
+
+    expect(workflow.on).toMatchObject({
+      workflow_dispatch: {
+        inputs: {
+          security: {
+            description: "Whether a security pass runs after the Code review, true or false",
+            required: true,
+          },
+        },
+      },
+    });
+    expect(env?.["REVIEW_SECURITY"]).toBe("${{ inputs.security }}");
+    expect(workflow.jobs["review"]?.["timeout-minutes"]).toBe(50);
+    expect(stepNamed(steps, "Write a failed result when the runner wrote none").run).toContain(
+      'security: ($security == "true")',
     );
   });
 

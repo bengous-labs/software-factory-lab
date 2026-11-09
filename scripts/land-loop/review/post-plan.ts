@@ -1,7 +1,8 @@
 /**
  * The review the Merge bot posts from the review job's report: one inline comment per posted finding,
  * each with its thread, anchored on a line GitHub accepts, and a body that counts them and carries the
- * marker a later decision reads to post the review only once. A Pre-existing finding is not posted.
+ * marker a later decision reads to post the review only once. A Pre-existing finding is not posted. A
+ * security pass's finding names its pass after its severity, and keeps the severity's marker.
  */
 
 import type { Schema } from "effect";
@@ -102,20 +103,32 @@ function anchorOf(finding: ReportedFinding, diff: DiffLines): Anchor {
   return { file: first[0], line: Math.min(...first[1]) };
 }
 
-/** The comments to post: every Important, and the first Nits up to the cap; a diff that shows no line throws. */
+/**
+ * The comments to post: every Important, and each pass's first Nits up to the cap; a diff that shows no
+ * line throws.
+ */
 export function postPlanOf(findings: readonly ReportedFinding[], diff: DiffLines): PostPlan {
-  const planned = (severity: PostedSeverity): PlannedComment[] =>
+  const planned = (severity: PostedSeverity, passes: ReadonlyArray<ReportedFinding["pass"]>): PlannedComment[] =>
     findings.flatMap((finding) =>
-      finding.severity === severity ? [{ anchor: anchorOf(finding, diff), finding, severity }] : [],
+      finding.severity === severity && passes.includes(finding.pass)
+        ? [{ anchor: anchorOf(finding, diff), finding, severity }]
+        : [],
     );
 
   return {
-    comments: [...planned("important"), ...planned("nit").slice(0, NIT_CAP)],
+    comments: [
+      ...planned("important", ["code", "security"]),
+      ...planned("nit", ["code"]).slice(0, NIT_CAP),
+      ...planned("nit", ["security"]).slice(0, NIT_CAP),
+    ],
     preExisting: findings.filter((finding) => finding.severity === "pre_existing").length,
   };
 }
 
 const LABEL: Readonly<Record<PostedSeverity, string>> = { important: "Important", nit: "Nit" };
+
+const labelOf = ({ severity, finding }: PlannedComment): string =>
+  finding.pass === "security" ? `${LABEL[severity]} (security)` : LABEL[severity];
 
 const placeOf = (place: { readonly file: string; readonly line: number | null }): string =>
   place.line === null ? place.file : `${place.file}:${place.line}`;
@@ -127,7 +140,7 @@ function commentOf(planned: PlannedComment): string {
   const moved = anchor.file !== finding.file || (finding.line !== null && anchor.line !== finding.line);
 
   return [
-    `**${LABEL[planned.severity]}**: ${finding.summary}`,
+    `**${labelOf(planned)}**: ${finding.summary}`,
     ...(moved ? [movedLineOf(placeOf(finding))] : []),
     ...(finding.breaks === null ? [] : [`Breaks: \`${placeOf(finding.breaks)}\``]),
     "",
@@ -145,11 +158,15 @@ export function reviewMarkerOf(request: ReviewRequest): string {
 function bodyOf(plan: PostPlan, result: ReportedResult): string {
   const { request } = result;
 
-  const count = (severity: PostedSeverity): number =>
-    plan.comments.filter((planned) => planned.severity === severity).length;
+  const counts = (pass: ReportedFinding["pass"]): string => {
+    const count = (severity: PostedSeverity): number =>
+      plan.comments.filter((planned) => planned.severity === severity && planned.finding.pass === pass).length;
 
-  const found =
-    plan.comments.length === 0 ? "nothing to fix." : `${count("important")} important, ${count("nit")} nit.`;
+    return `${count("important")} important, ${count("nit")} nit`;
+  };
+
+  const security = request.security ? `; security: ${counts("security")}` : "";
+  const found = plan.comments.length === 0 ? "nothing to fix." : `${counts("code")}${security}.`;
 
   const preExisting = plan.preExisting === 0 ? "" : ` ${plan.preExisting} pre-existing finding(s) not posted.`;
 

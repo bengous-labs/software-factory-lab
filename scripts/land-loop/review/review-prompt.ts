@@ -18,7 +18,7 @@ const ROUND_1_LOCAL =
   "This is review round 1. A local review in the author's session read this change first. Its findings and the author's answers:";
 
 /** Round 1 reads the local review's findings, when the Stop hook wrote some; rounds 2 and 3 the earlier threads. */
-function roundText(request: ReviewRequest, threads: readonly EarlierThread[]): readonly string[] {
+export function roundText(request: ReviewRequest, threads: readonly EarlierThread[]): readonly string[] {
   if (request.round === 1 && threads.length === 0) {
     return [];
   }

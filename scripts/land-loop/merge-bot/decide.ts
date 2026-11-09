@@ -54,6 +54,8 @@ export interface RoutingAnswer {
   readonly reason: string;
   /** The model asked, exact when it answered; null when the Routing rules decided. */
   readonly model: string | null;
+  /** Whether each Review round of the change runs a security pass; absent, as in older records, reads as false. */
+  readonly security?: boolean;
 }
 
 const Round = Schema.Literals([1, 2, 3]);
@@ -142,6 +144,7 @@ const ReadRecord = Schema.Struct({
       reason: Schema.String,
       // Records written before the Routing answer named its model have none.
       model: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      security: Schema.optionalKey(Schema.Boolean),
       // Records written while the Principal judge existed: the field still reads, and is left out.
       needsFable: Schema.optionalKey(Schema.Boolean),
     }),
@@ -298,7 +301,13 @@ export type CheckState =
 export type Step =
   | { readonly kind: "route"; readonly patch: string; readonly patchDelta: boolean }
   | { readonly kind: "labels"; readonly route: LandRoute; readonly depth: ReviewDepth }
-  | { readonly kind: "request-review"; readonly depth: Exclude<ReviewDepth, "none">; readonly reviewRound: ReviewRound }
+  | {
+      readonly kind: "request-review";
+      readonly depth: Exclude<ReviewDepth, "none">;
+      readonly reviewRound: ReviewRound;
+      /** Whether the review runs a security pass after the Code review: the whole PR's Routing answer says so. */
+      readonly security: boolean;
+    }
   | { readonly kind: "post-review"; readonly result: ReportedResult }
   | { readonly kind: "review-check"; readonly check: CheckState }
   | { readonly kind: "land-gate"; readonly check: CheckState }
@@ -445,8 +454,8 @@ const ciSummary = (summary: string, record: StateRecord, patch: string): string 
     ? summary
     : `${summary} This push is not routed yet: its labels are the previous push's.`;
 
-/** How long after its dispatch a review the job has not reported counts as failed: past the job's 30-minute timeout. */
-export const REVIEW_DEADLINE_MS = 45 * 60_000;
+/** How long after its dispatch a review the job has not reported counts as failed: past the job's 50-minute timeout. */
+export const REVIEW_DEADLINE_MS = 65 * 60_000;
 
 function withoutReview(record: StateRecord): StateRecord {
   const { review: _done, ...rest } = record;
@@ -762,7 +771,10 @@ export function decide(snapshot: Snapshot): Decision {
   steps.push({ kind: "labels", ...labels });
 
   if (need !== null) {
-    steps.push({ kind: "request-review", depth: need.depth, reviewRound: need.round }, ...runningSteps(need.round));
+    steps.push(
+      { kind: "request-review", depth: need.depth, reviewRound: need.round, security: routing.security === true },
+      ...runningSteps(need.round),
+    );
 
     return { kind: "steps", steps };
   }
