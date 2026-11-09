@@ -82,8 +82,8 @@ describe("escapeHtml", () => {
     ["closes </x> and <?php", String.raw`closes &lt;/x> and &lt;?php`],
     ["see <https://example.com>", String.raw`see &lt;https://example.com>`],
     ["a < b and b > c", String.raw`a &lt; b and b > c`],
-    ["[doc](https://x) and ![img](y)", String.raw`[doc]\(https://x) and ![img]\(y)`],
-    ["[x]: /u and $a$", String.raw`[x]\: /u and \$a\$`],
+    ["[doc](https://x) and ![img](y)", String.raw`\[doc\](https://x) and !\[img\](y)`],
+    ["[x]: /u and $a$", String.raw`\[x\]: /u and \$a\$`],
     [String.raw`review-&lt;head>.json`, String.raw`review-&lt;head>.json`],
   ])("%j becomes %j", (text, escaped) => {
     expect(escapeHtml(text)).toBe(escaped);
@@ -114,7 +114,9 @@ describe("escapeHtml", () => {
       "- a\n  \\`\\`\\`\n  &lt;x>\n  \\`\\`\\`",
     ],
     ["a closing fence indented up to 3 spaces closes the block", "```\n<x>\n   ```\n<b>", "```\n<x>\n   ```\n&lt;b>"],
-    ["a link cannot take the backtick of a span", "[a](`) <b>x</b> `", "[a]\\(`) <b>x</b> `"],
+    ["a link cannot take the backtick of a span", "[a](`) <b>x</b> `", String.raw`\[a\](${"`"}) <b>x</b> ${"`"}`],
+    ["nor a reference link", "[a][`l] <b> `", String.raw`\[a\]\[${"`"}l] <b> ${"`"}`],
+    ["nor a definition", "[`a]: /u <b> `", String.raw`\[${"`"}a]: /u <b> ${"`"}`],
     ["an email autolink cannot take it", "<1`@a.b> <!-- hide --> `", "&lt;1`@a.b> <!-- hide --> `"],
     ["an extended autolink cannot take it", "see www.x.com` <b>hi</b> `", "see www.x.com\\` &lt;b>hi&lt;/b> \\`"],
     ["nor a URL one", "https://x.io/a` <!-- hide --> `", "https://x.io/a\\` &lt;!-- hide --> \\`"],
@@ -187,7 +189,7 @@ describe("unescapeHtml", () => {
   test("reads back the text escapeHtml was given", () => {
     fc.assert(
       fc.property(
-        markdownText.filter((text) => !/\\[<`~$]|\]\\[(:]|&lt;/u.test(text) && !text.includes("\r")),
+        markdownText.filter((text) => !/\\[<`~$[\]]|&lt;/u.test(text) && !text.includes("\r")),
         (text) => unescapeHtml(escapeHtml(text)) === text,
       ),
     );

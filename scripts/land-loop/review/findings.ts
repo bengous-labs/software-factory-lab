@@ -120,11 +120,11 @@ export function movedLineOf(place: string): string {
   return `At ${codeSpan(place)}, outside this diff.`;
 }
 
-const MOVED_LINE_PATTERN = /^At `(.+?)(?::\d+)?`, outside this diff\.$/mu;
+const MOVED_LINE_PATTERN = /^At (?<fence>`+) ?(.+?)(?::\d+)? ?\k<fence>, outside this diff\.$/mu;
 
 /** The file a finding's comment is about: the one its moved line names, else `anchorPath`, the file it sits on. */
 export function findingFileOf(anchorPath: string, body: string): string {
-  return MOVED_LINE_PATTERN.exec(body)?.[1] ?? anchorPath;
+  return MOVED_LINE_PATTERN.exec(body)?.[2] ?? anchorPath;
 }
 
 /**

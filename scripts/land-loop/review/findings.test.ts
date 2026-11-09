@@ -223,6 +223,11 @@ describe("findingFileOf", () => {
     expect(findingFileOf("a.ts", MOVED_NIT("a.ts:120"))).toBe("a.ts");
     expect(findingFileOf("a.ts", NIT)).toBe("a.ts");
   });
+
+  test("a place that holds backticks reads back from the longer fence movedLineOf writes", () => {
+    expect(findingFileOf("AGENTS.md", MOVED_NIT("a`b.ts:4"))).toBe("a`b.ts");
+    expect(findingFileOf("AGENTS.md", MOVED_NIT("`a.ts`"))).toBe("`a.ts`");
+  });
 });
 
 describe("nitPathsOf", () => {
