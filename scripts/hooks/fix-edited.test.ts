@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { $ } from "bun";
 
+import { fixtureEnv } from "../gates/fixture-env.ts";
 import { candidateOf, filePathOf, formatIgnorePatterns } from "./fix-edited.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -63,15 +65,17 @@ describe("candidateOf", () => {
   });
 });
 
-const runHook = (filePath: string) =>
+/** Runs the hook on a Write of `filePath`, as Claude Code does for the project at `project`. */
+const runHook = (filePath: string, project = ROOT) =>
   $`bun ${SCRIPT} < ${Buffer.from(
     JSON.stringify({
       hook_event_name: "PostToolUse",
       tool_name: "Write",
       tool_input: { file_path: filePath, content: "" },
-      cwd: ROOT,
+      cwd: project,
     }),
   )}`
+    .env({ ...fixtureEnv(process.env), CLAUDE_PROJECT_DIR: project })
     .nothrow()
     .quiet();
 
@@ -111,5 +115,90 @@ describe("the hook", () => {
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout.toString()).toBe("");
     expect(await Bun.file(path).text()).toBe(UNFORMATTED);
+  });
+});
+
+describe("the hook, on a file in a worktree", () => {
+  const BARE = "const a  =   1\nexport {a}\n";
+  const FORMATTED = "const a = 1;\nexport { a };\n";
+  let main = "";
+  let worktree = "";
+
+  beforeAll(async () => {
+    main = mkdtempSync(join(tmpdir(), "fix-edited-"));
+    worktree = join(main, ".claude", "worktrees", "w");
+
+    const env = fixtureEnv(process.env);
+
+    await $`git init -q -b dev`.cwd(main).env(env).quiet();
+    writeFileSync(join(main, "bunfig.toml"), "[fmt]\n");
+    writeFileSync(join(main, ".gitignore"), ".claude/worktrees/\n");
+    await $`git add -A`.cwd(main).env(env).quiet();
+    await $`git -c user.name=t -c user.email=t@t.test commit -q -m base`.cwd(main).env(env).quiet();
+    await $`git worktree add -q -b w ${worktree}`.cwd(main).env(env).quiet();
+  });
+
+  afterAll(() => {
+    rmSync(main, { recursive: true, force: true });
+  });
+
+  test("formats it in its own checkout, whether the project dir is the main checkout or that worktree", async () => {
+    for (const [name, project] of [
+      ["project-main.ts", main],
+      ["project-worktree.ts", worktree],
+    ] as const) {
+      const path = join(worktree, name);
+
+      writeFileSync(path, BARE);
+
+      const ran = await runHook(path, project);
+
+      expect(ran.exitCode).toBe(0);
+      expect(ran.stdout.toString()).toBe("");
+      expect(await Bun.file(path).text()).toBe(FORMATTED);
+    }
+  });
+
+  test("formats a file named through a symbolic link to the checkout", async () => {
+    const link = `${main}-link`;
+
+    symlinkSync(main, link);
+
+    const path = join(link, ".claude", "worktrees", "w", "through-link.ts");
+
+    writeFileSync(path, BARE);
+
+    const ran = await runHook(path, link);
+
+    rmSync(link);
+
+    expect(ran.exitCode).toBe(0);
+    expect(await Bun.file(join(worktree, "through-link.ts")).text()).toBe(FORMATTED);
+  });
+
+  test("leaves a file of another repository than the project's as it is, running none of its tools", async () => {
+    const path = join(worktree, "other-repo.ts");
+
+    writeFileSync(path, BARE);
+
+    const ran = await runHook(path, ROOT);
+
+    expect(ran.exitCode).toBe(0);
+    expect(await Bun.file(path).text()).toBe(BARE);
+  });
+
+  test("throws when Claude Code did not set CLAUDE_PROJECT_DIR", async () => {
+    const path = join(worktree, "no-project.ts");
+
+    writeFileSync(path, BARE);
+
+    const ran = await $`bun ${SCRIPT} < ${Buffer.from(JSON.stringify({ tool_input: { file_path: path } }))}`
+      .env(fixtureEnv({ ...process.env, CLAUDE_PROJECT_DIR: undefined }))
+      .nothrow()
+      .quiet();
+
+    expect(ran.exitCode).not.toBe(0);
+    expect(ran.stderr.toString()).toContain("CLAUDE_PROJECT_DIR is not set");
+    expect(await Bun.file(path).text()).toBe(BARE);
   });
 });

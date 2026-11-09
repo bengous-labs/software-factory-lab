@@ -2,23 +2,27 @@
 
 /**
  * The PostToolUse hook on Edit and Write. It applies the style config's autofixes, then `bun fmt`, to
- * the file the tool wrote, when that file is one `bun fmt --check .` reads: not ignored by git, and
- * matched by no `[fmt].ignorePatterns` of `bunfig.toml`. That keeps the vendored anti-slop copy,
- * `node_modules` and `.claude/worktrees` out. It prints nothing and exits 0, since what a PostToolUse
- * hook prints goes into the agent's context, unless its input or `bunfig.toml` does not read: it then
- * throws, naming which.
+ * the file the tool wrote, when that file is one `bun fmt --check .` reads in its own checkout: not
+ * ignored by git, and matched by no `[fmt].ignorePatterns` of that checkout's `bunfig.toml`. That keeps
+ * the vendored anti-slop copy and `node_modules` out. The checkout is the file's own, the main one or a
+ * worktree, and the hook acts only on a checkout of the project's own repository: it runs that
+ * checkout's oxlint and configs, and never another repository's. A path through a symbolic link is read
+ * as its real path, the one git names the checkout by. It prints nothing and exits 0, since what a
+ * PostToolUse hook prints goes into the agent's context, unless its input or `bunfig.toml` does not read,
+ * or `CLAUDE_PROJECT_DIR` is unset: it then throws, naming which.
  *
  * Reads the PostToolUse input on stdin.
  */
 
-import { extname, isAbsolute, join, relative, sep } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 
 import { $ } from "bun";
 import { Result, Schema } from "effect";
 
+import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../lib/checkout.ts";
+import type { Checkout } from "../lib/checkout.ts";
 import { decodeJson } from "../lib/json.ts";
-
-const ROOT = join(import.meta.dir, "..", "..");
 
 const LINTED = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"]);
 
@@ -58,24 +62,48 @@ export function candidateOf(root: string, filePath: string, ignorePatterns: read
   return ignorePatterns.some((pattern) => new Bun.Glob(pattern).match(path)) ? null : path;
 }
 
-if (import.meta.main) {
-  const filePath = filePathOf(await Bun.stdin.text());
-  const ignorePatterns = formatIgnorePatterns(await Bun.file(join(ROOT, "bunfig.toml")).text());
-  const path = filePath === null ? null : candidateOf(ROOT, filePath, ignorePatterns);
+/** The checkout `dir` lies in, or null outside any repository or for a missing `dir`. */
+async function checkoutOf(dir: string): Promise<Checkout | null> {
+  const ran = await $`git -C ${dir} rev-parse --path-format=absolute --show-toplevel --git-common-dir`
+    .nothrow()
+    .quiet();
+
+  return checkoutFromRevParse(ran.stdout.toString(), ran.exitCode);
+}
+
+/** Applies the autofixes and `bun fmt` to `filePath` in the checkout at `root`, when that checkout formats it. */
+async function fixIn(root: string, filePath: string): Promise<void> {
+  const ignorePatterns = formatIgnorePatterns(await Bun.file(join(root, "bunfig.toml")).text());
+  const path = candidateOf(root, filePath, ignorePatterns);
 
   // git check-ignore exits 0 for an ignored path, 1 for one that is not.
-  if (path !== null && (await $`git check-ignore -q -- ${path}`.cwd(ROOT).nothrow().quiet()).exitCode === 1) {
-    if (LINTED.has(extname(path))) {
-      const oxlint = join(ROOT, "node_modules", ".bin", "oxlint");
+  if (path === null || (await $`git check-ignore -q -- ${path}`.cwd(root).nothrow().quiet()).exitCode !== 1) {
+    return;
+  }
 
-      // A second pass applies the fixes that wait on another rule's fix, such as the blank line after a
-      // brace curly adds. An error both passes leave is the Stop checks' to report, not this hook's.
-      const fix = () => $`${oxlint} -c oxlint.style.config.ts --fix --quiet ${path}`.cwd(ROOT).nothrow().quiet();
+  if (LINTED.has(extname(path))) {
+    const oxlint = join(root, "node_modules", ".bin", "oxlint");
 
-      await fix();
-      await fix();
+    // A second pass applies the fixes that wait on another rule's fix, such as the blank line after a
+    // brace curly adds. An error both passes leave is the Stop checks' to report, not this hook's.
+    const fix = () => $`${oxlint} -c oxlint.style.config.ts --fix --quiet ${path}`.cwd(root).nothrow().quiet();
+
+    await fix();
+    await fix();
+  }
+
+  await $`${process.execPath} fmt ${path}`.cwd(root).nothrow().quiet();
+}
+
+if (import.meta.main) {
+  const filePath = filePathOf(await Bun.stdin.text());
+
+  if (filePath !== null) {
+    const root = trustedRoot(await checkoutOf(dirname(filePath)), await checkoutOf(projectDirOf(process.env)));
+
+    // git names the checkout by its real path, so a path through a symbolic link would read as outside it.
+    if (root !== null) {
+      await fixIn(root, join(realpathSync(dirname(filePath)), basename(filePath)));
     }
-
-    await $`${process.execPath} fmt ${path}`.cwd(ROOT).nothrow().quiet();
   }
 }
