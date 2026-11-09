@@ -14,7 +14,8 @@ import { Schema } from "effect";
 
 import { decodeJson } from "../lib/json.ts";
 
-const REFUSED = new Set(["github-flow:dispatch", "github-flow:shift"]);
+/** The refused skills, each by its full name and by the bare name the Skill tool also launches. */
+const REFUSED = new Set(["github-flow:dispatch", "github-flow:shift", "dispatch", "shift"]);
 
 /** The two inputs this hook reads: Claude's Skill call, and the user's typed command. */
 const HookInput = Schema.Union([
@@ -34,7 +35,8 @@ export function hookInputOf(stdin: string): HookInput {
 
 /**
  * Why the skill or command `name` is refused, or null when it may run. The Skill tool launches a skill named
- * with surrounding spaces or a leading `/`, so the name is read without them.
+ * with surrounding spaces, a leading `/` or no plugin prefix, so the name is read without the first two and
+ * matched bare too. It refuses another case itself, so the case is kept.
  */
 export function refusalFor(name: string): string | null {
   const skill = name.trim().replace(/^\//u, "");

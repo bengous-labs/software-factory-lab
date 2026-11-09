@@ -57,8 +57,13 @@ describe("refusalFor", () => {
     }
   });
 
+  test("refuses the bare names, which the Skill tool also launches", () => {
+    expect(refusalFor("dispatch")).toStartWith("Refused: `dispatch` runs each Worker as a subagent");
+    expect(refusalFor(" /shift")).toStartWith("Refused: `shift` runs each Worker as a subagent");
+  });
+
   test("lets every other skill run", () => {
-    for (const name of ["github-flow:pr", "github-flow:issue", "git:commit", "dispatch", "code-review"]) {
+    for (const name of ["github-flow:pr", "github-flow:issue", "git:commit", "other:dispatch", "code-review"]) {
       expect(refusalFor(name)).toBeNull();
     }
   });
