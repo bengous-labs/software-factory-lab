@@ -394,6 +394,16 @@ describe("lsRemoteHead", () => {
     await $`git init -q silent`.cwd(lab).env(env).quiet();
     await $`git remote add origin ${"ext::sleep 37.123"}`.cwd(join(lab, "silent")).env(env).quiet();
     await $`git config protocol.ext.allow always`.cwd(join(lab, "silent")).env(env).quiet();
+
+    const holder = join(lab, "holder.sh");
+
+    writeFileSync(holder, '#!/bin/sh\nsleep 37.25 >&2 &\nexec git-upload-pack "$1"\n', { mode: 0o755 });
+    await $`git init -q holding`.cwd(lab).env(env).quiet();
+    await $`git remote add origin ${`ext::${holder} ${join(lab, "remote.git")}`}`
+      .cwd(join(lab, "holding"))
+      .env(env)
+      .quiet();
+    await $`git config protocol.ext.allow always`.cwd(join(lab, "holding")).env(env).quiet();
   });
 
   afterAll(() => {
@@ -426,5 +436,15 @@ describe("lsRemoteHead", () => {
     await Bun.sleep(200);
 
     expect(runningSleep("37.123")).toBe(false);
+  });
+
+  test("bounds the reads too, when git answers and exits but a helper it spawned holds its stderr open", async () => {
+    const started = performance.now();
+    const head = await lsRemoteHead(join(lab, "holding"), 500);
+
+    expect(head.failure).toBe("`git ls-remote --symref origin HEAD` timed out after 500 ms");
+    expect(performance.now() - started).toBeLessThan(3000);
+    await Bun.sleep(200);
+    expect(runningSleep("37.25")).toBe(false);
   });
 });

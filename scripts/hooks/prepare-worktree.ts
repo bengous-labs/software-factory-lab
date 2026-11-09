@@ -156,10 +156,23 @@ export interface RemoteHead {
   readonly failure: string | null;
 }
 
+/** Kills the process group `pid` leads; a group that already ended is no error. */
+function killGroup(pid: number): void {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (error) {
+    // ESRCH: the group ended between the deadline and the kill.
+    if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) {
+      throw error;
+    }
+  }
+}
+
 /**
- * Runs `git ls-remote --symref origin HEAD` in `root`, never waiting on a prompt. Past `timeoutMs` it kills
- * git's whole process group: git runs in its own session, so its transport (ssh, an ext:: command) dies
- * with it, and no terminal is left to prompt on.
+ * Runs `git ls-remote --symref origin HEAD` in `root`, never waiting on a prompt. One deadline, `timeoutMs`,
+ * covers git's exit and the reads of both its pipes, which a transport or helper it spawned may hold open
+ * after git exits; past it the whole process group is killed. git runs in its own session, so that group
+ * holds its transport (ssh, an ext:: command), and no terminal is left to prompt on.
  */
 export async function lsRemoteHead(root: string, timeoutMs: number): Promise<RemoteHead> {
   const proc = Bun.spawn(["git", "ls-remote", "--symref", "origin", "HEAD"], {
@@ -171,27 +184,26 @@ export async function lsRemoteHead(root: string, timeoutMs: number): Promise<Rem
     stderr: "pipe",
   });
 
-  const timer = setTimeout(() => {
-    try {
-      process.kill(-proc.pid, "SIGKILL");
-    } catch (error) {
-      // ESRCH: the group ended between the timer firing and the kill.
-      if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) {
-        throw error;
-      }
-    }
-  }, timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const code = await proc.exited;
+  const deadline = new Promise<"timed out">((resolve) => {
+    timer = setTimeout(() => {
+      resolve("timed out");
+    }, timeoutMs);
+  });
+
+  const finished = Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+  const outcome = await Promise.race([finished, deadline]);
 
   clearTimeout(timer);
 
-  // Only the timer kills git; its pipes stay unread, since a transport it spawned may still hold them.
-  if (proc.signalCode !== null) {
+  if (outcome === "timed out") {
+    killGroup(proc.pid);
+
     return { stdout: "", failure: `\`git ls-remote --symref origin HEAD\` timed out after ${timeoutMs} ms` };
   }
 
-  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+  const [code, stdout, stderr] = outcome;
 
   return { stdout, failure: code === 0 ? null : `\`git ls-remote --symref origin HEAD\` failed: ${stderr.trim()}` };
 }
@@ -290,5 +302,6 @@ if (import.meta.main) {
     console.error(run.stderr);
   }
 
-  process.exitCode = run.code;
+  // An explicit exit: a helper outside git's group may still hold a pipe the hook stopped reading.
+  process.exit(run.code);
 }
