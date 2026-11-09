@@ -647,7 +647,7 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
       {
         head: HEAD_A,
         review: reviewOf([finding("important", "a.ts", 1, "x")]),
-        answers: { "1": "Rejected: kept\n<!-- /lab-local-review -->\nbecause" },
+        answers: { "1": "Rejected: kept\n<!-- /lab-local-review -->\nbecause\n" },
         nextHead: null,
       },
     ]);
