@@ -7,6 +7,7 @@
 
 import { Option, Schema } from "effect";
 
+import { codeSpan, unescapeHtml } from "../../lib/markdown.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import { LOCAL_REVIEW_CLOSE, LOCAL_REVIEW_OPEN } from "../stop/decide.ts";
 import { Severity } from "./review-report.ts";
@@ -116,14 +117,29 @@ export function reviewOfBody(body: string): { readonly patch: string; readonly r
  * `<file>:<line>`. An external format: posted comments carry it, so the words stay.
  */
 export function movedLineOf(place: string): string {
-  return `At \`${place}\`, outside this diff.`;
+  return `At ${codeSpan(place)}, outside this diff.`;
 }
 
-const MOVED_LINE_PATTERN = /^At `(.+?)(?::\d+)?`, outside this diff\.$/mu;
+/** The moved line, its fence the whole first backtick run, so a long run cannot make the match backtrack. */
+const MOVED_LINE_PATTERN = /^At (?<fence>`+)(?!`)(?<rest>.*), outside this diff\.$/mu;
+
+/** The place `movedLineOf` wrote in `body`, without its line number; null when no moved line closes its fence. */
+function movedPlaceOf(body: string): string | null {
+  const { fence = "", rest = "" } = MOVED_LINE_PATTERN.exec(body)?.groups ?? {};
+
+  if (fence === "" || !rest.endsWith(fence)) {
+    return null;
+  }
+
+  const place = rest.slice(0, -fence.length);
+  const unpadded = place.startsWith(" ") && place.endsWith(" ") && place.length > 1 ? place.slice(1, -1) : place;
+
+  return unpadded.replace(/:\d+$/u, "");
+}
 
 /** The file a finding's comment is about: the one its moved line names, else `anchorPath`, the file it sits on. */
 export function findingFileOf(anchorPath: string, body: string): string {
-  return MOVED_LINE_PATTERN.exec(body)?.[1] ?? anchorPath;
+  return movedPlaceOf(body) ?? anchorPath;
 }
 
 /**
@@ -175,7 +191,9 @@ export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThrea
       return [];
     }
 
-    const answers = answersOf(appLogin, thread).map((reply) => unmarked(reply.body));
+    const answers = answersOf(appLogin, thread).map((reply) =>
+      reply.body.includes(AUTHOR_MARK) ? unescapeHtml(unmarked(reply.body)) : unmarked(reply.body),
+    );
 
     const state = rejectedOf(appLogin, thread)
       ? "resolved: rejected by the Author"
@@ -186,7 +204,7 @@ export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThrea
     return [
       {
         where: `${thread.path}:${thread.line ?? "?"}`,
-        finding: finding.body.split("\n")[0] ?? "",
+        finding: unescapeHtml(finding.body.split("\n")[0] ?? ""),
         reply: `${answers.length === 0 ? "no answer" : answers.join(" / ")} (thread ${state})`,
       },
     ];
@@ -213,7 +231,13 @@ export function localReviewEntriesOf(body: string): EarlierThread[] {
 
       return where === undefined || finding === undefined || reply === undefined
         ? []
-        : [{ where, finding, reply: `${reply} (local review)` }];
+        : [
+            {
+              where: unescapeHtml(where),
+              finding: unescapeHtml(finding),
+              reply: `${unescapeHtml(reply)} (local review)`,
+            },
+          ];
     });
 }
 

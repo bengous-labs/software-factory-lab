@@ -257,6 +257,30 @@ describe("reviewOf", () => {
     ]);
   });
 
+  test("a placeholder in the summary or the scenario is escaped for GitHub; code and the marker are not", () => {
+    const placeholder = {
+      ...finding("important", "b.ts", 1),
+      summary: "Reads review-<head>.json, not `review-<head>.json`.",
+      failureScenario: "The body reads '<code counts>'.\n\n```\n<head>\n```",
+    };
+
+    expect(commentsOf(placeholder).map((comment) => comment.body)).toEqual([
+      `**Important**: Reads review-&lt;head>.json, not \`review-<head>.json\`.\n\nThe body reads '&lt;code counts>'.\n\n\`\`\`\n<head>\n\`\`\`\n\n${markerOf("important")}`,
+    ]);
+  });
+
+  test("a summary over several lines stays on its line, and a backtick in a path cannot close its code span", () => {
+    const fenced = {
+      ...finding("important", "b.ts", 1),
+      summary: "```\n<details><summary>ok</summary>\n\n```",
+      breaks: { file: "x` <details> `y", line: 2 },
+    };
+
+    expect(commentsOf(fenced).map((comment) => comment.body.split("\n").slice(0, 2))).toEqual([
+      ["**Important**: ``` <details><summary>ok</summary> ```", "Breaks: ``x` <details> `y:2``"],
+    ]);
+  });
+
   test("a comment anchored away from its finding says where the finding is", () => {
     const bodies = commentsOf(
       finding("important", "app/other.ts", 4),

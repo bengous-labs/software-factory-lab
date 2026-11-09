@@ -256,6 +256,13 @@ describe("holdStepsOf", () => {
     });
   });
 
+  test("a placeholder in the reason is escaped for GitHub; the Author's mark is not", () => {
+    expect(holdStepsOf("rewrites <file> paths", [])).toEqual({
+      addLabel: true,
+      comment: "Held for the Owner by the Author: rewrites &lt;file> paths\n\n<!-- lab-author-reply -->",
+    });
+  });
+
   test("no hold, or a PR that carries land:human already, adds nothing and posts nothing", () => {
     expect(holdStepsOf(null, [])).toEqual({ addLabel: false, comment: null });
     expect(holdStepsOf(null, ["land:human"])).toEqual({ addLabel: false, comment: null });
@@ -697,6 +704,45 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
     expect(bodyWithBlock(`Intro.\n\n${block}\n\nCloses #66`, "NEW")).toBe("Intro.\n\nNEW\n\nCloses #66");
   });
 
+  test("a placeholder in a finding or an answer is escaped for GitHub and reads back as written", () => {
+    const block =
+      localReviewBlockOf([
+        {
+          head: HEAD_A,
+          review: reviewOf([finding("important", "a.ts", 1, "reads '<code counts>' from `review-<head>.json`")]),
+          answers: { "1": "Rejected: <sha> holds it" },
+          nextHead: null,
+        },
+      ]) ?? "";
+
+    expect(block).toContain(
+      "\n- a.ts:1: reads '&lt;code counts>' from `review-<head>.json` | Author: Rejected: &lt;sha> holds it\n</details>",
+    );
+    expect(block.startsWith("<!-- lab-local-review -->\n")).toBe(true);
+    expect(localReviewEntriesOf(bodyWithBlock("Intro.\n\nCloses #66", block))).toEqual([
+      {
+        where: "a.ts:1",
+        finding: "reads '<code counts>' from `review-<head>.json`",
+        reply: "Rejected: <sha> holds it (local review)",
+      },
+    ]);
+  });
+
+  test("a backtick left open in a finding cannot pair with one in its answer or its place", () => {
+    const block =
+      localReviewBlockOf([
+        {
+          head: HEAD_A,
+          review: reviewOf([finding("important", "a`.ts", 1, "a `b")]),
+          answers: { "1": "Rejected: x` <b> `" },
+          nextHead: null,
+        },
+      ]) ?? "";
+
+    expect(block).toContain("\n- a\\`.ts:1: a \\`b | Author: Rejected: x` <b> `\n");
+    expect(Bun.markdown.html(block.replaceAll(/<!--.*?-->|<\/?details>|<\/?summary>/gu, ""))).not.toContain("<b>");
+  });
+
   test("a delimiter that a removal would form from its neighbours is removed too", () => {
     const block =
       localReviewBlockOf([
@@ -716,6 +762,19 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
 });
 
 describe("answeredImportantsOf", () => {
+  test("each answered Important reads on one line, its spaces collapsed and trimmed", () => {
+    expect(
+      answeredImportantsOf([
+        {
+          head: HEAD_A,
+          review: reviewOf([finding("important", "a.ts", 1, " two\n  lines ")]),
+          answers: { "1": "Rejected:  kept\n" },
+          nextHead: null,
+        },
+      ]),
+    ).toEqual([{ where: "a.ts:1", finding: "two lines", reply: "Rejected: kept", rejected: true }]);
+  });
+
   test("the answered Importants of every reviewed head, as earlier findings, a rejection told from a fix", () => {
     expect(
       answeredImportantsOf([

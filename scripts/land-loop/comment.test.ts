@@ -49,6 +49,16 @@ describe("post", () => {
     expect(options).toEqual([{ cwd: "/repo", env: { GH_TOKEN: "t0k" } }]);
   });
 
+  test("a placeholder in the comment is escaped for GitHub; code and the author's mark are not", async () => {
+    const { run, calls } = recording(0);
+
+    await post(run, "/repo", "t0k", { pr: 86, body: "Kept <n> rounds, see `review-<head>.json`" });
+
+    expect(calls).toEqual([
+      ["gh", "pr", "comment", "86", "--body", `Kept &lt;n> rounds, see \`review-<head>.json\`\n\n${AUTHOR_MARK}`],
+    ]);
+  });
+
   test("no Author token: the command exits non-zero with the reason before any gh call", () => {
     const missing = join(mkdtempSync(join(tmpdir(), "author-")), "absent");
 

@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { escapeHtml } from "../../lib/markdown.ts";
 import { tokensText } from "../../lib/tokens.ts";
 import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
@@ -561,7 +562,7 @@ async function snapshotOf(
 
 /** The POST body of `repos/<repo>/check-runs`: its Details link opens `runUrl`, the run that posts it. */
 export function checkRunBodyOf(name: string, head: string, check: CheckState, runUrl: string): Schema.JsonObject {
-  const output = { title: check.summary, summary: check.summary };
+  const output = { title: check.summary, summary: escapeHtml(check.summary) };
 
   return check.kind === "pending"
     ? { name, head_sha: head, status: "in_progress", output, details_url: runUrl }

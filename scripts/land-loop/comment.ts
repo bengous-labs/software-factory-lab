@@ -7,6 +7,7 @@
  *   bun scripts/land-loop/comment.ts <pr> "<comment>"
  */
 
+import { escapeHtml } from "../lib/markdown.ts";
 import { AUTHOR_MARK } from "./author-mark.ts";
 import { ghEnv, requiredAuthorToken } from "./lib/author.ts";
 import { checked, run } from "./lib/run.ts";
@@ -31,7 +32,7 @@ export async function post(
   token: string,
   { pr, body }: { readonly pr: number; readonly body: string },
 ): Promise<void> {
-  await checked(runner, ["gh", "pr", "comment", String(pr), "--body", `${body}\n\n${AUTHOR_MARK}`], {
+  await checked(runner, ["gh", "pr", "comment", String(pr), "--body", `${escapeHtml(body)}\n\n${AUTHOR_MARK}`], {
     cwd,
     env: ghEnv(token),
   });

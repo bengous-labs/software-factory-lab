@@ -400,6 +400,12 @@ describe("checkRunBodyOf", () => {
     });
   });
 
+  test("a placeholder is escaped in the Markdown summary, and kept as written in the plain-text title", () => {
+    expect(
+      checkRunBodyOf("land-gate", SHA, { kind: "pending", summary: "Held for the Owner: <file>." }, RUN_URL)["output"],
+    ).toEqual({ title: "Held for the Owner: <file>.", summary: String.raw`Held for the Owner: &lt;file>.` });
+  });
+
   test("a success or a failure check is completed with its kind as conclusion, and links to the run", () => {
     for (const kind of ["success", "failure"] as const) {
       expect(checkRunBodyOf("agent-review", SHA, { kind, summary: "Done." }, RUN_URL)).toEqual({

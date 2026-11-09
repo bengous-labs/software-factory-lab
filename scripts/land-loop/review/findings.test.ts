@@ -223,6 +223,18 @@ describe("findingFileOf", () => {
     expect(findingFileOf("a.ts", MOVED_NIT("a.ts:120"))).toBe("a.ts");
     expect(findingFileOf("a.ts", NIT)).toBe("a.ts");
   });
+
+  test("a moved line with long backtick runs reads in one pass, and an unclosed fence names no file", () => {
+    const run = "`".repeat(20_000);
+
+    expect(findingFileOf("a.ts", `At ${run}x${run}, outside this diff.`)).toBe("x");
+    expect(findingFileOf("a.ts", `At ${run}x${run.slice(1)}, outside this diff.`)).toBe("a.ts");
+  });
+
+  test("a place that holds backticks reads back from the longer fence movedLineOf writes", () => {
+    expect(findingFileOf("AGENTS.md", MOVED_NIT("a`b.ts:4"))).toBe("a`b.ts");
+    expect(findingFileOf("AGENTS.md", MOVED_NIT("`a.ts`"))).toBe("`a.ts`");
+  });
 });
 
 describe("nitPathsOf", () => {
@@ -279,6 +291,32 @@ describe("earlierThreadsOf", () => {
       },
       { where: "a.ts:?", finding: "**Nit**: a name", reply: "no answer (thread open)" },
     ]);
+  });
+
+  test("a placeholder escaped for GitHub reads back as written, in the finding and the answers", () => {
+    const escaped = `**Important**: reads review-&lt;head>.json\n\nwhy\n\n${markerOf("important")}`;
+
+    expect(
+      earlierThreadsOf(APP, [thread(escaped, [[AUTHOR, `Rejected: &lt;sha> holds it\n\n${AUTHOR_MARK}`]])]),
+    ).toEqual([
+      {
+        where: "a.ts:3",
+        finding: "**Important**: reads review-<head>.json",
+        reply: "Rejected: <sha> holds it (thread open)",
+      },
+    ]);
+  });
+
+  test("a human's answer is read as written: only the answers the Author escaped are read back", () => {
+    expect(earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous", String.raw`the pattern &lt;word matches`]])])).toEqual(
+      [
+        {
+          where: "a.ts:3",
+          finding: "**Important**: off by one",
+          reply: String.raw`the pattern &lt;word matches (thread open)`,
+        },
+      ],
+    );
   });
 
   test("the Author's machine account answers as the author: its replies reach the earlier findings", () => {

@@ -95,6 +95,15 @@ describe("answer", () => {
     );
   });
 
+  test("a placeholder in the answer is escaped for GitHub; code and the marks are not", async () => {
+    expect(await postedBodyOf("Rejected: <sha> is `review-<head>.json`")).toBe(
+      "body=Rejected: &lt;sha> is `review-<head>.json`\n\n<!-- lab-author-reject -->\n\n<!-- lab-author-reply -->",
+    );
+    expect(await postedBodyOf("Fixed in abc1234: reads <file>")).toBe(
+      "body=Fixed in abc1234: reads &lt;file>\n\n<!-- lab-author-reply -->",
+    );
+  });
+
   test("a failed reply resolves nothing", async () => {
     const { run, calls } = recording(1);
 

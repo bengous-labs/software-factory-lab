@@ -1336,6 +1336,14 @@ describe("why a PR is held, where the Owner looks", () => {
     expect(steps.at(-1)?.kind).toBe("land-gate");
   });
 
+  test("a placeholder in the hold is escaped for GitHub in the comment that asks the Owner", () => {
+    const record = reviewed(LIGHT, { ownerHold: "rewrites <file> paths." });
+
+    expect(commentsOf({ ...READY, record })).toEqual([
+      String.raw`This PR waits for the Owner's Land approval: rewrites &lt;file> paths. Add the label land-ok to land it.`,
+    ]);
+  });
+
   test("a PR the Owner hold holds asks the Owner with the hold, its final period left out", () => {
     const record = reviewed(LIGHT, { ownerHold: "Review round 3 posted 2 Important finding(s)." });
 
