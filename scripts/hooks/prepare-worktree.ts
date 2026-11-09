@@ -5,8 +5,9 @@
  *
  * At SessionStart, and before Claude creates a worktree (EnterWorktree, or an Agent call with
  * `isolation: worktree`), it points `origin/HEAD` at the remote's default branch: Claude Code branches a
- * `fresh` worktree from it, and its own fetch never moves it. Before a creation, a failure refuses the
- * call with exit 2, so no worktree starts from a stale base.
+ * `fresh` worktree from it, and its own fetch never moves it. Before a creation, any failure, a remote
+ * silent past twenty seconds included, refuses the call with exit 2, so no worktree starts from a stale
+ * base; so does an input the hook cannot read, since exit 1 would let the call run.
  *
  * Before a Bash, Edit or Write call, it runs `bun install --frozen-lockfile --ignore-scripts` in the
  * checkout the call works in, the edited file's or the cwd's, when that checkout has a `bun.lock`: bun
@@ -112,13 +113,45 @@ async function originHeadIn(root: string): Promise<string | null> {
   return ran.exitCode === 0 ? ran.stdout.toString().trim() : null;
 }
 
+/** How long the hook waits on the remote, well below the hook's own timeout, past which Claude Code runs the call. */
+const LS_REMOTE_TIMEOUT_MS = 20_000;
+
+/** What `git ls-remote --symref origin HEAD` printed, or why it printed nothing usable. */
+export interface RemoteHead {
+  readonly stdout: string;
+  readonly failure: string | null;
+}
+
+/** Runs `git ls-remote --symref origin HEAD` in `root`, killed past `timeoutMs`, and never waiting on a prompt. */
+export async function lsRemoteHead(root: string, timeoutMs: number): Promise<RemoteHead> {
+  const proc = Bun.spawn(["git", "ls-remote", "--symref", "origin", "HEAD"], {
+    cwd: root,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: timeoutMs,
+  });
+
+  const code = await proc.exited;
+
+  // A killed git leaves its transport (ssh, an ext:: command) holding the pipes open, so they are read only after a clean exit.
+  if (proc.signalCode !== null) {
+    return { stdout: "", failure: `\`git ls-remote --symref origin HEAD\` timed out after ${timeoutMs} ms` };
+  }
+
+  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+
+  return { stdout, failure: code === 0 ? null : `\`git ls-remote --symref origin HEAD\` failed: ${stderr.trim()}` };
+}
+
 /** Points `origin/HEAD` in `root` at the remote's default branch; returns why it could not, or null. */
 async function syncOriginHead(root: string): Promise<string | null> {
-  const remote = await $`git ls-remote --symref origin HEAD`.cwd(root).nothrow().quiet();
-  const target = originHeadTarget(remote.stdout.toString());
+  const remote = await lsRemoteHead(root, LS_REMOTE_TIMEOUT_MS);
+  const target = originHeadTarget(remote.stdout);
 
-  if (remote.exitCode !== 0 || target === null) {
-    return `\`git ls-remote --symref origin HEAD\` named no default branch: ${remote.stderr.toString().trim()}`;
+  if (remote.failure !== null || target === null) {
+    return remote.failure ?? "`git ls-remote --symref origin HEAD` named no default branch";
   }
 
   if ((await originHeadIn(root)) === target) {
@@ -174,8 +207,28 @@ async function prepare(input: HookInput, env: Readonly<Partial<Record<string, st
   return DONE;
 }
 
+/**
+ * The hook's outcome on `stdin`. Claude Code runs the call when a hook throws, so a failure that leaves the
+ * base unknown exits 2: an input it cannot read, and any error before a worktree creation.
+ */
+async function outcomeOf(stdin: string, env: Readonly<Partial<Record<string, string>>>): Promise<HookRun> {
+  let input: HookInput;
+
+  try {
+    input = hookInputOf(stdin);
+  } catch (error) {
+    return { code: 2, stderr: `prepare-worktree could not read its input, so it refuses the call. ${String(error)}` };
+  }
+
+  try {
+    return await prepare(input, env);
+  } catch (error) {
+    return { code: planFor(input).syncOriginHead === "require" ? 2 : 1, stderr: `prepare-worktree: ${String(error)}` };
+  }
+}
+
 if (import.meta.main) {
-  const run = await prepare(hookInputOf(await Bun.stdin.text()), process.env);
+  const run = await outcomeOf(await Bun.stdin.text(), process.env);
 
   if (run.stderr !== "") {
     console.error(run.stderr);

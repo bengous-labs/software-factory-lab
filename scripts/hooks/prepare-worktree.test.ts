@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { $ } from "bun";
 
 import { fixtureEnv } from "../gates/fixture-env.ts";
-import { hookInputOf, originHeadTarget, planFor, STOP_FORK_FLAG } from "./prepare-worktree.ts";
+import { hookInputOf, lsRemoteHead, originHeadTarget, planFor, STOP_FORK_FLAG } from "./prepare-worktree.ts";
 
 const SCRIPT = join(import.meta.dir, "prepare-worktree.ts");
 
@@ -18,6 +18,13 @@ interface HookPayload {
   readonly tool_input?: Readonly<Record<string, string>>;
   readonly source?: string;
 }
+
+/** Runs the hook on `input` with no CLAUDE_PROJECT_DIR, which Claude Code never leaves unset. */
+const runWithoutProjectDir = (input: HookPayload) =>
+  $`bun ${SCRIPT} < ${Buffer.from(JSON.stringify(input))}`
+    .env(fixtureEnv({ ...process.env, CLAUDE_PROJECT_DIR: undefined }))
+    .nothrow()
+    .quiet();
 
 const preToolUse = (tool: string, toolInput: Record<string, string> = {}, cwd = "/repo") =>
   hookInputOf(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: toolInput, cwd }));
@@ -208,5 +215,75 @@ describe("the hook", () => {
     expect(create.exitCode).toBe(2);
     expect(create.stderr.toString()).toContain("prepare-worktree: origin/HEAD may be stale");
     expect(start.exitCode).toBe(1);
+  });
+
+  test("refuses with exit 2 an input it cannot read, since exit 1 would let the call run", async () => {
+    const ran = await $`bun ${SCRIPT} < ${Buffer.from("not json")}`
+      .env({ ...env, CLAUDE_PROJECT_DIR: clone })
+      .nothrow()
+      .quiet();
+
+    expect(ran.exitCode).toBe(2);
+    expect(ran.stderr.toString()).toContain("prepare-worktree could not read its input, so it refuses the call");
+  });
+
+  test("without CLAUDE_PROJECT_DIR, refuses a worktree creation with exit 2 and only reports before Bash", async () => {
+    const create = await runWithoutProjectDir({
+      hook_event_name: "PreToolUse",
+      tool_name: "EnterWorktree",
+      tool_input: {},
+      cwd: clone,
+    });
+
+    const bash = await runWithoutProjectDir({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: {},
+      cwd: clone,
+    });
+
+    expect(create.exitCode).toBe(2);
+    expect(create.stderr.toString()).toContain("CLAUDE_PROJECT_DIR is not set");
+    expect(bash.exitCode).toBe(1);
+  });
+});
+
+describe("lsRemoteHead", () => {
+  const env = fixtureEnv(process.env);
+  let lab = "";
+
+  beforeAll(async () => {
+    lab = mkdtempSync(join(tmpdir(), "ls-remote-head-"));
+    await $`git init -q --bare -b dev remote.git`.cwd(lab).env(env).quiet();
+    await $`git init -q answering`.cwd(lab).env(env).quiet();
+    await $`git remote add origin ${join(lab, "remote.git")}`.cwd(join(lab, "answering")).env(env).quiet();
+    await $`git init -q silent`.cwd(lab).env(env).quiet();
+    await $`git remote add origin ${"ext::sleep 5"}`.cwd(join(lab, "silent")).env(env).quiet();
+    await $`git config protocol.ext.allow always`.cwd(join(lab, "silent")).env(env).quiet();
+  });
+
+  afterAll(() => {
+    rmSync(lab, { recursive: true, force: true });
+  });
+
+  test("prints the remote's HEAD for a remote that answers", async () => {
+    const seed = join(lab, "seed");
+
+    await $`git clone -q ${join(lab, "remote.git")} ${seed}`.env(env).quiet();
+    await $`git -c user.name=t -c user.email=t@t.test commit -q --allow-empty -m dev`.cwd(seed).env(env).quiet();
+    await $`git push -q origin HEAD:dev`.cwd(seed).env(env).quiet();
+
+    const head = await lsRemoteHead(join(lab, "answering"), 5000);
+
+    expect(head.failure).toBeNull();
+    expect(originHeadTarget(head.stdout)).toBe("refs/remotes/origin/dev");
+  });
+
+  test("gives up on a silent remote past its timeout, without waiting for it", async () => {
+    const started = performance.now();
+    const head = await lsRemoteHead(join(lab, "silent"), 300);
+
+    expect(head.failure).toBe("`git ls-remote --symref origin HEAD` timed out after 300 ms");
+    expect(performance.now() - started).toBeLessThan(3000);
   });
 });
