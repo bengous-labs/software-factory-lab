@@ -13,17 +13,12 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import { $ } from "bun";
-import { Schema } from "effect";
 
-import { decodeJson } from "../lib/json.ts";
+import { objectAt, optionalStringAt, parseJson, stringAt } from "../lib/plain-json.ts";
 
 const PROTECTED_BRANCH = "dev";
 
-/** The PreToolUse input, as far as this hook reads it. */
-const PreToolUseInput = Schema.Struct({
-  cwd: Schema.String,
-  tool_input: Schema.Struct({ command: Schema.optionalKey(Schema.String) }),
-});
+const SOURCE = "the PreToolUse input";
 
 /** The git global options that take their value as the next word. */
 const VALUED_OPTIONS = new Set(["-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"]);
@@ -37,9 +32,11 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 
 /** The Bash command the tool call on `stdin` runs, and the directory it runs in. */
 export function bashCallOf(stdin: string) {
-  const input = decodeJson(PreToolUseInput, "the PreToolUse input", stdin);
+  const input = objectAt(SOURCE, parseJson(SOURCE, stdin));
+  const cwd = stringAt(SOURCE, input, "cwd");
+  const toolInput = objectAt(SOURCE, input["tool_input"], ["tool_input"]);
 
-  return { command: input.tool_input.command ?? "", cwd: input.cwd };
+  return { command: optionalStringAt(SOURCE, toolInput, "command", ["tool_input"]) ?? "", cwd };
 }
 
 /** A shell control operator, newline read as `;`. */

@@ -18,37 +18,33 @@ import { realpathSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 
 import { $ } from "bun";
-import { Result, Schema } from "effect";
 
 import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../lib/checkout.ts";
 import type { Checkout } from "../lib/checkout.ts";
-import { decodeJson } from "../lib/json.ts";
+import type { Json } from "../lib/plain-json.ts";
+import { objectAt, optionalObjectAt, optionalStringAt, optionalStringsAt, parseJson } from "../lib/plain-json.ts";
 
 const LINTED = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"]);
 
 const FORMATTED = new Set([...LINTED, ".json", ".jsonc", ".md", ".yml", ".yaml", ".toml", ".css", ".html"]);
 
-/** The PostToolUse input, as far as this hook reads it. */
-const PostToolUseInput = Schema.Struct({ tool_input: Schema.Struct({ file_path: Schema.optionalKey(Schema.String) }) });
-
-const Bunfig = Schema.Struct({
-  fmt: Schema.optionalKey(Schema.Struct({ ignorePatterns: Schema.optionalKey(Schema.Array(Schema.String)) })),
-});
-
 /** The `file_path` the Edit or Write tool call on `stdin` names, or null when its input has none. */
 export function filePathOf(stdin: string): string | null {
-  return decodeJson(PostToolUseInput, "the PostToolUse input", stdin).tool_input.file_path ?? null;
+  const source = "the PostToolUse input";
+  const input = objectAt(source, parseJson(source, stdin));
+  const toolInput = objectAt(source, input["tool_input"], ["tool_input"]);
+
+  return optionalStringAt(source, toolInput, "file_path", ["tool_input"]) ?? null;
 }
 
 /** The `[fmt].ignorePatterns` of a `bunfig.toml`. */
 export function formatIgnorePatterns(bunfig: string): readonly string[] {
-  const decoded = Schema.decodeUnknownResult(Bunfig)(Bun.TOML.parse(bunfig));
+  const source = "bunfig.toml";
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: a parsed TOML document holds only tables, arrays, strings, numbers, booleans and dates, which the checks below read as JSON values.
+  const document = Bun.TOML.parse(bunfig) as Json;
+  const fmt = optionalObjectAt(source, objectAt(source, document), "fmt");
 
-  if (Result.isFailure(decoded)) {
-    throw new Error(`bunfig.toml: ${decoded.failure.message}`, { cause: decoded.failure });
-  }
-
-  return decoded.success.fmt?.ignorePatterns ?? [];
+  return (fmt && optionalStringsAt(source, fmt, "ignorePatterns", ["fmt"])) ?? [];
 }
 
 /** `filePath` relative to `root`, when it lies under `root` with an extension bun fmt formats; else null. */
