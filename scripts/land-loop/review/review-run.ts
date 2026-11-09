@@ -1,6 +1,7 @@
 /**
- * The review job's sessions: the Code review, then the security pass when the request asks for it, each
- * on its own prompt, merged into the job's result. `session` runs one review session on a prompt.
+ * The review job's sessions: the Code review, then the security pass when the request asks for it and the
+ * Code review answered, each on its own prompt, merged into the job's result. `session` runs one review
+ * session on a prompt.
  */
 
 import type { SessionAnswer } from "../ports/review.ts";
@@ -24,7 +25,10 @@ export async function reviewRunOf(
   runUrl: string,
 ): Promise<ReviewResult> {
   const code = await session(promptOf(request, guides, threads));
-  const security = request.security ? await session(securityPromptOf(request, guides, threads)) : null;
+
+  // A failed Code review fails the round whatever the security pass finds: it is not run.
+  const security =
+    request.security && code.kind === "answered" ? await session(securityPromptOf(request, guides, threads)) : null;
 
   return mergedResultOf(request, code, security, runUrl);
 }

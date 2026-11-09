@@ -34,7 +34,7 @@ export interface PostPlan {
   readonly preExisting: number;
 }
 
-/** The cap on Nits per review that REVIEW.md sets. */
+/** The cap on Nits per review that REVIEW.md sets, applied to each pass of a review: the Code review's and the security pass's. */
 const NIT_CAP = 3;
 
 /** The header of a file's new side; `/dev/null`, a deleted file's, does not start so. */

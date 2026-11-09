@@ -79,4 +79,15 @@ describe("reviewRunOf", () => {
     );
     expect(fake.prompts).toEqual([promptOf(request, GUIDES, THREADS), securityPromptOf(request, GUIDES, THREADS)]);
   });
+
+  test("a failed Code review session fails the round at once: the security pass does not run", async () => {
+    const request = { ...REQUEST, security: true };
+    const code: SessionAnswer = { ...answered([]), kind: "failed", error: "timed out after 1200000 ms" };
+    const fake = fakeSession([code]);
+
+    expect(await reviewRunOf(request, INPUTS, fake.session, RUN_URL)).toEqual(
+      mergedResultOf(request, code, null, RUN_URL),
+    );
+    expect(fake.prompts).toEqual([promptOf(request, GUIDES, THREADS)]);
+  });
 });
