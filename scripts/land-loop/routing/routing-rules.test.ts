@@ -178,6 +178,7 @@ describe("a change that only deletes files", () => {
   test("gets a light review when its factory and deep paths are all Markdown or text, as PR #75's skill deletion", () => {
     expect(answerOf(lab(deleting([".claude/skills/effect-ts/SKILL.md", "skills-lock.json"])))).toEqual({
       ...LIGHT,
+      security: true,
       reason:
         "deletes only Markdown and text files under a deep-review path: .claude/skills/effect-ts/SKILL.md; lands once CI is green and no Important is open",
     });
@@ -221,6 +222,7 @@ describe("a change that only deletes files", () => {
     expect(answerOf(lab(deleting([".github/workflows/old.yml"])))).toMatchObject(OWNER_DEEP);
     expect(answerOf(lab(deleting(["AGENTS.md"], LAB.lineCap + 1)))).toEqual({
       ...AUTO_DEEP,
+      security: true,
       reason: `${LAB.lineCap + 1} lines changed, past the ${LAB.lineCap}-line cap`,
     });
   });
@@ -249,7 +251,7 @@ describe("the breaking commits", () => {
         "a breaking commit: feat!: x",
       ],
     ] as const) {
-      expect(lab(input)).toEqual({ kind: "ruled", answer: { ...OWNER_DEEP, reason } });
+      expect(lab(input)).toEqual({ kind: "ruled", answer: { ...OWNER_DEEP, reason, security: false } });
     }
   });
 
@@ -284,16 +286,16 @@ describe("the breaking commits", () => {
 
 describe("the cap", () => {
   test("gives a change past it a deep review that lands auto, inside the factory's paths and outside, and asks no judge", () => {
-    for (const paths of [
-      ["app/src/cli.ts"],
-      ["scripts/land-loop/pr-watch.ts"],
-      ["scripts/land-loop/pr-watch.ts", "app/src/cli.ts"],
-    ]) {
+    for (const [paths, security] of [
+      [["app/src/cli.ts"], false],
+      [["scripts/land-loop/pr-watch.ts"], true],
+      [["scripts/land-loop/pr-watch.ts", "app/src/cli.ts"], true],
+    ] as const) {
       const verdict = lab({ paths, lines: 401, deletedPaths: [], messages: ["feat: x"] });
 
       expect(verdict).toEqual({
         kind: "ruled",
-        answer: { ...AUTO_DEEP, reason: "401 lines changed, past the 400-line cap" },
+        answer: { ...AUTO_DEEP, reason: "401 lines changed, past the 400-line cap", security },
       });
       expect(judgeAskOf(verdict, null)).toEqual({ kind: "none" });
     }
@@ -305,7 +307,7 @@ describe("the cap", () => {
     expect(routingRulesOf(policy, { paths: ["a.ts"], lines: 10, deletedPaths: [], messages: [] }).kind).toBe("judged");
     expect(routingRulesOf(policy, { paths: ["a.ts"], lines: 11, deletedPaths: [], messages: [] })).toEqual({
       kind: "ruled",
-      answer: { ...AUTO_DEEP, reason: "11 lines changed, past the 10-line cap" },
+      answer: { ...AUTO_DEEP, reason: "11 lines changed, past the 10-line cap", security: false },
     });
   });
 
@@ -362,9 +364,11 @@ describe("judgeAskOf", () => {
 
 describe("routingOf", () => {
   test("a change no rule names takes the Routing judge's Review depth, and lands auto whatever the judge answers", () => {
-    expect(routingOf(JUDGED, null, judge("auto"))).toEqual(judge("auto"));
-    expect(routingOf(JUDGED, null, judge("owner"))).toEqual(judge("auto"));
-    expect(routingOf(JUDGED, JUDGED, judge("owner"))).toEqual(judge("auto"));
+    const judged = { ...judge("auto"), security: false };
+
+    expect(routingOf(JUDGED, null, judge("auto"))).toEqual(judged);
+    expect(routingOf(JUDGED, null, judge("owner"))).toEqual(judged);
+    expect(routingOf(JUDGED, JUDGED, judge("owner"))).toEqual(judged);
   });
 
   test("a ruled change keeps the rules' answer, and asks no judge", () => {
@@ -385,10 +389,12 @@ describe("routingOf", () => {
   });
 
   test("a change no rule names whose Patch delta is ruled takes the delta's answer, asks no judge, and lands auto", () => {
-    const delta: RoutingAnswer = { ...RULED, reason: "the delta" };
+    const delta: RoutingAnswer = { ...RULED, reason: "the delta", security: false };
 
     expect(routingOf(JUDGED, { kind: "ruled", answer: delta }, null)).toEqual(delta);
-    expect(routingOf(JUDGED, { kind: "ruled", answer: { ...delta, land: "owner" } }, null)).toEqual(delta);
+    expect(routingOf(JUDGED, { kind: "ruled", answer: { ...delta, land: "owner", security: true } }, null)).toEqual(
+      delta,
+    );
   });
 
   test("a change the judge was not asked about, though its verdict needs it, fails", () => {
@@ -573,5 +579,57 @@ describe("withNitAnswers", () => {
     const unread = { ...READ, secondRound: false, reason: "the Patch delta touches no file: nothing to read again" };
 
     expect(nitsOnly(AFTER_CLEAN_ROUND_3, unread)).toBe(unread);
+  });
+});
+
+const securityOf = (paths: readonly string[], lines = 3): boolean | undefined =>
+  answerOf(lab({ paths, lines, deletedPaths: [], messages: ["feat: x"] }))?.security;
+
+const change = (paths: readonly string[], lines = 3): RoutingInput => ({
+  paths,
+  lines,
+  deletedPaths: [],
+  messages: [],
+});
+
+describe("the security pass", () => {
+  test("a change with a factory, Owner or deep-review path, or the factory config, gets it", () => {
+    expect(securityOf(["scripts/land-loop/merge-bot/main.ts"])).toBe(true);
+    expect(securityOf([".github/workflows/ci.yml"])).toBe(true);
+    expect(securityOf(["app/src/store/store.ts"])).toBe(true);
+    expect(securityOf([FACTORY_CONFIG_PATH])).toBe(true);
+    expect(securityOf(["scripts/land-loop/merge-bot/main.ts", "docs/usage.md"], LAB.lineCap + 1)).toBe(true);
+  });
+
+  test("a change with none of them gets none: the judge's answer, or the cap's", () => {
+    expect(lab(change(["app/src/commands/add.ts", "docs/usage.md"]))).toEqual({ kind: "judged" });
+    expect(securityOf(["app/src/commands/add.ts", "app/src/cli.ts"], LAB.lineCap + 1)).toBe(false);
+    expect(routingOf(JUDGED, null, judge("auto")).security).toBe(false);
+    expect(routingOf(JUDGED, JUDGED, { ...judge("auto"), security: true }).security).toBe(false);
+  });
+
+  test("a Patch delta keeps the whole PR's flag, whatever the delta touches", () => {
+    const whole = lab(change(["scripts/a.ts", "app/src/cli.ts"]));
+    const appOnly = lab(change(["app/src/cli.ts"], LAB.lineCap + 1));
+    const nothing = patchDeltaRulesOf(LAB, change([], 0));
+
+    expect(routingOf(whole, appOnly, null).security).toBe(true);
+    expect(routingOf(whole, nothing, null).security).toBe(true);
+    expect(routingOf(whole, JUDGED, judge("auto")).security).toBe(true);
+    expect(routingOf(JUDGED, lab(change(["scripts/a.ts"])), null).security).toBe(false);
+  });
+
+  test("a change is flagged exactly when one of its paths matches the config, ownerPaths, factoryPaths or deepReviewPaths", () => {
+    const risky = [FACTORY_CONFIG_PATH, ...LAB.ownerPaths, ...LAB.factoryPaths, ...LAB.deepReviewPaths];
+
+    fc.assert(
+      fc.property(CHANGE(fc.oneof(ANY_PATH, FACTORY_PATH, UNDER("app/src"), UNDER(".github"))), (input) => {
+        const verdict = lab(input);
+        const flagged = input.paths.some((path) => matches(risky, path));
+
+        expect(verdict.kind === "ruled" && verdict.answer.security === true).toBe(flagged);
+        expect(verdict.kind === "judged" || verdict.answer.security === flagged).toBe(true);
+      }),
+    );
   });
 });

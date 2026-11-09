@@ -5,7 +5,8 @@
  * lands without the Owner once CI is green and no Important is open. A change that only deletes files,
  * Markdown or text among them, gets a light review. A change that touches a path outside `factoryPaths`
  * goes to the Owner when one of its commits is breaking. A change past `lineCap` gets a deep Code review. The Routing judge answers the Review depth of the paths no rule names; it
- * never sets the Land route.
+ * never sets the Land route. A change with a path of `ownerPaths`, `factoryPaths` or `deepReviewPaths`,
+ * or the factory config, gets a security pass in each Review round.
  */
 
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
@@ -28,14 +29,12 @@ export interface RoutingInput {
 /** What the Routing rules make of a change: `ruled`, their answer stands; `judged`, the Routing judge answers. */
 export type RulesVerdict = { readonly kind: "ruled"; readonly answer: RoutingAnswer } | { readonly kind: "judged" };
 
-const ruled = (
-  land: RoutingAnswer["land"],
-  reason: string,
-  review: RoutingAnswer["review"] = "deep",
-): RulesVerdict => ({
-  kind: "ruled",
-  answer: { land, review, secondRound: true, reason, model: null },
-});
+const ruledOf =
+  (security: boolean) =>
+  (land: RoutingAnswer["land"], reason: string, review: RoutingAnswer["review"] = "deep"): RulesVerdict => ({
+    kind: "ruled",
+    answer: { land, review, secondRound: true, reason, model: null, security },
+  });
 
 /** The paths that match at least one of `globs`. */
 export function matching(globs: readonly string[], paths: readonly string[]): readonly string[] {
@@ -55,6 +54,8 @@ export function routingRulesOf(
   }
 
   const owner = matching([FACTORY_CONFIG_PATH, ...policy.ownerPaths], paths);
+  const deep = matching([...policy.factoryPaths, ...policy.deepReviewPaths], paths);
+  const ruled = ruledOf(owner.length + deep.length > 0);
 
   if (owner.length > 0) {
     return ruled("owner", `touches a path the Owner lands: ${listed(owner)}`);
@@ -69,8 +70,6 @@ export function routingRulesOf(
   if (lines > policy.lineCap) {
     return ruled("auto", `${lines} lines changed, past the ${policy.lineCap}-line cap`);
   }
-
-  const deep = matching([...policy.factoryPaths, ...policy.deepReviewPaths], paths);
 
   if (deep.length === 0) {
     return { kind: "judged" };
@@ -128,7 +127,7 @@ export function judgeAskOf(verdict: RulesVerdict, patchDelta: RulesVerdict | nul
  * when it asked nothing. The rules alone set the Land route: the judge's answer lands `auto`. On a Patch
  * delta, a ruled change keeps the rules' answer and is read again when its ruled delta says so, when
  * the judge says so when it is judged; a judged change whose delta is ruled takes the delta's Review depth,
- * and still lands `auto`.
+ * and still lands `auto`. The security pass is the whole change's: a judged change gets none.
  */
 export function routingOf(
   verdict: RulesVerdict,
@@ -140,7 +139,7 @@ export function routingOf(
       throw new Error("the Routing judge was not asked about a judged change");
     }
 
-    return { ...judge, land: "auto" };
+    return { ...judge, land: "auto", security: false };
   };
 
   if (patchDelta === null) {
@@ -148,7 +147,7 @@ export function routingOf(
   }
 
   if (verdict.kind === "judged") {
-    return patchDelta.kind === "ruled" ? { ...patchDelta.answer, land: "auto" } : judged();
+    return patchDelta.kind === "ruled" ? { ...patchDelta.answer, land: "auto", security: false } : judged();
   }
 
   return {

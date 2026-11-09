@@ -30,13 +30,17 @@ export const SEGMENT = fc.stringMatching(/^[\w.-]{1,12}$/u).filter((segment) => 
 export const UNDER = (directory: string): fc.Arbitrary<string> =>
   fc.array(SEGMENT, { minLength: 1, maxLength: 4 }).map((segments) => [directory, ...segments].join("/"));
 
-export const ROUTING: fc.Arbitrary<RoutingAnswer> = fc.record({
-  land: fc.constantFrom("auto", "owner"),
-  review: fc.constantFrom("none", "light", "deep"),
-  secondRound: fc.boolean(),
-  reason: fc.string(),
-  model: fc.option(fc.string(), { nil: null }),
-});
+export const ROUTING: fc.Arbitrary<RoutingAnswer> = fc.record(
+  {
+    land: fc.constantFrom("auto", "owner"),
+    review: fc.constantFrom("none", "light", "deep"),
+    secondRound: fc.boolean(),
+    reason: fc.string(),
+    model: fc.option(fc.string(), { nil: null }),
+    security: fc.boolean(),
+  },
+  { requiredKeys: ["land", "review", "secondRound", "reason", "model"] },
+);
 
 export const PATCH = fc.constantFrom("patch-1", "patch-2");
 
@@ -92,6 +96,7 @@ const ARBITRARY_FINDING: fc.Arbitrary<ReportedFinding> = fc.record({
   summary: fc.constant("s"),
   failureScenario: fc.constant("f"),
   breaks: fc.constant(null),
+  pass: fc.constantFrom("code", "security"),
 });
 
 const RUN_FACTS = {
@@ -103,6 +108,7 @@ const RUN_FACTS = {
     round: ROUND,
     model: fc.constant("sonnet"),
     effort: fc.constantFrom("medium"),
+    security: fc.boolean(),
   }),
   model: fc.constant(null),
   claudeCodeVersion: fc.constant(null),

@@ -436,7 +436,7 @@ async function runLocalReview(
 
   const guides = { review: await trunkFile("REVIEW.md"), project: await trunkFile("AGENTS.md") };
   const { model, effort } = REVIEW_SETTINGS.deep;
-  const request: ReviewRequest = { pr: 0, head, base, patch: "local", round: 1, model, effort };
+  const request: ReviewRequest = { pr: 0, head, base, patch: "local", round: 1, model, effort, security: false };
   // The head has no review yet, so every review of the branch is an earlier head's: its answers carry forward.
   const earlier = answeredImportantsOf(await branchReviews(deps, cwd, stateDir));
   const started = deps.now();

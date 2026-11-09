@@ -860,6 +860,7 @@ async function perform(
         patch,
         round: step.reviewRound,
         ...REVIEW_SETTINGS[step.depth],
+        security: step.security,
       };
 
       const path = `repos/${env.repo}/actions/workflows/${REVIEW_WORKFLOW}/dispatches`;

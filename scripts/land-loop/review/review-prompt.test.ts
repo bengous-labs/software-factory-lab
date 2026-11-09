@@ -17,6 +17,7 @@ const REQUEST: ReviewRequest = {
   round: 1,
   model: "sonnet",
   effort: "medium",
+  security: false,
 };
 
 const APP = "bengous-labs-agents";

@@ -30,6 +30,9 @@ on:
       effort:
         description: The effort level of /code-review
         required: true
+      security:
+        description: Whether a security pass runs after the Code review, true or false
+        required: true
 
 # The number alone: the Merge bot reads it back from `workflow_run.display_title`.
 run-name: ${{ inputs.pr }}
@@ -50,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     # A last resort: the runner times out first and writes the cause, while a job timeout cancels the job
     # with no result.
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       REVIEW_PR: ${{ inputs.pr }}
       REVIEW_HEAD: ${{ inputs.head }}
@@ -59,6 +62,7 @@ jobs:
       REVIEW_ROUND: ${{ inputs.round }}
       REVIEW_MODEL: ${{ inputs.model }}
       REVIEW_EFFORT: ${{ inputs.effort }}
+      REVIEW_SECURITY: ${{ inputs.security }}
     steps:
       - name: Checkout the dispatched ref
         uses: actions/checkout@v7.0.1
@@ -96,9 +100,11 @@ jobs:
           test -f review-result.json || jq -n \
             --argjson pr "$REVIEW_PR" --arg head "$REVIEW_HEAD" --arg base "$REVIEW_BASE" --arg patch "$REVIEW_PATCH" \
             --argjson round "$REVIEW_ROUND" --arg model "$REVIEW_MODEL" --arg effort "$REVIEW_EFFORT" \
+            --arg security "$REVIEW_SECURITY" \
             --arg runUrl "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             '{kind: "failed", cause: "the review job stopped before the runner wrote its result",
-              request: {pr: $pr, head: $head, base: $base, patch: $patch, round: $round, model: $model, effort: $effort},
+              request: {pr: $pr, head: $head, base: $base, patch: $patch, round: $round, model: $model, effort: $effort,
+                security: ($security == "true")},
               model: null, claudeCodeVersion: null, tokens: null, runUrl: $runUrl}' > review-result.json
 
       - name: Upload the result

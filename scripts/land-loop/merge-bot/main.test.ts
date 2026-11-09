@@ -244,7 +244,16 @@ const WHERE = { repo: "o/r", cwd: "/tmp" };
 const ASKED: ReviewState = { kind: "requested", patch: "p1", round: 1, runId: 7, at: "2026-11-07T11:00:00.000Z" };
 
 const RESULT = resultOf(
-  { pr: 12, head: "a".repeat(40), base: "b".repeat(40), patch: "p1", round: 1, model: "opus", effort: "high" },
+  {
+    pr: 12,
+    head: "a".repeat(40),
+    base: "b".repeat(40),
+    patch: "p1",
+    round: 1,
+    model: "opus",
+    effort: "high",
+    security: false,
+  },
   {
     kind: "answered",
     structured: { findings: [] },

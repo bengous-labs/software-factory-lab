@@ -166,7 +166,8 @@ export function ownerWaitOf(pr: PrData): number {
 
 const ROUND = /^Review round (\d+) /u;
 
-const IMPORTANT_COUNT = /: (\d+) important, \d+ nit\./u;
+/** A round's counts as `post-plan.ts` writes them: the Code review's, then the security pass's when it ran. */
+const IMPORTANT_COUNT = /: (\d+) important, \d+ nit(?:; security: (\d+) important, \d+ nit)?\./u;
 
 /** The latest review of each round the App posted, keyed by its round number. */
 function latestRounds(reviews: PrData["reviews"]): ReadonlyMap<number, string> {
@@ -186,7 +187,11 @@ function latestRounds(reviews: PrData["reviews"]): ReadonlyMap<number, string> {
 export const roundsOf = (reviews: PrData["reviews"]): number => latestRounds(reviews).size;
 
 export const importantFoundOf = (reviews: PrData["reviews"]): number =>
-  [...latestRounds(reviews).values()].reduce((sum, body) => sum + Number(IMPORTANT_COUNT.exec(body)?.[1] ?? 0), 0);
+  [...latestRounds(reviews).values()].reduce((sum, body) => {
+    const [, code = "0", security = "0"] = IMPORTANT_COUNT.exec(body) ?? [];
+
+    return sum + Number(code) + Number(security);
+  }, 0);
 
 export interface FindingAnswers {
   readonly fixed: number;

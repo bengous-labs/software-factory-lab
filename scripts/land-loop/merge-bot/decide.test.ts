@@ -121,10 +121,27 @@ describe("decide", () => {
 
     expect(stepsOf(READY)).toEqual([
       { kind: "labels", route: "auto", depth: "light" },
-      { kind: "request-review", depth: "light", reviewRound: 1 },
+      { kind: "request-review", depth: "light", reviewRound: 1, security: false },
       { kind: "review-check", check: running },
       { kind: "land-gate", check: running },
     ]);
+  });
+
+  test("the review asks a security pass exactly when the patch's Routing answer says so; an answer with no flag asks none", () => {
+    const securityOf = (routing: RoutingAnswer, record = READY.record): boolean | null => {
+      const review = stepsOf({ ...READY, record: { ...record, triage: { [P1]: routing } } }).find(
+        (step) => step.kind === "request-review",
+      );
+
+      return review?.kind === "request-review" ? review.security : null;
+    };
+
+    const round2 = { ...READY.record, reviewedPatch: "patch-0", reviewRounds: 1 };
+
+    expect(securityOf({ ...LIGHT, security: true })).toBe(true);
+    expect(securityOf({ ...LIGHT, security: false })).toBe(false);
+    expect(securityOf(LIGHT)).toBe(false);
+    expect(securityOf({ ...LIGHT, secondRound: true, security: true }, round2)).toBe(true);
   });
 
   test("review:none sets the Review check green at once, and a land:auto PR goes to the queue", () => {
@@ -679,6 +696,14 @@ describe("the stored record", () => {
     });
   });
 
+  test("a Routing answer's security flag is stored and read back; a record written before it reads with none", () => {
+    const secured = { ...EMPTY_RECORD, triage: { [P1]: { ...LIGHT, security: true } } };
+
+    expect(recordOfJson(JSON.stringify(storedOfRecord(secured)))).toEqual(secured);
+    expect(recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, land: "auto" } } })).triage[P1]).toEqual(LIGHT);
+    expect(() => recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, security: "yes" } } }))).toThrow("security");
+  });
+
   test("a record outside its schema is refused, naming the field", () => {
     expect(() => recordOfJson(JSON.stringify({ reviewRounds: "1" }))).toThrow(
       'the Merge bot state record: Expected number\n  at ["reviewRounds"]',
@@ -894,6 +919,7 @@ const finding = (severity: ReportedFinding["severity"]): ReportedFinding => ({
   summary: "s",
   failureScenario: "f",
   breaks: null,
+  pass: "code",
 });
 
 const completed = (result: ReviewResult | null, conclusion = "success"): ReviewJob => ({
@@ -923,6 +949,7 @@ describe("the review job's run", () => {
     round: 1 as const,
     model: "sonnet",
     effort: "medium" as const,
+    security: false,
   };
 
   const FACTS = {
@@ -966,6 +993,11 @@ describe("the review job's run", () => {
     const late = new Date(Date.parse(AT) + REVIEW_DEADLINE_MS + 1).toISOString();
     const waiting = { ...asked, reviewJob: { kind: "running" as const } };
 
+    expect(REVIEW_DEADLINE_MS).toBe(65 * 60_000);
+    expect(kinds({ ...waiting, now: new Date(Date.parse(AT) + 60 * 60_000).toISOString() })).toEqual([
+      "review-check",
+      "land-gate",
+    ]);
     expect(kinds({ ...waiting, now: deadline })).toEqual(["review-check", "land-gate"]);
     expect(stepsOf({ ...waiting, now: late })).toEqual([
       {
@@ -1071,7 +1103,7 @@ describe("the review job's run", () => {
     expect(stepsOf({ ...stale, reviewJob: completed(reported()) }).slice(0, 3)).toEqual([
       { kind: "record", record: READY.record },
       { kind: "labels", route: "auto", depth: "light" },
-      { kind: "request-review", depth: "light", reviewRound: 1 },
+      { kind: "request-review", depth: "light", reviewRound: 1, security: false },
     ]);
     expect(reviewStepsOf(READY, READY.record)).toEqual({ record: READY.record, end: null });
   });
@@ -1083,7 +1115,7 @@ describe("the review job's run", () => {
       expect(stepsOf(gone).slice(0, 3)).toEqual([
         { kind: "record", record: READY.record },
         { kind: "labels", route: "auto", depth: "light" },
-        { kind: "request-review", depth: "light", reviewRound: 1 },
+        { kind: "request-review", depth: "light", reviewRound: 1, security: false },
       ]);
     }
   });
@@ -1137,6 +1169,14 @@ describe("the review job's run", () => {
 
     expect(once.importantByRound).toEqual([0]);
     expect(afterReview(once, round1)).toEqual(once);
+  });
+
+  test("a round's Important count holds the security pass's Importants with the Code review's", () => {
+    const security = { ...finding("important"), pass: "security" as const };
+
+    expect(
+      afterReview(READY.record, reported(finding("important"), security, finding("nit"))).importantByRound,
+    ).toEqual([2]);
   });
 
   test("a round counted over a record that has no count for an earlier round reads back, the missing one as null", () => {

@@ -109,6 +109,16 @@ describe("openImportantOf", () => {
     ).toBe(2);
     expect(openImportantOf(APP, [])).toBe(0);
   });
+
+  test("a security pass's Important counts as any other, through the same marker, and reaches the next round's earlier findings", () => {
+    const security = `**Important (security)**: the token reaches the log\n\nwhy\n\n${markerOf("important")}`;
+
+    expect(severityOfBody(security)).toBe("important");
+    expect(openImportantOf(APP, [thread(security), thread(IMPORTANT)])).toBe(2);
+    expect(earlierThreadsOf(APP, [thread(security)]).map((earlier) => earlier.finding)).toEqual([
+      "**Important (security)**: the token reaches the log",
+    ]);
+  });
 });
 
 const FIXED = `Fixed in abc1234: count the rejections apart\n\n${AUTHOR_MARK}`;
@@ -189,6 +199,7 @@ const REQUEST: ReviewRequest = {
   round: 1,
   model: "claude-opus-5-5",
   effort: "high",
+  security: false,
 };
 
 /** A Nit's comment as `post-plan.ts` writes it once its finding is anchored away from `place`. */

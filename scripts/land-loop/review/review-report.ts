@@ -4,7 +4,7 @@
  * shape is an external format: the Merge bot reads it from another run.
  */
 
-import { Effect, Result, Schema, SchemaGetter } from "effect";
+import { Effect, Result, Schema, SchemaGetter, SchemaTransformation } from "effect";
 
 import { TokenCounts, tokensText } from "../../lib/tokens.ts";
 import type { SessionAnswer } from "../ports/review.ts";
@@ -30,6 +30,8 @@ const ReviewRequestFields = {
   round: Round,
   model: Schema.String,
   effort: Effort,
+  /** Whether a security pass runs after the Code review; an artifact written before it has none, read as false. */
+  security: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 };
 
 export const ReviewRequest = Schema.Struct(ReviewRequestFields);
@@ -43,6 +45,15 @@ export const ReviewInputs = Schema.Struct({
   ...ReviewRequestFields,
   pr: IntFromString,
   round: Schema.FiniteFromString.pipe(Schema.decodeTo(Round)),
+  security: Schema.Literals(["true", "false"]).pipe(
+    Schema.decodeTo(
+      Schema.Boolean,
+      SchemaTransformation.transform({
+        decode: (flag) => flag === "true",
+        encode: (flag) => (flag ? "true" : "false"),
+      }),
+    ),
+  ),
 });
 
 const Location = Schema.Struct({ file: Schema.String, line: Schema.NullOr(Schema.Int) });
@@ -56,6 +67,8 @@ const ReportedFinding = Schema.Struct({
   failureScenario: Schema.String,
   /** Where the defect shows, when that is another place; null when it shows on the causing line. */
   breaks: Schema.NullOr(Location),
+  /** The pass that reported it; an artifact written before the security pass has none, read as the Code review's. */
+  pass: Schema.Literals(["code", "security"]).pipe(Schema.withDecodingDefaultKey(Effect.succeed("code" as const))),
 });
 
 export type ReportedFinding = typeof ReportedFinding.Type;
@@ -180,11 +193,57 @@ export function resultOf(request: ReviewRequest, answer: SessionAnswer, runUrl: 
           summary: finding.summary,
           failureScenario: finding.failure_scenario,
           breaks: finding.breaks,
+          pass: "code",
         })),
       },
       ...facts,
     }),
   });
+}
+
+const summed = (a: TokenCounts | null, b: TokenCounts | null): TokenCounts | null =>
+  a === null || b === null
+    ? (a ?? b)
+    : {
+        input: a.input + b.input,
+        output: a.output + b.output,
+        cacheRead: a.cacheRead + b.cacheRead,
+        cacheCreation: a.cacheCreation + b.cacheCreation,
+      };
+
+/**
+ * The job's result from the Code review's session and the security pass's, null when none ran: the Code
+ * review's findings, then the security pass's, and the tokens of both. A failed session fails the result,
+ * the security pass's cause prefixed.
+ */
+export function mergedResultOf(
+  request: ReviewRequest,
+  code: SessionAnswer,
+  security: SessionAnswer | null,
+  runUrl: string,
+): ReviewResult {
+  const codeResult = resultOf(request, code, runUrl);
+
+  if (security === null) {
+    return codeResult;
+  }
+
+  const securityResult = resultOf(request, security, runUrl);
+  const tokens = summed(codeResult.tokens, securityResult.tokens);
+
+  if (codeResult.kind === "failed") {
+    return { ...codeResult, tokens };
+  }
+
+  if (securityResult.kind === "failed") {
+    const { report: _report, ...facts } = codeResult;
+
+    return { ...facts, kind: "failed", cause: `security pass: ${securityResult.cause}`, tokens };
+  }
+
+  const securityFindings = securityResult.report.findings.map((finding) => ({ ...finding, pass: "security" as const }));
+
+  return { ...codeResult, report: { findings: [...codeResult.report.findings, ...securityFindings] }, tokens };
 }
 
 /** One line for the job's log: the request, what ran, and the findings by severity or the cause. */
