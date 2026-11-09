@@ -3,12 +3,14 @@
 /**
  * The hook that keeps a worktree as ready as the main checkout, on SessionStart and PreToolUse.
  *
- * At SessionStart, and before Claude creates a worktree (EnterWorktree, or an Agent call with
- * `isolation: worktree`), it points `origin/HEAD` at the remote's default branch: Claude Code branches a
- * `fresh` worktree from it, and its own fetch never moves it. Before a creation, any failure, a remote
- * silent past twenty seconds included, refuses the call with exit 2, so no worktree starts from a stale
- * base, an unreadable input or no checkout at `$CLAUDE_PROJECT_DIR` included. An unreadable input for any
- * other tool only reports, with exit 1, so the session keeps the commands that would fix the hook.
+ * It points `origin/HEAD` at the remote's default branch, from which Claude Code branches a `fresh`
+ * worktree and which its own fetch never moves: at SessionStart, where a failure only reports, and before
+ * a call that creates a worktree, EnterWorktree with no `path` or an Agent call with `isolation: worktree`,
+ * where any failure refuses the call with exit 2: a remote silent past twenty seconds, whose whole process
+ * group is then killed, an unreadable input, or no checkout at `$CLAUDE_PROJECT_DIR`. An Agent call whose
+ * definition sets the isolation names none, so its worktree relies on the SessionStart sync; a
+ * `claude --worktree` session creates its worktree before any hook runs. An unreadable input for any other
+ * tool only reports, with exit 1, so the session keeps the commands that would fix the hook.
  *
  * Before a Bash, Edit or Write call, it runs `bun install --frozen-lockfile --ignore-scripts` in the
  * checkout the call works in, the edited file's or the cwd's, when that checkout has a `bun.lock`: bun
@@ -44,6 +46,7 @@ const HookInput = Schema.Union([
     tool_input: Schema.Struct({
       isolation: Schema.optionalKey(Schema.String),
       file_path: Schema.optionalKey(Schema.String),
+      path: Schema.optionalKey(Schema.String),
     }),
   }),
 ]);
@@ -69,7 +72,11 @@ export function planFor(input: HookInput): Plan {
 
   const { tool_name: tool, tool_input: toolInput, cwd } = input;
 
-  if (tool === "EnterWorktree" || (tool === "Agent" && toolInput.isolation === "worktree")) {
+  // EnterWorktree with a `path` switches into an existing worktree: it creates none and branches from no base.
+  if (
+    (tool === "EnterWorktree" && toolInput.path === undefined) ||
+    (tool === "Agent" && toolInput.isolation === "worktree")
+  ) {
     return { syncOriginHead: "require", installFrom: null };
   }
 
@@ -149,20 +156,37 @@ export interface RemoteHead {
   readonly failure: string | null;
 }
 
-/** Runs `git ls-remote --symref origin HEAD` in `root`, killed past `timeoutMs`, and never waiting on a prompt. */
+/**
+ * Runs `git ls-remote --symref origin HEAD` in `root`, never waiting on a prompt. Past `timeoutMs` it kills
+ * git's whole process group: git runs in its own session, so its transport (ssh, an ext:: command) dies
+ * with it, and no terminal is left to prompt on.
+ */
 export async function lsRemoteHead(root: string, timeoutMs: number): Promise<RemoteHead> {
   const proc = Bun.spawn(["git", "ls-remote", "--symref", "origin", "HEAD"], {
     cwd: root,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    detached: true,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    timeout: timeoutMs,
   });
+
+  const timer = setTimeout(() => {
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch (error) {
+      // ESRCH: the group ended between the timer firing and the kill.
+      if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) {
+        throw error;
+      }
+    }
+  }, timeoutMs);
 
   const code = await proc.exited;
 
-  // A killed git leaves its transport (ssh, an ext:: command) holding the pipes open, so they are read only after a clean exit.
+  clearTimeout(timer);
+
+  // Only the timer kills git; its pipes stay unread, since a transport it spawned may still hold them.
   if (proc.signalCode !== null) {
     return { stdout: "", failure: `\`git ls-remote --symref origin HEAD\` timed out after ${timeoutMs} ms` };
   }

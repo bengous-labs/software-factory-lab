@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,6 +80,13 @@ describe("planFor", () => {
       installFrom: "/repo/.claude/worktrees/w",
     });
     expect(planFor(preToolUse("Edit", {}))).toEqual({ syncOriginHead: "none", installFrom: "/repo" });
+  });
+
+  test("leaves origin/HEAD alone for EnterWorktree with a path, which switches into an existing worktree", () => {
+    expect(planFor(preToolUse("EnterWorktree", { path: "/repo/.claude/worktrees/w" }))).toEqual({
+      syncOriginHead: "none",
+      installFrom: null,
+    });
   });
 
   test("does nothing for a subagent in the session's checkout, a remote one, or another tool", () => {
@@ -304,9 +311,17 @@ describe("the hook", () => {
 
     const start = await runHook({ hook_event_name: "SessionStart", cwd: clone });
 
+    const reenter = await runHook({
+      hook_event_name: "PreToolUse",
+      tool_name: "EnterWorktree",
+      tool_input: { path: join(clone, ".claude", "worktrees", "w") },
+      cwd: clone,
+    });
+
     expect(create.exitCode).toBe(2);
     expect(create.stderr.toString()).toContain("prepare-worktree: origin/HEAD may be stale");
     expect(start.exitCode).toBe(1);
+    expect(reenter.exitCode).toBe(0);
   });
 
   test("refuses an unreadable input naming EnterWorktree with exit 2, and only reports one naming Bash", async () => {
@@ -355,6 +370,18 @@ describe("the hook", () => {
   });
 });
 
+/** Whether a `sleep <duration>` process is running, read from /proc. */
+function runningSleep(duration: string): boolean {
+  return readdirSync("/proc")
+    .filter((entry) => /^\d+$/u.test(entry))
+    .some((pid) => {
+      const cmdline = join("/proc", pid, "cmdline");
+
+      // A process may end between the listing and the read.
+      return existsSync(cmdline) && readFileSync(cmdline, "utf8") === `sleep\0${duration}\0`;
+    });
+}
+
 describe("lsRemoteHead", () => {
   const env = fixtureEnv(process.env);
   let lab = "";
@@ -365,7 +392,7 @@ describe("lsRemoteHead", () => {
     await $`git init -q answering`.cwd(lab).env(env).quiet();
     await $`git remote add origin ${join(lab, "remote.git")}`.cwd(join(lab, "answering")).env(env).quiet();
     await $`git init -q silent`.cwd(lab).env(env).quiet();
-    await $`git remote add origin ${"ext::sleep 5"}`.cwd(join(lab, "silent")).env(env).quiet();
+    await $`git remote add origin ${"ext::sleep 37.123"}`.cwd(join(lab, "silent")).env(env).quiet();
     await $`git config protocol.ext.allow always`.cwd(join(lab, "silent")).env(env).quiet();
   });
 
@@ -392,5 +419,12 @@ describe("lsRemoteHead", () => {
 
     expect(head.failure).toBe("`git ls-remote --symref origin HEAD` timed out after 300 ms");
     expect(performance.now() - started).toBeLessThan(3000);
+  });
+
+  test("kills the silent remote's transport along with git, leaving no process behind", async () => {
+    await lsRemoteHead(join(lab, "silent"), 300);
+    await Bun.sleep(200);
+
+    expect(runningSleep("37.123")).toBe(false);
   });
 });
