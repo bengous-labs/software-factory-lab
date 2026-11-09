@@ -3,8 +3,8 @@
  * dispatched ref. It reviews the checkout of the pull request's head under `pr/` and writes the job's
  * result to `review-result.json`, which the workflow uploads as its artifact. On every Review round it puts
  * the earlier findings `read-threads.ts` wrote to `review-threads.json` in the prompt. When the request
- * asks it, a security pass runs after the Code review with the same tools and guard, and the result holds
- * the findings of both. The review sessions get a fresh Claude Code configuration and no variable of the
+ * asks it and the Code review reported, a security pass runs after it with the same tools and guard, and
+ * the result holds the findings of both (`review-run.ts`). The review sessions get a fresh Claude Code configuration and no variable of the
  * job but `PATH`, `HOME` and the OAuth token.
  */
 
