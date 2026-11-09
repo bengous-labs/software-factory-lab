@@ -12,6 +12,6 @@ paths:
 - `fix-edited.ts` and `install-deps.ts` act only on a checkout of the project's repository, found by its git common directory. The Stop hook runs `bun check` in whatever checkout `cwd` is in.
 - A subagent fires `SubagentStop` with `cwd` in its worktree, never `Stop`: the Stop hook does not run for it.
 - A Bash command that writes a file fires no `PostToolUse` on `Edit|Write`. The Stop checks catch its format.
-- A hook that must stop a call exits 2 or prints a deny. Exit 1, an uncaught throw and a timeout let the call run.
+- A hook that must stop a call exits 2 or prints a deny. By default a hook that fails, with exit 1 or an uncaught throw, or times out lets the call run. A guard that must also stop the call when it fails itself sets `"onFailure": "block"` on its entry in `.claude/settings.json`.
 - Each worktree gets its own `node_modules`: `install-deps.ts` installs it at SessionStart, SubagentStart and after EnterWorktree, the three events whose `cwd` is a new worktree, and does nothing in a Stop hook fork. The packages it places are copies, not hardlinks into bun's cache, so a write to them cannot reach the main checkout's `node_modules`, from which the hooks load. An install a session runs itself uses bun's default, which hardlinks on Linux.
 - `worktree.baseRef: fresh` branches a worktree from `origin/HEAD`, which Claude Code's own fetch never moves. A clone whose `origin/HEAD` names another branch than the Trunk runs `git remote set-head origin --auto` once.
