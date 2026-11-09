@@ -437,9 +437,15 @@ export const LOCAL_REVIEW_CLOSE = "<!-- /lab-local-review -->";
 const reviewedOf = (reviews: readonly ReviewedHead[]): Array<ReviewedHead & { readonly review: LocalReviewRecord }> =>
   reviews.flatMap((entry) => ("failed" in entry.review ? [] : [{ ...entry, review: entry.review }]));
 
-/** `text` on one line with no comment delimiter, so an entry can never open or close the block. */
-const oneLine = (text: string): string =>
-  text.replaceAll("<!--", "").replaceAll("-->", "").replaceAll(/\s+/gu, " ").trim();
+/** `text` without comment delimiters, removed until none is left: a removal can join its neighbours into a new one. */
+function withoutDelimiters(text: string): string {
+  const removed = text.replaceAll("<!--", "").replaceAll("-->", "");
+
+  return removed === text ? text : withoutDelimiters(removed);
+}
+
+/** `text` on one line with no comment delimiter, so an entry can never open or close the block. A delimiter holds no space, so the collapse after the removal forms none. */
+const oneLine = (text: string): string => withoutDelimiters(text).replaceAll(/\s+/gu, " ").trim();
 
 /** An answered Important of a reviewed head, as an earlier finding; `rejected` tells a rejection from a fix. */
 export type AnsweredImportant = EarlierThread & { readonly rejected: boolean };

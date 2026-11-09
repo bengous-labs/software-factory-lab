@@ -721,6 +721,44 @@ describe("the local review", () => {
     expect(publishing(calls)).toEqual([]);
   });
 
+  test("a review run in this stop ignores a shown record an earlier run left, and blocks with its findings", async () => {
+    const { run, calls, root } = worldOf({ paths: RISKY });
+    mkdirSync(stateOf(root), { recursive: true });
+    writeFileSync(join(stateOf(root), `review-${HEAD}-shown.json`), "[1,2]\n");
+
+    const fake = fakeSession(answered(TWO_AND_A_NIT), calls);
+    const deps = { run, env: RISKY_ENV, now: () => 0, reviewSession: fake.session };
+    const outcome = await stop({ ...input(root), stop_hook_active: true }, deps, () => {});
+
+    expect(fake.calls).toHaveLength(1);
+    expect(outcome.kind === "block" && outcome.reason).toStartWith("The local review found 2 Important finding(s)");
+  });
+
+  test("a stop that follows no block forgets the shown record, so a later turn shows the findings again", async () => {
+    const { run, calls, root } = worldOf({ doneJudgeAnswer: "", paths: RISKY });
+    const shownFile = join(stateOf(root), `review-${HEAD}-shown.json`);
+    const deps = { run, env: RISKY_ENV, now: () => 0, reviewSession: fakeSession(answered([]), calls).session };
+    mkdirSync(stateOf(root), { recursive: true });
+    writeFileSync(shownFile, "[1,2]\n");
+
+    await stop({ ...input(root), stop_hook_active: true }, deps, () => {});
+
+    expect(existsSync(shownFile)).toBe(true);
+
+    await stop(
+      { ...input(root), stop_hook_active: false },
+      { ...deps, env: { ...RISKY_ENV, [FORK_FLAG]: "1" } },
+      () => {},
+    );
+
+    expect(existsSync(shownFile)).toBe(true);
+
+    const blocked = await stop(input(root), deps, () => {});
+
+    expect(blocked.kind).toBe("block");
+    expect(existsSync(shownFile)).toBe(false);
+  });
+
   test("a new head reviewed right after a block still shows its Importants once, then lets the session end", async () => {
     const { run, calls, root } = worldOf({ paths: RISKY });
     const fake = fakeSession(answered(TWO_AND_A_NIT), calls);

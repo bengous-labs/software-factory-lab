@@ -11,7 +11,7 @@
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { Predicate, Result, Schema } from "effect";
@@ -535,6 +535,17 @@ async function localReviewHold(
   return outcomeOf(next);
 }
 
+/**
+ * A stop that follows no block opens a new turn, so what an earlier turn's block showed is forgotten:
+ * the shown record only ever stands for a block of the current turn. Forks return before this, so
+ * a fork's own stop never clears it.
+ */
+function forgetShownOnNewTurn(stateDir: string, head: string, stopHookActive: boolean): void {
+  if (!stopHookActive) {
+    rmSync(join(stateDir, shownRecordName(head)), { force: true });
+  }
+}
+
 /** What Claude Code is told on a `Next` that ends the stop; null on one that lets the hook go on. */
 function outcomeOf(next: Next): Outcome | null {
   if (next.kind === "none") {
@@ -635,6 +646,8 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
 
     return { kind: "allow" };
   }
+
+  forgetShownOnNewTurn(stateDir, head, input.stop_hook_active === true);
 
   await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
 

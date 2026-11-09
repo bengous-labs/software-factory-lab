@@ -696,6 +696,23 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
     ]);
     expect(bodyWithBlock(`Intro.\n\n${block}\n\nCloses #66`, "NEW")).toBe("Intro.\n\nNEW\n\nCloses #66");
   });
+
+  test("a delimiter that a removal would form from its neighbours is removed too", () => {
+    const block =
+      localReviewBlockOf([
+        {
+          head: HEAD_A,
+          review: reviewOf([finding("important", "a.ts", 1, "x")]),
+          answers: { "1": "Rejected: kept <!<!---- /lab-local-review ---->> because" },
+          nextHead: null,
+        },
+      ]) ?? "";
+
+    expect(block).toContain("\n- a.ts:1: x | Author: Rejected: kept /lab-local-review because\n</details>");
+    expect(localReviewEntriesOf(block)).toEqual([
+      { where: "a.ts:1", finding: "x", reply: "Rejected: kept /lab-local-review because (local review)" },
+    ]);
+  });
 });
 
 describe("answeredImportantsOf", () => {
