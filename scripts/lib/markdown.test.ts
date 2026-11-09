@@ -4,6 +4,8 @@ import * as fc from "fast-check";
 
 import { codeSpan, escapeHtml, escapeInline, unescapeHtml } from "./markdown.ts";
 
+const NBSP = String.fromCodePoint(0xa0);
+
 /** GitHub's extensions that can take a backtick from a code span: autolinks and math. */
 const GITHUB = { autolinks: true, latexMath: true };
 
@@ -117,6 +119,16 @@ describe("escapeHtml", () => {
     ["an extended autolink cannot take it", "see www.x.com` <b>hi</b> `", "see www.x.com\\` &lt;b>hi&lt;/b> \\`"],
     ["nor a URL one", "https://x.io/a` <!-- hide --> `", "https://x.io/a\\` &lt;!-- hide --> \\`"],
     ["a span after a space stays code", "see www.x.com `<b>`", "see www.x.com `<b>`"],
+    [
+      String.raw`an autolink cannot take the \ of a \< the text wrote`,
+      String.raw`see www.x.com\<img src=x>`,
+      "see www.x.com&lt;img src=x>",
+    ],
+    [
+      "an autolink runs past a no-break space",
+      `see www.x.com${NBSP}\`<img>\` y`,
+      String.raw`see www.x.com${NBSP}\`&lt;img>\` y`,
+    ],
     ["math cannot take it", "$a`$ <b> `", "\\$a`$ <b> `"],
     ["U+2028 starts no line", "a \u2028```\n<b>\n```", "a \u2028\\`\\`\\`\n&lt;b>\n\\`\\`\\`"],
     ["a carriage return ends a line", "x\r```\r<b>\r```", "x\n```\n<b>\n```"],
@@ -175,7 +187,7 @@ describe("unescapeHtml", () => {
   test("reads back the text escapeHtml was given", () => {
     fc.assert(
       fc.property(
-        markdownText.filter((text) => !/\\[`~$]|\]\\[(:]|&lt;/u.test(text) && !text.includes("\r")),
+        markdownText.filter((text) => !/\\[<`~$]|\]\\[(:]|&lt;/u.test(text) && !text.includes("\r")),
         (text) => unescapeHtml(escapeHtml(text)) === text,
       ),
     );

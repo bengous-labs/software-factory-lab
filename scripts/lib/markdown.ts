@@ -9,9 +9,9 @@ const TILDE_FENCE = /(?<=^|\n)(?<tilde>~{3,})(?!~)[^\n]*\n[\s\S]*?(?<=\n) {0,3}\
 /**
  * A code span on one line with no `|`: a table cell would split it, and GitHub would read its content
  * as text. It opens neither in a word after `www.` nor after a `:`: GitHub's extended autolink
- * (`www.`, `https://`) runs to the next space and would take its opening backtick.
+ * (`www.`, `https://`) runs to the next ASCII space, past any other, and would take its opening backtick.
  */
-const CODE_SPAN = /(?<!(?:[Ww]{3}\.|:)\S*)(?<!`)(?<ticks>`+)(?!`)[^\n|]*?(?<!`)\k<ticks>(?!`)/u;
+const CODE_SPAN = /(?<!(?:[Ww]{3}\.|:)[^ \t\n\v\f\r]*)(?<!`)(?<ticks>`+)(?!`)[^\n|]*?(?<!`)\k<ticks>(?!`)/u;
 
 /** A run of backticks no span closes: escaped, so it cannot pair with a backtick outside the text. */
 const OPEN_RUN = /`+/u;
@@ -63,6 +63,7 @@ const TOKEN = new RegExp(
 
 const ESCAPED_SINGLES = new Map([
   ["<", "&lt;"],
+  [String.raw`\<`, "&lt;"],
   ["$", String.raw`\$`],
   ["]", "]\\"],
 ]);
