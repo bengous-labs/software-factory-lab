@@ -118,12 +118,18 @@ const call = (env: Env, method: string, path: string, body?: Schema.JsonObject):
     body === undefined ? undefined : JSON.stringify(body),
   );
 
-/** The endpoint at `path`, decoded by `schema`. */
-const api = async <S extends Schema.ConstraintDecoder<unknown>>(
-  env: Env,
+/** The endpoint at `path`, read through `runner` and decoded by `schema`. */
+const apiWith = async <S extends Schema.ConstraintDecoder<unknown>>(
+  runner: Run,
+  where: Pick<Env, "cwd">,
   schema: S,
   path: string,
-): Promise<S["Type"]> => decodeJson(schema, `gh api ${path}`, await call(env, "GET", path));
+): Promise<S["Type"]> =>
+  decodeJson(schema, `gh api ${path}`, await checked(runner, ["gh", "api", "-X", "GET", path], { cwd: where.cwd }));
+
+/** The endpoint at `path`, decoded by `schema`. */
+const api = <S extends Schema.ConstraintDecoder<unknown>>(env: Env, schema: S, path: string): Promise<S["Type"]> =>
+  apiWith(run, env, schema, path);
 
 /** Sends `body` to the endpoint at `path`; what it answers is not read. */
 const send = async (env: Env, method: string, path: string, body?: Schema.JsonObject): Promise<void> => {
@@ -177,6 +183,7 @@ export const CheckRuns = Schema.Struct({
       status: Schema.String,
       conclusion: Schema.NullOr(Schema.String),
       app: Schema.NullOr(Schema.Struct({ slug: Schema.String })),
+      check_suite: Schema.Struct({ id: Schema.Finite }),
     }),
   ),
 });
@@ -269,11 +276,14 @@ export function ownerCommenter(
 const postOwnerComment = ownerCommenter(run);
 
 /** `repos/<repo>/commits/<sha>/check-suites`, as far as the Merge bot reads it. */
-export const CheckSuites = Schema.Struct({ check_suites: Schema.Array(Schema.Struct({ created_at: Schema.String })) });
-
-/** `repos/<repo>/actions/runs`, as far as the Merge bot reads it. */
-export const WorkflowRuns = Schema.Struct({
-  workflow_runs: Schema.Array(Schema.Struct({ conclusion: Schema.NullOr(Schema.String) })),
+export const CheckSuites = Schema.Struct({
+  check_suites: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      head_branch: Schema.NullOr(Schema.String),
+      created_at: Schema.String,
+    }),
+  ),
 });
 
 /** `repos/<repo>/commits/<sha>/pulls`, as far as the Merge bot reads it. */
@@ -341,14 +351,18 @@ interface Range {
   readonly head: string;
 }
 
-async function rangeOf(env: Env, pr: Pull): Promise<Range> {
-  await git(env, [
-    "fetch",
-    "--quiet",
-    "origin",
+/** The refspecs `rangeOf` fetches: the PR's head, its base and the Trunk, whose head `devRunsReader` reads. */
+export function rangeRefspecsOf(pr: Pick<Pull, "number" | "base">): readonly string[] {
+  const branches = pr.base.ref === TRUNK ? [TRUNK] : [pr.base.ref, TRUNK];
+
+  return [
     `+refs/pull/${pr.number}/head:refs/lab/pr-${pr.number}`,
-    `+refs/heads/${pr.base.ref}:refs/remotes/origin/${pr.base.ref}`,
-  ]);
+    ...branches.map((branch) => `+refs/heads/${branch}:refs/remotes/origin/${branch}`),
+  ];
+}
+
+async function rangeOf(env: Env, pr: Pull): Promise<Range> {
+  await git(env, ["fetch", "--quiet", "origin", ...rangeRefspecsOf(pr)]);
 
   return { base: await git(env, ["merge-base", `origin/${pr.base.ref}`, pr.head.sha]), head: pr.head.sha };
 }
@@ -446,16 +460,48 @@ const reviewJobOf = reviewJobReader(run);
 export const ciRunsPathsOf = (repo: string, sha: string): readonly string[] =>
   CI_CHECKS.map((name) => `repos/${repo}/commits/${sha}/check-runs?check_name=${name}`);
 
-/**
- * The latest completed push run of `ci.yml` on dev. Not of any workflow: the Merge bot's own push run
- * ends first and green, and would hide a red CI.
- */
-export const devCiRunsPathOf = (repo: string): string =>
-  `repos/${repo}/actions/workflows/ci.yml/runs?branch=dev&event=push&status=completed&per_page=1`;
-
 /** The CI of a head from the check runs of each of CI_CHECKS: GitHub Actions' run of each, as `ciOf` reads them. */
 export const ciOfRuns = (runs: ReadonlyArray<typeof CheckRuns.Type>): Snapshot["ci"] =>
   ciOf(runs.map((found) => found.check_runs.find((check) => check.app?.slug === "github-actions")));
+
+/** See `Snapshot["devRed"]`. */
+export const devRedOf = (runs: ReadonlyArray<typeof CheckRuns.Type>): boolean => ciOfRuns(runs) === "failure";
+
+/**
+ * The runs of `runs` that ran in a suite of a push to `branch`. The merge queue's commit becomes the
+ * Trunk's head, so it also carries the queue's suites, whose `mutation` is skipped.
+ */
+export function pushRunsOf(
+  suites: typeof CheckSuites.Type,
+  runs: ReadonlyArray<typeof CheckRuns.Type>,
+  branch: string,
+): ReadonlyArray<typeof CheckRuns.Type> {
+  const pushSuites = new Set(
+    suites.check_suites.filter((suite) => suite.head_branch === branch).map((suite) => suite.id),
+  );
+
+  return runs.map((found) => ({
+    check_runs: found.check_runs.filter((check) => pushSuites.has(check.check_suite.id)),
+  }));
+}
+
+/** The push runs of each of CI_CHECKS on the Trunk's head, as `rangeOf` fetched it. */
+export function devRunsReader(
+  runner: Run,
+): (where: Pick<Env, "repo" | "cwd">) => Promise<ReadonlyArray<typeof CheckRuns.Type>> {
+  return async (where) => {
+    const devHead = (await checked(runner, ["git", "rev-parse", `origin/${TRUNK}`], { cwd: where.cwd })).trim();
+
+    const [suites, runs] = await Promise.all([
+      apiWith(runner, where, CheckSuites, `repos/${where.repo}/commits/${devHead}/check-suites?per_page=100`),
+      Promise.all(ciRunsPathsOf(where.repo, devHead).map((path) => apiWith(runner, where, CheckRuns, path))),
+    ]);
+
+    return pushRunsOf(suites, runs, TRUNK);
+  };
+}
+
+const devRunsOf = devRunsReader(run);
 
 async function snapshotOf(
   env: Env,
@@ -464,7 +510,10 @@ async function snapshotOf(
   record: StateRecord,
   threads: readonly ReviewThread[],
 ): Promise<Snapshot> {
-  const ciRuns = await Promise.all(ciRunsPathsOf(env.repo, pr.head.sha).map((path) => api(env, CheckRuns, path)));
+  const [ciRuns, devRuns] = await Promise.all([
+    Promise.all(ciRunsPathsOf(env.repo, pr.head.sha).map((path) => api(env, CheckRuns, path))),
+    devRunsOf(env),
+  ]);
 
   const patch = await patchOf(env, range);
   const empty = (await pathsListed(env, changedPathsArgs(range.base, range.head))).length === 0;
@@ -486,8 +535,6 @@ async function snapshotOf(
     landApprovalPutByOwner = landApprovalPutByOwnerOf(events, env.owner);
   }
 
-  const devRuns = await api(env, WorkflowRuns, devCiRunsPathOf(env.repo));
-
   return {
     number: pr.number,
     state: pr.merged ? "MERGED" : pr.state === "open" ? "OPEN" : "CLOSED",
@@ -504,7 +551,7 @@ async function snapshotOf(
     landApprovalPutByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
     rejectedImportant: rejectedImportantOf(graphqlLogin(env.appLogin), threads),
-    devRed: devRuns.workflow_runs[0]?.conclusion === "failure",
+    devRed: devRedOf(devRuns),
     conflicting: conflictingOf(pr.mergeable_state),
     record,
     now: new Date().toISOString(),

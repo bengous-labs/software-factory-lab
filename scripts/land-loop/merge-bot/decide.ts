@@ -229,6 +229,7 @@ export interface Snapshot {
   readonly openImportant: number;
   /** The App's Important findings the Author resolved with a rejection. */
   readonly rejectedImportant: number;
+  /** CI is red on the Trunk's head: validate or mutation completed other than success. A check still running, or not yet posted, does not read as red. */
   readonly devRed: boolean;
   /** GitHub reads the PR as conflicting with its base: no CI runs on it and the queue refuses it. */
   readonly conflicting: boolean;
