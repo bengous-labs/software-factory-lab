@@ -176,7 +176,7 @@ export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThrea
       return [];
     }
 
-    const answers = answersOf(appLogin, thread).map((reply) => unmarked(reply.body));
+    const answers = answersOf(appLogin, thread).map((reply) => unescapeHtml(unmarked(reply.body)));
 
     const state = rejectedOf(appLogin, thread)
       ? "resolved: rejected by the Author"
@@ -188,7 +188,7 @@ export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThrea
       {
         where: `${thread.path}:${thread.line ?? "?"}`,
         finding: unescapeHtml(finding.body.split("\n")[0] ?? ""),
-        reply: `${answers.length === 0 ? "no answer" : unescapeHtml(answers.join(" / "))} (thread ${state})`,
+        reply: `${answers.length === 0 ? "no answer" : answers.join(" / ")} (thread ${state})`,
       },
     ];
   });

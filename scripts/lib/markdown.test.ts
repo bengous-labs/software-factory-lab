@@ -9,7 +9,31 @@ const hasRawHtml = (text: string): boolean =>
   Bun.markdown.html(text) !== Bun.markdown.html(text, { noHtmlSpans: true, noHtmlBlocks: true });
 
 const markdownText = fc.string({
-  unit: fc.constantFrom("<", ">", "`", "\\", "~", "!", "?", "/", ":", "-", "#", "a", "h", " ", "\n"),
+  unit: fc.constantFrom(
+    "<",
+    ">",
+    "`",
+    "\\",
+    "~",
+    "!",
+    "?",
+    "/",
+    ":",
+    "-",
+    "#",
+    "a",
+    "h",
+    " ",
+    "\n",
+    "``",
+    "```",
+    "~~~",
+    "\n  ",
+    "\n   ",
+    "\n    ",
+    "\n\n",
+    "<b>",
+  ),
   maxLength: 40,
 });
 
@@ -43,6 +67,9 @@ describe("escapeHtml", () => {
     ["a backtick in the info string opens no fence", "``` a`b\n<x>\n```", "``` a`b\n\\<x>\n```"],
     ["an unclosed backtick is text", "unclosed `review-<head>.json", "unclosed `review-\\<head>.json"],
     ["a code span stops at the end of the line", "`a\n<x> b`", "`a\n\\<x> b`"],
+    ["a span that may close a run left open above is text", "`\n`<b>`", "`\n`\\<b>`"],
+    ["a blank line closes the paragraph and its open runs", "`\n\n`<b>`", "`\n\n`<b>`"],
+    ["a closing fence indented up to 3 spaces closes the block", "```\n<x>\n   ```\n<b>", "```\n<x>\n   ```\n\\<b>"],
     ["a fence indented in a list item is escaped", "- a\n  ```\n  <x>\n  ```", "- a\n  ```\n  \\<x>\n  ```"],
   ])("%s", (_, text, escaped) => {
     expect(escapeHtml(text)).toBe(escaped);
