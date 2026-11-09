@@ -6,9 +6,10 @@
  * arrived in a new worktree. It runs `bun install --frozen-lockfile --ignore-scripts --backend=copyfile`
  * at the top of that checkout when it has a `bun.lock`, and only in a checkout of the project's own
  * repository. bun takes the packages from its shared cache and does nothing in about ten milliseconds when
- * all is in. Copied files, never hardlinks, so a write in one worktree's `node_modules` cannot reach the
- * main checkout's, from which the hooks load. No lifecycle script runs. A failed install exits 1, which
- * reports and blocks nothing.
+ * all is in. The packages this hook places are copies, never hardlinks into bun's cache, so a write to one
+ * of them cannot reach the main checkout's `node_modules`, from which the hooks load; an install the
+ * session runs itself keeps bun's own default. No lifecycle script runs. It does nothing in a Stop hook
+ * fork, which must stay read-only. A failed install exits 1, which reports and blocks nothing.
  *
  * Reads the hook input on stdin.
  */
@@ -22,6 +23,9 @@ import { Schema } from "effect";
 import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../lib/checkout.ts";
 import type { Checkout } from "../lib/checkout.ts";
 import { decodeJson } from "../lib/json.ts";
+
+/** The variable the Stop hook sets on the read-only forks it launches. */
+const STOP_FORK_FLAG = "LAB_STOP_FORK";
 
 /** The hook input, as far as this hook reads it. */
 const HookInput = Schema.Struct({ cwd: Schema.String });
@@ -40,7 +44,7 @@ async function checkoutOf(dir: string): Promise<Checkout | null> {
   return checkoutFromRevParse(ran.stdout.toString(), ran.exitCode);
 }
 
-if (import.meta.main) {
+if (import.meta.main && process.env[STOP_FORK_FLAG] !== "1") {
   const cwd = cwdOf(await Bun.stdin.text());
   const root = trustedRoot(await checkoutOf(cwd), await checkoutOf(projectDirOf(process.env)));
 

@@ -31,9 +31,9 @@ describe("the hook", () => {
   let worktree = "";
 
   /** Runs the hook for a session or subagent whose cwd is `cwd`, in the project at `main`. */
-  const runHook = (cwd: string) =>
+  const runHook = (cwd: string, extra: Readonly<Record<string, string>> = {}) =>
     $`bun ${SCRIPT} < ${Buffer.from(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "EnterWorktree", cwd }))}`
-      .env({ ...env, CLAUDE_PROJECT_DIR: main })
+      .env({ ...env, CLAUDE_PROJECT_DIR: main, ...extra })
       .nothrow()
       .quiet();
 
@@ -85,6 +85,28 @@ describe("the hook", () => {
       expect((await runHook(cwd)).exitCode).toBe(0);
       expect(existsSync(join(cwd, "node_modules"))).toBe(false);
     }
+  });
+
+  test("does nothing in a Stop hook fork, which must stay read-only", async () => {
+    const fork = join(main, ".claude", "worktrees", "fork");
+
+    await $`git worktree add -q -b fork ${fork}`.cwd(main).env(env).quiet();
+
+    expect((await runHook(fork, { LAB_STOP_FORK: "1" })).exitCode).toBe(0);
+    expect(existsSync(join(fork, "node_modules"))).toBe(false);
+  });
+
+  test("does nothing in a project checkout with no bun.lock", async () => {
+    const lockless = join(main, ".claude", "worktrees", "lockless");
+
+    await $`git worktree add -q -b lockless ${lockless}`.cwd(main).env(env).quiet();
+    rmSync(join(lockless, "bun.lock"));
+
+    const ran = await runHook(lockless);
+
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stderr.toString()).toBe("");
+    expect(existsSync(join(lockless, "node_modules"))).toBe(false);
   });
 
   test("reports a failed install with exit 1, which blocks nothing", async () => {
