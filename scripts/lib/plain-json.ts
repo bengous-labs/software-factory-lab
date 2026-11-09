@@ -35,10 +35,15 @@ export function parseJson(source: string, text: string): Json {
   }
 }
 
-/** `value` as an object; anything else throws, naming `source` and `path`. */
+/** `value` as a plain object; anything else, a TOML datetime included, throws, naming `source` and `path`. */
 export function objectAt(source: string, value: Json | undefined, path: JsonPath = []): JsonObject {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- this check is the parser at the hooks' I/O boundary.
-  if (typeof value !== "object" || value === null || isList(value)) {
+  if (
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- this check is the parser at the hooks' I/O boundary.
+    typeof value !== "object" ||
+    value === null ||
+    isList(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
     return fail(source, "Expected object", path);
   }
 
