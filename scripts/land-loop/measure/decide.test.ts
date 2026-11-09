@@ -191,6 +191,25 @@ describe("Rounds and Important found", () => {
     expect(importantFoundOf(reviews)).toBe(3);
   });
 
+  test("a round with a security pass counts the Importants of both passes", () => {
+    const app = { login: "bengous-labs-agents[bot]" };
+
+    const reviews = [
+      {
+        user: app,
+        body: "Review round 1 (m, /code-review high): 2 important, 1 nit; security: 0 important, 0 nit.",
+        submitted_at: "2026-11-07T21:00:00Z",
+      },
+      {
+        user: app,
+        body: "Review round 2 (m, /code-review high): 0 important, 0 nit; security: 3 important, 1 nit. 1 pre-existing finding(s) not posted.",
+        submitted_at: "2026-11-07T21:10:00Z",
+      },
+    ];
+
+    expect(importantFoundOf(reviews)).toBe(5);
+  });
+
   test("a pending review, which GitHub sends without submitted_at, reads and counts no round", () => {
     const reviews = decodeReviewsPages(
       JSON.stringify([[...PR86.reviews, { user: { login: "bengous" }, body: "", state: "PENDING" }]]),
