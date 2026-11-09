@@ -1,19 +1,9 @@
 {
   "worktree": {
-    "baseRef": "fresh"
+    "baseRef": "fresh",
+    "symlinkDirectories": ["node_modules"]
   },
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR\"/scripts/hooks/prepare-worktree.ts",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
@@ -33,16 +23,6 @@
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR\"/scripts/hooks/refuse-commit-on-dev.ts",
             "timeout": 30
-          }
-        ]
-      },
-      {
-        "matcher": "Bash|Edit|Write|EnterWorktree|Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR\"/scripts/hooks/prepare-worktree.ts",
-            "timeout": 180
           }
         ]
       }
