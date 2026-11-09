@@ -6,7 +6,15 @@ import { join } from "node:path";
 import { $ } from "bun";
 
 import { fixtureEnv } from "../gates/fixture-env.ts";
-import { hookInputOf, lsRemoteHead, originHeadTarget, planFor, STOP_FORK_FLAG } from "./prepare-worktree.ts";
+import {
+  hookInputOf,
+  lsRemoteHead,
+  originHeadTarget,
+  planFor,
+  STOP_FORK_FLAG,
+  syncedAfterWrite,
+  unreadableCode,
+} from "./prepare-worktree.ts";
 
 const SCRIPT = join(import.meta.dir, "prepare-worktree.ts");
 
@@ -94,6 +102,31 @@ describe("originHeadTarget", () => {
   });
 });
 
+describe("unreadableCode", () => {
+  test("refuses with 2 an input naming a tool that may create a worktree", () => {
+    expect(unreadableCode(JSON.stringify({ tool_name: "EnterWorktree" }))).toBe(2);
+    expect(unreadableCode(JSON.stringify({ tool_name: "Agent", tool_input: { isolation: 7 } }))).toBe(2);
+  });
+
+  test("only reports with 1 for any other tool, or an input naming none", () => {
+    expect(unreadableCode(JSON.stringify({ tool_name: "Bash" }))).toBe(1);
+    expect(unreadableCode(JSON.stringify({ hook_event_name: "SessionStart" }))).toBe(1);
+    expect(unreadableCode("not json")).toBe(1);
+  });
+});
+
+describe("syncedAfterWrite", () => {
+  test("a write that succeeded, or one that lost the lock to a writer of the same target", () => {
+    expect(syncedAfterWrite(0, "refs/remotes/origin/dev", "refs/remotes/origin/dev")).toBe(true);
+    expect(syncedAfterWrite(128, "refs/remotes/origin/dev", "refs/remotes/origin/dev")).toBe(true);
+  });
+
+  test("not a failed write that left another target, or none", () => {
+    expect(syncedAfterWrite(128, "refs/remotes/origin/main", "refs/remotes/origin/dev")).toBe(false);
+    expect(syncedAfterWrite(128, null, "refs/remotes/origin/dev")).toBe(false);
+  });
+});
+
 describe("the hook", () => {
   const env = fixtureEnv(process.env);
   let lab = "";
@@ -108,6 +141,13 @@ describe("the hook", () => {
 
   const originHead = async () =>
     (await $`git symbolic-ref refs/remotes/origin/HEAD`.cwd(clone).env(env).quiet()).stdout.toString().trim();
+
+  /** Runs the hook on a raw `stdin`, as Claude Code does for the project at `clone`. */
+  const runRaw = (stdin: string) =>
+    $`bun ${SCRIPT} < ${Buffer.from(stdin)}`
+      .env({ ...env, CLAUDE_PROJECT_DIR: clone })
+      .nothrow()
+      .quiet();
 
   const staleOriginHead = () => $`git remote set-head origin main`.cwd(clone).env(env).quiet();
 
@@ -186,6 +226,58 @@ describe("the hook", () => {
     expect(await originHead()).toBe("refs/remotes/origin/main");
   });
 
+  test("two calls at once in a checkout with no node_modules both install it", async () => {
+    rmSync(join(clone, "node_modules"), { recursive: true, force: true });
+
+    const call = { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: {}, cwd: clone };
+    const ran = await Promise.all([runHook(call), runHook(call)]);
+
+    expect(ran.map((each) => each.exitCode)).toEqual([0, 0]);
+    expect(existsSync(join(clone, "node_modules", "dep", "package.json"))).toBe(true);
+  });
+
+  test("refuses a worktree creation with exit 2 when the remote's HEAD names no branch", async () => {
+    const remote = join(lab, "remote.git");
+    const tip = (await $`git rev-parse dev`.cwd(remote).env(env).quiet()).stdout.toString().trim();
+
+    writeFileSync(join(remote, "HEAD"), `${tip}\n`);
+
+    const ran = await runHook({
+      hook_event_name: "PreToolUse",
+      tool_name: "EnterWorktree",
+      tool_input: {},
+      cwd: clone,
+    });
+
+    writeFileSync(join(remote, "HEAD"), "ref: refs/heads/dev\n");
+
+    expect(ran.exitCode).toBe(2);
+    expect(ran.stderr.toString()).toContain("`git ls-remote --symref origin HEAD` named no default branch");
+  });
+
+  test("refuses a worktree creation with exit 2 when origin/HEAD cannot be written", async () => {
+    await staleOriginHead();
+
+    const lock = join(clone, ".git", "refs", "remotes", "origin", "HEAD.lock");
+
+    writeFileSync(lock, "");
+
+    const ran = await runHook({
+      hook_event_name: "PreToolUse",
+      tool_name: "EnterWorktree",
+      tool_input: {},
+      cwd: clone,
+    });
+
+    rmSync(lock);
+
+    expect(ran.exitCode).toBe(2);
+    expect(ran.stderr.toString()).toContain(
+      "`git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/dev` failed",
+    );
+    expect(await originHead()).toBe("refs/remotes/origin/main");
+  });
+
   test("reports a failed install with exit 1, which does not refuse the call", async () => {
     writeFileSync(
       join(clone, "package.json"),
@@ -217,14 +309,29 @@ describe("the hook", () => {
     expect(start.exitCode).toBe(1);
   });
 
-  test("refuses with exit 2 an input it cannot read, since exit 1 would let the call run", async () => {
-    const ran = await $`bun ${SCRIPT} < ${Buffer.from("not json")}`
-      .env({ ...env, CLAUDE_PROJECT_DIR: clone })
-      .nothrow()
-      .quiet();
+  test("refuses an unreadable input naming EnterWorktree with exit 2, and only reports one naming Bash", async () => {
+    const create = await runRaw(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "EnterWorktree" }));
+    const bash = await runRaw(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash" }));
 
-    expect(ran.exitCode).toBe(2);
-    expect(ran.stderr.toString()).toContain("prepare-worktree could not read its input, so it refuses the call");
+    expect(create.exitCode).toBe(2);
+    expect(create.stderr.toString()).toContain("prepare-worktree could not read its input");
+    expect(bash.exitCode).toBe(1);
+  });
+
+  test("refuses a worktree creation with exit 2 when CLAUDE_PROJECT_DIR is no checkout, and lets Bash run", async () => {
+    const create = await runHook(
+      { hook_event_name: "PreToolUse", tool_name: "EnterWorktree", tool_input: {}, cwd: clone },
+      { CLAUDE_PROJECT_DIR: lab },
+    );
+
+    const bash = await runHook(
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: {}, cwd: clone },
+      { CLAUDE_PROJECT_DIR: lab },
+    );
+
+    expect(create.exitCode).toBe(2);
+    expect(create.stderr.toString()).toContain(`git reads no checkout at ${lab}`);
+    expect(bash.exitCode).toBe(0);
   });
 
   test("without CLAUDE_PROJECT_DIR, refuses a worktree creation with exit 2 and only reports before Bash", async () => {

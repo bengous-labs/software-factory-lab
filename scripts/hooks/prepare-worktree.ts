@@ -7,7 +7,8 @@
  * `isolation: worktree`), it points `origin/HEAD` at the remote's default branch: Claude Code branches a
  * `fresh` worktree from it, and its own fetch never moves it. Before a creation, any failure, a remote
  * silent past twenty seconds included, refuses the call with exit 2, so no worktree starts from a stale
- * base; so does an input the hook cannot read, since exit 1 would let the call run.
+ * base, an unreadable input or no checkout at `$CLAUDE_PROJECT_DIR` included. An unreadable input for any
+ * other tool only reports, with exit 1, so the session keeps the commands that would fix the hook.
  *
  * Before a Bash, Edit or Write call, it runs `bun install --frozen-lockfile --ignore-scripts` in the
  * checkout the call works in, the edited file's or the cwd's, when that checkout has a `bun.lock`: bun
@@ -80,6 +81,32 @@ export function planFor(input: HookInput): Plan {
   }
 
   return { syncOriginHead: "none", installFrom: tool === "Bash" ? cwd : null };
+}
+
+/** The tool name of an input, read alone, so a call whose input the full decode refuses still has a name. */
+const NamedTool = Schema.Struct({ tool_name: Schema.String });
+
+/** The tools whose call may create a worktree. */
+const CREATING_TOOLS = new Set(["EnterWorktree", "Agent"]);
+
+/**
+ * The exit code for an input the hook cannot read: 2 when it names a tool that may create a worktree, so
+ * that call is refused; else 1, which lets a Bash, Edit or Write call run, so a changed input never locks
+ * the session out of the commands that would fix the hook.
+ */
+export function unreadableCode(stdin: string): 1 | 2 {
+  try {
+    return CREATING_TOOLS.has(decodeJson(NamedTool, "the hook input", stdin).tool_name) ? 2 : 1;
+  } catch {
+    // An input that names no tool cannot be told to be a worktree creation.
+    return 1;
+  }
+}
+
+/** Whether `origin/HEAD` ends at `target` after a write that exited `writeExit` and a re-read that found `reread`. */
+export function syncedAfterWrite(writeExit: number, reread: string | null, target: string): boolean {
+  // Two worktree creations at once may race on the ref's lock: the loser finds the winner's same target.
+  return writeExit === 0 || reread === target;
 }
 
 /** The `refs/remotes/origin/<branch>` the remote's HEAD names in `git ls-remote --symref origin HEAD`, or null. */
@@ -160,8 +187,7 @@ async function syncOriginHead(root: string): Promise<string | null> {
 
   const set = await $`git symbolic-ref refs/remotes/origin/HEAD ${target}`.cwd(root).nothrow().quiet();
 
-  // Two worktree creations at once may race on the ref's lock: the loser finds the winner's same target.
-  return set.exitCode === 0 || (await originHeadIn(root)) === target
+  return syncedAfterWrite(set.exitCode, set.exitCode === 0 ? target : await originHeadIn(root), target)
     ? null
     : `\`git symbolic-ref refs/remotes/origin/HEAD ${target}\` failed: ${set.stderr.toString().trim()}`;
 }
@@ -174,10 +200,16 @@ async function prepare(input: HookInput, env: Readonly<Partial<Record<string, st
     return DONE;
   }
 
-  const project = await checkoutOf(projectDirOf(env));
+  const projectDir = projectDirOf(env);
+  const project = await checkoutOf(projectDir);
 
   if (project === null) {
-    return DONE;
+    return plan.syncOriginHead === "require"
+      ? {
+          code: 2,
+          stderr: `prepare-worktree: git reads no checkout at ${projectDir}, so origin/HEAD cannot be checked.`,
+        }
+      : DONE;
   }
 
   if (plan.syncOriginHead !== "none") {
@@ -208,8 +240,8 @@ async function prepare(input: HookInput, env: Readonly<Partial<Record<string, st
 }
 
 /**
- * The hook's outcome on `stdin`. Claude Code runs the call when a hook throws, so a failure that leaves the
- * base unknown exits 2: an input it cannot read, and any error before a worktree creation.
+ * The hook's outcome on `stdin`. Claude Code runs the call when a hook throws, so a failure before a
+ * worktree creation exits 2, an input it cannot read included; any other failure only reports.
  */
 async function outcomeOf(stdin: string, env: Readonly<Partial<Record<string, string>>>): Promise<HookRun> {
   let input: HookInput;
@@ -217,7 +249,7 @@ async function outcomeOf(stdin: string, env: Readonly<Partial<Record<string, str
   try {
     input = hookInputOf(stdin);
   } catch (error) {
-    return { code: 2, stderr: `prepare-worktree could not read its input, so it refuses the call. ${String(error)}` };
+    return { code: unreadableCode(stdin), stderr: `prepare-worktree could not read its input. ${String(error)}` };
   }
 
   try {
