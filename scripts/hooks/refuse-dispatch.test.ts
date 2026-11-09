@@ -1,11 +1,50 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { $ } from "bun";
+import { Schema } from "effect";
 
-import { answerOf, hookInputOf, refusalFor, runOf } from "./refuse-dispatch.ts";
+import { decodeJson } from "../lib/json.ts";
+import { answerOf, hookInputOf, refusalFor, REFUSED, runOf } from "./refuse-dispatch.ts";
 
 const SCRIPT = join(import.meta.dir, "refuse-dispatch.ts");
+
+const SETTINGS = join(import.meta.dir, "..", "..", ".claude", "settings.json");
+
+/** The hook entries of `.claude/settings.json`, as far as this test reads them. */
+const Settings = Schema.Struct({
+  hooks: Schema.Record(
+    Schema.String,
+    Schema.Array(
+      Schema.Struct({
+        matcher: Schema.optionalKey(Schema.String),
+        hooks: Schema.Array(Schema.Struct({ command: Schema.String })),
+      }),
+    ),
+  ),
+});
+
+/** The matcher of the `event` entry that runs refuse-dispatch.ts. */
+function matcherOf(event: string): string | undefined {
+  const settings = decodeJson(Settings, SETTINGS, readFileSync(SETTINGS, "utf8"));
+
+  const entry = settings.hooks[event]?.find((candidate) =>
+    candidate.hooks.some((hook) => hook.command.includes("scripts/hooks/refuse-dispatch.ts")),
+  );
+
+  return entry?.matcher;
+}
+
+/**
+ * Whether Claude Code fires a hook with `matcher` for `value`: a matcher of letters, digits, `_`, `-`, spaces,
+ * `,` and `|` is a list of exact names; any other is an unanchored JavaScript regular expression.
+ */
+function fires(matcher: string, value: string): boolean {
+  return /^[\w\s,|-]*$/u.test(matcher)
+    ? matcher.split(/[|,]/u).some((name) => name.trim() === value)
+    : new RegExp(matcher, "u").test(value);
+}
 
 const skillCall = (skill: string) =>
   JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Skill", tool_input: { skill, args: "12" }, cwd: "/r" });
@@ -143,5 +182,23 @@ describe("runOf", () => {
     expect(run.code).toBe(2);
     expect(run.stdout).toBe("");
     expect(run.stderr).toContain("the hook input");
+  });
+});
+
+describe(".claude/settings.json", () => {
+  test("the Skill hook runs refuse-dispatch on every Skill call", () => {
+    expect(matcherOf("PreToolUse")).toBe("Skill");
+  });
+
+  test("the UserPromptExpansion hook fires for every refused name, and for no other command", () => {
+    const matcher = matcherOf("UserPromptExpansion") ?? "";
+
+    for (const name of REFUSED) {
+      expect(fires(matcher, name)).toBe(true);
+    }
+
+    for (const name of ["github-flow:pr", "other:dispatch", "dispatcher", "git:commit"]) {
+      expect(fires(matcher, name)).toBe(false);
+    }
   });
 });

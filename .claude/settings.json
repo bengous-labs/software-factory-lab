@@ -35,7 +35,7 @@
     ],
     "UserPromptExpansion": [
       {
-        "matcher": "github-flow:dispatch|github-flow:shift",
+        "matcher": "^(github-flow:)?(dispatch|shift)$",
         "hooks": [
           {
             "type": "command",

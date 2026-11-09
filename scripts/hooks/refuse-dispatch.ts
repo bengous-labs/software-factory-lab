@@ -15,7 +15,7 @@ import { Schema } from "effect";
 import { decodeJson } from "../lib/json.ts";
 
 /** The refused skills, each by its full name and by the bare name the Skill tool also launches. */
-const REFUSED = new Set(["github-flow:dispatch", "github-flow:shift", "dispatch", "shift"]);
+export const REFUSED = new Set(["github-flow:dispatch", "github-flow:shift", "dispatch", "shift"]);
 
 /** The two inputs this hook reads: Claude's Skill call, and the user's typed command. */
 const HookInput = Schema.Union([
