@@ -80,7 +80,7 @@ describe("reviewRunOf", () => {
     expect(fake.prompts).toEqual([promptOf(request, GUIDES, THREADS), securityPromptOf(request, GUIDES, THREADS)]);
   });
 
-  test("a failed Code review session fails the round at once: the security pass does not run", async () => {
+  test("a Code review session that failed, or whose answer does not read, fails the round at once: the security pass does not run", async () => {
     const request = { ...REQUEST, security: true };
 
     for (const code of [
