@@ -3,14 +3,15 @@
 /**
  * The Stop hook of the Author's session. It reads the session, git and the branch's PR, decides with
  * `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the session
- * whether the task is finished, then publishes: pushes the branch, opens or readies the PR, and tells
- * the Author to arm its PR watch. Every step is appended to `.lab/stop.log` as one JSON line, with the
+ * whether the task is finished, runs a local deep review on a branch that touches a risky path, then
+ * publishes: pushes the branch, opens or readies the PR with the local review's block in its body, and
+ * tells the Author to arm its PR watch. Every step is appended to `.lab/stop.log` as one JSON line, with the
  * fork's latency and tokens.
  *
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { Predicate, Result, Schema } from "effect";
@@ -18,23 +19,55 @@ import { Predicate, Result, Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { ModelUsage, tokensOf } from "../../lib/tokens.ts";
 import type { TokenCounts } from "../../lib/tokens.ts";
+import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
 import { authorTokenOf, ghEnv, pushArgs } from "../lib/author.ts";
 import type { AuthorToken } from "../lib/author.ts";
+import { resolverOf } from "../lib/resolve.ts";
+import { reviewSession } from "../lib/review-session.ts";
 import { checked, run as runCli } from "../lib/run.ts";
+import type { ReviewCall, ReviewSession } from "../ports/review.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
+import { promptOf } from "../review/review-prompt.ts";
+import { OUTPUT_SCHEMA, resultOf } from "../review/review-report.ts";
+import type { ReviewRequest } from "../review/review-report.ts";
+import { REVIEW_SETTINGS } from "../review/review-settings.ts";
+import { guardOf } from "../review/tool-guard.ts";
 import {
   admit,
   afterAuthorToken,
+  afterLocalReview,
   afterStopChecks,
+  answeredImportantsOf,
   answerOf,
+  answersOf,
+  answersRecordName,
   armReason,
+  bodyWithBlock,
   closingLineOf,
   decide,
   FORK_MARKER,
   holdStepsOf,
   IGNORED_BRANCH,
+  localReviewBlockOf,
+  localReviewOf,
+  nitLinesOf,
+  reviewRecordName,
+  riskyPathsOf,
+  shownOf,
+  shownRecordName,
+  unansweredNumbersOf,
 } from "./decide.ts";
-import type { Action, HoldSteps, PullRequest, Snapshot, StopChecks } from "./decide.ts";
+import type {
+  Action,
+  HoldSteps,
+  LocalReview,
+  LocalReviewAnswers,
+  Next,
+  PullRequest,
+  ReviewedHead,
+  Snapshot,
+  StopChecks,
+} from "./decide.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
 
@@ -43,6 +76,8 @@ const TRUNK = "dev";
 const FORK_TIMEOUT_MS = 180_000;
 
 const STOP_CHECKS_TIMEOUT_MS = 300_000;
+
+const LOCAL_REVIEW_TIMEOUT_MS = 600_000;
 
 /** The repository of the hook's own files, where the fork guard lives; the Author's cwd may be another checkout. */
 const REPO = resolve(import.meta.dir, "..", "..", "..");
@@ -84,6 +119,7 @@ export interface Deps {
   readonly run: Run;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly now: () => number;
+  readonly reviewSession: ReviewSession;
 }
 
 /** One line of a session transcript, as far as this hook reads it: a message's model and its text blocks. */
@@ -315,6 +351,243 @@ async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: strin
   return { kind: "green" };
 }
 
+const reviewFileOf = (stateDir: string, head: string): string => join(stateDir, reviewRecordName(head));
+
+const answersFileOf = (stateDir: string, head: string): string => join(stateDir, answersRecordName(head));
+
+function storedAnswers(stateDir: string, head: string): LocalReviewAnswers {
+  const file = answersFileOf(stateDir, head);
+
+  return existsSync(file) ? answersOf(file, readFileSync(file, "utf8")) : {};
+}
+
+function storedReview(stateDir: string, head: string): LocalReview | null {
+  const file = reviewFileOf(stateDir, head);
+
+  return existsSync(file) ? localReviewOf(file, readFileSync(file, "utf8")) : null;
+}
+
+function requiredEnv(deps: Deps, name: string): string {
+  const value = deps.env[name];
+
+  if (value === undefined || value === "") {
+    throw new Error(`${name} is unset: the local review session needs it`);
+  }
+
+  return value;
+}
+
+/** The Claude Code credentials a session may take from the environment instead of a login under HOME. */
+const CREDENTIALS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
+
+/** The whole environment of the review session: PATH and HOME, and the Author's credential when one is set. */
+function sessionEnvOf(deps: Deps): ReviewCall["env"] {
+  const credentials = CREDENTIALS.flatMap((name) => {
+    const value = deps.env[name];
+
+    return value === undefined || value === "" ? [] : [[name, value] as const];
+  });
+
+  return {
+    PATH: requiredEnv(deps, "PATH"),
+    HOME: requiredEnv(deps, "HOME"),
+    ...Object.fromEntries(credentials),
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+  };
+}
+
+/** The branch's heads in commit order, each with its local review when it has one. */
+async function branchReviews(deps: Deps, cwd: string, stateDir: string): Promise<ReviewedHead[]> {
+  const heads = (await gitOut(deps, cwd, ["rev-list", "--reverse", `origin/${TRUNK}..HEAD`]))
+    .split("\n")
+    .filter((sha) => sha !== "");
+
+  return heads.flatMap((sha, index): ReviewedHead[] => {
+    const review = storedReview(stateDir, sha);
+
+    return review === null
+      ? []
+      : [{ head: sha, review, answers: storedAnswers(stateDir, sha), nextHead: heads[index + 1] ?? null }];
+  });
+}
+
+/** What the local review of a head runs on: the checkout, the head, and the risky paths it counts in its log. */
+interface ReviewScope {
+  readonly cwd: string;
+  /** The repository root, as git prints it. */
+  readonly root: string;
+  readonly stateDir: string;
+  readonly head: string;
+  readonly riskyPaths: number;
+}
+
+/** Runs the local deep review of the head and writes its record, unless the session failed; logs the session. */
+async function runLocalReview(
+  deps: Deps,
+  scope: ReviewScope,
+  log: (record: StopLogRecord) => void,
+): Promise<LocalReview> {
+  const { cwd, stateDir, head } = scope;
+  const root = realpathSync(scope.root);
+  const base = await gitOut(deps, cwd, ["merge-base", `origin/${TRUNK}`, "HEAD"]);
+
+  const trunkFile = (path: string): Promise<string> =>
+    checked(deps.run, ["git", "show", `origin/${TRUNK}:${path}`], { cwd });
+
+  const guides = { review: await trunkFile("REVIEW.md"), project: await trunkFile("AGENTS.md") };
+  const { model, effort } = REVIEW_SETTINGS.deep;
+  const request: ReviewRequest = { pr: 0, head, base, patch: "local", round: 1, model, effort };
+  // The head has no review yet, so every review of the branch is an earlier head's: its answers carry forward.
+  const earlier = answeredImportantsOf(await branchReviews(deps, cwd, stateDir));
+  const started = deps.now();
+
+  const answer = await deps.reviewSession({
+    prompt: promptOf(request, guides, earlier),
+    cwd: root,
+    model,
+    effort,
+    outputSchema: OUTPUT_SCHEMA,
+    guard: guardOf({ root, resolve: resolverOf(root) }),
+    timeoutMs: LOCAL_REVIEW_TIMEOUT_MS,
+    env: sessionEnvOf(deps),
+  });
+
+  const result = resultOf(request, answer, "local");
+  const facts = { head, paths: scope.riskyPaths, ms: deps.now() - started, model: result.model, tokens: result.tokens };
+
+  if (result.kind === "failed") {
+    log({ step: "local-review", ...facts, error: result.cause });
+
+    return { failed: result.cause };
+  }
+
+  const review: LocalReview = {
+    findings: result.report.findings.map(({ file, line, severity, summary, failureScenario }) => ({
+      file,
+      line,
+      severity,
+      summary,
+      failureScenario,
+    })),
+    model: result.model,
+    tokens: result.tokens,
+  };
+
+  writeFileSync(reviewFileOf(stateDir, head), `${JSON.stringify(review, null, 2)}\n`);
+
+  const count = (severity: string): number => review.findings.filter((found) => found.severity === severity).length;
+  const answers = storedAnswers(stateDir, head);
+
+  log({
+    step: "local-review",
+    ...facts,
+    important: count("important"),
+    nit: count("nit"),
+    preExisting: count("pre_existing"),
+    unanswered: review.findings
+      .filter((found) => found.severity === "important")
+      .filter((_, index) => answers[String(index + 1)] === undefined).length,
+    nits: nitLinesOf(review),
+  });
+
+  return review;
+}
+
+/**
+ * What the local review stops the publication with, or null when it lets it go on: on a branch with no
+ * risky path, or a head whose Importants all have an answer. The head's review runs once.
+ */
+async function localReviewHold(
+  deps: Deps,
+  scope: Omit<ReviewScope, "riskyPaths">,
+  stopHookActive: boolean,
+  log: (record: StopLogRecord) => void,
+): Promise<Outcome | null> {
+  const { cwd, stateDir, head } = scope;
+  const diff = await gitOut(deps, cwd, ["diff", "--name-only", "--no-renames", `origin/${TRUNK}...HEAD`]);
+  const paths = diff.split("\n").filter((path) => path !== "");
+  const config = await gitOut(deps, cwd, ["show", `origin/${TRUNK}:${FACTORY_CONFIG_PATH}`]);
+  const policy = factoryConfigOf(config).land.routing;
+
+  const riskyPaths = riskyPathsOf(paths, policy).length;
+
+  if (riskyPaths === 0) {
+    return null;
+  }
+
+  const shownFile = join(stateDir, shownRecordName(head));
+  // A review the hook runs now was never shown, whatever a shown record of an earlier run says.
+  const stored = storedReview(stateDir, head);
+  const shown = stored !== null && existsSync(shownFile) ? shownOf(shownFile, readFileSync(shownFile, "utf8")) : null;
+  const review = stored ?? (await runLocalReview(deps, { ...scope, riskyPaths }, log));
+  const answers = storedAnswers(stateDir, head);
+
+  const next = afterLocalReview(review, answers, {
+    stopHookActive,
+    shown,
+    rejectCommand: `bun ${join(scope.root, "scripts", "land-loop", "local-review.ts")}`,
+  });
+
+  if (next.kind === "block" && !("failed" in review)) {
+    writeFileSync(shownFile, `${JSON.stringify(unansweredNumbersOf(review, answers))}\n`);
+  }
+
+  return outcomeOf(next);
+}
+
+/**
+ * A stop that follows no block opens a new turn, so what an earlier turn's block showed is forgotten:
+ * the shown record only ever stands for a block of the current turn. Forks return before this, so
+ * a fork's own stop never clears it.
+ */
+function forgetShownOnNewTurn(stateDir: string, head: string, stopHookActive: boolean): void {
+  if (!stopHookActive) {
+    rmSync(join(stateDir, shownRecordName(head)), { force: true });
+  }
+}
+
+/** What Claude Code is told on a `Next` that ends the stop; null on one that lets the hook go on. */
+function outcomeOf(next: Next): Outcome | null {
+  if (next.kind === "none") {
+    return { kind: "allow" };
+  }
+
+  return next.kind === "block" ? { kind: "block", reason: next.reason } : null;
+}
+
+/** The PR body's local review block, over every reviewed head of the branch; null when none has a review. */
+async function localReviewBlock(deps: Deps, cwd: string, stateDir: string): Promise<string | null> {
+  return localReviewBlockOf(await branchReviews(deps, cwd, stateDir));
+}
+
+export const PrBody = Schema.Struct({ body: Schema.String });
+
+/** The body of a PR the hook opens: the fork's body, the local review's block, then the closing line. */
+function openBodyOf(branch: string, forkBody: string, block: string | null): string {
+  const closing = closingLineOf(branch, forkBody);
+  const closed = [forkBody, closing].filter((part) => part !== null && part !== "").join("\n\n");
+
+  return block === null ? closed : bodyWithBlock(closed, block);
+}
+
+/** Writes `block` in the body of PR `pr`, in place of the one there; no block leaves the body as it is. */
+async function editBody(deps: Deps, options: RunOptions, pr: number, block: string | null): Promise<void> {
+  if (block === null) {
+    return;
+  }
+
+  const { body } = decodeJson(
+    PrBody,
+    "gh pr view",
+    await checked(deps.run, ["gh", "pr", "view", String(pr), "--json", "body"], options),
+  );
+
+  await checked(deps.run, ["gh", "pr", "edit", String(pr), "--body-file", "-"], {
+    ...options,
+    stdin: bodyWithBlock(body, block),
+  });
+}
+
 export type Outcome = { readonly kind: "allow" } | { readonly kind: "block"; readonly reason: string };
 
 /**
@@ -373,6 +646,8 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
 
     return { kind: "allow" };
   }
+
+  forgetShownOnNewTurn(stateDir, head, input.stop_hook_active === true);
 
   await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
 
@@ -459,12 +734,21 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     return { kind: "allow" };
   }
 
+  const held = await localReviewHold(deps, { cwd, root, stateDir, head }, withArmed.stopHookActive, log);
+
+  if (held !== null) {
+    return held;
+  }
+
   // A PR the hook opens carries no label yet.
   const hold = holdStepsOf(action.hold, action.kind === "push" ? (withArmed.pr?.labels ?? []) : []);
 
-  // The hold goes on before the push, so the Merge bot never reads the new head without it.
+  const block = await localReviewBlock(deps, cwd, stateDir);
+
+  // The hold and the body's block go on before the push, so neither the Merge bot nor a review its push starts reads the new head without them.
   if (action.kind === "push") {
     await putHold(deps, ghOptions(cwd, author), { pr: action.pr, hold: action.hold, steps: hold, ready: false }, log);
+    await editBody(deps, ghOptions(cwd, author), action.pr, block);
   }
 
   await checked(deps.run, pushArgs(branch), { cwd, env: { LAB_AUTHOR_TOKEN: author.token }, timeoutMs: 120_000 });
@@ -483,8 +767,7 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
       title: text.title,
     });
 
-    const closing = closingLineOf(branch, text.body);
-    const body = [text.body, closing].filter((part) => part !== null && part !== "").join("\n\n");
+    const body = openBodyOf(branch, text.body, block);
 
     const url = await checked(
       deps.run,
@@ -542,7 +825,7 @@ if (import.meta.main) {
   };
 
   try {
-    const outcome = await stop(input, { run: runCli, env: process.env, now: Date.now }, log);
+    const outcome = await stop(input, { run: runCli, env: process.env, now: Date.now, reviewSession }, log);
 
     if (outcome.kind === "block") {
       console.log(JSON.stringify({ decision: "block", reason: outcome.reason }));

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import { earlierThreadsOf, markerOf } from "./findings.ts";
-import { promptOf, readsEarlierThreads } from "./review-prompt.ts";
+import { promptOf } from "./review-prompt.ts";
 import type { ReviewRequest } from "./review-report.ts";
 
 const HEAD = "e1249fc0000000000000000000000000000000aa";
@@ -90,10 +90,26 @@ describe("promptOf", () => {
   });
 });
 
-describe("readsEarlierThreads", () => {
-  test("Review rounds 2 and 3 read the earlier threads, round 1 none", () => {
-    expect(readsEarlierThreads(1)).toBe(false);
-    expect(readsEarlierThreads(2)).toBe(true);
-    expect(readsEarlierThreads(3)).toBe(true);
+describe("round 1", () => {
+  test("with the local review's entries, it lists them as earlier findings with the author's answers", () => {
+    const threads = [
+      { where: "a.ts:3", finding: "off by one", reply: "Fixed in fa2392d (local review)" },
+      { where: "b.ts", finding: "blank", reply: "Rejected: kept (local review)" },
+    ];
+
+    const prompt = promptOf(REQUEST, GUIDES, threads);
+
+    expect(prompt).toContain(
+      "\nRun one git command per Bash call, with no shell operator. Use Read and Grep for everything else.\n\nThis is review round 1. A local review in the author's session read this change first. Its findings and the author's answers:\n- a.ts:3: off by one | Author: Fixed in fa2392d (local review)\n- b.ts: blank | Author: Rejected: kept (local review)\nReport only what is wrong now. Never report again a finding the author resolved with a valid reason, nor one already open.",
+    );
+    expect(prompt.endsWith("nor one already open.")).toBe(true);
+  });
+
+  test("without entries, it has no round text", () => {
+    expect(
+      promptOf(REQUEST, GUIDES, []).endsWith(
+        "Run one git command per Bash call, with no shell operator. Use Read and Grep for everything else.",
+      ),
+    ).toBe(true);
   });
 });

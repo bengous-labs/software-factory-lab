@@ -81,16 +81,16 @@ describe("the review job's workflow", () => {
     expect(Object.keys(env ?? {}).filter((name) => name.includes("TOKEN"))).toEqual([]);
   });
 
-  test("only the thread step, on Review rounds 2 and 3, gets the job's token, before the Review step", async () => {
+  test("only the thread step, at every round, gets the job's token, before the Review step", async () => {
     const { steps } = (await workflowOf("code-review.yml")).jobs["review"] ?? { steps: [] };
     const tokened = steps.filter((step) => step.env?.["GH_TOKEN"] !== undefined);
 
     expect(tokened.map((step) => step.name)).toEqual(["Read the earlier review threads"]);
     expect(tokened[0]).toMatchObject({
-      if: "inputs.round != '1'",
       run: "bun scripts/land-loop/review/read-threads.ts",
       env: { GH_TOKEN: "${{ github.token }}" },
     });
+    expect(tokened[0]?.if).toBeUndefined();
     expect(steps.indexOf(stepNamed(steps, "Read the earlier review threads"))).toBeLessThan(
       steps.indexOf(stepNamed(steps, "Review")),
     );

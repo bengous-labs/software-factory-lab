@@ -14,23 +14,28 @@ export interface Guides {
   readonly project: string;
 }
 
-/** Whether the review job reads the earlier review threads for `round`: every round after the first. */
-export const readsEarlierThreads = (round: ReviewRequest["round"]): boolean => round >= 2;
+const ROUND_1_LOCAL =
+  "This is review round 1. A local review in the author's session read this change first. Its findings and the author's answers:";
 
+/** Round 1 reads the local review's findings, when the Stop hook wrote some; rounds 2 and 3 the earlier threads. */
 function roundText(request: ReviewRequest, threads: readonly EarlierThread[]): readonly string[] {
-  if (request.round === 1) {
+  if (request.round === 1 && threads.length === 0) {
     return [];
   }
 
-  const first =
-    request.round === 2
-      ? `This is review round 2. ${request.base} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.`
-      : `This is review round 3, the last one. ${request.base} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.`;
+  const opening =
+    request.round === 1
+      ? [ROUND_1_LOCAL]
+      : [
+          request.round === 2
+            ? `This is review round 2. ${request.base} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.`
+            : `This is review round 3, the last one. ${request.base} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.`,
+          "Earlier findings and the author's answers:",
+        ];
 
   return [
     "",
-    first,
-    "Earlier findings and the author's answers:",
+    ...opening,
     ...threads.map((thread) => `- ${thread.where}: ${thread.finding} | Author: ${thread.reply}`),
     "Report only what is wrong now. Never report again a finding the author resolved with a valid reason, nor one already open.",
   ];

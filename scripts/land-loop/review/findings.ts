@@ -2,12 +2,13 @@
  * The App's findings as GitHub holds them. Each posted finding carries a marker that names its
  * severity, read back to count the open Important threads and by the author's PR watch. A pull
  * request's review threads come from one GraphQL query: the Merge bot counts them, and the review job
- * gives Review round 2 the earlier findings with the author's answers.
+ * gives every Review round the earlier findings with the author's answers, the local review's included.
  */
 
 import { Option, Schema } from "effect";
 
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
+import { LOCAL_REVIEW_CLOSE, LOCAL_REVIEW_OPEN } from "../stop/decide.ts";
 import { Severity } from "./review-report.ts";
 
 /** The marker a finding's comment carries. An external name: posted findings carry it, so the string stays. */
@@ -163,7 +164,7 @@ function unmarked(body: string): string {
 
 /**
  * The App's findings, open or resolved, each with the author's answers and whether its thread is
- * resolved: Review round 2 reports again neither a finding the author resolved with a valid reason
+ * resolved: a later Review round reports again neither a finding the author resolved with a valid reason
  * nor one still open. `appLogin` is the App's login as GraphQL prints it.
  */
 export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThread[]): EarlierThread[] {
@@ -190,4 +191,33 @@ export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThrea
       },
     ];
   });
+}
+
+/** One entry of the block, `- <file>[:<line>]: <summary> | Author: <answer>`, as the Stop hook writes it. */
+const LOCAL_ENTRY = /^- (.+?): (.+?) \| Author: (.*)$/u;
+
+/** The entries of the local review block the Stop hook wrote in the PR body, as earlier findings; none without a block. */
+export function localReviewEntriesOf(body: string): EarlierThread[] {
+  const open = body.indexOf(LOCAL_REVIEW_OPEN);
+  const close = body.indexOf(LOCAL_REVIEW_CLOSE, open);
+
+  if (open === -1 || close === -1) {
+    return [];
+  }
+
+  return body
+    .slice(open, close)
+    .split("\n")
+    .flatMap((line) => {
+      const [, where, finding, reply] = LOCAL_ENTRY.exec(line.trimEnd()) ?? [];
+
+      return where === undefined || finding === undefined || reply === undefined
+        ? []
+        : [{ where, finding, reply: `${reply} (local review)` }];
+    });
+}
+
+/** What the review job's thread step gives the review: the local review's entries of `body`, then the App's threads. */
+export function earlierFindingsOf(appLogin: string, threads: readonly ReviewThread[], body: string): EarlierThread[] {
+  return [...localReviewEntriesOf(body), ...earlierThreadsOf(appLogin, threads)];
 }
