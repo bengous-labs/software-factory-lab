@@ -25,7 +25,7 @@ import type { AuthorToken } from "../lib/author.ts";
 import { resolverOf } from "../lib/resolve.ts";
 import { reviewSession } from "../lib/review-session.ts";
 import { checked, run as runCli } from "../lib/run.ts";
-import type { ReviewSession } from "../ports/review.ts";
+import type { ReviewCall, ReviewSession } from "../ports/review.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
 import { promptOf } from "../review/review-prompt.ts";
 import { OUTPUT_SCHEMA, resultOf } from "../review/review-report.ts";
@@ -37,6 +37,7 @@ import {
   afterAuthorToken,
   afterLocalReview,
   afterStopChecks,
+  answeredImportantsOf,
   answerOf,
   answersOf,
   answersRecordName,
@@ -50,7 +51,9 @@ import {
   localReviewBlockOf,
   localReviewNeeded,
   localReviewOf,
+  nitLinesOf,
   reviewRecordName,
+  riskyPathsOf,
 } from "./decide.ts";
 import type {
   Action,
@@ -372,6 +375,40 @@ function requiredEnv(deps: Deps, name: string): string {
   return value;
 }
 
+/** The Claude Code credentials a session may take from the environment instead of a login under HOME. */
+const CREDENTIALS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
+
+/** The whole environment of the review session: PATH and HOME, and the Author's credential when one is set. */
+function sessionEnvOf(deps: Deps): ReviewCall["env"] {
+  const credentials = CREDENTIALS.flatMap((name) => {
+    const value = deps.env[name];
+
+    return value === undefined || value === "" ? [] : [[name, value] as const];
+  });
+
+  return {
+    PATH: requiredEnv(deps, "PATH"),
+    HOME: requiredEnv(deps, "HOME"),
+    ...Object.fromEntries(credentials),
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+  };
+}
+
+/** The branch's heads in commit order, each with its local review when it has one. */
+async function branchReviews(deps: Deps, cwd: string, stateDir: string): Promise<ReviewedHead[]> {
+  const heads = (await gitOut(deps, cwd, ["rev-list", "--reverse", `origin/${TRUNK}..HEAD`]))
+    .split("\n")
+    .filter((sha) => sha !== "");
+
+  return heads.flatMap((sha, index): ReviewedHead[] => {
+    const review = storedReview(stateDir, sha);
+
+    return review === null
+      ? []
+      : [{ head: sha, review, answers: storedAnswers(stateDir, sha), nextHead: heads[index + 1] ?? null }];
+  });
+}
+
 /** What the local review of a head runs on: the checkout, the head, and the risky paths it counts in its log. */
 interface ReviewScope {
   readonly cwd: string;
@@ -398,17 +435,19 @@ async function runLocalReview(
   const guides = { review: await trunkFile("REVIEW.md"), project: await trunkFile("AGENTS.md") };
   const { model, effort } = REVIEW_SETTINGS.deep;
   const request: ReviewRequest = { pr: 0, head, base, patch: "local", round: 1, model, effort };
+  // The head has no review yet, so every review of the branch is an earlier head's: its answers carry forward.
+  const earlier = answeredImportantsOf(await branchReviews(deps, cwd, stateDir));
   const started = deps.now();
 
   const answer = await deps.reviewSession({
-    prompt: promptOf(request, guides, []),
+    prompt: promptOf(request, guides, earlier),
     cwd: root,
     model,
     effort,
     outputSchema: OUTPUT_SCHEMA,
     guard: guardOf({ root, resolve: resolverOf(root) }),
     timeoutMs: LOCAL_REVIEW_TIMEOUT_MS,
-    env: { PATH: requiredEnv(deps, "PATH"), HOME: requiredEnv(deps, "HOME"), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
+    env: sessionEnvOf(deps),
   });
 
   const result = resultOf(request, answer, "local");
@@ -446,6 +485,7 @@ async function runLocalReview(
     unanswered: review.findings
       .filter((found) => found.severity === "important")
       .filter((_, index) => answers[String(index + 1)] === undefined).length,
+    nits: nitLinesOf(review),
   });
 
   return review;
@@ -471,10 +511,17 @@ async function localReviewHold(
     return null;
   }
 
-  const riskyPaths = paths.filter((path) => localReviewNeeded([path], policy)).length;
-  const review = storedReview(stateDir, head) ?? (await runLocalReview(deps, { ...scope, riskyPaths }, log));
+  const stored = storedReview(stateDir, head);
+  const riskyPaths = riskyPathsOf(paths, policy).length;
+  const review = stored ?? (await runLocalReview(deps, { ...scope, riskyPaths }, log));
 
-  return outcomeOf(afterLocalReview(review, storedAnswers(stateDir, head), stopHookActive));
+  return outcomeOf(
+    afterLocalReview(review, storedAnswers(stateDir, head), {
+      stopHookActive,
+      reviewedNow: stored === null,
+      rejectCommand: `bun ${join(scope.root, "scripts", "land-loop", "local-review.ts")}`,
+    }),
+  );
 }
 
 /** What Claude Code is told on a `Next` that ends the stop; null on one that lets the hook go on. */
@@ -488,19 +535,7 @@ function outcomeOf(next: Next): Outcome | null {
 
 /** The PR body's local review block, over every reviewed head of the branch; null when none has a review. */
 async function localReviewBlock(deps: Deps, cwd: string, stateDir: string): Promise<string | null> {
-  const heads = (await gitOut(deps, cwd, ["rev-list", "--reverse", `origin/${TRUNK}..HEAD`]))
-    .split("\n")
-    .filter((sha) => sha !== "");
-
-  const reviews = heads.flatMap((sha, index): ReviewedHead[] => {
-    const review = storedReview(stateDir, sha);
-
-    return review === null
-      ? []
-      : [{ head: sha, review, answers: storedAnswers(stateDir, sha), nextHead: heads[index + 1] ?? null }];
-  });
-
-  return localReviewBlockOf(reviews);
+  return localReviewBlockOf(await branchReviews(deps, cwd, stateDir));
 }
 
 export const PrBody = Schema.Struct({ body: Schema.String });
@@ -684,14 +719,16 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
   // A PR the hook opens carries no label yet.
   const hold = holdStepsOf(action.hold, action.kind === "push" ? (withArmed.pr?.labels ?? []) : []);
 
-  // The hold goes on before the push, so the Merge bot never reads the new head without it.
+  const block = await localReviewBlock(deps, cwd, stateDir);
+
+  // The hold and the body's block go on before the push, so neither the Merge bot nor a review its push starts reads the new head without them.
   if (action.kind === "push") {
     await putHold(deps, ghOptions(cwd, author), { pr: action.pr, hold: action.hold, steps: hold, ready: false }, log);
+    await editBody(deps, ghOptions(cwd, author), action.pr, block);
   }
 
   await checked(deps.run, pushArgs(branch), { cwd, env: { LAB_AUTHOR_TOKEN: author.token }, timeoutMs: 120_000 });
 
-  const block = await localReviewBlock(deps, cwd, stateDir);
   let number: number;
 
   if (action.kind === "open") {
@@ -732,8 +769,6 @@ export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRe
     await putHold(deps, ghOptions(cwd, author), { pr: number, hold: action.hold, steps: hold, ready: true }, log);
   } else {
     number = action.pr;
-
-    await editBody(deps, ghOptions(cwd, author), number, block);
 
     if (action.ready) {
       await checked(deps.run, ["gh", "pr", "ready", String(number)], ghOptions(cwd, author));

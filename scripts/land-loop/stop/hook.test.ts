@@ -663,6 +663,60 @@ describe("the local review", () => {
     expect(calls.some((ran) => ran.argv.includes("push"))).toBe(true);
   });
 
+  test("the session gets the Author's Claude Code credential from the environment when one is set", async () => {
+    const { run, calls, root } = worldOf({ paths: RISKY });
+    const fake = fakeSession(answered([]), calls);
+    const env = { ...RISKY_ENV, CLAUDE_CODE_OAUTH_TOKEN: "oauth", ANTHROPIC_API_KEY: "key", OTHER: "x" };
+    await stop(input(root), { run, env, now: () => 0, reviewSession: fake.session }, () => {});
+
+    expect(fake.calls[0]?.env).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/home/author",
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+      ANTHROPIC_API_KEY: "key",
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+    });
+  });
+
+  test("a new head's review gets the earlier heads' answered Importants, so a rejection carries forward", async () => {
+    const old = "a".repeat(40);
+    const { run, calls, root } = worldOf({ paths: RISKY, heads: [old, HEAD] });
+    mkdirSync(stateOf(root), { recursive: true });
+    writeFileSync(
+      join(stateOf(root), `review-${old}.json`),
+      JSON.stringify({
+        findings: [
+          { file: "a.ts", line: 1, severity: "important", summary: "Off by one.", failureScenario: "x" },
+          { file: "b.ts", line: null, severity: "important", summary: "Blank.", failureScenario: "y" },
+        ],
+        model: null,
+        tokens: null,
+      }),
+    );
+    writeFileSync(join(stateOf(root), `review-${old}-answers.json`), JSON.stringify({ "2": "Rejected: kept" }));
+
+    const fake = fakeSession(answered([]), calls);
+    await stop(input(root), { run, env: RISKY_ENV, now: () => 0, reviewSession: fake.session }, () => {});
+
+    expect(fake.calls[0]?.prompt).toEndWith(
+      `This is review round 1. A local review in the author's session read this change first. Its findings and the author's answers:\n- a.ts:1: Off by one. | Author: Fixed in ${HEAD.slice(0, 7)}\n- b.ts: Blank. | Author: Rejected: kept\nReport only what is wrong now. Never report again a finding the author resolved with a valid reason, nor one already open.`,
+    );
+  });
+
+  test("a new head reviewed right after a block still shows its Importants once, then lets the session end", async () => {
+    const { run, calls, root } = worldOf({ paths: RISKY });
+    const fake = fakeSession(answered(TWO_AND_A_NIT), calls);
+    const deps = { run, env: RISKY_ENV, now: () => 0, reviewSession: fake.session };
+
+    const first = await stop({ ...input(root), stop_hook_active: true }, deps, () => {});
+    const second = await stop({ ...input(root), stop_hook_active: true }, deps, () => {});
+
+    expect(first.kind === "block" && first.reason).toStartWith("The local review found 2 Important finding(s)");
+    expect(second).toEqual({ kind: "allow" });
+    expect(fake.calls).toHaveLength(1);
+    expect(publishing(calls)).toEqual([]);
+  });
+
   test("a non-risky stop, a Done judge NO, and a head already reviewed run no session", async () => {
     const plain = worldOf({ paths: ["app/src/commands/add.ts", "docs/usage.md"] });
     const no = worldOf({ doneJudgeAnswer: "NO, a question is pending", paths: RISKY });
@@ -720,7 +774,10 @@ describe("the local review", () => {
       model: "claude-opus-5-5",
       tokens: { input: 5, output: 7, cacheRead: 0, cacheCreation: 0 },
     });
-    expect(first).toEqual({ kind: "block", reason: localReviewReason(record, {}) });
+    expect(first).toEqual({
+      kind: "block",
+      reason: localReviewReason(record, {}, `bun ${join(root, "scripts", "land-loop", "local-review.ts")}`),
+    });
 
     const active = await stop({ ...input(root), stop_hook_active: true }, deps, () => {});
     const fresh = await stop(input(root), deps, () => {});
@@ -796,7 +853,7 @@ describe("the local review", () => {
     );
   });
 
-  test("on gh pr ready the block is edited in the body in place, after the push and before the ready", async () => {
+  test("on an existing PR the block is edited in the body in place before the push, so a review the push starts reads it", async () => {
     const old = "a".repeat(40);
 
     const { run, calls, root } = worldOf({
@@ -824,12 +881,12 @@ describe("the local review", () => {
     await stop(input(root), { run, env: RISKY_ENV, now: () => 0, reviewSession: fake.session }, () => {});
 
     expect(publishing(calls)).toEqual([
-      ["push", { LAB_AUTHOR_TOKEN: TOKEN }, undefined],
       [
         "gh pr edit 12",
         { GH_TOKEN: TOKEN },
         `Intro.\n\n<!-- lab-local-review -->\nLocal review (deep, ${HEAD.slice(0, 7)}): 1 Important fixed, 1 rejected, 0 Nit.\n<details><summary>Findings</summary>\n\n- a.ts:1: Off by one. | Author: Fixed in ${HEAD.slice(0, 7)}\n- b.ts: Blank. | Author: Rejected: kept\n</details>\n<!-- /lab-local-review -->\n\nCloses #66`,
       ],
+      ["push", { LAB_AUTHOR_TOKEN: TOKEN }, undefined],
       ["gh pr ready 12", { GH_TOKEN: TOKEN }, undefined],
     ]);
   });
@@ -875,6 +932,7 @@ describe("the local review", () => {
         nit: 1,
         preExisting: 1,
         unanswered: 2,
+        nits: ["scripts/land-loop/stop/hook.ts:11: A name."],
       },
     ]);
   });

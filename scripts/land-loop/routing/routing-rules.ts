@@ -28,7 +28,8 @@ const ruled = (land: RoutingAnswer["land"], reason: string): RulesVerdict => ({
   answer: { land, review: "deep", secondRound: true, reason, model: null },
 });
 
-function matching(globs: readonly string[], paths: readonly string[]): readonly string[] {
+/** The paths that match at least one of `globs`. */
+export function matching(globs: readonly string[], paths: readonly string[]): readonly string[] {
   const compiled = globs.map((glob) => new Bun.Glob(glob));
 
   return paths.filter((path) => compiled.some((glob) => glob.match(path)));

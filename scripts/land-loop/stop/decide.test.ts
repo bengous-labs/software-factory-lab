@@ -9,6 +9,7 @@ import {
   afterAuthorToken,
   afterLocalReview,
   afterStopChecks,
+  answeredImportantsOf,
   answerOf,
   answersOf,
   answersRecordName,
@@ -21,10 +22,12 @@ import {
   localReviewNeeded,
   localReviewOf,
   localReviewReason,
+  nitLinesOf,
   rejectArgsOf,
   reviewRecordName,
+  riskyPathsOf,
 } from "./decide.ts";
-import type { Answer, LocalFinding, LocalReviewRecord, Snapshot } from "./decide.ts";
+import type { Answer, LocalFinding, LocalReviewContext, LocalReviewRecord, Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -395,9 +398,13 @@ describe("localReviewNeeded", () => {
   });
 });
 
+const REJECT = "bun scripts/land-loop/local-review.ts";
+
+const CONTEXT: LocalReviewContext = { stopHookActive: false, reviewedNow: false, rejectCommand: REJECT };
+
 describe("localReviewReason", () => {
   test("two unanswered Importants and one Nit give the block text, word for word", () => {
-    expect(localReviewReason(TWO_IMPORTANT, {}))
+    expect(localReviewReason(TWO_IMPORTANT, {}, REJECT))
       .toBe(`The local review found 2 Important finding(s) on this head without an answer, so nothing was published:
 
 1. scripts/land-loop/merge-bot/decide.ts:598: The routing of an empty patch is read from the record without a routing step, so a PR with no file lands auto.
@@ -409,21 +416,38 @@ Fix a finding with a commit, or reject it: bun scripts/land-loop/local-review.ts
   });
 
   test("an answered Important is skipped and keeps the others' numbers; no Nit, or two, take the plural", () => {
-    const reason = localReviewReason(reviewOf([DECIDE_598, MAIN_421]), { "1": "Rejected: no" });
+    const reason = localReviewReason(reviewOf([DECIDE_598, MAIN_421]), { "1": "Rejected: no" }, REJECT);
 
     expect(reason.startsWith("The local review found 1 Important finding(s) on this head")).toBe(true);
     expect(reason).not.toContain("1. ");
     expect(reason).toContain(":\n\n2. scripts/land-loop/merge-bot/main.ts:421: ");
     expect(reason.endsWith("A Nit never blocks: 0 Nits are in .lab/stop.log.")).toBe(true);
     expect(
-      localReviewReason(reviewOf([DECIDE_598, finding("nit", "a.ts", 1, "x"), finding("nit", "a.ts", 2, "y")]), {}),
+      localReviewReason(
+        reviewOf([DECIDE_598, finding("nit", "a.ts", 1, "x"), finding("nit", "a.ts", 2, "y")]),
+        {},
+        REJECT,
+      ),
     ).toContain("A Nit never blocks: 2 Nits are in .lab/stop.log.");
   });
 
   test("a finding with no line names its file alone", () => {
-    expect(localReviewReason(reviewOf([finding("important", "a.ts", null, "broken")]), {})).toContain(
+    expect(localReviewReason(reviewOf([finding("important", "a.ts", null, "broken")]), {}, REJECT)).toContain(
       ":\n\n1. a.ts: broken\n   broken Scenario.\n\nFix",
     );
+  });
+
+  test("the reject command is the one the hook names, an absolute path included", () => {
+    expect(localReviewReason(TWO_IMPORTANT, {}, "bun /repo/scripts/land-loop/local-review.ts")).toContain(
+      'or reject it: bun /repo/scripts/land-loop/local-review.ts reject <n> "<reason>". Then stop.',
+    );
+  });
+});
+
+describe("nitLinesOf", () => {
+  test("each Nit is its place and its summary; no other severity is one", () => {
+    expect(nitLinesOf(TWO_IMPORTANT)).toEqual(["a.ts:1: a nit"]);
+    expect(nitLinesOf(reviewOf([finding("nit", "b.ts", null, "x")]))).toEqual(["b.ts: x"]);
   });
 });
 
@@ -431,35 +455,55 @@ describe("afterLocalReview", () => {
   test("no Important, or every Important answered, publishes", () => {
     const answered = { "1": "Rejected: a", "2": "Rejected: b" };
 
-    expect(afterLocalReview(reviewOf([finding("nit", "a.ts", 1, "x")]), {}, false)).toEqual({ kind: "publish" });
-    expect(afterLocalReview(TWO_IMPORTANT, answered, false)).toEqual({ kind: "publish" });
-    expect(afterLocalReview(TWO_IMPORTANT, answered, true)).toEqual({ kind: "publish" });
+    expect(afterLocalReview(reviewOf([finding("nit", "a.ts", 1, "x")]), {}, CONTEXT)).toEqual({ kind: "publish" });
+    expect(afterLocalReview(TWO_IMPORTANT, answered, CONTEXT)).toEqual({ kind: "publish" });
+    expect(afterLocalReview(TWO_IMPORTANT, answered, { ...CONTEXT, stopHookActive: true })).toEqual({
+      kind: "publish",
+    });
   });
 
   test("an unanswered Important blocks with the block text, then lets the session end with nothing published", () => {
     const answers = { "1": "Rejected: a" };
 
-    expect(afterLocalReview(TWO_IMPORTANT, answers, false)).toEqual({
+    expect(afterLocalReview(TWO_IMPORTANT, answers, CONTEXT)).toEqual({
       kind: "block",
-      reason: localReviewReason(TWO_IMPORTANT, answers),
+      reason: localReviewReason(TWO_IMPORTANT, answers, REJECT),
     });
-    expect(afterLocalReview(TWO_IMPORTANT, answers, true)).toEqual({
+    expect(afterLocalReview(TWO_IMPORTANT, answers, { ...CONTEXT, stopHookActive: true })).toEqual({
       kind: "none",
       reason: "the local review is still red after a block: nothing is published",
     });
   });
 
-  test("a failed session blocks once with its error cut at 200 characters, then lets the session end", () => {
-    const error = `timed out ${"x".repeat(300)}`;
-
-    expect(afterLocalReview({ failed: error }, {}, false)).toEqual({
+  test("a review that ran in this stop blocks even right after a block: the Author never saw its findings", () => {
+    expect(afterLocalReview(TWO_IMPORTANT, {}, { ...CONTEXT, stopHookActive: true, reviewedNow: true })).toEqual({
       kind: "block",
-      reason: `The local review could not run (${error.slice(0, 200)}), so nothing was published. Stop again to retry; ask no question.`,
+      reason: localReviewReason(TWO_IMPORTANT, {}, REJECT),
     });
-    expect(afterLocalReview({ failed: error }, {}, true)).toEqual({
+    expect(afterLocalReview(TWO_IMPORTANT, {}, { ...CONTEXT, reviewedNow: true })).toEqual({
+      kind: "block",
+      reason: localReviewReason(TWO_IMPORTANT, {}, REJECT),
+    });
+  });
+
+  test("a failed session blocks once with its error cut at 200 characters, then lets the session end, even just run", () => {
+    const error = `timed out ${"x".repeat(300)}`;
+    const reason = `The local review could not run (${error.slice(0, 200)}), so nothing was published. Stop again to retry; ask no question.`;
+
+    const ended = {
       kind: "none",
       reason: "the local review is still red after a block: nothing is published",
+    } as const;
+
+    expect(afterLocalReview({ failed: error }, {}, CONTEXT)).toEqual({ kind: "block", reason });
+    expect(afterLocalReview({ failed: error }, {}, { ...CONTEXT, reviewedNow: true })).toEqual({
+      kind: "block",
+      reason,
     });
+    expect(afterLocalReview({ failed: error }, {}, { ...CONTEXT, stopHookActive: true })).toEqual(ended);
+    expect(afterLocalReview({ failed: error }, {}, { ...CONTEXT, stopHookActive: true, reviewedNow: true })).toEqual(
+      ended,
+    );
   });
 });
 
@@ -596,6 +640,48 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
     ]);
 
     expect(block).toContain("\n- a.ts:1: two lines | Author: Rejected: x\n");
+  });
+
+  test("a rejection over several lines stays on its entry's line, so it cannot end the block early", () => {
+    const block = localReviewBlockOf([
+      {
+        head: HEAD_A,
+        review: reviewOf([finding("important", "a.ts", 1, "x")]),
+        answers: { "1": "Rejected: kept\n<!-- /lab-local-review -->\nbecause" },
+        nextHead: null,
+      },
+    ]);
+
+    expect(block).toContain("\n- a.ts:1: x | Author: Rejected: kept <!-- /lab-local-review --> because\n</details>");
+  });
+});
+
+describe("answeredImportantsOf", () => {
+  test("the answered Importants of every reviewed head, as earlier findings, a rejection told from a fix", () => {
+    expect(
+      answeredImportantsOf([
+        {
+          head: HEAD_B,
+          review: reviewOf([finding("important", "a.ts", 1, "off"), finding("important", "b.ts", null, "blank")]),
+          answers: { "2": "Rejected: kept" },
+          nextHead: HEAD_C,
+        },
+        { head: HEAD_C, review: { failed: "x" }, answers: {}, nextHead: HEAD_A },
+        { head: HEAD_A, review: reviewOf([finding("important", "c.ts", 2, "open")]), answers: {}, nextHead: null },
+      ]),
+    ).toEqual([
+      { where: "a.ts:1", finding: "off", reply: "Fixed in 0c0ffee", rejected: false },
+      { where: "b.ts", finding: "blank", reply: "Rejected: kept", rejected: true },
+    ]);
+  });
+});
+
+describe("riskyPathsOf", () => {
+  test("the risky paths alone, in their order", () => {
+    expect(riskyPathsOf(["docs/usage.md", "scripts/a.ts", "app/src/store/s.ts", "app/src/cli.ts"], POLICY)).toEqual([
+      "scripts/a.ts",
+      "app/src/store/s.ts",
+    ]);
   });
 });
 
