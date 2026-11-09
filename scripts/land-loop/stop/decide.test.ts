@@ -256,6 +256,13 @@ describe("holdStepsOf", () => {
     });
   });
 
+  test("a placeholder in the reason is escaped for GitHub; the Author's mark is not", () => {
+    expect(holdStepsOf("rewrites <file> paths", [])).toEqual({
+      addLabel: true,
+      comment: "Held for the Owner by the Author: rewrites \\<file> paths\n\n<!-- lab-author-reply -->",
+    });
+  });
+
   test("no hold, or a PR that carries land:human already, adds nothing and posts nothing", () => {
     expect(holdStepsOf(null, [])).toEqual({ addLabel: false, comment: null });
     expect(holdStepsOf(null, ["land:human"])).toEqual({ addLabel: false, comment: null });
@@ -695,6 +702,30 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
       { where: "b.ts:2", finding: "z", reply: "Fixed in 0c0ffee (local review)" },
     ]);
     expect(bodyWithBlock(`Intro.\n\n${block}\n\nCloses #66`, "NEW")).toBe("Intro.\n\nNEW\n\nCloses #66");
+  });
+
+  test("a placeholder in a finding or an answer is escaped for GitHub and reads back as written", () => {
+    const block =
+      localReviewBlockOf([
+        {
+          head: HEAD_A,
+          review: reviewOf([finding("important", "a.ts", 1, "reads '<code counts>' from `review-<head>.json`")]),
+          answers: { "1": "Rejected: <sha> holds it" },
+          nextHead: null,
+        },
+      ]) ?? "";
+
+    expect(block).toContain(
+      "\n- a.ts:1: reads '\\<code counts>' from `review-<head>.json` | Author: Rejected: \\<sha> holds it\n</details>",
+    );
+    expect(block.startsWith("<!-- lab-local-review -->\n")).toBe(true);
+    expect(localReviewEntriesOf(bodyWithBlock("Intro.\n\nCloses #66", block))).toEqual([
+      {
+        where: "a.ts:1",
+        finding: "reads '<code counts>' from `review-<head>.json`",
+        reply: "Rejected: <sha> holds it (local review)",
+      },
+    ]);
   });
 
   test("a delimiter that a removal would form from its neighbours is removed too", () => {

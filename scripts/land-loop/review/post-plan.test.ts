@@ -257,6 +257,18 @@ describe("reviewOf", () => {
     ]);
   });
 
+  test("a placeholder in the summary or the scenario is escaped for GitHub; code and the marker are not", () => {
+    const placeholder = {
+      ...finding("important", "b.ts", 1),
+      summary: "Reads review-<head>.json, not `review-<head>.json`.",
+      failureScenario: "The body reads '<code counts>'.\n\n```\n<head>\n```",
+    };
+
+    expect(commentsOf(placeholder).map((comment) => comment.body)).toEqual([
+      `**Important**: Reads review-\\<head>.json, not \`review-<head>.json\`.\n\nThe body reads '\\<code counts>'.\n\n\`\`\`\n<head>\n\`\`\`\n\n${markerOf("important")}`,
+    ]);
+  });
+
   test("a comment anchored away from its finding says where the finding is", () => {
     const bodies = commentsOf(
       finding("important", "app/other.ts", 4),

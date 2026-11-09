@@ -8,6 +8,7 @@
  *   bun scripts/land-loop/thread.ts <thread-id> --reject "<reason>"
  */
 
+import { escapeHtml } from "../lib/markdown.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "./author-mark.ts";
 import { ghEnv, requiredAuthorToken } from "./lib/author.ts";
 import { checked, run } from "./lib/run.ts";
@@ -49,9 +50,11 @@ export function argsOf(argv: readonly string[]): { id: string; body: string } | 
   return id === undefined || id.trim() === "" || body === null ? null : { id, body };
 }
 
-/** The reply as posted: a rejection carries `REJECT_MARK`, then every answer `AUTHOR_MARK`. */
+/** The reply as posted, its HTML escaped: a rejection carries `REJECT_MARK`, then every answer `AUTHOR_MARK`. */
 function postedOf(body: string): string {
-  return body.startsWith(REJECT_PREFIX) ? `${body}\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}` : `${body}\n\n${AUTHOR_MARK}`;
+  const text = escapeHtml(body);
+
+  return body.startsWith(REJECT_PREFIX) ? `${text}\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}` : `${text}\n\n${AUTHOR_MARK}`;
 }
 
 /** Replies first, so a thread is never resolved without the author's answer in it. */

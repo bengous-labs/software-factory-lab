@@ -9,6 +9,7 @@
 import { Schema, Struct } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { escapeHtml } from "../../lib/markdown.ts";
 import type { ReportedResult, ReviewResult } from "../review/review-report.ts";
 
 /** Who lands a change: `auto`, the Merge bot alone, or `owner`, with a Land approval. */
@@ -438,7 +439,7 @@ function ownerWaitSteps(next: StateRecord, patch: string, wait: OwnerWait): read
   return [
     {
       kind: "owner-comment",
-      body: `This PR waits for the Owner's Land approval: ${wait.asked}. Add the label ${LAND_APPROVAL_LABEL} to land it.`,
+      body: `This PR waits for the Owner's Land approval: ${escapeHtml(wait.asked)}. Add the label ${LAND_APPROVAL_LABEL} to land it.`,
     },
     { kind: "record", record: { ...next, ownerAskedPatch: patch } },
     gate,

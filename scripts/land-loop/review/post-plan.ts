@@ -7,6 +7,7 @@
 
 import type { Schema } from "effect";
 
+import { escapeHtml } from "../../lib/markdown.ts";
 import { markerOf, movedLineOf } from "./findings.ts";
 import type { ReportedFinding, ReportedResult, ReviewRequest, Severity } from "./review-report.ts";
 
@@ -140,11 +141,11 @@ function commentOf(planned: PlannedComment): string {
   const moved = anchor.file !== finding.file || (finding.line !== null && anchor.line !== finding.line);
 
   return [
-    `**${labelOf(planned)}**: ${finding.summary}`,
+    `**${labelOf(planned)}**: ${escapeHtml(finding.summary)}`,
     ...(moved ? [movedLineOf(placeOf(finding))] : []),
     ...(finding.breaks === null ? [] : [`Breaks: \`${placeOf(finding.breaks)}\``]),
     "",
-    finding.failureScenario,
+    escapeHtml(finding.failureScenario),
     "",
     markerOf(planned.severity),
   ].join("\n");

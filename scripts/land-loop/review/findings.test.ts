@@ -281,6 +281,20 @@ describe("earlierThreadsOf", () => {
     ]);
   });
 
+  test("a placeholder escaped for GitHub reads back as written, in the finding and the answers", () => {
+    const escaped = `**Important**: reads review-\\<head>.json\n\nwhy\n\n${markerOf("important")}`;
+
+    expect(
+      earlierThreadsOf(APP, [thread(escaped, [[AUTHOR, `Rejected: \\<sha> holds it\n\n${AUTHOR_MARK}`]])]),
+    ).toEqual([
+      {
+        where: "a.ts:3",
+        finding: "**Important**: reads review-<head>.json",
+        reply: "Rejected: <sha> holds it (thread open)",
+      },
+    ]);
+  });
+
   test("the Author's machine account answers as the author: its replies reach the earlier findings", () => {
     expect(
       earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous-labs-author", "Fixed in abc: bound checked"]])]),

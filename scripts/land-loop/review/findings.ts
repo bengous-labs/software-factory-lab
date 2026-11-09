@@ -7,6 +7,7 @@
 
 import { Option, Schema } from "effect";
 
+import { unescapeHtml } from "../../lib/markdown.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import { LOCAL_REVIEW_CLOSE, LOCAL_REVIEW_OPEN } from "../stop/decide.ts";
 import { Severity } from "./review-report.ts";
@@ -186,8 +187,8 @@ export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThrea
     return [
       {
         where: `${thread.path}:${thread.line ?? "?"}`,
-        finding: finding.body.split("\n")[0] ?? "",
-        reply: `${answers.length === 0 ? "no answer" : answers.join(" / ")} (thread ${state})`,
+        finding: unescapeHtml(finding.body.split("\n")[0] ?? ""),
+        reply: `${answers.length === 0 ? "no answer" : unescapeHtml(answers.join(" / "))} (thread ${state})`,
       },
     ];
   });
@@ -213,7 +214,7 @@ export function localReviewEntriesOf(body: string): EarlierThread[] {
 
       return where === undefined || finding === undefined || reply === undefined
         ? []
-        : [{ where, finding, reply: `${reply} (local review)` }];
+        : [{ where, finding: unescapeHtml(finding), reply: `${unescapeHtml(reply)} (local review)` }];
     });
 }
 
