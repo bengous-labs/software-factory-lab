@@ -295,6 +295,16 @@ describe("earlierThreadsOf", () => {
     ]);
   });
 
+  test("a human's answer is read as written: only the answers the Author escaped are read back", () => {
+    expect(earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous", String.raw`the pattern \<word matches`]])])).toEqual([
+      {
+        where: "a.ts:3",
+        finding: "**Important**: off by one",
+        reply: String.raw`the pattern \<word matches (thread open)`,
+      },
+    ]);
+  });
+
   test("the Author's machine account answers as the author: its replies reach the earlier findings", () => {
     expect(
       earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous-labs-author", "Fixed in abc: bound checked"]])]),

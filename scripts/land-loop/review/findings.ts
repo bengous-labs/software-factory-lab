@@ -7,7 +7,7 @@
 
 import { Option, Schema } from "effect";
 
-import { unescapeHtml } from "../../lib/markdown.ts";
+import { codeSpan, unescapeHtml } from "../../lib/markdown.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import { LOCAL_REVIEW_CLOSE, LOCAL_REVIEW_OPEN } from "../stop/decide.ts";
 import { Severity } from "./review-report.ts";
@@ -117,7 +117,7 @@ export function reviewOfBody(body: string): { readonly patch: string; readonly r
  * `<file>:<line>`. An external format: posted comments carry it, so the words stay.
  */
 export function movedLineOf(place: string): string {
-  return `At \`${place}\`, outside this diff.`;
+  return `At ${codeSpan(place)}, outside this diff.`;
 }
 
 const MOVED_LINE_PATTERN = /^At `(.+?)(?::\d+)?`, outside this diff\.$/mu;
@@ -176,7 +176,9 @@ export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThrea
       return [];
     }
 
-    const answers = answersOf(appLogin, thread).map((reply) => unescapeHtml(unmarked(reply.body)));
+    const answers = answersOf(appLogin, thread).map((reply) =>
+      reply.body.includes(AUTHOR_MARK) ? unescapeHtml(unmarked(reply.body)) : unmarked(reply.body),
+    );
 
     const state = rejectedOf(appLogin, thread)
       ? "resolved: rejected by the Author"
@@ -214,7 +216,13 @@ export function localReviewEntriesOf(body: string): EarlierThread[] {
 
       return where === undefined || finding === undefined || reply === undefined
         ? []
-        : [{ where, finding: unescapeHtml(finding), reply: `${unescapeHtml(reply)} (local review)` }];
+        : [
+            {
+              where: unescapeHtml(where),
+              finding: unescapeHtml(finding),
+              reply: `${unescapeHtml(reply)} (local review)`,
+            },
+          ];
     });
 }
 

@@ -9,7 +9,7 @@
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
-import { escapeHtml } from "../../lib/markdown.ts";
+import { escapeInline } from "../../lib/markdown.ts";
 import { TokenCounts } from "../../lib/tokens.ts";
 import { AUTHOR_MARK } from "../author-mark.ts";
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
@@ -204,7 +204,7 @@ export function holdStepsOf(hold: string | null, labels: readonly string[]): Hol
     return { addLabel: false, comment: null };
   }
 
-  return { addLabel: true, comment: `Held for the Owner by the Author: ${escapeHtml(hold)}\n\n${AUTHOR_MARK}` };
+  return { addLabel: true, comment: `Held for the Owner by the Author: ${escapeInline(hold)}\n\n${AUTHOR_MARK}` };
 }
 
 /** A Worker's branch is `<type>/<N>-<slug>`, made for issue N. */
@@ -491,7 +491,10 @@ export function localReviewBlockOf(reviews: readonly ReviewedHead[]): string | n
     `Local review (deep, ${latest.head.slice(0, 7)}): ${entries.length - rejected} Important fixed, ${rejected} rejected, ${nitLinesOf(latest.review).length} Nit.`,
     "<details><summary>Findings</summary>",
     "",
-    ...entries.map((entry) => `- ${entry.where}: ${escapeHtml(entry.finding)} | Author: ${escapeHtml(entry.reply)}`),
+    ...entries.map(
+      (entry) =>
+        `- ${escapeInline(entry.where)}: ${escapeInline(entry.finding)} | Author: ${escapeInline(entry.reply)}`,
+    ),
     "</details>",
     LOCAL_REVIEW_CLOSE,
   ].join("\n");

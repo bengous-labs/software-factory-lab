@@ -728,6 +728,21 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
     ]);
   });
 
+  test("a backtick left open in a finding cannot pair with one in its answer or its place", () => {
+    const block =
+      localReviewBlockOf([
+        {
+          head: HEAD_A,
+          review: reviewOf([finding("important", "a`.ts", 1, "a `b")]),
+          answers: { "1": "Rejected: x` <b> `" },
+          nextHead: null,
+        },
+      ]) ?? "";
+
+    expect(block).toContain("\n- a\\`.ts:1: a \\`b | Author: Rejected: x` <b> `\n");
+    expect(Bun.markdown.html(block.replaceAll(/<!--.*?-->|<\/?details>|<\/?summary>/gu, ""))).not.toContain("<b>");
+  });
+
   test("a delimiter that a removal would form from its neighbours is removed too", () => {
     const block =
       localReviewBlockOf([
@@ -747,6 +762,19 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
 });
 
 describe("answeredImportantsOf", () => {
+  test("each answered Important reads on one line, its spaces collapsed and trimmed", () => {
+    expect(
+      answeredImportantsOf([
+        {
+          head: HEAD_A,
+          review: reviewOf([finding("important", "a.ts", 1, " two\n  lines ")]),
+          answers: { "1": "Rejected:  kept\n" },
+          nextHead: null,
+        },
+      ]),
+    ).toEqual([{ where: "a.ts:1", finding: "two lines", reply: "Rejected: kept", rejected: true }]);
+  });
+
   test("the answered Importants of every reviewed head, as earlier findings, a rejection told from a fix", () => {
     expect(
       answeredImportantsOf([

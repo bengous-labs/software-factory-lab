@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { Schema } from "effect";
 
 import { decodeJson } from "../lib/json.ts";
+import { unescapeHtml } from "../lib/markdown.ts";
 import { AUTHOR_MARK } from "./author-mark.ts";
 import { checked, run } from "./lib/run.ts";
 import type { Run } from "./ports/run.ts";
@@ -114,7 +115,7 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
       const kind = severity === "important" || severity === "nit" ? "Finding" : "Comment";
       wakes.push({
         key: `thread:${thread.id}`,
-        line: `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}`,
+        line: `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(thread.author === APP_LOGIN ? unescapeHtml(thread.body) : thread.body)}`,
       });
     }
 

@@ -1,81 +1,79 @@
 /** A backslash escape: GitHub shows the punctuation after it as text. */
 const ESCAPED = /\\[!-/:-@[-`{-~]/u;
 
-/** A fenced code block opened at column 0, to its closing fence, indented up to 3 spaces, or the end of the text. */
-const BACKTICK_FENCE = /^(?<tick>`{3,})[^`\n]*\n[\s\S]*?(?:^ {0,3}\k<tick>`*[ \t]*$|(?![\s\S]))/u;
+/** A closed fenced code block, its fences at the start of a line: an unclosed one is no code. */
+const BACKTICK_FENCE = /(?<=^|\n)(?<tick>`{3,})[^`\n]*\n[\s\S]*?(?<=\n) {0,3}\k<tick>`*[ \t]*(?=\n|$)/u;
 
-const TILDE_FENCE = /^(?<tilde>~{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\k<tilde>~*[ \t]*$|(?![\s\S]))/u;
+const TILDE_FENCE = /(?<=^|\n)(?<tilde>~{3,})(?!~)[^\n]*\n[\s\S]*?(?<=\n) {0,3}\k<tilde>~*[ \t]*(?=\n|$)/u;
 
-/** A code span on one line: a run of backticks closed by a run of the same length. */
-const CODE_SPAN = /(?<!`)(?<ticks>`+)(?!`)[^\n]*?(?<!`)\k<ticks>(?!`)/u;
+/** A code span on one line with no `|`: a table cell would split it, and GitHub would read its content as text. */
+const CODE_SPAN = /(?<!`)(?<ticks>`+)(?!`)[^\n|]*?(?<!`)\k<ticks>(?!`)/u;
+
+/** A run of backticks no span closes: escaped, so it cannot pair with a backtick outside the text. */
+const OPEN_RUN = /`+/u;
+
+/** A tilde fence no fence closes, its first `~` escaped, so it cannot swallow what follows the text. */
+const OPEN_TILDE_FENCE = /(?<=^|\n) {0,3}~(?=~~)/u;
 
 /** The `<` that opens raw HTML in CommonMark: before a letter, `/`, `!` or `?`. */
 const TAG_START = /<(?=[A-Za-z/!?])/u;
 
 /**
- * What `escapeHtml` leaves as written, then the `<` it escapes. Code it does not recognize, such as a
- * fence indented in a list or a code span over two lines, gets its `<` escaped too: a stray `\` shows
- * in that code, where leaving it would let GitHub read raw HTML.
+ * What the escaper reads, first match wins. Only code it is sure of is left as written: anything else
+ * gets its `<` and its backticks escaped, so a miss shows a stray `\`, never raw HTML.
  */
-const TOKEN_SOURCE = [ESCAPED, BACKTICK_FENCE, TILDE_FENCE, CODE_SPAN, TAG_START]
-  .map((pattern) => pattern.source)
-  .join("|");
+const TOKEN = new RegExp(
+  [ESCAPED, BACKTICK_FENCE, TILDE_FENCE, CODE_SPAN, OPEN_RUN, OPEN_TILDE_FENCE, TAG_START]
+    .map((pattern) => pattern.source)
+    .join("|"),
+  "gu",
+);
 
-const PAIRED = new RegExp([ESCAPED, CODE_SPAN].map((pattern) => pattern.source).join("|"), "gmu");
-
-const BLANK_LINE = /\n[ \t]*\n/gu;
-
-/** Where the paragraph that holds `offset` starts: after the last blank line before it. */
-function paragraphStart(text: string, offset: number): number {
-  const blanks = [...text.slice(0, offset).matchAll(BLANK_LINE)];
-  const last = blanks.at(-1);
-
-  return last === undefined ? 0 : last.index + last[0].length;
-}
-
-/**
- * Whether a run of `length` backticks is left open in `before`. A code span can cross lines, so such a
- * run may pair with the one at `offset`, which then closes a span instead of opening one.
- */
-function leftOpen(before: string, length: number): boolean {
-  return before
-    .replaceAll(PAIRED, "")
-    .split(/[^`]+/u)
-    .some((run) => run.length === length);
-}
-
-/** `text` with each token of `TOKEN_SOURCE` passed through `swap`, a code span that may close an earlier one read as text. */
-function rewritten(text: string, swap: (token: string) => string): string {
-  const token = new RegExp(TOKEN_SOURCE, "gmu");
-  let out = "";
-  let last = 0;
-
-  for (let match = token.exec(text); match !== null; match = token.exec(text)) {
-    const ticks = match.groups?.["ticks"];
-
-    const asText =
-      ticks !== undefined && leftOpen(text.slice(paragraphStart(text, match.index), match.index), ticks.length);
-
-    const end = asText ? match.index + ticks.length : token.lastIndex;
-
-    out += text.slice(last, match.index) + (asText ? text.slice(match.index, end) : swap(match[0]));
-    last = end;
-    token.lastIndex = end;
+/** A token as `escapeHtml` writes it: a tag start, an open run or an open fence escaped, code and escapes as they are. */
+function escapedToken(token: string): string {
+  if (token === "<") {
+    return String.raw`\<`;
   }
 
-  return out + text.slice(last);
+  if (/^ {0,3}~$/u.test(token)) {
+    return token.replace("~", String.raw`\~`);
+  }
+
+  return /^`+$/u.test(token) ? token.replaceAll("`", String.raw`\``) : token;
 }
 
 /**
- * `text` with each `<` that GitHub would read as an HTML tag escaped as `\<`, outside code, so a
- * placeholder such as `<head>` shows as written. Markdown structure (`#`, `>`, `- `) stays as it is,
- * and escaping twice changes nothing.
+ * `text`, a whole Markdown body or a block that starts a line, with each `<` that GitHub would read
+ * as an HTML tag escaped as `\<` and each backtick that closes no span escaped as `` \` ``, outside
+ * code. A placeholder such as `<head>` then shows as written, and the text cannot open code that
+ * swallows what follows it. Markdown structure (`#`, `>`, `- `) stays as it is, and escaping twice
+ * changes nothing.
  */
 export function escapeHtml(text: string): string {
-  return rewritten(text, (token) => (token === "<" ? String.raw`\<` : token));
+  return text.replaceAll(/\r\n?/gu, "\n").replaceAll(TOKEN, escapedToken);
 }
 
-/** `text` with the `\<` outside code read back as `<`: what `escapeHtml` was given, when that held no `\<`. */
+/** `text` for the middle of a line: on one line, so it opens no block, then escaped as `escapeHtml` does. */
+export function escapeInline(text: string): string {
+  return escapeHtml(text.replaceAll(/\s+/gu, " ").trim());
+}
+
+/** `text` in a code span, on one line, its fence longer than any backtick run it holds. */
+export function codeSpan(text: string): string {
+  const inline = text.replaceAll(/\s+/gu, " ").trim();
+  const longest = Math.max(0, ...(inline.match(/`+/gu) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longest + 1);
+  const pad = inline.startsWith("`") || inline.endsWith("`") ? " " : "";
+
+  return `${fence}${pad}${inline}${pad}${fence}`;
+}
+
+const UNESCAPED: ReadonlySet<string> = new Set([String.raw`\<`, String.raw`\``, String.raw`\~`]);
+
+/**
+ * `text` with what `escapeHtml` escaped outside code read back: `\<`, `` \` `` and `\~` without their
+ * `\`. It gives back what `escapeHtml` was given, when that held no `\` before a `<`, a backtick or a `~`.
+ */
 export function unescapeHtml(text: string): string {
-  return rewritten(text, (token) => (token === String.raw`\<` ? "<" : token));
+  return text.replaceAll(TOKEN, (token) => (UNESCAPED.has(token) ? token.slice(1) : token));
 }
