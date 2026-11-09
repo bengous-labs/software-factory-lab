@@ -4,9 +4,10 @@
  * The PreToolUse hook on Skill and the UserPromptExpansion hook. It refuses `github-flow:dispatch` and
  * `github-flow:shift`, whether Claude calls the skill or the user types its command: they run each Worker
  * as a subagent in a worktree, and a subagent never fires the Stop hook that publishes a Worker's pull
- * request. It leaves every other skill and command alone, and throws when its input does not read.
+ * request. It leaves every other skill and command alone, and refuses with exit 2 when its input does not
+ * read.
  *
- * Reads the hook input on stdin; prints the refusal on stdout.
+ * Reads the hook input on stdin; prints the refusal on stdout, or on stderr for an input it cannot read.
  */
 
 import { Schema } from "effect";
@@ -31,10 +32,15 @@ export function hookInputOf(stdin: string): HookInput {
   return decodeJson(HookInput, "the hook input", stdin);
 }
 
-/** Why the skill or command `name` is refused, or null when it may run. */
+/**
+ * Why the skill or command `name` is refused, or null when it may run. The Skill tool launches a skill named
+ * with surrounding spaces or a leading `/`, so the name is read without them.
+ */
 export function refusalFor(name: string): string | null {
-  return REFUSED.has(name)
-    ? `Refused: \`${name}\` runs each Worker as a subagent, and in this repository a Worker is its own Claude Code session. A subagent never fires the Stop hook, so its pull request would get no Stop checks, no Done judge and no PR watch to answer its review. Start one session per issue instead: it enters a worktree with EnterWorktree, and its Stop hook publishes the pull request when it stops.`
+  const skill = name.trim().replace(/^\//u, "");
+
+  return REFUSED.has(skill)
+    ? `Refused: \`${skill}\` runs each Worker as a subagent, and in this repository a Worker is its own Claude Code session. A subagent never fires the Stop hook, so its pull request would get no Stop checks, no Done judge and no PR watch to answer its review. Start one session per issue instead: it enters a worktree with EnterWorktree, and its Stop hook publishes the pull request when it stops.`
     : null;
 }
 
@@ -59,10 +65,37 @@ export function answerOf(input: HookInput): string | null {
   return reason === null ? null : JSON.stringify({ decision: "block", reason });
 }
 
-if (import.meta.main) {
-  const answer = answerOf(hookInputOf(await Bun.stdin.text()));
+/** What the hook prints on each stream, and the code it exits with. */
+export interface HookRun {
+  readonly code: 0 | 2;
+  readonly stdout: string;
+  readonly stderr: string;
+}
 
-  if (answer !== null) {
-    console.log(answer);
+/** What the hook does with `stdin`: print `stdout` and exit 0, or refuse with `stderr` and exit 2. */
+export function runOf(stdin: string): HookRun {
+  let input: HookInput;
+
+  try {
+    input = hookInputOf(stdin);
+  } catch (error) {
+    // Claude Code runs the call when a hook exits 1, so an input this guard cannot read refuses it instead.
+    return { code: 2, stdout: "", stderr: `Refused: refuse-dispatch could not read its input. ${String(error)}` };
   }
+
+  return { code: 0, stdout: answerOf(input) ?? "", stderr: "" };
+}
+
+if (import.meta.main) {
+  const run = runOf(await Bun.stdin.text());
+
+  if (run.stdout !== "") {
+    console.log(run.stdout);
+  }
+
+  if (run.stderr !== "") {
+    console.error(run.stderr);
+  }
+
+  process.exitCode = run.code;
 }

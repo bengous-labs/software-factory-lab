@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { $ } from "bun";
 
-import { answerOf, hookInputOf, refusalFor } from "./refuse-dispatch.ts";
+import { answerOf, hookInputOf, refusalFor, runOf } from "./refuse-dispatch.ts";
 
 const SCRIPT = join(import.meta.dir, "refuse-dispatch.ts");
 
@@ -48,6 +48,12 @@ describe("refusalFor", () => {
 
       expect(reason).toStartWith(`Refused: \`${name}\` runs each Worker as a subagent`);
       expect(reason).toContain("EnterWorktree");
+    }
+  });
+
+  test("reads a name with a leading slash or surrounding spaces, which the Skill tool still launches", () => {
+    for (const name of ["/github-flow:dispatch", " github-flow:dispatch ", "\t/github-flow:shift\n"]) {
+      expect(refusalFor(name)).toStartWith("Refused: `github-flow:");
     }
   });
 
@@ -97,10 +103,40 @@ describe("the hook", () => {
     expect(allowed.stdout.toString()).toBe("");
   });
 
-  test("fails on an input that does not read", async () => {
-    const ran = await runHook("not json");
+  test("prints the block for a typed shift", async () => {
+    const blocked = await runHook(typedCommand("github-flow:shift"));
 
-    expect(ran.exitCode).not.toBe(0);
-    expect(ran.stderr.toString()).toContain("the hook input");
+    expect(blocked.exitCode).toBe(0);
+    expect(JSON.parse(blocked.stdout.toString())).toEqual({
+      decision: "block",
+      reason: refusalFor("github-flow:shift"),
+    });
+  });
+
+  test("refuses with exit 2 an input that does not read, so Claude Code does not run the call", async () => {
+    const ran = await runHook(JSON.stringify({ hook_event_name: "PreToolUse", tool_input: { command: "x" } }));
+
+    expect(ran.exitCode).toBe(2);
+    expect(ran.stdout.toString()).toBe("");
+    expect(ran.stderr.toString()).toStartWith("Refused: refuse-dispatch could not read its input.");
+  });
+});
+
+describe("runOf", () => {
+  test("prints the answer and exits 0 for an input that reads", () => {
+    expect(runOf(skillCall("github-flow:pr"))).toEqual({ code: 0, stdout: "", stderr: "" });
+    expect(runOf(skillCall("github-flow:dispatch"))).toEqual({
+      code: 0,
+      stdout: answerOf(hookInputOf(skillCall("github-flow:dispatch"))) ?? "",
+      stderr: "",
+    });
+  });
+
+  test("refuses on stderr with exit 2, naming why, for an input that does not read", () => {
+    const run = runOf("not json");
+
+    expect(run.code).toBe(2);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("the hook input");
   });
 });
