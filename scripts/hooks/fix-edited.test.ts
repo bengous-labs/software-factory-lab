@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { $ } from "bun";
 
 import { fixtureEnv } from "../gates/fixture-env.ts";
-import { candidateOf, editOf, formatIgnorePatterns, rootFor } from "./fix-edited.ts";
+import { candidateOf, filePathOf, formatIgnorePatterns } from "./fix-edited.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 
@@ -16,41 +16,19 @@ const UNFORMATTED = "export function f(x: number) {\n  if (x > 0) return   'posi
 
 const FIXED = 'export function f(x: number) {\n  if (x > 0) {\n    return "positive";\n  }\n\n  return "other";\n}\n';
 
-describe("editOf", () => {
-  test("reads tool_input.file_path, null when there is none, and cwd", () => {
-    expect(
-      editOf(JSON.stringify({ cwd: "/repo", tool_name: "Write", tool_input: { file_path: "/repo/a.ts" } })),
-    ).toEqual({ filePath: "/repo/a.ts", cwd: "/repo" });
-    expect(editOf(JSON.stringify({ cwd: "/repo", tool_name: "Write", tool_input: {} }))).toEqual({
-      filePath: null,
-      cwd: "/repo",
-    });
+describe("filePathOf", () => {
+  test("reads tool_input.file_path, and null when there is none", () => {
+    expect(filePathOf(JSON.stringify({ tool_name: "Write", tool_input: { file_path: "/repo/a.ts" } }))).toBe(
+      "/repo/a.ts",
+    );
+    expect(filePathOf(JSON.stringify({ tool_name: "Write", tool_input: {} }))).toBeNull();
   });
 
   test("refuses an input that is not a tool call's", () => {
-    expect(() => editOf("null")).toThrow("the PostToolUse input: Expected object");
-    expect(() => editOf(JSON.stringify({ cwd: "/repo", tool_input: { file_path: 7 } }))).toThrow(
+    expect(() => filePathOf("null")).toThrow("the PostToolUse input: Expected object");
+    expect(() => filePathOf(JSON.stringify({ tool_input: { file_path: 7 } }))).toThrow(
       'Expected string\n  at ["tool_input"]["file_path"]',
     );
-    expect(() => editOf(JSON.stringify({ tool_input: {} }))).toThrow('Missing key\n  at ["cwd"]');
-  });
-});
-
-describe("rootFor", () => {
-  const main = { root: "/repo", commonDir: "/repo/.git" };
-  const worktree = { root: "/repo/.claude/worktrees/w", commonDir: "/repo/.git" };
-  const other = { root: "/other", commonDir: "/other/.git" };
-
-  test("the file's own checkout, when it shares the session's repository: a worktree's, not the main one's", () => {
-    expect(rootFor(worktree, main)).toBe("/repo/.claude/worktrees/w");
-    expect(rootFor(main, worktree)).toBe("/repo");
-    expect(rootFor(worktree, worktree)).toBe("/repo/.claude/worktrees/w");
-  });
-
-  test("none for a file of another repository, or outside any", () => {
-    expect(rootFor(other, main)).toBeNull();
-    expect(rootFor(null, main)).toBeNull();
-    expect(rootFor(main, null)).toBeNull();
   });
 });
 
@@ -87,15 +65,17 @@ describe("candidateOf", () => {
   });
 });
 
-const runHook = (filePath: string, cwd = ROOT) =>
+/** Runs the hook on a Write of `filePath`, as Claude Code does for the project at `project`. */
+const runHook = (filePath: string, project = ROOT) =>
   $`bun ${SCRIPT} < ${Buffer.from(
     JSON.stringify({
       hook_event_name: "PostToolUse",
       tool_name: "Write",
       tool_input: { file_path: filePath, content: "" },
-      cwd,
+      cwd: project,
     }),
   )}`
+    .env({ ...fixtureEnv(process.env), CLAUDE_PROJECT_DIR: project })
     .nothrow()
     .quiet();
 
@@ -162,16 +142,16 @@ describe("the hook, on a file in a worktree", () => {
     rmSync(main, { recursive: true, force: true });
   });
 
-  test("formats it in its own checkout, whether the session's cwd is that worktree or the main checkout", async () => {
-    for (const [name, cwd] of [
-      ["from-worktree.ts", worktree],
-      ["from-main.ts", main],
+  test("formats it in its own checkout, whether the project dir is the main checkout or that worktree", async () => {
+    for (const [name, project] of [
+      ["project-main.ts", main],
+      ["project-worktree.ts", worktree],
     ] as const) {
       const path = join(worktree, name);
 
       writeFileSync(path, BARE);
 
-      const ran = await runHook(path, cwd);
+      const ran = await runHook(path, project);
 
       expect(ran.exitCode).toBe(0);
       expect(ran.stdout.toString()).toBe("");
@@ -179,7 +159,7 @@ describe("the hook, on a file in a worktree", () => {
     }
   });
 
-  test("leaves a file of another repository than the session's as it is", async () => {
+  test("leaves a file of another repository than the project's as it is, running none of its tools", async () => {
     const path = join(worktree, "other-repo.ts");
 
     writeFileSync(path, BARE);
@@ -187,6 +167,21 @@ describe("the hook, on a file in a worktree", () => {
     const ran = await runHook(path, ROOT);
 
     expect(ran.exitCode).toBe(0);
+    expect(await Bun.file(path).text()).toBe(BARE);
+  });
+
+  test("throws when Claude Code did not set CLAUDE_PROJECT_DIR", async () => {
+    const path = join(worktree, "no-project.ts");
+
+    writeFileSync(path, BARE);
+
+    const ran = await $`bun ${SCRIPT} < ${Buffer.from(JSON.stringify({ tool_input: { file_path: path } }))}`
+      .env(fixtureEnv({ ...process.env, CLAUDE_PROJECT_DIR: undefined }))
+      .nothrow()
+      .quiet();
+
+    expect(ran.exitCode).not.toBe(0);
+    expect(ran.stderr.toString()).toContain("CLAUDE_PROJECT_DIR is not set");
     expect(await Bun.file(path).text()).toBe(BARE);
   });
 });

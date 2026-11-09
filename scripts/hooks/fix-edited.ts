@@ -5,9 +5,10 @@
  * the file the tool wrote, when that file is one `bun fmt --check .` reads in its own checkout: not
  * ignored by git, and matched by no `[fmt].ignorePatterns` of that checkout's `bunfig.toml`. That keeps
  * the vendored anti-slop copy and `node_modules` out. The checkout is the file's own, the main one or a
- * worktree, and the hook acts only when it belongs to the repository of the session's `cwd`. It prints
- * nothing and exits 0, since what a PostToolUse hook prints goes into the agent's context, unless its
- * input or `bunfig.toml` does not read: it then throws, naming which.
+ * worktree, and the hook acts only on a checkout of the project's own repository: it runs that
+ * checkout's oxlint and configs, and never another repository's. It prints nothing and exits 0, since
+ * what a PostToolUse hook prints goes into the agent's context, unless its input or `bunfig.toml` does not
+ * read: it then throws, naming which.
  *
  * Reads the PostToolUse input on stdin.
  */
@@ -17,6 +18,8 @@ import { dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 import { $ } from "bun";
 import { Result, Schema } from "effect";
 
+import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../lib/checkout.ts";
+import type { Checkout } from "../lib/checkout.ts";
 import { decodeJson } from "../lib/json.ts";
 
 const LINTED = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"]);
@@ -24,48 +27,15 @@ const LINTED = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"]);
 const FORMATTED = new Set([...LINTED, ".json", ".jsonc", ".md", ".yml", ".yaml", ".toml", ".css", ".html"]);
 
 /** The PostToolUse input, as far as this hook reads it. */
-const PostToolUseInput = Schema.Struct({
-  cwd: Schema.String,
-  tool_input: Schema.Struct({ file_path: Schema.optionalKey(Schema.String) }),
-});
+const PostToolUseInput = Schema.Struct({ tool_input: Schema.Struct({ file_path: Schema.optionalKey(Schema.String) }) });
 
 const Bunfig = Schema.Struct({
   fmt: Schema.optionalKey(Schema.Struct({ ignorePatterns: Schema.optionalKey(Schema.Array(Schema.String)) })),
 });
 
-/** What the hook reads of an Edit or Write call: the file it names, null when none, and the session's cwd. */
-export interface EditCall {
-  readonly filePath: string | null;
-  readonly cwd: string;
-}
-
-/** The Edit or Write tool call on `stdin`. */
-export function editOf(stdin: string): EditCall {
-  const input = decodeJson(PostToolUseInput, "the PostToolUse input", stdin);
-
-  return { filePath: input.tool_input.file_path ?? null, cwd: input.cwd };
-}
-
-/** A checkout: its top-level directory, and the git directory it shares with every worktree of its repository. */
-export interface Checkout {
-  readonly root: string;
-  readonly commonDir: string;
-}
-
-/** The root of the file's checkout, when it belongs to the same repository as the session's; else null. */
-export function rootFor(file: Checkout | null, session: Checkout | null): string | null {
-  return file !== null && session !== null && file.commonDir === session.commonDir ? file.root : null;
-}
-
-/** The checkout `dir` lies in, or null outside any repository or for a missing `dir`. */
-async function checkoutOf(dir: string): Promise<Checkout | null> {
-  const ran = await $`git -C ${dir} rev-parse --path-format=absolute --show-toplevel --git-common-dir`
-    .nothrow()
-    .quiet();
-
-  const [root, commonDir] = ran.stdout.toString().trim().split("\n");
-
-  return ran.exitCode === 0 && root !== undefined && commonDir !== undefined ? { root, commonDir } : null;
+/** The `file_path` the Edit or Write tool call on `stdin` names, or null when its input has none. */
+export function filePathOf(stdin: string): string | null {
+  return decodeJson(PostToolUseInput, "the PostToolUse input", stdin).tool_input.file_path ?? null;
 }
 
 /** The `[fmt].ignorePatterns` of a `bunfig.toml`. */
@@ -88,6 +58,15 @@ export function candidateOf(root: string, filePath: string, ignorePatterns: read
   }
 
   return ignorePatterns.some((pattern) => new Bun.Glob(pattern).match(path)) ? null : path;
+}
+
+/** The checkout `dir` lies in, or null outside any repository or for a missing `dir`. */
+async function checkoutOf(dir: string): Promise<Checkout | null> {
+  const ran = await $`git -C ${dir} rev-parse --path-format=absolute --show-toplevel --git-common-dir`
+    .nothrow()
+    .quiet();
+
+  return checkoutFromRevParse(ran.stdout.toString(), ran.exitCode);
 }
 
 /** Applies the autofixes and `bun fmt` to `filePath` in the checkout at `root`, when that checkout formats it. */
@@ -115,10 +94,10 @@ async function fixIn(root: string, filePath: string): Promise<void> {
 }
 
 if (import.meta.main) {
-  const { filePath, cwd } = editOf(await Bun.stdin.text());
+  const filePath = filePathOf(await Bun.stdin.text());
 
   if (filePath !== null) {
-    const root = rootFor(await checkoutOf(dirname(filePath)), await checkoutOf(cwd));
+    const root = trustedRoot(await checkoutOf(dirname(filePath)), await checkoutOf(projectDirOf(process.env)));
 
     if (root !== null) {
       await fixIn(root, filePath);
