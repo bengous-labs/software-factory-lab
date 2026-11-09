@@ -45,6 +45,7 @@ import {
   ownerCommenter,
   Pull,
   PullReviews,
+  rangeRefspecsOf,
   readsPatchDelta,
   reviewJobReader,
   routingLineOf,
@@ -107,9 +108,9 @@ describe("the GitHub answers the Merge bot reads", () => {
       decodeJson(
         CheckSuites,
         "suites",
-        JSON.stringify({ check_suites: [{ id: 1, app: null, head_branch: null, created_at: "t" }] }),
+        JSON.stringify({ check_suites: [{ id: 1, head_branch: null, created_at: "t" }] }),
       ).check_suites,
-    ).toEqual([{ id: 1, app: null, head_branch: null, created_at: "t" }]);
+    ).toEqual([{ id: 1, head_branch: null, created_at: "t" }]);
     expect(decodeJson(CommitPulls, "pulls", JSON.stringify([{ number: 3, state: "open" }]))).toEqual([
       { number: 3, state: "open" },
     ]);
@@ -772,11 +773,11 @@ describe("the routing inputs", () => {
 
 type CheckRun = (typeof CheckRuns.Type)["check_runs"][number];
 
-const runIn = (suite: number, status: string, conclusion: string | null): CheckRun => ({
+const runIn = (suite: number, status: string, conclusion: string | null, slug = "github-actions"): CheckRun => ({
   name: "x",
   status,
   conclusion,
-  app: { slug: "github-actions" },
+  app: { slug },
   check_suite: { id: suite },
 });
 
@@ -820,14 +821,9 @@ describe("devRunsReader", () => {
   /** The merge queue's suite, CI's push suite and the App's suite on DEV_HEAD. */
   const SUITES = {
     check_suites: [
-      {
-        id: QUEUE_SUITE,
-        app: { slug: "github-actions" },
-        head_branch: "gh-readonly-queue/dev/pr-1-a",
-        created_at: "t",
-      },
-      { id: PUSH_SUITE, app: { slug: "github-actions" }, head_branch: "dev", created_at: "t" },
-      { id: APP_SUITE, app: { slug: "bengous-labs-agents" }, head_branch: "dev", created_at: "t" },
+      { id: QUEUE_SUITE, head_branch: "gh-readonly-queue/dev/pr-1-a", created_at: "t" },
+      { id: PUSH_SUITE, head_branch: "dev", created_at: "t" },
+      { id: APP_SUITE, head_branch: "dev", created_at: "t" },
     ],
   };
 
@@ -854,7 +850,19 @@ describe("devRunsReader", () => {
     return { runner, calls };
   }
 
-  test("fetches origin/dev, then reads its check suites and validate and mutation on its head, and no workflow run", async () => {
+  test("rangeOf fetches dev once, beside the PR's base when that is another branch", () => {
+    expect(rangeRefspecsOf({ number: 12, base: { ref: "dev" } })).toEqual([
+      "+refs/pull/12/head:refs/lab/pr-12",
+      "+refs/heads/dev:refs/remotes/origin/dev",
+    ]);
+    expect(rangeRefspecsOf({ number: 12, base: { ref: "main" } })).toEqual([
+      "+refs/pull/12/head:refs/lab/pr-12",
+      "+refs/heads/main:refs/remotes/origin/main",
+      "+refs/heads/dev:refs/remotes/origin/dev",
+    ]);
+  });
+
+  test("reads origin/dev's check suites and validate and mutation on its head, and no workflow run", async () => {
     const { runner, calls } = devRunner(
       [runIn(PUSH_SUITE, "completed", "success")],
       [runIn(PUSH_SUITE, "completed", "success")],
@@ -863,7 +871,6 @@ describe("devRunsReader", () => {
     const runs = await devRunsReader(runner)(WHERE);
 
     expect(calls).toEqual([
-      ["git", "fetch", "--quiet", "origin", "+refs/heads/dev:refs/remotes/origin/dev"],
       ["git", "rev-parse", "origin/dev"],
       ["gh", "api", "-X", "GET", `repos/o/r/commits/${DEV_HEAD}/check-suites?per_page=100`],
       ...ciRunsPathsOf("o/r", DEV_HEAD).map((path) => ["gh", "api", "-X", "GET", path]),
@@ -891,8 +898,8 @@ describe("devRunsReader", () => {
 
   test("a red run in another app's suite on dev is not read", async () => {
     const { runner } = devRunner(
-      [runIn(APP_SUITE, "completed", "failure"), runIn(PUSH_SUITE, "completed", "success")],
-      [runIn(APP_SUITE, "completed", "failure"), runIn(PUSH_SUITE, "completed", "success")],
+      [runIn(APP_SUITE, "completed", "failure", "bengous-labs-agents"), runIn(PUSH_SUITE, "completed", "success")],
+      [runIn(APP_SUITE, "completed", "failure", "bengous-labs-agents"), runIn(PUSH_SUITE, "completed", "success")],
     );
 
     expect(devRedOf(await devRunsReader(runner)(WHERE))).toBe(false);

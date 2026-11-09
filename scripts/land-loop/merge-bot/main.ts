@@ -118,12 +118,18 @@ const call = (env: Env, method: string, path: string, body?: Schema.JsonObject):
     body === undefined ? undefined : JSON.stringify(body),
   );
 
-/** The endpoint at `path`, decoded by `schema`. */
-const api = async <S extends Schema.ConstraintDecoder<unknown>>(
-  env: Env,
+/** The endpoint at `path`, read through `runner` and decoded by `schema`. */
+const apiWith = async <S extends Schema.ConstraintDecoder<unknown>>(
+  runner: Run,
+  where: Pick<Env, "cwd">,
   schema: S,
   path: string,
-): Promise<S["Type"]> => decodeJson(schema, `gh api ${path}`, await call(env, "GET", path));
+): Promise<S["Type"]> =>
+  decodeJson(schema, `gh api ${path}`, await checked(runner, ["gh", "api", "-X", "GET", path], { cwd: where.cwd }));
+
+/** The endpoint at `path`, decoded by `schema`. */
+const api = <S extends Schema.ConstraintDecoder<unknown>>(env: Env, schema: S, path: string): Promise<S["Type"]> =>
+  apiWith(run, env, schema, path);
 
 /** Sends `body` to the endpoint at `path`; what it answers is not read. */
 const send = async (env: Env, method: string, path: string, body?: Schema.JsonObject): Promise<void> => {
@@ -274,7 +280,6 @@ export const CheckSuites = Schema.Struct({
   check_suites: Schema.Array(
     Schema.Struct({
       id: Schema.Finite,
-      app: Schema.NullOr(Schema.Struct({ slug: Schema.String })),
       head_branch: Schema.NullOr(Schema.String),
       created_at: Schema.String,
     }),
@@ -346,14 +351,18 @@ interface Range {
   readonly head: string;
 }
 
-async function rangeOf(env: Env, pr: Pull): Promise<Range> {
-  await git(env, [
-    "fetch",
-    "--quiet",
-    "origin",
+/** The refspecs `rangeOf` fetches: the PR's head, its base and the Trunk, whose head `devRunsReader` reads. */
+export function rangeRefspecsOf(pr: Pick<Pull, "number" | "base">): readonly string[] {
+  const branches = pr.base.ref === TRUNK ? [TRUNK] : [pr.base.ref, TRUNK];
+
+  return [
     `+refs/pull/${pr.number}/head:refs/lab/pr-${pr.number}`,
-    `+refs/heads/${pr.base.ref}:refs/remotes/origin/${pr.base.ref}`,
-  ]);
+    ...branches.map((branch) => `+refs/heads/${branch}:refs/remotes/origin/${branch}`),
+  ];
+}
+
+async function rangeOf(env: Env, pr: Pull): Promise<Range> {
+  await git(env, ["fetch", "--quiet", "origin", ...rangeRefspecsOf(pr)]);
 
   return { base: await git(env, ["merge-base", `origin/${pr.base.ref}`, pr.head.sha]), head: pr.head.sha };
 }
@@ -459,8 +468,8 @@ export const ciOfRuns = (runs: ReadonlyArray<typeof CheckRuns.Type>): Snapshot["
 export const devRedOf = (runs: ReadonlyArray<typeof CheckRuns.Type>): boolean => ciOfRuns(runs) === "failure";
 
 /**
- * The runs of `runs` that ran in a GitHub Actions suite of a push to `branch`. The merge queue's commit
- * becomes the Trunk's head, so it also carries the queue's suites, whose `mutation` is skipped.
+ * The runs of `runs` that ran in a suite of a push to `branch`. The merge queue's commit becomes the
+ * Trunk's head, so it also carries the queue's suites, whose `mutation` is skipped.
  */
 export function pushRunsOf(
   suites: typeof CheckSuites.Type,
@@ -468,9 +477,7 @@ export function pushRunsOf(
   branch: string,
 ): ReadonlyArray<typeof CheckRuns.Type> {
   const pushSuites = new Set(
-    suites.check_suites
-      .filter((suite) => suite.app?.slug === "github-actions" && suite.head_branch === branch)
-      .map((suite) => suite.id),
+    suites.check_suites.filter((suite) => suite.head_branch === branch).map((suite) => suite.id),
   );
 
   return runs.map((found) => ({
@@ -478,26 +485,16 @@ export function pushRunsOf(
   }));
 }
 
-/** The push runs of each of CI_CHECKS on the Trunk's head, fetched by this read. */
+/** The push runs of each of CI_CHECKS on the Trunk's head, as `rangeOf` fetched it. */
 export function devRunsReader(
   runner: Run,
 ): (where: Pick<Env, "repo" | "cwd">) => Promise<ReadonlyArray<typeof CheckRuns.Type>> {
   return async (where) => {
-    const options = { cwd: where.cwd };
-
-    const read = async <S extends Schema.ConstraintDecoder<unknown>>(schema: S, path: string): Promise<S["Type"]> =>
-      decodeJson(schema, `gh api ${path}`, await checked(runner, ["gh", "api", "-X", "GET", path], options));
-
-    await checked(
-      runner,
-      ["git", "fetch", "--quiet", "origin", `+refs/heads/${TRUNK}:refs/remotes/origin/${TRUNK}`],
-      options,
-    );
-    const devHead = (await checked(runner, ["git", "rev-parse", `origin/${TRUNK}`], options)).trim();
+    const devHead = (await checked(runner, ["git", "rev-parse", `origin/${TRUNK}`], { cwd: where.cwd })).trim();
 
     const [suites, runs] = await Promise.all([
-      read(CheckSuites, `repos/${where.repo}/commits/${devHead}/check-suites?per_page=100`),
-      Promise.all(ciRunsPathsOf(where.repo, devHead).map((path) => read(CheckRuns, path))),
+      apiWith(runner, where, CheckSuites, `repos/${where.repo}/commits/${devHead}/check-suites?per_page=100`),
+      Promise.all(ciRunsPathsOf(where.repo, devHead).map((path) => apiWith(runner, where, CheckRuns, path))),
     ]);
 
     return pushRunsOf(suites, runs, TRUNK);
