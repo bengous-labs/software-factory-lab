@@ -15,24 +15,43 @@ const OPEN_RUN = /`+/u;
 /** A tilde fence no fence closes, its first `~` escaped, so it cannot swallow what follows the text. */
 const OPEN_TILDE_FENCE = /(?<=^|\n) {0,3}~(?=~~)/u;
 
-/** The `<` that opens raw HTML in CommonMark: before a letter, `/`, `!` or `?`. */
-const TAG_START = /<(?=[A-Za-z/!?])/u;
+/** A link, image or definition opener `escapeHtml` already escaped. */
+const ESCAPED_LINK = /\]\\[(:]/u;
+
+/**
+ * What can take a backtick before a code span closes it, so the span's `<` would be read as HTML: a
+ * link, image or definition (`](`, `]:`), and GitHub's math (`$`). Each is escaped, so it opens nothing.
+ */
+const LINK = /\](?=[(:])/u;
+
+const MATH = /\$/u;
+
+/** Every `<`: raw HTML and autolinks start with one, and an autolink can take a backtick too. */
+const ANGLE = /</u;
 
 /**
  * What the escaper reads, first match wins. Only code it is sure of is left as written: anything else
- * gets its `<` and its backticks escaped, so a miss shows a stray `\`, never raw HTML.
+ * that could open HTML, or take a backtick from code, is escaped.
  */
 const TOKEN = new RegExp(
-  [ESCAPED, BACKTICK_FENCE, TILDE_FENCE, CODE_SPAN, OPEN_RUN, OPEN_TILDE_FENCE, TAG_START]
+  [ESCAPED_LINK, ESCAPED, BACKTICK_FENCE, TILDE_FENCE, CODE_SPAN, OPEN_RUN, OPEN_TILDE_FENCE, LINK, MATH, ANGLE]
     .map((pattern) => pattern.source)
     .join("|"),
   "gu",
 );
 
-/** A token as `escapeHtml` writes it: a tag start, an open run or an open fence escaped, code and escapes as they are. */
+const ESCAPED_SINGLES = new Map([
+  ["<", String.raw`\<`],
+  ["$", String.raw`\$`],
+  ["]", "]\\"],
+]);
+
+/** A token as `escapeHtml` writes it: an opener escaped, code and escapes as they are. */
 function escapedToken(token: string): string {
-  if (token === "<") {
-    return String.raw`\<`;
+  const single = ESCAPED_SINGLES.get(token);
+
+  if (single !== undefined) {
+    return single;
   }
 
   if (/^ {0,3}~$/u.test(token)) {
@@ -43,11 +62,11 @@ function escapedToken(token: string): string {
 }
 
 /**
- * `text`, a whole Markdown body or a block that starts a line, with each `<` that GitHub would read
- * as an HTML tag escaped as `\<` and each backtick that closes no span escaped as `` \` ``, outside
- * code. A placeholder such as `<head>` then shows as written, and the text cannot open code that
- * swallows what follows it. Markdown structure (`#`, `>`, `- `) stays as it is, and escaping twice
- * changes nothing.
+ * `text`, a whole Markdown body or a block that starts a line, escaped outside code so GitHub reads no
+ * HTML in it: each `<`, each backtick no span closes, each link opener (`](`, `]:`) and each `$`. A
+ * placeholder such as `<head>` then shows as written, and the text cannot open code that swallows what
+ * follows it. A link the text holds shows as text. Other Markdown (`#`, `>`, `- `, emphasis) stays as
+ * it is, and escaping twice changes nothing.
  */
 export function escapeHtml(text: string): string {
   return text.replaceAll(/\r\n?/gu, "\n").replaceAll(TOKEN, escapedToken);
@@ -68,12 +87,20 @@ export function codeSpan(text: string): string {
   return `${fence}${pad}${inline}${pad}${fence}`;
 }
 
-const UNESCAPED: ReadonlySet<string> = new Set([String.raw`\<`, String.raw`\``, String.raw`\~`]);
+const UNESCAPED = new Map([
+  [String.raw`\<`, "<"],
+  [String.raw`\``, "`"],
+  [String.raw`\~`, "~"],
+  [String.raw`\$`, "$"],
+  [String.raw`]\(`, "]("],
+  [String.raw`]\:`, "]:"],
+]);
 
 /**
- * `text` with what `escapeHtml` escaped outside code read back: `\<`, `` \` `` and `\~` without their
- * `\`. It gives back what `escapeHtml` was given, when that held no `\` before a `<`, a backtick or a `~`.
+ * `text` with what `escapeHtml` escaped outside code read back without its `\`. It gives back what
+ * `escapeHtml` was given, when that held no `\` before a `<`, a backtick, a `~`, a `$`, or a `(` or a
+ * `:` after a `]`.
  */
 export function unescapeHtml(text: string): string {
-  return text.replaceAll(TOKEN, (token) => (UNESCAPED.has(token) ? token.slice(1) : token));
+  return text.replaceAll(TOKEN, (token) => UNESCAPED.get(token) ?? token);
 }

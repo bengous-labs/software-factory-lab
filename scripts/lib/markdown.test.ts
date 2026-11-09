@@ -4,9 +4,12 @@ import * as fc from "fast-check";
 
 import { codeSpan, escapeHtml, escapeInline, unescapeHtml } from "./markdown.ts";
 
+/** GitHub's extensions that can take a backtick from a code span: autolinks and math. */
+const GITHUB = { autolinks: true, latexMath: true };
+
 /** Whether Markdown `text` holds raw HTML: its render changes when raw HTML is turned off. */
 const hasRawHtml = (text: string): boolean =>
-  Bun.markdown.html(text) !== Bun.markdown.html(text, { noHtmlSpans: true, noHtmlBlocks: true });
+  Bun.markdown.html(text, GITHUB) !== Bun.markdown.html(text, { ...GITHUB, noHtmlSpans: true, noHtmlBlocks: true });
 
 const markdownText = fc.string({
   unit: fc.constantFrom(
@@ -40,6 +43,22 @@ const markdownText = fc.string({
     "\r",
     "\u2028",
     "<b>",
+    "<1",
+    "[",
+    "]",
+    "(",
+    ")",
+    "](",
+    "]:",
+    "![",
+    "$",
+    "'",
+    "@",
+    "1",
+    "_",
+    ".",
+    "www.",
+    "http://",
   ),
   maxLength: 50,
 });
@@ -58,7 +77,9 @@ describe("escapeHtml", () => {
     ["a <!-- note --> b", String.raw`a \<!-- note --> b`],
     ["closes </x> and <?php", String.raw`closes \</x> and \<?php`],
     ["see <https://example.com>", String.raw`see \<https://example.com>`],
-    ["a < b and b > c", "a < b and b > c"],
+    ["a < b and b > c", String.raw`a \< b and b > c`],
+    ["[doc](https://x) and ![img](y)", String.raw`[doc]\(https://x) and ![img]\(y)`],
+    ["[x]: /u and $a$", String.raw`[x]\: /u and \$a\$`],
     [String.raw`review-\<head>.json`, String.raw`review-\<head>.json`],
   ])("%j becomes %j", (text, escaped) => {
     expect(escapeHtml(text)).toBe(escaped);
@@ -89,6 +110,9 @@ describe("escapeHtml", () => {
       "- a\n  \\`\\`\\`\n  \\<x>\n  \\`\\`\\`",
     ],
     ["a closing fence indented up to 3 spaces closes the block", "```\n<x>\n   ```\n<b>", "```\n<x>\n   ```\n\\<b>"],
+    ["a link cannot take the backtick of a span", "[a](`) <b>x</b> `", "[a]\\(`) <b>x</b> `"],
+    ["an email autolink cannot take it", "<1`@a.b> <!-- hide --> `", "\\<1`@a.b> <!-- hide --> `"],
+    ["math cannot take it", "$a`$ <b> `", "\\$a`$ <b> `"],
     ["U+2028 starts no line", "a \u2028```\n<b>\n```", "a \u2028\\`\\`\\`\n\\<b>\n\\`\\`\\`"],
     ["a carriage return ends a line", "x\r```\r<b>\r```", "x\n```\n<b>\n```"],
   ])("%s", (_, text, escaped) => {
@@ -105,7 +129,8 @@ describe("escapeHtml", () => {
         const comment = commentOf(summary, place, scenario);
 
         return (
-          !hasRawHtml(comment.replace("<!-- m -->", "")) && Bun.markdown.html(comment).trimEnd().endsWith("<!-- m -->")
+          !hasRawHtml(comment.replace("<!-- m -->", "")) &&
+          Bun.markdown.html(comment, GITHUB).trimEnd().endsWith("<!-- m -->")
         );
       }),
     );
@@ -145,7 +170,7 @@ describe("unescapeHtml", () => {
   test("reads back the text escapeHtml was given", () => {
     fc.assert(
       fc.property(
-        markdownText.filter((text) => !/\\[<`~]/u.test(text) && !text.includes("\r")),
+        markdownText.filter((text) => !/\\[<`~$]|\]\\[(:]/u.test(text) && !text.includes("\r")),
         (text) => unescapeHtml(escapeHtml(text)) === text,
       ),
     );
