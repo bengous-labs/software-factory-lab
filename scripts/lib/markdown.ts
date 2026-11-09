@@ -6,8 +6,12 @@ const BACKTICK_FENCE = /(?<=^|\n)(?<tick>`{3,})[^`\n]*\n[\s\S]*?(?<=\n) {0,3}\k<
 
 const TILDE_FENCE = /(?<=^|\n)(?<tilde>~{3,})(?!~)[^\n]*\n[\s\S]*?(?<=\n) {0,3}\k<tilde>~*[ \t]*(?=\n|$)/u;
 
-/** A code span on one line with no `|`: a table cell would split it, and GitHub would read its content as text. */
-const CODE_SPAN = /(?<!`)(?<ticks>`+)(?!`)[^\n|]*?(?<!`)\k<ticks>(?!`)/u;
+/**
+ * A code span on one line with no `|`: a table cell would split it, and GitHub would read its content
+ * as text. It opens neither in a word after `www.` nor after a `:`: GitHub's extended autolink
+ * (`www.`, `https://`) runs to the next space and would take its opening backtick.
+ */
+const CODE_SPAN = /(?<!(?:[Ww]{3}\.|:)\S*)(?<!`)(?<ticks>`+)(?!`)[^\n|]*?(?<!`)\k<ticks>(?!`)/u;
 
 /** A run of backticks no span closes: escaped, so it cannot pair with a backtick outside the text. */
 const OPEN_RUN = /`+/u;
@@ -26,22 +30,39 @@ const LINK = /\](?=[(:])/u;
 
 const MATH = /\$/u;
 
-/** Every `<`: raw HTML and autolinks start with one, and an autolink can take a backtick too. */
+/**
+ * Every `<`: raw HTML and autolinks start with one, and an autolink can take a backtick too. It becomes
+ * `&lt;`, not `\<`: an extended autolink that stops at the `<` would take the `\` and leave the `<` raw.
+ */
 const ANGLE = /</u;
+
+const ESCAPED_ANGLE = /&lt;/u;
 
 /**
  * What the escaper reads, first match wins. Only code it is sure of is left as written: anything else
  * that could open HTML, or take a backtick from code, is escaped.
  */
 const TOKEN = new RegExp(
-  [ESCAPED_LINK, ESCAPED, BACKTICK_FENCE, TILDE_FENCE, CODE_SPAN, OPEN_RUN, OPEN_TILDE_FENCE, LINK, MATH, ANGLE]
+  [
+    ESCAPED_LINK,
+    ESCAPED,
+    ESCAPED_ANGLE,
+    BACKTICK_FENCE,
+    TILDE_FENCE,
+    CODE_SPAN,
+    OPEN_RUN,
+    OPEN_TILDE_FENCE,
+    LINK,
+    MATH,
+    ANGLE,
+  ]
     .map((pattern) => pattern.source)
     .join("|"),
   "gu",
 );
 
 const ESCAPED_SINGLES = new Map([
-  ["<", String.raw`\<`],
+  ["<", "&lt;"],
   ["$", String.raw`\$`],
   ["]", "]\\"],
 ]);
@@ -88,7 +109,7 @@ export function codeSpan(text: string): string {
 }
 
 const UNESCAPED = new Map([
-  [String.raw`\<`, "<"],
+  ["&lt;", "<"],
   [String.raw`\``, "`"],
   [String.raw`\~`, "~"],
   [String.raw`\$`, "$"],

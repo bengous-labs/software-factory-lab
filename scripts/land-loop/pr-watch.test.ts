@@ -121,7 +121,7 @@ describe("wakesOf", () => {
         path: "a.ts",
         line: 2,
         author: "bengous-labs-agents",
-        body: String.raw`**Important**: reads review-\<head>.json`,
+        body: String.raw`**Important**: reads review-&lt;head>.json`,
         replies: [],
       },
       {
@@ -130,14 +130,14 @@ describe("wakesOf", () => {
         path: "a.ts",
         line: 3,
         author: "bengous",
-        body: String.raw`keep \<word`,
+        body: String.raw`keep &lt;word`,
         replies: [],
       },
     ];
 
     expect(wakesOf(7, { ...OPEN, threads }).map((wake) => wake.line)).toEqual([
       "Comment T9 on a.ts:2 by bengous-labs-agents: **Important**: reads review-<head>.json",
-      String.raw`Comment T10 on a.ts:3 by bengous: keep \<word`,
+      String.raw`Comment T10 on a.ts:3 by bengous: keep &lt;word`,
     ]);
   });
 

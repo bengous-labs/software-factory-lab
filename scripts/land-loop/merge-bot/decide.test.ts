@@ -1340,7 +1340,7 @@ describe("why a PR is held, where the Owner looks", () => {
     const record = reviewed(LIGHT, { ownerHold: "rewrites <file> paths." });
 
     expect(commentsOf({ ...READY, record })).toEqual([
-      String.raw`This PR waits for the Owner's Land approval: rewrites \<file> paths. Add the label land-ok to land it.`,
+      String.raw`This PR waits for the Owner's Land approval: rewrites &lt;file> paths. Add the label land-ok to land it.`,
     ]);
   });
 

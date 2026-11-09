@@ -265,7 +265,7 @@ describe("reviewOf", () => {
     };
 
     expect(commentsOf(placeholder).map((comment) => comment.body)).toEqual([
-      `**Important**: Reads review-\\<head>.json, not \`review-<head>.json\`.\n\nThe body reads '\\<code counts>'.\n\n\`\`\`\n<head>\n\`\`\`\n\n${markerOf("important")}`,
+      `**Important**: Reads review-&lt;head>.json, not \`review-<head>.json\`.\n\nThe body reads '&lt;code counts>'.\n\n\`\`\`\n<head>\n\`\`\`\n\n${markerOf("important")}`,
     ]);
   });
 

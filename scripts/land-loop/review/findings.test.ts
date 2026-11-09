@@ -282,10 +282,10 @@ describe("earlierThreadsOf", () => {
   });
 
   test("a placeholder escaped for GitHub reads back as written, in the finding and the answers", () => {
-    const escaped = `**Important**: reads review-\\<head>.json\n\nwhy\n\n${markerOf("important")}`;
+    const escaped = `**Important**: reads review-&lt;head>.json\n\nwhy\n\n${markerOf("important")}`;
 
     expect(
-      earlierThreadsOf(APP, [thread(escaped, [[AUTHOR, `Rejected: \\<sha> holds it\n\n${AUTHOR_MARK}`]])]),
+      earlierThreadsOf(APP, [thread(escaped, [[AUTHOR, `Rejected: &lt;sha> holds it\n\n${AUTHOR_MARK}`]])]),
     ).toEqual([
       {
         where: "a.ts:3",
@@ -296,13 +296,15 @@ describe("earlierThreadsOf", () => {
   });
 
   test("a human's answer is read as written: only the answers the Author escaped are read back", () => {
-    expect(earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous", String.raw`the pattern \<word matches`]])])).toEqual([
-      {
-        where: "a.ts:3",
-        finding: "**Important**: off by one",
-        reply: String.raw`the pattern \<word matches (thread open)`,
-      },
-    ]);
+    expect(earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous", String.raw`the pattern &lt;word matches`]])])).toEqual(
+      [
+        {
+          where: "a.ts:3",
+          finding: "**Important**: off by one",
+          reply: String.raw`the pattern &lt;word matches (thread open)`,
+        },
+      ],
+    );
   });
 
   test("the Author's machine account answers as the author: its replies reach the earlier findings", () => {

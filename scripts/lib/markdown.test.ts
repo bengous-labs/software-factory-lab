@@ -44,6 +44,8 @@ const markdownText = fc.string({
     "\u2028",
     "<b>",
     "<1",
+    "&",
+    "&lt;",
     "[",
     "]",
     "(",
@@ -69,18 +71,18 @@ const commentOf = (summary: string, place: string, scenario: string): string =>
 
 describe("escapeHtml", () => {
   test.each([
-    ["review-<head>.json", String.raw`review-\<head>.json`],
+    ["review-<head>.json", String.raw`review-&lt;head>.json`],
     [
       "reads '<code counts>; security: <security counts>.'",
-      String.raw`reads '\<code counts>; security: \<security counts>.'`,
+      String.raw`reads '&lt;code counts>; security: &lt;security counts>.'`,
     ],
-    ["a <!-- note --> b", String.raw`a \<!-- note --> b`],
-    ["closes </x> and <?php", String.raw`closes \</x> and \<?php`],
-    ["see <https://example.com>", String.raw`see \<https://example.com>`],
-    ["a < b and b > c", String.raw`a \< b and b > c`],
+    ["a <!-- note --> b", String.raw`a &lt;!-- note --> b`],
+    ["closes </x> and <?php", String.raw`closes &lt;/x> and &lt;?php`],
+    ["see <https://example.com>", String.raw`see &lt;https://example.com>`],
+    ["a < b and b > c", String.raw`a &lt; b and b > c`],
     ["[doc](https://x) and ![img](y)", String.raw`[doc]\(https://x) and ![img]\(y)`],
     ["[x]: /u and $a$", String.raw`[x]\: /u and \$a\$`],
-    [String.raw`review-\<head>.json`, String.raw`review-\<head>.json`],
+    [String.raw`review-&lt;head>.json`, String.raw`review-&lt;head>.json`],
   ])("%j becomes %j", (text, escaped) => {
     expect(escapeHtml(text)).toBe(escaped);
   });
@@ -96,24 +98,27 @@ describe("escapeHtml", () => {
   });
 
   test.each([
-    ["an unclosed fence is no code", "```\n<div>", `${String.raw`\`\`\``}\n${String.raw`\<div>`}`],
-    ["an unclosed tilde fence is no code", "~~~\n<x>", `${String.raw`\~~~`}\n${String.raw`\<x>`}`],
-    ["a shorter fence does not close a longer one", "~~~~\n  ~~~\n<x>", "\\~~~~\n  \\~~~\n\\<x>"],
-    ["a backtick in the info string opens no fence", "``` a`b\n<x>\n```", "\\`\\`\\` a\\`b\n\\<x>\n\\`\\`\\`"],
-    ["an unclosed backtick is escaped", "unclosed `review-<head>.json", "unclosed \\`review-\\<head>.json"],
-    ["a code span stops at the end of the line", "`a\n<x> b`", "\\`a\n\\<x> b\\`"],
+    ["an unclosed fence is no code", "```\n<div>", `${String.raw`\`\`\``}\n${String.raw`&lt;div>`}`],
+    ["an unclosed tilde fence is no code", "~~~\n<x>", `${String.raw`\~~~`}\n${String.raw`&lt;x>`}`],
+    ["a shorter fence does not close a longer one", "~~~~\n  ~~~\n<x>", "\\~~~~\n  \\~~~\n&lt;x>"],
+    ["a backtick in the info string opens no fence", "``` a`b\n<x>\n```", "\\`\\`\\` a\\`b\n&lt;x>\n\\`\\`\\`"],
+    ["an unclosed backtick is escaped", "unclosed `review-<head>.json", "unclosed \\`review-&lt;head>.json"],
+    ["a code span stops at the end of the line", "`a\n<x> b`", "\\`a\n&lt;x> b\\`"],
     ["a run of another length left open is escaped", "``a\n`b`` <b> `", "\\`\\`a\n`b`` <b> `"],
-    ["a span with a pipe is no code, as in a table cell", "| `<a | b>` |", "| \\`\\<a | b>\\` |"],
+    ["a span with a pipe is no code, as in a table cell", "| `<a | b>` |", "| \\`&lt;a | b>\\` |"],
     [
       "a fence indented in a list item is escaped",
       "- a\n  ```\n  <x>\n  ```",
-      "- a\n  \\`\\`\\`\n  \\<x>\n  \\`\\`\\`",
+      "- a\n  \\`\\`\\`\n  &lt;x>\n  \\`\\`\\`",
     ],
-    ["a closing fence indented up to 3 spaces closes the block", "```\n<x>\n   ```\n<b>", "```\n<x>\n   ```\n\\<b>"],
+    ["a closing fence indented up to 3 spaces closes the block", "```\n<x>\n   ```\n<b>", "```\n<x>\n   ```\n&lt;b>"],
     ["a link cannot take the backtick of a span", "[a](`) <b>x</b> `", "[a]\\(`) <b>x</b> `"],
-    ["an email autolink cannot take it", "<1`@a.b> <!-- hide --> `", "\\<1`@a.b> <!-- hide --> `"],
+    ["an email autolink cannot take it", "<1`@a.b> <!-- hide --> `", "&lt;1`@a.b> <!-- hide --> `"],
+    ["an extended autolink cannot take it", "see www.x.com` <b>hi</b> `", "see www.x.com\\` &lt;b>hi&lt;/b> \\`"],
+    ["nor a URL one", "https://x.io/a` <!-- hide --> `", "https://x.io/a\\` &lt;!-- hide --> \\`"],
+    ["a span after a space stays code", "see www.x.com `<b>`", "see www.x.com `<b>`"],
     ["math cannot take it", "$a`$ <b> `", "\\$a`$ <b> `"],
-    ["U+2028 starts no line", "a \u2028```\n<b>\n```", "a \u2028\\`\\`\\`\n\\<b>\n\\`\\`\\`"],
+    ["U+2028 starts no line", "a \u2028```\n<b>\n```", "a \u2028\\`\\`\\`\n&lt;b>\n\\`\\`\\`"],
     ["a carriage return ends a line", "x\r```\r<b>\r```", "x\n```\n<b>\n```"],
   ])("%s", (_, text, escaped) => {
     expect(escapeHtml(text)).toBe(escaped);
@@ -144,7 +149,7 @@ describe("escapeHtml", () => {
 describe("escapeInline", () => {
   test("puts the text on one line, so a fence or an HTML block cannot start in it", () => {
     expect(escapeInline("```\n<details>\n```")).toBe("``` <details> ```");
-    expect(escapeInline(" two\n  lines <b> ")).toBe(String.raw`two lines \<b>`);
+    expect(escapeInline(" two\n  lines <b> ")).toBe(String.raw`two lines &lt;b>`);
   });
 
   test("fragments joined on one line hold no raw HTML", () => {
@@ -170,13 +175,13 @@ describe("unescapeHtml", () => {
   test("reads back the text escapeHtml was given", () => {
     fc.assert(
       fc.property(
-        markdownText.filter((text) => !/\\[<`~$]|\]\\[(:]/u.test(text) && !text.includes("\r")),
+        markdownText.filter((text) => !/\\[`~$]|\]\\[(:]|&lt;/u.test(text) && !text.includes("\r")),
         (text) => unescapeHtml(escapeHtml(text)) === text,
       ),
     );
   });
 
   test("leaves code as written", () => {
-    expect(unescapeHtml(`${String.raw`\`a\<b\` and \<c> in `}\`\\<d>\``)).toBe("`a<b` and <c> in `\\<d>`");
+    expect(unescapeHtml(`${String.raw`\`a&lt;b\` and &lt;c> in `}\`&lt;d>\``)).toBe("`a<b` and <c> in `&lt;d>`");
   });
 });

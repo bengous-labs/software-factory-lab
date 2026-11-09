@@ -55,7 +55,7 @@ describe("post", () => {
     await post(run, "/repo", "t0k", { pr: 86, body: "Kept <n> rounds, see `review-<head>.json`" });
 
     expect(calls).toEqual([
-      ["gh", "pr", "comment", "86", "--body", `Kept \\<n> rounds, see \`review-<head>.json\`\n\n${AUTHOR_MARK}`],
+      ["gh", "pr", "comment", "86", "--body", `Kept &lt;n> rounds, see \`review-<head>.json\`\n\n${AUTHOR_MARK}`],
     ]);
   });
 

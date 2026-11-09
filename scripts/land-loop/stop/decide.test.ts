@@ -259,7 +259,7 @@ describe("holdStepsOf", () => {
   test("a placeholder in the reason is escaped for GitHub; the Author's mark is not", () => {
     expect(holdStepsOf("rewrites <file> paths", [])).toEqual({
       addLabel: true,
-      comment: "Held for the Owner by the Author: rewrites \\<file> paths\n\n<!-- lab-author-reply -->",
+      comment: "Held for the Owner by the Author: rewrites &lt;file> paths\n\n<!-- lab-author-reply -->",
     });
   });
 
@@ -716,7 +716,7 @@ Local review (deep, ac95210): 2 Important fixed, 1 rejected, 3 Nit.
       ]) ?? "";
 
     expect(block).toContain(
-      "\n- a.ts:1: reads '\\<code counts>' from `review-<head>.json` | Author: Rejected: \\<sha> holds it\n</details>",
+      "\n- a.ts:1: reads '&lt;code counts>' from `review-<head>.json` | Author: Rejected: &lt;sha> holds it\n</details>",
     );
     expect(block.startsWith("<!-- lab-local-review -->\n")).toBe(true);
     expect(localReviewEntriesOf(bodyWithBlock("Intro.\n\nCloses #66", block))).toEqual([
