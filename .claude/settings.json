@@ -21,6 +21,27 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR\"/scripts/hooks/refuse-dispatch.ts",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR\"/scripts/hooks/refuse-dispatch.ts",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "PostToolUse": [
