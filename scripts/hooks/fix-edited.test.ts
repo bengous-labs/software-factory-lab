@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -157,6 +157,23 @@ describe("the hook, on a file in a worktree", () => {
       expect(ran.stdout.toString()).toBe("");
       expect(await Bun.file(path).text()).toBe(FORMATTED);
     }
+  });
+
+  test("formats a file named through a symbolic link to the checkout", async () => {
+    const link = `${main}-link`;
+
+    symlinkSync(main, link);
+
+    const path = join(link, ".claude", "worktrees", "w", "through-link.ts");
+
+    writeFileSync(path, BARE);
+
+    const ran = await runHook(path, link);
+
+    rmSync(link);
+
+    expect(ran.exitCode).toBe(0);
+    expect(await Bun.file(join(worktree, "through-link.ts")).text()).toBe(FORMATTED);
   });
 
   test("leaves a file of another repository than the project's as it is, running none of its tools", async () => {

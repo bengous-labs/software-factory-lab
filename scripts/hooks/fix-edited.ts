@@ -6,14 +6,16 @@
  * ignored by git, and matched by no `[fmt].ignorePatterns` of that checkout's `bunfig.toml`. That keeps
  * the vendored anti-slop copy and `node_modules` out. The checkout is the file's own, the main one or a
  * worktree, and the hook acts only on a checkout of the project's own repository: it runs that
- * checkout's oxlint and configs, and never another repository's. It prints nothing and exits 0, since
- * what a PostToolUse hook prints goes into the agent's context, unless its input or `bunfig.toml` does not
- * read: it then throws, naming which.
+ * checkout's oxlint and configs, and never another repository's. A path through a symbolic link is read
+ * as its real path, the one git names the checkout by. It prints nothing and exits 0, since what a
+ * PostToolUse hook prints goes into the agent's context, unless its input or `bunfig.toml` does not read,
+ * or `CLAUDE_PROJECT_DIR` is unset: it then throws, naming which.
  *
  * Reads the PostToolUse input on stdin.
  */
 
-import { dirname, extname, isAbsolute, join, relative, sep } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 
 import { $ } from "bun";
 import { Result, Schema } from "effect";
@@ -99,8 +101,9 @@ if (import.meta.main) {
   if (filePath !== null) {
     const root = trustedRoot(await checkoutOf(dirname(filePath)), await checkoutOf(projectDirOf(process.env)));
 
+    // git names the checkout by its real path, so a path through a symbolic link would read as outside it.
     if (root !== null) {
-      await fixIn(root, filePath);
+      await fixIn(root, join(realpathSync(dirname(filePath)), basename(filePath)));
     }
   }
 }
