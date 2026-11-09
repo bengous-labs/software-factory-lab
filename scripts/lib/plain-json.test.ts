@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import type { Json, JsonObject } from "./plain-json.ts";
 import { objectAt, optionalObjectAt, optionalStringAt, optionalStringsAt, parseJson, stringAt } from "./plain-json.ts";
 
 const SOURCE = "the input";
@@ -23,6 +24,15 @@ describe("objectAt", () => {
     expect(() => objectAt(SOURCE, null)).toThrow(/^the input: Expected object$/u);
     expect(() => objectAt(SOURCE, [], ["a", 0])).toThrow('the input: Expected object\n  at ["a"][0]');
     expect(() => objectAt(SOURCE, "a")).toThrow("Expected object");
+  });
+
+  test("accepts an object without a prototype, and refuses an instance of a class", () => {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: Object.create(null) makes an empty object, which is a JsonObject.
+    const bare = Object.create(null) as JsonObject;
+
+    expect(objectAt(SOURCE, bare)).toBe(bare);
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion, anti-slop/no-chained-type-assertions -- SAFETY: a Date is no Json; the test feeds one to the check that refuses it.
+    expect(() => objectAt(SOURCE, new Date(0) as unknown as Json, ["d"])).toThrow('Expected object\n  at ["d"]');
   });
 });
 

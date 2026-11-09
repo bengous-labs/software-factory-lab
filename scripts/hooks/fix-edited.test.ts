@@ -44,6 +44,12 @@ describe("formatIgnorePatterns", () => {
     );
   });
 
+  test("refuses a [fmt] that is a datetime, not a table", () => {
+    expect(() => formatIgnorePatterns("fmt = 1979-05-27T07:32:00Z\n")).toThrow(
+      'bunfig.toml: Expected object\n  at ["fmt"]',
+    );
+  });
+
   test("the repository's own list keeps the vendored anti-slop copy out", async () => {
     expect(formatIgnorePatterns(await Bun.file(join(ROOT, "bunfig.toml")).text())).toContain(
       "scripts/vendor/anti-slop/**",

@@ -35,14 +35,19 @@ export function parseJson(source: string, text: string): Json {
   }
 }
 
-/** `value` as an object; anything else throws, naming `source` and `path`. */
+/**
+ * `value` as a plain object, one whose prototype is `Object.prototype` or null; anything else throws, naming
+ * `source` and `path`. That refuses an instance of a class, such as the `Instant` Bun reads a TOML datetime as.
+ */
 export function objectAt(source: string, value: Json | undefined, path: JsonPath = []): JsonObject {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- this check is the parser at the hooks' I/O boundary.
   if (typeof value !== "object" || value === null || isList(value)) {
     return fail(source, "Expected object", path);
   }
 
-  return value;
+  const prototype = Reflect.getPrototypeOf(value);
+
+  return prototype === Object.prototype || prototype === null ? value : fail(source, "Expected object", path);
 }
 
 /** `object[key]` as a string, or undefined when the key is missing; another type throws. */
