@@ -21,6 +21,15 @@ describe("rename", () => {
     expect(() => rename(TASKS, 9, "x")).toThrow("no task #9");
   });
 
+  test("the title the task already has is refused", () => {
+    expect(() => rename(TASKS, 1, "old")).toThrow(TaskError);
+    expect(() => rename(TASKS, 1, "old")).toThrow("task #1 already has that title");
+  });
+
+  test("the title another task has is taken", () => {
+    expect(rename(TASKS, 1, "other")[0]?.title).toBe("other");
+  });
+
   test("a title of 200 characters is kept", () => {
     const title = "a".repeat(200);
     expect(rename(TASKS, 1, title)[0]?.title).toBe(title);
