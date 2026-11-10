@@ -58,6 +58,8 @@ export interface PrState {
 export interface Wake {
   readonly key: string;
   readonly line: string;
+  /** Set on the Owner's own words alone: they reach a running session as a turn of its user, not as a peer's message. */
+  readonly owner?: true;
 }
 
 /** The key that keeps the end line from being delivered twice. */
@@ -105,7 +107,7 @@ function threadWakesOf(thread: Thread, where: string): readonly Wake[] {
   }
 
   return byOwner(thread)
-    ? [{ key, line: `Comment ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}` }]
+    ? [{ key, line: `Comment ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}`, owner: true }]
     : [];
 }
 
@@ -124,7 +126,7 @@ function replyWakesOf(thread: Thread, where: string, reply: Comment): readonly W
   }
 
   return byOwner(reply)
-    ? [{ key, line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}` }]
+    ? [{ key, line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}`, owner: true }]
     : [];
 }
 
@@ -156,6 +158,7 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
     wakes.push({
       key: `comment:${comment.id}`,
       line: `Comment on PR #${pr} by ${comment.author}: ${flat(comment.body)}`,
+      owner: true,
     });
   }
 
@@ -184,6 +187,9 @@ export function readingOf(pr: number, state: PrState, seen: ReadonlySet<string>)
 
   return { wakes: wakes.filter((wake) => !seen.has(wake.key)), ends: end !== null };
 }
+
+/** Whether a Wake the reading delivers holds the Owner's words. */
+export const ownerWordsIn = (reading: Reading): boolean => reading.wakes.some((wake) => wake.owner === true);
 
 /**
  * The text of the turn a reading's Wakes start in the Author's session: the Wakes' lines, and, while the
@@ -272,23 +278,49 @@ export function prStateOf(view: string, checks: string, conversation: string, th
   };
 }
 
-/** A session `claude agents --json` lists, as far as the relay reads it: a running one has a `pid`. */
-const Agent = Schema.Struct({ sessionId: Schema.optionalKey(Schema.String), pid: Schema.optionalKey(Schema.Finite) });
-
-/** How a Wake reaches the Author's session: its messaging socket while it runs, else a resume. */
-export type Route = { readonly kind: "socket"; readonly pid: number } | { readonly kind: "resume" };
+/**
+ * A session `claude agents --json` lists, as far as the relay reads it: a running one has a `pid`, a
+ * background one the `id` that `claude stop` takes, and a `status` that reads `busy` during a turn. Its
+ * `state` is no such signal: it can read `working` while the session waits for an answer.
+ */
+const Agent = Schema.Struct({
+  sessionId: Schema.optionalKey(Schema.String),
+  pid: Schema.optionalKey(Schema.Finite),
+  id: Schema.optionalKey(Schema.String),
+  status: Schema.optionalKey(Schema.String),
+});
 
 /**
- * The route to `session` from what `claude agents --json` printed: the socket of its process while it
- * runs, a resume when it no longer does. A running session is never resumed: Claude Code would start a
- * copy of it.
+ * How a Wake reaches the Author's session: its messaging socket while it runs, a resume when it no
+ * longer does; for the Owner's words, a stop so that a later turn resumes it, or nothing yet.
  */
-export function routeOf(agents: string, session: string): Route {
+export type Route =
+  | { readonly kind: "socket"; readonly pid: number }
+  | { readonly kind: "resume" }
+  | { readonly kind: "stop"; readonly id: string }
+  | { readonly kind: "wait" };
+
+/**
+ * The route to `session` from what `claude agents --json` printed. A running session is never resumed:
+ * Claude Code would start a copy of it. Claude Code hands a socket message to the session as a peer's,
+ * never as its user's approval, so a running background session that the Owner's words must reach is
+ * stopped once its turn is over, and a later turn resumes it with them: stopping it during a turn would
+ * cut that turn.
+ */
+export function routeOf(agents: string, session: string, ownerWords: boolean): Route {
   const found = decodeJson(Schema.Array(Agent), "claude agents --json", agents).find(
     (agent) => agent.sessionId === session,
   );
 
-  return found?.pid === undefined ? { kind: "resume" } : { kind: "socket", pid: found.pid };
+  if (found?.pid === undefined) {
+    return { kind: "resume" };
+  }
+
+  if (!ownerWords || found.id === undefined) {
+    return { kind: "socket", pid: found.pid };
+  }
+
+  return found.status === "busy" ? { kind: "wait" } : { kind: "stop", id: found.id };
 }
 
 /** The line the relay writes on a session's messaging socket: one user message. An external format: Claude Code reads it. */

@@ -4,8 +4,9 @@
  * The relay of one pull request, left detached by the Stop hook at a Publication, in the main checkout.
  * Every 30 s it reads the PR as the Author's machine account and delivers the Wakes it has not
  * delivered yet, as one turn in the session of the PR's latest Publication: on that session's messaging
- * socket while it runs, else by resuming it. The keys it delivered are kept in
- * `.lab/state/watch-<pr>.json`. It ends when the PR is landed or closed, and writes its start and its
+ * socket while it runs, else by resuming it. The Owner's words go by a resume alone, so that they reach it
+ * as its user's: a turn stops the running session, and the next one resumes it. The keys it delivered are
+ * kept in `.lab/state/watch-<pr>.json`. It ends when the PR is landed or closed, and writes its start and its
  * end to `.lab/outcomes.log`.
  *
  *   bun scripts/land-loop/relay/main.ts <pr>
@@ -22,6 +23,7 @@ import { relayFilesOf } from "../lib/relay-start.ts";
 import { checked, run } from "../lib/run.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
 import {
+  ownerWordsIn,
   prStateOf,
   readingOf,
   relayLineOf,
@@ -68,8 +70,8 @@ export interface RelayIo {
   readonly read: () => Promise<PrState>;
   /** The session of the PR's latest Publication. */
   readonly session: () => string;
-  /** Delivers `text` to `session`; null when it did not go through. */
-  readonly deliver: (session: string, text: string) => Promise<Delivered | null>;
+  /** Delivers `text` to `session`, as the Owner's words when `ownerWords`; null when it did not go through. */
+  readonly deliver: (session: string, text: string, ownerWords: boolean) => Promise<Delivered | null>;
 }
 
 /** What one turn of the relay did: the keys it delivered, and whether the relay ends. */
@@ -96,7 +98,7 @@ export async function turn(pr: number, seen: ReadonlySet<string>, io: RelayIo): 
   }
 
   const keys = reading.wakes.map((wake) => wake.key);
-  const via = await io.deliver(io.session(), wakeTextOf(pr, reading));
+  const via = await io.deliver(io.session(), wakeTextOf(pr, reading), ownerWordsIn(reading));
 
   return { delivered: via === null ? [] : keys, via, pending: keys.length, ends: reading.ends };
 }
@@ -129,9 +131,9 @@ if (import.meta.main) {
   const io: RelayIo = {
     read: () => readPr(run, gh, pr),
     session: () => readFileSync(files.session, "utf8").trim(),
-    deliver: async (session, text) =>
+    deliver: async (session, text, ownerWords) =>
       deliver({
-        route: routeOf(await checked(run, ["claude", "agents", "--json"], { cwd }), session),
+        route: routeOf(await checked(run, ["claude", "agents", "--json"], { cwd }), session, ownerWords),
         socketLine: socketLineOf(text),
         resumeArgs: resumeArgsOf(session, text),
       }),

@@ -1,6 +1,7 @@
 /**
  * How a Wake's text reaches the Author's session: one line on its messaging socket while the session
  * runs, else `claude --bg --resume <session-id> "<text>"`, which wakes it with its saved launch options.
+ * The Owner's words reach a running background session by `claude stop <id>`, then a later resume.
  * The socket's path is the one Claude Code was observed to bind, with the directory its documentation
  * names as the fallback.
  */
@@ -9,6 +10,7 @@ import { connect } from "node:net";
 import { join } from "node:path";
 
 import type { Run } from "../ports/run.ts";
+import { checked } from "./run.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -49,7 +51,11 @@ export interface DeliverIo {
 }
 
 /** The route to a session, as `relay/wakes.ts` `routeOf` reads it. */
-type Route = { readonly kind: "socket"; readonly pid: number } | { readonly kind: "resume" };
+type Route =
+  | { readonly kind: "socket"; readonly pid: number }
+  | { readonly kind: "resume" }
+  | { readonly kind: "stop"; readonly id: string }
+  | { readonly kind: "wait" };
 
 /** What `deliverer` sends: the route, the line for a socket, the command for a resume. */
 export interface Delivery {
@@ -61,10 +67,22 @@ export interface Delivery {
 /**
  * Delivers over `io`: to a running session, the line on the first of its socket's paths that takes it;
  * to one that no longer runs, the resume. Null when neither went through: a running session whose
- * socket takes nothing is not resumed, which would start a copy of it.
+ * socket takes nothing is not resumed, which would start a copy of it. A stop runs `claude stop` and
+ * delivers nothing: a resume right after it still finds the session running and starts a copy, so a
+ * later turn, which finds it stopped, resumes it. A stop that fails throws.
  */
 export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delivered | null> {
   return async ({ route, socketLine, resumeArgs }) => {
+    if (route.kind === "wait") {
+      return null;
+    }
+
+    if (route.kind === "stop") {
+      await checked(io.run, ["claude", "stop", route.id], { cwd: io.cwd, timeoutMs: 120_000 });
+
+      return null;
+    }
+
     if (route.kind === "socket") {
       for (const path of socketPathsOf(route.pid, io.env, io.uid)) {
         if (await io.post(path, socketLine)) {

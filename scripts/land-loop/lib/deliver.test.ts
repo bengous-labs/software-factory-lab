@@ -87,6 +87,34 @@ describe("deliverer", () => {
   test("a resume that fails delivered nothing", async () => {
     expect(await world([], 1).deliver(delivery({ kind: "resume" }))).toBeNull();
   });
+
+  test("a stop stops the session and delivers nothing: a resume in the same turn would start a copy of it", async () => {
+    const found = world(["/run/user/1000/cc-socks/34502.sock"]);
+
+    expect(await found.deliver(delivery({ kind: "stop", id: "725ecfab" }))).toBeNull();
+    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
+    expect(found.posts).toEqual([]);
+  });
+
+  test("a stop that fails throws, naming the command, and resumes nothing", async () => {
+    const found = world([], 1);
+
+    const failure = await found.deliver(delivery({ kind: "stop", id: "725ecfab" })).then(
+      () => null,
+      (error: Error) => error.message,
+    );
+
+    expect(failure).toStartWith("claude stop 725ecfab exited 1");
+    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
+  });
+
+  test("a wait delivers nothing and touches nothing: a later turn sends the text again", async () => {
+    const found = world(["/run/user/1000/cc-socks/34502.sock"]);
+
+    expect(await found.deliver(delivery({ kind: "wait" }))).toBeNull();
+    expect(found.runs).toEqual([]);
+    expect(found.posts).toEqual([]);
+  });
 });
 
 describe("postToSocket", () => {

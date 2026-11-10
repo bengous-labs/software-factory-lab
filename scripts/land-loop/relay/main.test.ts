@@ -23,6 +23,7 @@ const NIT = {
 interface Sent {
   readonly session: string;
   readonly text: string;
+  readonly ownerWords: boolean;
 }
 
 /** A fake of a relay's outside, and what it was asked to deliver. */
@@ -40,8 +41,8 @@ function relay(state: PrState, through: Delivered | null = "socket"): Relay {
     io: {
       read: () => Promise.resolve(state),
       session: () => "S1",
-      deliver: (session, text) => {
-        sent.push({ session, text });
+      deliver: (session, text, ownerWords) => {
+        sent.push({ session, text, ownerWords });
 
         return Promise.resolve(through);
       },
@@ -75,8 +76,18 @@ describe("turn", () => {
           "PR #7 is back in draft at c0ffee1: it lands only after your next stop.",
           "Fix what you accept with a commit, say in your last message which findings you reject and why, then stop.",
         ].join("\n"),
+        ownerWords: false,
       },
     ]);
+  });
+
+  test("a reading that holds the Owner's words is delivered as such", async () => {
+    const comments = [{ id: "11", author: "bengous", body: "use wording B" }];
+    const { io, sent } = relay({ ...OPEN, threads: [NIT], comments });
+
+    await turn(7, new Set(), io);
+
+    expect(sent.map((found) => found.ownerWords)).toEqual([true]);
   });
 
   test("each Wake is delivered once: a Wake delivered before is not sent again", async () => {
@@ -115,7 +126,9 @@ describe("turn", () => {
     const landed = relay({ ...OPEN, state: "MERGED" });
 
     expect(await turn(7, new Set(), landed.io)).toEqual({ delivered: ["end"], via: "socket", pending: 1, ends: true });
-    expect(landed.sent).toEqual([{ session: "S1", text: "The Land loop, about your pull request #7:\nPR #7 landed." }]);
+    expect(landed.sent).toEqual([
+      { session: "S1", text: "The Land loop, about your pull request #7:\nPR #7 landed.", ownerWords: false },
+    ]);
 
     const closed = relay({ ...OPEN, state: "CLOSED" }, null);
 
