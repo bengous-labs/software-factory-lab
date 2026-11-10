@@ -26,6 +26,10 @@ describe("rename", () => {
     expect(() => rename(TASKS, 1, "old")).toThrow("task #1 already has that title");
   });
 
+  test("the title the task already has is refused even with spaces around it", () => {
+    expect(() => rename(TASKS, 1, " old ")).toThrow("task #1 already has that title");
+  });
+
   test("the title another task has is taken", () => {
     expect(rename(TASKS, 1, "other")[0]?.title).toBe("other");
   });
