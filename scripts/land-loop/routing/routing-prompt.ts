@@ -1,4 +1,4 @@
-/** The prompt the Routing judge reads: its questions, then the change's diff stat and its diff, cut past `DIFF_MAX`. */
+/** The prompt the Routing judge reads: its questions, then the change's diff stat and its diff, cut past `DIFF_MAX`. The judge sets the Review depth and whether a Patch delta is read again; it never sends a change to the Owner. */
 
 const DIFF_MAX = 60_000;
 
