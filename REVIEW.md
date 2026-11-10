@@ -14,7 +14,7 @@ The Code review reads this guide in its prompt. Review each change against what 
 ## Severity
 
 - **Important**: a failure from the list above that this change introduces, or a behaviour the change adds or changes with no test. It blocks the merge.
-- **Nit**: anything else worth saying, such as a name, a structure or a simpler form. At most three per review.
+- **Nit**: anything else worth saying, such as a name, a structure or a simpler form. Report every Nit, the most useful first: each pass of the review posts only its first three.
 - **Pre-existing**: a defect this change did not introduce, whatever its weight. It never blocks.
 
 ## Evidence
