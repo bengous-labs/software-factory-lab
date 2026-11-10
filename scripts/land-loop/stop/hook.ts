@@ -34,6 +34,7 @@ import { openFindingsOf, ReviewThreads, threadsQueryOf } from "../review/finding
 import type { OpenFinding } from "../review/findings.ts";
 import {
   admit,
+  afterClosed,
   afterStopChecks,
   bystanderOf,
   checkoutOf,
@@ -272,7 +273,12 @@ async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise
 }
 
 export const ListedPrs = Schema.Array(
-  Schema.Struct({ number: Schema.Finite, isDraft: Schema.Boolean, headRefOid: Schema.String }),
+  Schema.Struct({
+    number: Schema.Finite,
+    isDraft: Schema.Boolean,
+    headRefOid: Schema.String,
+    isCrossRepository: Schema.Boolean,
+  }),
 );
 
 /** The options of a `gh` call: with the Author's credential once its token is found. */
@@ -280,18 +286,29 @@ function ghOptions(cwd: string, author: AuthorToken): RunOptions {
   return author.kind === "found" ? { cwd, env: ghEnv(author.token) } : { cwd };
 }
 
+/** The branch's open PR; `--head` also matches a fork's branch of the same name, which is not the Author's. */
 async function prOf(deps: Deps, gh: RunOptions, branch: string): Promise<PullRequest | null> {
   const listed = decodeJson(
     ListedPrs,
     "gh pr list",
     await checked(
       deps.run,
-      ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,isDraft,headRefOid"],
+      [
+        "gh",
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number,isDraft,headRefOid,isCrossRepository",
+      ],
       gh,
     ),
   );
 
-  const pr = listed[0];
+  const pr = listed.find((one) => !one.isCrossRepository);
 
   return pr === undefined ? null : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid };
 }
@@ -594,13 +611,11 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     treeClean: (await gitOut(deps, cwd, ["status", "--porcelain"])) === "",
     ahead: Number(await gitOut(deps, cwd, ["rev-list", "--count", `origin/${TRUNK}..HEAD`])),
     pr: await prOf(deps, gh, branch),
-    closed: null,
   };
 
   const first = admit(snapshot);
 
-  const admission =
-    first.kind === "read-closed" ? admit({ ...snapshot, closed: await closedPrsOf(deps, gh, branch) }) : first;
+  const admission = first.kind === "read-closed" ? afterClosed(head, await closedPrsOf(deps, gh, branch)) : first;
 
   log({ step: "admit", branch, head, pr: snapshot.pr?.number ?? null, ...admission });
 

@@ -127,12 +127,14 @@ interface World {
   readonly log: (record: StopLogRecord) => void;
 }
 
-const draftPr = (head = HEAD): string => JSON.stringify([{ number: 12, isDraft: true, headRefOid: head }]);
+const draftPr = (head = HEAD, isCrossRepository = false): string =>
+  JSON.stringify([{ number: 12, isDraft: true, headRefOid: head, isCrossRepository }]);
 
 const closedPr = (state: string, head = HEAD, isCrossRepository = false): string =>
   JSON.stringify([{ number: 146, headRefOid: head, state, isCrossRepository }]);
 
-const readyPr = (head = HEAD): string => JSON.stringify([{ number: 12, isDraft: false, headRefOid: head }]);
+const readyPr = (head = HEAD): string =>
+  JSON.stringify([{ number: 12, isDraft: false, headRefOid: head, isCrossRepository: false }]);
 
 /** A fake of git, gh, bun and claude for an Author's session in a worktree, on `branch`, one commit ahead of dev. */
 function world(fake: Partial<Fake> = {}): World {
@@ -952,6 +954,19 @@ describe("a PR closed without landing", () => {
       "number,headRefOid,state,isCrossRepository",
     ]);
     expect(closedList?.options.env).toEqual({ GH_TOKEN: TOKEN });
+  });
+
+  test("a fork's open PR of the same branch name is not the branch's: the closed PR still holds the stop", async () => {
+    const found = world({ listed: draftPr(HEAD, true), closedListed: closedPr("CLOSED") });
+    await stopIn(found);
+
+    expect(writes(found.calls)).toEqual([]);
+    expect(found.outcomes.map((outcome) => outcome.line)).toMatchObject([
+      { reason: `#146 was closed without landing at ${HEAD}: a stop at the head it had publishes nothing` },
+    ]);
+    expect(found.calls.find((call) => call.argv.includes("open"))?.argv.at(-1)).toBe(
+      "number,isDraft,headRefOid,isCrossRepository",
+    );
   });
 
   test("the closed list is not read when the stop publishes nothing anyway, or a PR is open", async () => {

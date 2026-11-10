@@ -92,13 +92,11 @@ export interface Snapshot {
   /** Commits on HEAD that `origin/dev` lacks. */
   readonly ahead: number;
   readonly pr: PullRequest | null;
-  /** The branch's PRs closed without landing; null until the hook reads them, which `admit` asks for when it needs them. */
-  readonly closed: readonly ClosedPullRequest[] | null;
 }
 
 export type Admission =
   | { readonly kind: "none"; readonly reason: string }
-  /** The stop could open a PR: admit again with the branch's closed PRs read. */
+  /** The stop could open a PR: `afterClosed` decides, once the branch's closed PRs are read. */
   | { readonly kind: "read-closed" }
   /** The PR is ready at this head: nothing to publish; the Nit threads a stop closes are closed. */
   | { readonly kind: "ready"; readonly pr: number; readonly reason: string }
@@ -145,27 +143,29 @@ export function admit(snapshot: Snapshot): Admission {
     return none("the tree has uncommitted changes");
   }
 
-  const { pr, closed } = snapshot;
+  const { pr } = snapshot;
 
   if (pr === null) {
-    if (closed === null) {
-      return { kind: "read-closed" };
-    }
-
-    const closedHere = closed.find((one) => one.headSha === snapshot.head);
-
-    if (closedHere !== undefined) {
-      return none(
-        `#${closedHere.number} was closed without landing at ${snapshot.head}: a stop at the head it had publishes nothing`,
-      );
-    }
+    return { kind: "read-closed" };
   }
 
-  if (pr !== null && !pr.draft && pr.headSha === snapshot.head) {
+  if (!pr.draft && pr.headSha === snapshot.head) {
     return { kind: "ready", pr: pr.number, reason: `#${pr.number} is ready at ${snapshot.head} already` };
   }
 
   return { kind: "stop-checks" };
+}
+
+/** What a stop that could open a PR does, given the branch's PRs closed without landing. */
+export function afterClosed(
+  head: string,
+  closed: readonly ClosedPullRequest[],
+): Extract<Admission, { kind: "none" | "stop-checks" }> {
+  const closedHere = closed.find((one) => one.headSha === head);
+
+  return closedHere === undefined
+    ? { kind: "stop-checks" }
+    : none(`#${closedHere.number} was closed without landing at ${head}: a stop at the head it had publishes nothing`);
 }
 
 /** No Author token blocks once, naming where it was looked for; a second stop without it lets the session end. */
