@@ -232,8 +232,13 @@ export function noDoneAnswer(code: number, stopHookActive: boolean): Refusal {
   };
 }
 
+/** The question of a Done judge's answer as the outcome and the log quote it: trimmed, then cut to 300 characters. */
+export function quotedQuestionOf(question: string): string {
+  return question.trim().slice(0, 300);
+}
+
 export function decide(pr: PullRequest | null, answer: DoneAnswer): Action {
-  const question = answer.question.trim().slice(0, 300);
+  const question = quotedQuestionOf(answer.question);
   const unfinished = `the Done judge says the change is not finished: ${answer.reason}`;
 
   if (question !== "") {

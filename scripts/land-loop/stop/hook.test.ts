@@ -682,7 +682,7 @@ describe("the Done judge", () => {
   });
 
   test("a finished change whose last message leaves a question to the user publishes nothing, and the log quotes it", async () => {
-    const found = world({ done: [{ ...FINISHED, question: "Leave the doc, or update it?" }] });
+    const found = world({ done: [{ ...FINISHED, question: "  Leave the doc, or update it?\n" }] });
 
     expect(await stopIn(found)).toEqual({ kind: "allow" });
     expect(writes(found.calls)).toEqual([]);

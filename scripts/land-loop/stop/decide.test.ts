@@ -13,6 +13,7 @@ import {
   noAuthorToken,
   noDoneAnswer,
   outcomeLineOf,
+  quotedQuestionOf,
   rejectionReplyOf,
   rejectionsOf,
 } from "./decide.ts";
@@ -270,6 +271,12 @@ describe("decide", () => {
       reason:
         "the Author's last message leaves a question to its user: Which wording?; the Done judge says the change is not finished: a test is missing",
     });
+  });
+
+  test("a question is quoted trimmed, then cut to its first 300 characters", () => {
+    expect(quotedQuestionOf(`  ${"a".repeat(300)}b`)).toBe("a".repeat(300));
+    expect(quotedQuestionOf(" Which wording?\n")).toBe("Which wording?");
+    expect(quotedQuestionOf(" \n\t")).toBe("");
   });
 
   test("the quoted question is cut to its first 300 characters", () => {

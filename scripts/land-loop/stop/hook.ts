@@ -45,6 +45,7 @@ import {
   noAuthorToken,
   noDoneAnswer,
   outcomeLineOf,
+  quotedQuestionOf,
   rejectionReplyOf,
   rejectionsOf,
 } from "./decide.ts";
@@ -582,7 +583,7 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     step: "done-judge",
     model: stopping.model,
     answer: answer === null ? "none" : answer.finished ? "finished" : "not-finished",
-    question: answer?.question.slice(0, 300) ?? null,
+    question: answer === null ? null : quotedQuestionOf(answer.question),
     reason: answer?.reason.slice(0, 300) ?? null,
     rejections: answer?.rejections.length ?? null,
     ms: doneJudge.ms,
