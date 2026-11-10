@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { Schema } from "effect";
 
+import { APP_LOGIN, AUTHOR_LOGIN, OWNER_LOGIN } from "./logins.ts";
+
 const Step = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   if: Schema.optionalKey(Schema.String),
@@ -166,5 +168,20 @@ describe("the Merge bot's workflow", () => {
     const { steps } = (await workflowOf("merge-bot.yml")).jobs["merge-bot"] ?? { steps: [] };
 
     expect(stepNamed(steps, "Get the agents' App token").with?.["permission-actions"]).toBe("write");
+  });
+});
+
+describe("the lab's logins", () => {
+  test("the workflows and logins.ts name the same Owner, Author and App, so the Merge bot, the review job, the Stop hook and the relay trust the same logins", async () => {
+    const mergeBot = (await workflowOf("merge-bot.yml")).jobs["merge-bot"]?.steps ?? [];
+    const review = (await workflowOf("code-review.yml")).jobs["review"]?.steps ?? [];
+    const named = stepNamed(mergeBot, "Run the Merge bot").env ?? {};
+
+    expect({ OWNER: named["OWNER"], AUTHOR_LOGIN: named["AUTHOR_LOGIN"], APP_LOGIN: named["APP_LOGIN"] }).toEqual({
+      OWNER: OWNER_LOGIN,
+      AUTHOR_LOGIN,
+      APP_LOGIN: `${APP_LOGIN}[bot]`,
+    });
+    expect(stepNamed(review, "Read the earlier review threads").env?.["APP_LOGIN"]).toBe(`${APP_LOGIN}[bot]`);
   });
 });

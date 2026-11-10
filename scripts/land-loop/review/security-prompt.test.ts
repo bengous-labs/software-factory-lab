@@ -60,7 +60,7 @@ describe("securityPromptOf", () => {
     ];
 
     const listed = [
-      "Earlier findings, each with the answers of the Author and of the Owner:",
+      "Earlier findings, each with the answers of the Author and of the Owner, quoted under the login that wrote them:",
       "- [E1] .github/workflows/code-review.yml:70: **Important (security)**: the head reaches a run: line | Answers: Fixed in abc123 (thread resolved)",
       "- [E2] a.ts:3: **Nit**: a name | Answers: no answer (thread open)",
       ANSWERED,

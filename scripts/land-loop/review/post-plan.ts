@@ -167,49 +167,51 @@ export interface AgainReply {
  * The replies that carry, each in its open thread of `heldOpen`, the Importants the round of `result`
  * reports again: what is still wrong, under the finding's marker, so the relay delivers it to the
  * Author, and under the review's marker, so a posting that is retried posts none twice. A thread takes
- * one reply per review: the first finding that names it.
+ * one reply per review, with every finding of the round that names it, the Code review's and the
+ * security pass's. Only a comment of the App counts as that reply: `appLogin` is its login as GraphQL
+ * prints it, and any login can write the marker.
  */
 export function againRepliesOf(
   result: ReportedResult,
   heldOpen: readonly string[],
   threads: readonly ReviewThread[],
+  appLogin: string,
 ): AgainReply[] {
   const { request } = result;
   const marker = reviewMarkerOf(request);
 
-  const replied = new Set<string>();
+  return heldOpen.flatMap((thread) => {
+    const posted = threads.some(
+      (found) =>
+        found.id === thread &&
+        found.comments.nodes.some((comment) => comment.author?.login === appLogin && comment.body.includes(marker)),
+    );
 
-  for (const thread of threads) {
-    if (thread.comments.nodes.some((comment) => comment.body.includes(marker))) {
-      replied.add(thread.id);
+    const again = result.report.findings.filter(
+      (finding) => finding.severity === "important" && finding.earlier === thread,
+    );
+
+    if (posted || again.length === 0) {
+      return [];
     }
-  }
 
-  const replies: AgainReply[] = [];
+    const reports = again.flatMap((finding) => [
+      `**${finding.pass === "security" ? `${LABEL.important} (security)` : LABEL.important}**: ${escapeInline(finding.summary)}`,
+      "",
+      escapeHtml(finding.failureScenario),
+      "",
+    ]);
 
-  for (const finding of result.report.findings) {
-    const thread = heldOpen.find((held) => held === finding.earlier);
+    const body = [
+      `Review round ${request.round} still holds this finding.`,
+      "",
+      ...reports,
+      markerOf("important"),
+      marker,
+    ].join("\n");
 
-    if (finding.severity === "important" && thread !== undefined && !replied.has(thread)) {
-      replied.add(thread);
-
-      const label = finding.pass === "security" ? `${LABEL.important} (security)` : LABEL.important;
-
-      const body = [
-        `**${label}**: ${escapeInline(finding.summary)}`,
-        `Still wrong at Review round ${request.round}.`,
-        "",
-        escapeHtml(finding.failureScenario),
-        "",
-        markerOf("important"),
-        marker,
-      ].join("\n");
-
-      replies.push({ thread, body });
-    }
-  }
-
-  return replies;
+    return [{ thread, body }];
+  });
 }
 
 function bodyOf(plan: PostPlan, result: ReportedResult): string {

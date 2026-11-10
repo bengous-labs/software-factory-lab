@@ -32,7 +32,7 @@ export function roundText(request: ReviewRequest, threads: readonly EarlierThrea
     request.round === 2
       ? `This is review round 2. ${request.base} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.`
       : `This is review round 3, the last one. ${request.base} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.`,
-    "Earlier findings, each with the answers of the Author and of the Owner:",
+    "Earlier findings, each with the answers of the Author and of the Owner, quoted under the login that wrote them:",
   ];
 
   return [

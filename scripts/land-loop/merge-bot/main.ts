@@ -957,7 +957,9 @@ async function perform(
       }
 
       if (step.heldOpen.length > 0) {
-        await postAgain(env, againRepliesOf(result, step.heldOpen, await threadsOf(env, pr.number)));
+        const threads = await threadsOf(env, pr.number);
+
+        await postAgain(env, againRepliesOf(result, step.heldOpen, threads, graphqlLogin(env.appLogin)));
       }
 
       log(`#${pr.number} ${summaryOf(result)}${posted ? ", posted before" : ""}`);
