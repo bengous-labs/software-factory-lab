@@ -8,6 +8,27 @@ import { TaskError } from "../src/task.ts";
 
 const tempFile = (): string => join(mkdtempSync(join(tmpdir(), "todo-")), "todo.json");
 
+describe("done command", () => {
+  test("it prints the id and the title of the task it marks", () => {
+    const path = tempFile();
+    run(["add", "write the spec"], path);
+    run(["add", "review the PR"], path);
+
+    expect(run(["done", "2"], path)).toBe("done #2 review the PR");
+    expect(run(["list", "--done"], path)).toBe("[x] #2 review the PR");
+  });
+
+  test("it prints the title of the task with that id when ids are not contiguous", () => {
+    const path = tempFile();
+    run(["add", "a"], path);
+    run(["add", "b"], path);
+    run(["add", "c"], path);
+    run(["remove", "1"], path);
+
+    expect(run(["done", "3"], path)).toBe("done #3 c");
+  });
+});
+
 describe("search command", () => {
   test("the words after search are joined into one query", () => {
     const path = tempFile();
