@@ -1,13 +1,12 @@
 {
   "land": {
     "routing": {
-      "ownerPaths": [".github/**", "bun.lock", "scripts/vendor/**"],
+      "ownerPaths": [".github/**", "bun.lock", "scripts/vendor/**", "REVIEW.md", "scripts/land-loop/**/*-prompt.ts"],
       "factoryPaths": [
         "scripts/**",
         ".claude/**",
         "AGENTS.md",
         "CLAUDE.md",
-        "REVIEW.md",
         "package.json",
         "mise.toml",
         "tsconfig.json",

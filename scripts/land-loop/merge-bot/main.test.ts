@@ -16,6 +16,7 @@ import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../rou
 import type { ReviewState } from "./decide.ts";
 import {
   ActionsRun,
+  againPoster,
   changedPathsArgs,
   checkRunBodyOf,
   CheckRuns,
@@ -28,6 +29,7 @@ import {
   devRedOf,
   devRunsReader,
   Dispatched,
+  draftConverter,
   humanLabelByOf,
   IssueComments,
   IssueEvents,
@@ -51,6 +53,7 @@ import {
   routingLineOf,
   routingPolicyAt,
   startOf,
+  threadsResolver,
 } from "./main.ts";
 
 const PULL = {
@@ -309,8 +312,10 @@ const filler = (count: number): LabelEvent[] =>
 describe("humanLabelByOf", () => {
   const BOT = "agents[bot]";
 
+  const LOGINS = { appLogin: BOT, authorLogin: "bengous-labs-author" };
+
   test("no land:human on the PR is null, whatever the events say", () => {
-    expect(humanLabelByOf([labeled("land:human", BOT, "2026-11-05T10:00:00Z")], ["land:auto"], BOT)).toBeNull();
+    expect(humanLabelByOf([labeled("land:human", BOT, "2026-11-05T10:00:00Z")], ["land:auto"], LOGINS)).toBeNull();
   });
 
   test("the latest labeled event of land:human decides: the Merge bot's App, or any other login", () => {
@@ -325,8 +330,18 @@ describe("humanLabelByOf", () => {
       labeled("land:human", "owner", "2026-11-05T11:00:00Z"),
     ];
 
-    expect(humanLabelByOf(botLast, ["land:human"], BOT)).toBe("merge-bot");
-    expect(humanLabelByOf(ownerLast, ["land:human"], BOT)).toBe("other");
+    expect(humanLabelByOf(botLast, ["land:human"], LOGINS)).toBe("merge-bot");
+    expect(humanLabelByOf(ownerLast, ["land:human"], LOGINS)).toBe("other");
+  });
+
+  test("the Author's machine account's label is an agent's: it is told apart from another login's", () => {
+    const authorLast = [
+      labeled("land:human", "owner", "2026-11-05T10:00:00Z"),
+      labeled("land:human", "bengous-labs-author", "2026-11-05T11:00:00Z"),
+    ];
+
+    expect(humanLabelByOf(authorLast, ["land:human"], LOGINS)).toBe("author");
+    expect(humanLabelByOf(authorLast.toReversed(), ["land:human"], LOGINS)).toBe("other");
   });
 
   test("a land:human on the PR whose latest event is its removal is a read that lags: another login", () => {
@@ -335,12 +350,12 @@ describe("humanLabelByOf", () => {
       { ...labeled("land:human", BOT, "2026-11-05T11:00:00Z"), event: "unlabeled" },
     ];
 
-    expect(humanLabelByOf(lagging, ["land:human"], BOT)).toBe("other");
+    expect(humanLabelByOf(lagging, ["land:human"], LOGINS)).toBe("other");
   });
 
   test("an unreadable actor, or no labeled event of land:human, is another login: the safe side", () => {
-    expect(humanLabelByOf([labeled("land:human", null, "2026-11-05T10:00:00Z")], ["land:human"], BOT)).toBe("other");
-    expect(humanLabelByOf([labeled("land-ok", BOT, "2026-11-05T10:00:00Z")], ["land:human"], BOT)).toBe("other");
+    expect(humanLabelByOf([labeled("land:human", null, "2026-11-05T10:00:00Z")], ["land:human"], LOGINS)).toBe("other");
+    expect(humanLabelByOf([labeled("land-ok", BOT, "2026-11-05T10:00:00Z")], ["land:human"], LOGINS)).toBe("other");
   });
 });
 
@@ -361,7 +376,9 @@ describe("labelEventsReader", () => {
       ["gh", "api", "-X", "GET", "--paginate", "--slurp", "repos/o/r/issues/12/events?per_page=100"],
     ]);
     expect(events).toHaveLength(121);
-    expect(humanLabelByOf(events, ["land:human"], "agents[bot]")).toBe("merge-bot");
+    expect(humanLabelByOf(events, ["land:human"], { appLogin: "agents[bot]", authorLogin: "author" })).toBe(
+      "merge-bot",
+    );
   });
 });
 
@@ -442,6 +459,98 @@ describe("checkSetter", () => {
         stdin: JSON.stringify(checkRunBodyOf("land-gate", head, check, runUrl)),
       },
     ]);
+  });
+});
+
+/** A runner whose every command GitHub refuses. */
+const REFUSED: Run = () => Promise.resolve({ code: 1, stdout: "", stderr: "HTTP 502" });
+
+describe("draftConverter", () => {
+  test("sends the PR back to draft with one GraphQL mutation that names its node id", async () => {
+    const calls: Array<{ argv: string[]; stdin: string | undefined }> = [];
+
+    const runner: Run = (argv, options) => {
+      calls.push({ argv: [...argv], stdin: options.stdin });
+
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    };
+
+    await draftConverter(runner)(WHERE, "PR_node1");
+
+    expect(calls).toEqual([
+      {
+        argv: ["gh", "api", "-X", "POST", "graphql", "--input", "-"],
+        stdin: JSON.stringify({
+          query: "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}",
+          variables: { id: "PR_node1" },
+        }),
+      },
+    ]);
+  });
+
+  test("a conversion GitHub refuses throws, so the round is not recorded and a later run sends the PR back again", () => {
+    expect(draftConverter(REFUSED)(WHERE, "PR_node1")).rejects.toThrow("gh api -X exited 1: HTTP 502");
+  });
+});
+
+describe("threadsResolver", () => {
+  test("resolves each thread, in its order, and stops at the first GitHub refuses", async () => {
+    const calls: string[][] = [];
+
+    const runner: Run = (argv) => {
+      calls.push([...argv]);
+
+      return Promise.resolve(
+        argv.includes("id=T2") ? { code: 1, stdout: "", stderr: "HTTP 502" } : { code: 0, stdout: "{}", stderr: "" },
+      );
+    };
+
+    await threadsResolver(runner)(WHERE, ["T1"]);
+
+    expect(calls).toEqual([
+      [
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        "query=mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}",
+        "-f",
+        "id=T1",
+      ],
+    ]);
+    expect(threadsResolver(runner)(WHERE, ["T2", "T3"])).rejects.toThrow("gh api graphql exited 1: HTTP 502");
+    expect(calls.some((call) => call.includes("id=T3"))).toBe(false);
+  });
+});
+
+describe("againPoster", () => {
+  test("posts each reply in its review thread, in its order", async () => {
+    const calls: string[][] = [];
+
+    const runner: Run = (argv) => {
+      calls.push([...argv]);
+
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    };
+
+    await againPoster(runner)(WHERE, [
+      { thread: "T1", body: "still wrong" },
+      { thread: "T2", body: "again" },
+    ]);
+
+    const reply =
+      "query=mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}";
+
+    expect(calls).toEqual([
+      ["gh", "api", "graphql", "-f", reply, "-f", "id=T1", "-f", "body=still wrong"],
+      ["gh", "api", "graphql", "-f", reply, "-f", "id=T2", "-f", "body=again"],
+    ]);
+  });
+
+  test("a reply GitHub refuses throws, so the round is not recorded and a later run posts what is left", () => {
+    expect(againPoster(REFUSED)(WHERE, [{ thread: "T1", body: "still wrong" }])).rejects.toThrow(
+      "gh api graphql exited 1: HTTP 502",
+    );
   });
 });
 

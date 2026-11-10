@@ -48,6 +48,7 @@ const FINDING = {
   summary: "rename accepts a blank title",
   failure_scenario: "rename 1 ' ' saves an empty title",
   breaks: { file: "app/src/commands/rename.ts", line: 5 },
+  earlier: null,
 };
 
 describe("ReviewInputs", () => {
@@ -160,9 +161,11 @@ describe("resultOf", () => {
             summary: "rename accepts a blank title",
             failureScenario: "rename 1 ' ' saves an empty title",
             breaks: { file: "app/src/commands/rename.ts", line: 5 },
+            earlier: null,
             pass: "code",
           },
         ],
+        namesEarlier: true,
       },
       request: REQUEST,
       runUrl: RUN_URL,
@@ -217,7 +220,26 @@ describe("resultOf", () => {
     const { security: _security, ...request } = current.request;
     const findings = current.kind === "reported" ? current.report.findings.map(({ pass: _pass, ...rest }) => rest) : [];
 
-    expect(resultOfJson(JSON.stringify({ ...current, request, report: { findings } }))).toEqual(current);
+    expect(resultOfJson(JSON.stringify({ ...current, request, report: { findings, namesEarlier: true } }))).toEqual(
+      current,
+    );
+  });
+
+  test("an artifact written before rounds named the earlier findings they report again reads as naming none, and says it was not asked to", () => {
+    const current = resultOf(REQUEST, answered({ findings: [FINDING] }), RUN_URL);
+    const findings = current.kind === "reported" ? current.report.findings : [];
+    const before = findings.map(({ earlier: _earlier, ...rest }) => rest);
+
+    const read = resultOfJson(JSON.stringify({ ...current, report: { findings: before } }));
+
+    expect(read?.kind === "reported" ? read.report : null).toEqual({ findings, namesEarlier: false });
+  });
+
+  test("a finding that reports an earlier one again keeps the id it names", () => {
+    const again = resultOf(REQUEST, answered({ findings: [{ ...FINDING, earlier: "E2" }] }), RUN_URL);
+
+    expect(again.kind === "reported" && again.report.findings[0]?.earlier).toBe("E2");
+    expect(resultOfJson(JSON.stringify(again))).toEqual(again);
   });
 
   test("an artifact that is not JSON, or not a result, reads as none", () => {
@@ -260,6 +282,7 @@ describe("mergedResultOf", () => {
       ["the token reaches the log", "security"],
       ["rename accepts a blank title", "security"],
     ]);
+    expect(result.kind === "reported" && result.report.namesEarlier).toBe(true);
   });
 
   test("a failed security session fails the result, its cause prefixed, even when the Code review answered", () => {

@@ -156,23 +156,23 @@ export function routingOf(
   };
 }
 
-/** The most lines a push after Review round 3 changes and still only answers its Nits. */
+/** The most lines the pushes after a Review round change, from the head it read, and still only answer its Nits. */
 export const NIT_ANSWER_LINE_CAP = 100;
 
-/** What a Patch delta after Review round 3 is weighed against. */
+/** What a Patch delta after a Review round is weighed against. */
 export interface NitAnswerInput {
   /** The PR's state record: its rounds, each round's Important count, the head the last round read. */
   readonly record: Pick<StateRecord, "reviewRounds" | "importantByRound" | "reviewedHead">;
   /** Where the Patch delta starts: the head the last round read, or the merge base once that head left the PR's history. */
   readonly deltaFrom: string;
-  /** The files Review round 3 posted a Nit finding on. */
+  /** The files the last Review round posted a Nit finding on. */
   readonly nitPaths: readonly string[];
 }
 
 /**
- * The Routing answer of a Patch delta that only answers the Nits of a Review round 3 that posted no
- * Important: the delta starts at the head round 3 read, touches only files round 3 posted a Nit on and
- * no `deepReviewPaths` path, in at most NIT_ANSWER_LINE_CAP lines. It needs no read, so it holds nothing
+ * The Routing answer of a Patch delta that only answers the Nits of the last Review round, whichever it was, when it posted no
+ * Important: the delta starts at the head that round read, touches only files it posted a Nit on and
+ * no `deepReviewPaths` path, in at most NIT_ANSWER_LINE_CAP lines. It needs no read, so it starts no round, holds nothing
  * for the Owner and the change keeps its Land route. Any other answer stands.
  */
 export function withNitAnswers(
@@ -185,8 +185,7 @@ export function withNitAnswers(
 
   const answersNits =
     answer.secondRound &&
-    record.reviewRounds === 3 &&
-    record.importantByRound?.[2] === 0 &&
+    record.importantByRound?.[record.reviewRounds - 1] === 0 &&
     record.reviewedHead === deltaFrom &&
     delta.lines <= NIT_ANSWER_LINE_CAP &&
     delta.paths.every((path) => nits.has(path)) &&
@@ -196,7 +195,7 @@ export function withNitAnswers(
     return answer;
   }
 
-  const nitAnswer = `a push after Review round 3 that only answers its Nits: ${delta.lines} lines in ${listed(delta.paths)}`;
+  const nitAnswer = `a push after Review round ${record.reviewRounds} that only answers its Nits: ${delta.lines} lines in ${listed(delta.paths)}`;
 
   // The Owner's route keeps its reason alone: the land-gate and the Owner's comment give it as why the PR is held.
   return { ...answer, secondRound: false, reason: answer.land === "owner" ? answer.reason : nitAnswer };

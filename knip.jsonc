@@ -1,13 +1,11 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   // knip reads the scripts the workflows run; these others are run by path and never imported: the CLI
-  // and the PR watch, thread, comment and measure scripts by hand, the hooks from .claude/settings.json, the ratchet's
+  // and the measure script by hand, the relay by the Stop hook, the hooks from .claude/settings.json, the ratchet's
   // config by check-exception-ratchet.ts.
   "entry": [
     "app/src/cli.ts",
-    "scripts/land-loop/pr-watch.ts",
-    "scripts/land-loop/thread.ts",
-    "scripts/land-loop/comment.ts",
+    "scripts/land-loop/relay/main.ts",
     "scripts/land-loop/measure/main.ts",
     "scripts/land-loop/stop/hook.ts",
     "scripts/land-loop/stop/fork-guard.ts",

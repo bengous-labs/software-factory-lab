@@ -11,7 +11,15 @@ import * as fc from "fast-check";
 
 import { FACTORY_CONFIG_PATH, factoryConfigOf } from "./factory-config.ts";
 import { decide, LAND_APPROVAL_LABEL } from "./merge-bot/decide.ts";
-import type { ReviewJob, ReviewState, RoutingAnswer, Snapshot, StateRecord, Step } from "./merge-bot/decide.ts";
+import type {
+  ImportantThread,
+  ReviewJob,
+  ReviewState,
+  RoutingAnswer,
+  Snapshot,
+  StateRecord,
+  Step,
+} from "./merge-bot/decide.ts";
 import type { ReportedFinding, ReviewResult } from "./review/review-report.ts";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
@@ -96,6 +104,7 @@ const ARBITRARY_FINDING: fc.Arbitrary<ReportedFinding> = fc.record({
   summary: fc.constant("s"),
   failureScenario: fc.constant("f"),
   breaks: fc.constant(null),
+  earlier: fc.constantFrom(null, "T-open-1", "T-open-2", "T-gone"),
   pass: fc.constantFrom("code", "security"),
 });
 
@@ -119,7 +128,7 @@ const RUN_FACTS = {
 const ARBITRARY_RESULT: fc.Arbitrary<ReviewResult> = fc.oneof(
   fc.record({
     kind: fc.constantFrom("reported"),
-    report: fc.record({ findings: fc.array(ARBITRARY_FINDING, { maxLength: 3 }) }),
+    report: fc.record({ findings: fc.array(ARBITRARY_FINDING, { maxLength: 3 }), namesEarlier: fc.boolean() }),
     ...RUN_FACTS,
   }),
   fc.record({ kind: fc.constantFrom("failed"), cause: fc.string(), ...RUN_FACTS }),
@@ -140,8 +149,22 @@ export const ARBITRARY_JOB: fc.Arbitrary<ReviewJob | null> = fc.option(
 
 export const LABELS = ["land:auto", "land:human", "review:none", "review:light", "review:deep", LAND_APPROVAL_LABEL];
 
-/** Who set the PR's land:human: the Merge bot's App, another login, or nobody. */
-export const HUMAN_LABEL_BY: fc.Arbitrary<Snapshot["humanLabelBy"]> = fc.constantFrom("merge-bot", "other", null);
+/** Who set the PR's land:human: the Merge bot's App, the Author's machine account, another login, or nobody. */
+export const HUMAN_LABEL_BY: fc.Arbitrary<Snapshot["humanLabelBy"]> = fc.constantFrom(
+  "merge-bot",
+  "author",
+  "other",
+  null,
+);
+
+/** Up to two open Important threads of the App, each posted by a review of either patch and any round, or by one that names none. */
+export const OPEN_IMPORTANT: fc.Arbitrary<readonly ImportantThread[]> = fc.uniqueArray(
+  fc.record({
+    thread: fc.constantFrom("T-open-1", "T-open-2"),
+    review: fc.option(fc.record({ patch: PATCH, round: ROUND }), { nil: null }),
+  }),
+  { selector: (found) => found.thread, maxLength: 2 },
+);
 
 /** Mostly open PRs from the Owner's own branches, the ones `decide` does more than ignore. */
 export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
@@ -149,6 +172,7 @@ export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   state: fc.oneof({ arbitrary: fc.constant("OPEN"), weight: 8 }, fc.constantFrom("CLOSED", "MERGED")),
   sameRepository: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
   openedByFactory: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
+  openedByAuthor: fc.boolean(),
   draft: fc.boolean(),
   head: HEAD,
   patch: PATCH,
@@ -158,7 +182,7 @@ export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   humanLabelBy: HUMAN_LABEL_BY,
   landApprovalByOwner: fc.boolean(),
   landApprovalPutByOwner: fc.boolean(),
-  openImportant: fc.nat({ max: 2 }),
+  openImportant: OPEN_IMPORTANT,
   rejectedImportant: fc.nat({ max: 2 }),
   devRed: fc.boolean(),
   conflicting: fc.boolean(),

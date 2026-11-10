@@ -1,6 +1,6 @@
 /**
  * The App's findings as GitHub holds them. Each posted finding carries a marker that names its
- * severity, read back to count the open Important threads and by the author's PR watch. A pull
+ * severity, read back to count the open Important threads and by the relay of the Author's PR. A pull
  * request's review threads come from one GraphQL query: the Merge bot counts them, and the review job
  * gives Review rounds 2 and 3 the earlier findings with the author's answers.
  */
@@ -9,6 +9,7 @@ import { Option, Schema } from "effect";
 
 import { codeSpan, unescapeHtml } from "../../lib/markdown.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
+import type { ImportantThread } from "../merge-bot/decide.ts";
 import { Severity } from "./review-report.ts";
 
 /** The marker a finding's comment carries. An external name: posted findings carry it, so the string stays. */
@@ -69,34 +70,81 @@ export function graphqlLogin(login: string): string {
   return login.replace(/\[bot\]$/u, "");
 }
 
-/** The App's unresolved threads whose finding is Important. `appLogin` is the App's login as GraphQL prints it. */
-export function openImportantOf(appLogin: string, threads: readonly ReviewThread[]): number {
-  return threads.filter((thread) => {
+/**
+ * The App's unresolved threads whose finding is Important, each with the patch and round of the review
+ * that posted it. `appLogin` is the App's login as GraphQL prints it.
+ */
+export function openImportantOf(appLogin: string, threads: readonly ReviewThread[]): ImportantThread[] {
+  return threads.flatMap((thread) => {
     const [finding] = thread.comments.nodes;
 
-    return !thread.isResolved && finding?.author?.login === appLogin && severityOfBody(finding.body) === "important";
-  }).length;
+    return !thread.isResolved && finding?.author?.login === appLogin && severityOfBody(finding.body) === "important"
+      ? [{ thread: thread.id, review: reviewOfBody(finding.pullRequestReview?.body ?? "") }]
+      : [];
+  });
 }
 
-/** The replies of `thread` another login than the App's posted, the author's answers. */
-function answersOf(appLogin: string, thread: ReviewThread): ReviewThread["comments"]["nodes"] {
-  return thread.comments.nodes.slice(1).filter((reply) => reply.author?.login !== appLogin);
+/** An open finding of the App: its thread, where it sits, its severity and its first line without the severity's label. */
+export interface OpenFinding {
+  readonly thread: string;
+  readonly path: string;
+  readonly line: number | null;
+  readonly severity: "important" | "nit";
+  readonly summary: string;
+}
+
+const SEVERITY_LABEL = /^\*\*[^*]+\*\*: /u;
+
+/** The App's unresolved Important and Nit threads. `appLogin` is the App's login as GraphQL prints it. */
+export function openFindingsOf(appLogin: string, threads: readonly ReviewThread[]): OpenFinding[] {
+  return threads.flatMap((thread) => {
+    const [finding] = thread.comments.nodes;
+    const severity = finding?.author?.login === appLogin ? severityOfBody(finding.body) : null;
+
+    if (thread.isResolved || finding === undefined || (severity !== "important" && severity !== "nit")) {
+      return [];
+    }
+
+    const summary = unescapeHtml(finding.body.split("\n")[0] ?? "").replace(SEVERITY_LABEL, "");
+
+    return [{ thread: thread.id, path: thread.path, line: thread.line, severity, summary }];
+  });
+}
+
+/**
+ * The logins whose words the Land loop reads in a review thread: the App's findings, and the answers of
+ * the Author's machine account and of the Owner. `app` is the App's login as GraphQL prints it.
+ */
+export interface ThreadLogins {
+  readonly app: string;
+  readonly author: string;
+  readonly owner: string;
+}
+
+/**
+ * The answers in `thread`: the replies of the Author's machine account and of the Owner. The lab is
+ * public: another login's reply is no answer, and reaches neither a count nor a reviewer's prompt.
+ */
+function answersOf(logins: ThreadLogins, thread: ReviewThread): ReviewThread["comments"]["nodes"] {
+  return thread.comments.nodes
+    .slice(1)
+    .filter((reply) => reply.author?.login === logins.author || reply.author?.login === logins.owner);
 }
 
 /** A resolved thread whose latest answer carries `REJECT_MARK`; a thread unresolved again is open, never rejected. */
-function rejectedOf(appLogin: string, thread: ReviewThread): boolean {
-  return thread.isResolved && answersOf(appLogin, thread).at(-1)?.body.includes(REJECT_MARK) === true;
+function rejectedOf(logins: ThreadLogins, thread: ReviewThread): boolean {
+  return thread.isResolved && answersOf(logins, thread).at(-1)?.body.includes(REJECT_MARK) === true;
 }
 
-/** The App's Important threads the author rejected. `appLogin` is the App's login as GraphQL prints it. */
-export function rejectedImportantOf(appLogin: string, threads: readonly ReviewThread[]): number {
+/** The App's Important threads the author rejected. */
+export function rejectedImportantOf(logins: ThreadLogins, threads: readonly ReviewThread[]): number {
   return threads.filter((thread) => {
     const [finding] = thread.comments.nodes;
 
     return (
-      finding?.author?.login === appLogin &&
+      finding?.author?.login === logins.app &&
       severityOfBody(finding.body) === "important" &&
-      rejectedOf(appLogin, thread)
+      rejectedOf(logins, thread)
     );
   }).length;
 }
@@ -164,37 +212,46 @@ export function nitPathsOf(
   return [...new Set(paths)].toSorted();
 }
 
-const EarlierThread = Schema.Struct({ where: Schema.String, finding: Schema.String, reply: Schema.String });
+const EarlierThread = Schema.Struct({
+  thread: Schema.String,
+  where: Schema.String,
+  finding: Schema.String,
+  reply: Schema.String,
+});
 
-/** A thread of an earlier round: where its finding sits, the finding's first line, and the author's answers with the thread's state. */
+/** A thread of an earlier round: its id, where its finding sits, the finding's first line, and the answers of the Author and of the Owner, each under its login, with the thread's state. */
 export type EarlierThread = typeof EarlierThread.Type;
 
 /** `review-threads.json`, which the review job's thread step writes and its runner reads. */
 export const EarlierThreads = Schema.Array(EarlierThread);
 
-/** An author's answer without the marks `thread.ts` appends. */
+/** An author's answer without the marks the Stop hook appends. */
 function unmarked(body: string): string {
   return body.replaceAll(`\n\n${REJECT_MARK}`, "").replaceAll(`\n\n${AUTHOR_MARK}`, "");
 }
 
 /**
- * The App's findings, open or resolved, each with the author's answers and whether its thread is
- * resolved: a later Review round reports again neither a finding the author resolved with a valid reason
- * nor one still open. `appLogin` is the App's login as GraphQL prints it.
+ * The App's findings, open or resolved, each with the answers of the Author's machine account and of
+ * the Owner, each under its login, and whether its thread is resolved: a later Review round reports again
+ * each Important that is still wrong, and no finding the author rejected with a valid reason. No other
+ * login's reply reaches the round: what it leaves out, the Merge bot closes.
  */
-export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThread[]): EarlierThread[] {
+export function earlierThreadsOf(logins: ThreadLogins, threads: readonly ReviewThread[]): EarlierThread[] {
   return threads.flatMap((thread) => {
     const [finding] = thread.comments.nodes;
 
-    if (finding?.author?.login !== appLogin) {
+    if (finding?.author?.login !== logins.app) {
       return [];
     }
 
-    const answers = answersOf(appLogin, thread).map((reply) =>
-      reply.body.includes(AUTHOR_MARK) ? unescapeHtml(unmarked(reply.body)) : unmarked(reply.body),
-    );
+    const answers = answersOf(logins, thread).map((reply) => {
+      const text = reply.body.includes(AUTHOR_MARK) ? unescapeHtml(unmarked(reply.body)) : unmarked(reply.body);
 
-    const state = rejectedOf(appLogin, thread)
+      // A code span on one line, its fence longer than any backtick run the answer holds: the answer reads as written, and cannot close its span to pass for another login's answer or another finding's line.
+      return `${reply.author?.login}: ${codeSpan(text)}`;
+    });
+
+    const state = rejectedOf(logins, thread)
       ? "resolved: rejected by the Author"
       : thread.isResolved
         ? "resolved"
@@ -202,6 +259,7 @@ export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThrea
 
     return [
       {
+        thread: thread.id,
         where: `${thread.path}:${thread.line ?? "?"}`,
         finding: unescapeHtml(finding.body.split("\n")[0] ?? ""),
         reply: `${answers.length === 0 ? "no answer" : answers.join(" / ")} (thread ${state})`,

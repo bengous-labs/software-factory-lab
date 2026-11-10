@@ -35,7 +35,6 @@ const FACTORY_FILES = [
   ".mcp.json",
   "AGENTS.md",
   "CLAUDE.md",
-  "REVIEW.md",
   "package.json",
   "mise.toml",
   "tsconfig.json",
@@ -83,6 +82,35 @@ describe("the lab's routing policy", () => {
       expect(answerOf(verdict)).toMatchObject(OWNER_DEEP);
       expect(answerOf(verdict)?.reason).toContain(reason);
     }
+  });
+
+  test("a change that touches only REVIEW.md, or only a prompt file a Judge reads, goes to the Owner", () => {
+    for (const path of [
+      "REVIEW.md",
+      "scripts/land-loop/stop/done-prompt.ts",
+      "scripts/land-loop/routing/routing-prompt.ts",
+      "scripts/land-loop/review/review-prompt.ts",
+      "scripts/land-loop/review/security-prompt.ts",
+      "scripts/land-loop/a-new-prompt.ts",
+    ]) {
+      const verdict = lab({ paths: [path], lines: 3, deletedPaths: [], messages: [] });
+
+      expect(verdict.kind).toBe("ruled");
+      expect(answerOf(verdict)).toMatchObject(OWNER_DEEP);
+      expect(answerOf(verdict)?.reason).toBe(`touches a path the Owner lands: ${path}`);
+    }
+  });
+
+  test("a prompt's test, and a file named like a prompt outside the Land loop, stay off the Owner's route", () => {
+    for (const path of ["scripts/land-loop/review/review-prompt.test.ts", "scripts/lib/a-prompt.ts"]) {
+      expect(answerOf(lab({ paths: [path], lines: 3, deletedPaths: [], messages: [] }))).toMatchObject(AUTO_DEEP);
+    }
+
+    expect(lab({ paths: ["app/src/a-prompt.ts", "docs/REVIEW.md"], lines: 3, deletedPaths: [], messages: [] })).toEqual(
+      {
+        kind: "judged",
+      },
+    );
   });
 
   test("a change that touches no file has no route", () => {
@@ -210,7 +238,7 @@ describe("a change that only deletes files", () => {
 
   test("a change that modifies, adds or renames a path keeps a deep review, whatever that path is", () => {
     for (const [paths, deletedPaths] of [
-      [["REVIEW.md"], []],
+      [["AGENTS.md"], []],
       [[".claude/skills/foo/SKILL.md", ".claude/skills/bar/SKILL.md"], [".claude/skills/foo/SKILL.md"]],
       [[".claude/skills/foo/SKILL.md", "app/src/cli.ts"], [".claude/skills/foo/SKILL.md"]],
     ] as const) {
@@ -449,8 +477,12 @@ describe("under the lab's policy, the Patch delta of a change that mixes the fac
 });
 
 const FACTORY_PATH = fc.oneof(
-  fc.constantFrom("AGENTS.md", "REVIEW.md", "package.json", "stryker.config.ts", ".mcp.json"),
-  fc.constantFrom("scripts/land-loop", "scripts/lint", ".claude").chain(UNDER),
+  fc.constantFrom("AGENTS.md", "package.json", "stryker.config.ts", ".mcp.json"),
+  fc
+    .constantFrom("scripts/land-loop", "scripts/lint", ".claude")
+    .chain(UNDER)
+    // A prompt file under scripts/land-loop is the Owner's, not the factory's alone.
+    .filter((path) => !path.endsWith("-prompt.ts")),
 );
 
 const ANY_PATH = fc.array(SEGMENT, { minLength: 1, maxLength: 4 }).map((segments) => segments.join("/"));
@@ -567,12 +599,44 @@ describe("withNitAnswers", () => {
     expect(nitsOnly({ ...withRecord({ reviewedHead: null }), deltaFrom: "merge-base" })).toBe(READ);
   });
 
-  test("before Review round 3, or after one that posted an Important or whose count is unknown, a delta keeps its answer", () => {
-    expect(nitsOnly(withRecord({ reviewRounds: 2 }))).toBe(READ);
-    expect(nitsOnly(withRecord({ importantByRound: [1, 0, 1] }))).toBe(READ);
-    expect(nitsOnly(withRecord({ importantByRound: [1, 0, null] }))).toBe(READ);
-    expect(nitsOnly(withRecord({ importantByRound: [1, 0] }))).toBe(READ);
+  test("after a round 1, a round 2 and a round 3 with no Important, a delta from that round's head in its Nit files within the cap needs no read", () => {
+    const clean: ReadonlyArray<[number, ReadonlyArray<number | null>]> = [
+      [1, [0]],
+      [2, [2, 0]],
+      [3, [1, 1, 0]],
+      [2, [null, 0, 5]],
+    ];
+
+    for (const [reviewRounds, importantByRound] of clean) {
+      expect(nitsOnly(withRecord({ reviewRounds, importantByRound }))).toEqual({
+        ...READ,
+        secondRound: false,
+        reason: `a push after Review round ${reviewRounds} that only answers its Nits: 10 lines in scripts/a.ts`,
+      });
+    }
+  });
+
+  test("after a round that posted an Important, or whose count is unknown, a delta keeps its answer, whichever the round", () => {
+    const unclean: ReadonlyArray<[number, ReadonlyArray<number | null>]> = [
+      [1, [1]],
+      [1, [null]],
+      [1, []],
+      [2, [0, 1]],
+      [2, [0, null]],
+      [2, [0]],
+      [3, [1, 0, 1]],
+      [3, [1, 0, null]],
+      [3, [1, 0]],
+      [0, []],
+      [0, [0]],
+    ];
+
+    for (const [reviewRounds, importantByRound] of unclean) {
+      expect(nitsOnly(withRecord({ reviewRounds, importantByRound }))).toBe(READ);
+    }
+
     expect(nitsOnly({ ...AFTER_CLEAN_ROUND_3, record: { reviewRounds: 3, reviewedHead: "h3" } })).toBe(READ);
+    expect(nitsOnly({ ...AFTER_CLEAN_ROUND_3, record: { reviewRounds: 1, reviewedHead: "h3" } })).toBe(READ);
   });
 
   test("a delta that needs no read already keeps its answer and its reason", () => {

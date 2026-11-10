@@ -1,16 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { Schema } from "effect";
+
 import { decodeJson } from "../../lib/json.ts";
+import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import { pushArgs } from "../lib/author.ts";
+import type { RelayStart } from "../ports/relay.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
-import { FORK_MARKER } from "./decide.ts";
+import { DONE_SCHEMA, FORK_MARKER } from "./decide.ts";
+import { BODY_REQUEST, doneQuestionOf } from "./done-prompt.ts";
 import {
-  BODY_REQUEST,
-  DONE_QUESTION,
-  doneJudgeFailure,
   FORK_FLAG,
   forkResultOf,
   hasForkMarker,
@@ -21,7 +23,7 @@ import {
   stop,
   StopInput,
 } from "./hook.ts";
-import type { StopLogRecord } from "./hook.ts";
+import type { Answer, Deps, StopLogRecord } from "./hook.ts";
 
 const HEAD = "d".repeat(40);
 
@@ -34,7 +36,10 @@ function tokenFile(): string {
   return path;
 }
 
-const TOKEN_ENV = { LAB_AUTHOR_TOKEN_FILE: tokenFile() };
+const TOKEN_FILE = tokenFile();
+
+/** The environment of an Author's session: the marker the launcher's settings file gives, and the token's file. */
+const AUTHOR_ENV = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: TOKEN_FILE };
 
 interface Call {
   readonly argv: readonly string[];
@@ -43,57 +48,155 @@ interface Call {
 
 const ok = (stdout: string): Promise<Ran> => Promise.resolve({ code: 0, stdout, stderr: "" });
 
+const DONE_OPENING = doneQuestionOf([]).split("\n")[0] ?? "";
+
+const MODEL_USAGE = {
+  "claude-haiku-5-5": { inputTokens: 2, outputTokens: 4, cacheReadInputTokens: 9000, cacheCreationInputTokens: 700 },
+};
+
+/** One line of `.lab/outcomes.log`, as the hook writes it for a stop. */
+const OutcomeLine = Schema.Struct({
+  at: Schema.String,
+  session: Schema.String,
+  worktree: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  head: Schema.NullOr(Schema.String),
+  outcome: Schema.Literals(["published", "not-published"]),
+  pr: Schema.optionalKey(Schema.Finite),
+  reason: Schema.optionalKey(Schema.String),
+});
+
+type OutcomeLine = typeof OutcomeLine.Type;
+
+const FINISHED = { finished: true, reason: "done and tested", rejections: [] };
+
+const UNFINISHED = { finished: false, reason: "a test is missing", rejections: [] };
+
+/** A review thread of the App as the threads query gives it. */
+function thread(id: string, severity: "important" | "nit" | "pre_existing", resolved = false) {
+  const label = { important: "Important", nit: "Nit", pre_existing: "Pre-existing" }[severity];
+
+  return {
+    id,
+    isResolved: resolved,
+    path: "app/src/cli.ts",
+    line: 7,
+    comments: {
+      nodes: [
+        {
+          author: { login: "bengous-labs-agents" },
+          body: `**${label}**: ${id} is wrong\n\nscenario\n\n<!-- lab-finding severity=${severity} -->`,
+        },
+      ],
+    },
+  };
+}
+
+const threadsAnswer = (threads: readonly unknown[]): string =>
+  JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } });
+
+/** The fake's say on the session and the branch. */
+interface Fake {
+  /** The Done judge's structured outputs, one per ask; the last one answers every later ask. `undefined` is a fork with none. */
+  readonly done: ReadonlyArray<Schema.Json | undefined>;
+  /** The exit code of the Done judge's fork. */
+  readonly doneCode: number;
+  readonly listed: string;
+  readonly branch: string | null;
+  readonly forkBody: string;
+  readonly mainCheckout: boolean;
+  readonly ahead: number;
+  readonly dirty: boolean;
+  readonly threads: readonly unknown[];
+  /** The command line prefixes that exit 1. */
+  readonly failing: readonly string[];
+  readonly env: Readonly<Record<string, string | undefined>>;
+}
+
 interface World {
-  readonly run: Run;
+  readonly deps: Deps;
   readonly calls: readonly Call[];
   readonly root: string;
+  /** The main checkout, which the fake's worktree belongs to. */
+  readonly checkout: string;
+  readonly relays: readonly RelayStart[];
+  readonly outcomes: ReadonlyArray<{ readonly checkout: string; readonly line: OutcomeLine }>;
+  readonly records: readonly StopLogRecord[];
+  readonly log: (record: StopLogRecord) => void;
 }
 
-const FACTORY_CONFIG = readFileSync(
-  resolve(import.meta.dir, "..", "..", "..", ".github", "software-factory.json"),
-  "utf8",
-);
+const draftPr = (head = HEAD): string => JSON.stringify([{ number: 12, isDraft: true, headRefOid: head }]);
 
-/** The fake's say on the session and the branch: the Done judge's answer, the PRs listed, the diff's paths. */
-interface Fake {
-  readonly doneJudgeAnswer: string;
-  readonly listed: string;
-  readonly branch: string;
-  readonly forkBody: string;
-  readonly paths: readonly string[];
-}
+const readyPr = (head = HEAD): string => JSON.stringify([{ number: 12, isDraft: false, headRefOid: head }]);
 
-/** A fake of git, gh, bun and claude for the Author's session on `branch`, one commit ahead, with the PRs `listed`. */
-function world(doneJudgeAnswer: string, listed = "[]", branch = "agent/x", forkBody = "Body text."): World {
-  return worldOf({ doneJudgeAnswer, listed, branch, forkBody });
-}
+/** A fake of git, gh, bun and claude for an Author's session in a worktree, on `branch`, one commit ahead of dev. */
+function world(fake: Partial<Fake> = {}): World {
+  const {
+    done = [FINISHED],
+    doneCode = 0,
+    listed = "[]",
+    branch = "agent/x",
+    forkBody = "Body text.",
+    mainCheckout = false,
+    ahead = 1,
+    dirty = false,
+    threads = [],
+    failing = [],
+    env = AUTHOR_ENV,
+  } = fake;
 
-function worldOf(fake: Partial<Fake>): World {
-  const { doneJudgeAnswer = "YES", listed = "[]", branch = "agent/x", forkBody = "Body text.", paths = [] } = fake;
-
-  const root = mkdtempSync(join(tmpdir(), "stop-"));
+  const checkout = mkdtempSync(join(tmpdir(), "stop-"));
+  const root = mainCheckout ? checkout : join(checkout, ".claude", "worktrees", "x");
   const calls: Call[] = [];
+  const relays: RelayStart[] = [];
+  const outcomes: Array<{ checkout: string; line: OutcomeLine }> = [];
+  const records: StopLogRecord[] = [];
+  let asked = 0;
 
   const exact = new Map([
     ["git rev-parse --show-toplevel", `${root}\n`],
-    ["git symbolic-ref --short -q HEAD", `${branch}\n`],
+    ["git rev-parse --absolute-git-dir", mainCheckout ? `${checkout}/.git\n` : `${checkout}/.git/worktrees/x\n`],
+    ["git rev-parse --path-format=absolute --git-common-dir", `${checkout}/.git\n`],
     ["git rev-parse HEAD", `${HEAD}\n`],
-    ["git status --porcelain", ""],
-    ["git diff --name-only --no-renames origin/dev...HEAD", `${paths.join("\n")}\n`],
-    ["git show origin/dev:.github/software-factory.json", FACTORY_CONFIG],
+    ["git status --porcelain", dirty ? " M app/src/cli.ts\n" : ""],
   ]);
+
+  /** What a fork asked `prompt` prints: the PR's text, or the Done judge's next answer. */
+  const fork = (prompt: string): Promise<Ran> => {
+    if (!prompt.startsWith(DONE_OPENING)) {
+      return ok(JSON.stringify({ result: `feat: x\n\n${forkBody}`, modelUsage: MODEL_USAGE }));
+    }
+
+    const answer = done[Math.min(asked, done.length - 1)];
+    asked += 1;
+
+    const printed =
+      answer === undefined
+        ? { result: "", modelUsage: MODEL_USAGE }
+        : { result: "", structured_output: answer, modelUsage: MODEL_USAGE };
+
+    return Promise.resolve({ code: doneCode, stdout: JSON.stringify(printed), stderr: "" });
+  };
 
   const run: Run = (argv, options) => {
     calls.push({ argv, options });
     const line = argv.join(" ");
     const known = exact.get(line);
 
+    if (failing.some((prefix) => line.startsWith(prefix))) {
+      return Promise.resolve({ code: 1, stdout: "", stderr: `${argv[0]} failed` });
+    }
+
     if (known !== undefined) {
       return ok(known);
     }
 
+    if (line === "git symbolic-ref --short -q HEAD") {
+      return branch === null ? Promise.resolve({ code: 1, stdout: "", stderr: "" }) : ok(`${branch}\n`);
+    }
+
     if (line.startsWith("git rev-list --count")) {
-      return ok("1\n");
+      return ok(`${ahead}\n`);
     }
 
     if (line.startsWith("git log -1")) {
@@ -108,33 +211,56 @@ function worldOf(fake: Partial<Fake>): World {
       return ok("https://github.com/o/r/pull/12\n");
     }
 
-    if (argv[0] === "claude") {
-      const prompt = argv.at(-1) ?? "";
-      const result = prompt === DONE_QUESTION ? doneJudgeAnswer : `feat: x\n\n${forkBody}`;
-
-      return ok(
-        JSON.stringify({
-          result,
-          modelUsage: {
-            "claude-haiku-5-5": {
-              inputTokens: 2,
-              outputTokens: 4,
-              cacheReadInputTokens: 9000,
-              cacheCreationInputTokens: 700,
-            },
-          },
-        }),
-      );
+    if (line.startsWith("gh api graphql -f query=query")) {
+      return ok(threadsAnswer(threads));
     }
 
-    return ok("");
+    return argv[0] === "claude" ? fork(argv.at(-1) ?? "") : ok("");
   };
 
-  return { run, calls, root };
+  const deps: Deps = {
+    run,
+    env,
+    now: () => 0,
+    startRelay: (relay) => {
+      relays.push(relay);
+
+      return "started";
+    },
+    recordOutcome: (where, line) => {
+      outcomes.push({ checkout: where, line: decodeJson(OutcomeLine, "an outcome line", line) });
+    },
+  };
+
+  return {
+    deps,
+    calls,
+    root,
+    checkout,
+    relays,
+    outcomes,
+    records,
+    log: (record) => {
+      records.push(record);
+    },
+  };
 }
 
-function input(root: string): StopInput {
-  const transcript = join(root, "t.jsonl");
+/** One stop of the fake's session. */
+const stopIn = (found: World, stopHookActive = false): Promise<Answer> =>
+  stop(input(found.root, stopHookActive), found.deps, found.log);
+
+/** The body `gh pr create` reads on stdin when the hook opens the PR from `branch` with the fork's `forkBody`. */
+async function bodyOf(branch: string, forkBody: string): Promise<string | undefined> {
+  const found = world({ branch, forkBody });
+  await stopIn(found);
+
+  return found.calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.options.stdin;
+}
+
+function input(root: string, stopHookActive = false): StopInput {
+  const dir = mkdtempSync(join(tmpdir(), "transcript-"));
+  const transcript = join(dir, "t.jsonl");
   writeFileSync(
     transcript,
     [
@@ -146,35 +272,28 @@ function input(root: string): StopInput {
     ].join("\n"),
   );
 
-  return { session_id: "S1", transcript_path: transcript, cwd: root };
+  return { session_id: "S1", transcript_path: transcript, cwd: root, stop_hook_active: stopHookActive };
 }
 
-/** The body `gh pr create` reads on stdin when the hook opens the PR from `branch` with the fork's `forkBody`. */
-async function bodyOf(branch: string, forkBody: string): Promise<string | undefined> {
-  const { run, calls, root } = world("YES", "[]", branch, forkBody);
-  await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
+/** What the hook wrote on GitHub and pushed, in its order: each reply and resolution with its thread, the push, the PR calls. */
+function writes(calls: readonly Call[]): string[] {
+  return calls.flatMap((call) => {
+    const line = call.argv.join(" ");
+    const id = call.argv.find((word) => word.startsWith("id="))?.slice(3) ?? "";
 
-  return calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.options.stdin;
-}
+    if (line.includes("addPullRequestReviewThreadReply")) {
+      return [`reply ${id}`];
+    }
 
-/** The publishing calls in their order, from the push on, as argv lines with their env and stdin. */
-function publishing(calls: readonly Call[]): Array<[string, RunOptions["env"], string | undefined]> {
-  return calls.flatMap((call): Array<[string, RunOptions["env"], string | undefined]> => {
+    if (line.includes("resolveReviewThread")) {
+      return [`resolve ${id}`];
+    }
+
     if (call.argv.includes("push")) {
-      return [["push", call.options.env, undefined]];
+      return ["push"];
     }
 
-    if (!/^gh pr (create|edit|comment|ready)/u.test(call.argv.join(" "))) {
-      return [];
-    }
-
-    return [
-      [
-        call.argv.slice(0, 4).join(" "),
-        call.options.env,
-        call.argv.includes("create") ? undefined : call.options.stdin,
-      ],
-    ];
+    return /^gh pr (create|edit|comment|ready)/u.test(line) ? [call.argv.slice(1, 3).join(" ")] : [];
   });
 }
 
@@ -182,8 +301,8 @@ const REPO = resolve(import.meta.dir, "..", "..", "..");
 
 const FORK_SETTINGS = `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"bun \\"${REPO}/scripts/land-loop/stop/fork-guard.ts\\"","timeout":30}]}]}}`;
 
-/** The command line of the Target for a fork asked `prompt` on the session's model. */
-const forkArgv = (prompt: string): readonly string[] => [
+/** The command line of a fork asked `prompt` on the session's model, with the JSON Schema of its answer, if any. */
+const forkArgv = (prompt: string, schema: string | null): readonly string[] => [
   "claude",
   "-p",
   "--resume",
@@ -196,6 +315,7 @@ const forkArgv = (prompt: string): readonly string[] => [
   "--settings",
   FORK_SETTINGS,
   "--strict-mcp-config",
+  ...(schema === null ? [] : ["--json-schema", schema]),
   "--output-format",
   "json",
   "--model",
@@ -203,55 +323,257 @@ const forkArgv = (prompt: string): readonly string[] => [
   prompt,
 ];
 
-describe("stop", () => {
-  test("each fork reads with Read, Grep, Glob and Bash under the fork guard, never Monitor", async () => {
-    const { run, calls, root } = world("YES");
-    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
+describe("who is an Author", () => {
+  test("a stop of a session without LAB_AUTHOR on a branch ahead of dev publishes nothing, and reads nothing", async () => {
+    for (const env of [
+      { LAB_AUTHOR_TOKEN_FILE: TOKEN_FILE },
+      { ...AUTHOR_ENV, LAB_AUTHOR: "0" },
+      { ...AUTHOR_ENV, LAB_AUTHOR: "" },
+    ]) {
+      const found = world({ env });
 
-    const forks = calls.filter((call) => call.argv[0] === "claude").map((call) => call.argv);
-
-    expect(forks).toEqual([forkArgv(DONE_QUESTION), forkArgv(BODY_REQUEST)]);
-    expect(forks.every((argv) => !(argv[argv.indexOf("--tools") + 1] ?? "").includes("Monitor"))).toBe(true);
-  });
-
-  test("the done-judge and body-fork lines log the tokens of each fork", async () => {
-    const records: StopLogRecord[] = [];
-    const { run, root } = world("YES");
-    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
-      records.push(record);
-    });
-
-    for (const step of ["done-judge", "body-fork"]) {
-      expect(records.find((record) => record.step === step)).toMatchObject({
-        tokens: { input: 2, output: 4, cacheRead: 9000, cacheCreation: 700 },
-      });
-      expect(Object.keys(records.find((record) => record.step === step) ?? {})).not.toContain("costUsd");
+      expect(await stopIn(found)).toEqual({ kind: "allow" });
+      expect(found.calls).toEqual([]);
+      expect(found.outcomes).toEqual([]);
+      expect(found.records).toEqual([
+        { step: "admit", kind: "none", reason: "this session is not an Author: its environment holds no LAB_AUTHOR=1" },
+      ]);
     }
   });
 
-  test("a finished task: the Done judge's fork runs on the session's model with the flag, then the branch is pushed and the PR opened", async () => {
-    const { run, calls, root } = world("YES, done and tested.");
-    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
+  test("a session that is not an Author, or a fork, has no transcript read: one that does not read stops no stop", async () => {
+    const unreadable = join(mkdtempSync(join(tmpdir(), "transcript-")), "t.jsonl");
+    writeFileSync(unreadable, "not JSON\n");
 
-    const doneJudge = calls.find((call) => call.argv[0] === "claude" && call.argv.at(-1) === DONE_QUESTION);
+    for (const env of [{}, { ...AUTHOR_ENV, [FORK_FLAG]: "1" }]) {
+      const found = world({ env });
 
-    expect(doneJudge?.argv).toEqual(forkArgv(DONE_QUESTION));
-    expect(doneJudge?.options.env?.[FORK_FLAG]).toBe("1");
-    expect(doneJudge?.options.cwd).toBe(root);
-    expect(calls.some((call) => call.argv.join(" ") === pushArgs("agent/x").join(" "))).toBe(true);
+      expect(
+        await stop({ session_id: "S1", transcript_path: unreadable, cwd: found.root }, found.deps, found.log),
+      ).toEqual({ kind: "allow" });
+    }
 
-    const create = calls.find((call) => call.argv.join(" ").startsWith("gh pr create"));
+    const author = world();
 
-    // oxlint-disable-next-line typescript/no-unsafe-argument -- bun-types types every asymmetric matcher as any.
-    expect(create?.argv).toEqual(expect.arrayContaining(["--base", "dev", "--title", "feat: x"]));
+    expect(
+      stop({ session_id: "S1", transcript_path: unreadable, cwd: author.root }, author.deps, author.log),
+    ).rejects.toThrow(`${unreadable} line 1`);
+  });
+
+  test("inside a fork the hook launched, nothing runs though the fork inherits the Author's marker", async () => {
+    const found = world({ env: { ...AUTHOR_ENV, [FORK_FLAG]: "1" } });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(found.calls).toEqual([]);
+    expect(found.outcomes).toEqual([]);
+    expect(found.records).toEqual([
+      { step: "admit", kind: "none", reason: "this session is a fork the hook launched" },
+    ]);
+  });
+
+  test("an Author session in the main checkout publishes nothing; the same session in a worktree publishes", async () => {
+    const main = world({ mainCheckout: true });
+
+    expect(await stopIn(main)).toEqual({ kind: "allow" });
+    expect(writes(main.calls)).toEqual([]);
+    expect(main.calls.some((call) => call.argv[0] === "claude" || call.argv[0] === "bun")).toBe(false);
+    expect(main.outcomes.map((outcome) => outcome.line)).toMatchObject([
+      {
+        outcome: "not-published",
+        reason: "this session works in the main checkout: an Author publishes from its own worktree",
+      },
+    ]);
+
+    const worktree = world();
+
+    expect(await stopIn(worktree)).toEqual({ kind: "allow" });
+    expect(writes(worktree.calls)).toEqual(["push", "pr create"]);
+    expect(worktree.outcomes.map((outcome) => outcome.line)).toMatchObject([{ outcome: "published", pr: 12 }]);
+  });
+});
+
+// An inherited GIT_DIR would point a fixture's git at the real repository; the test layer cannot import fixtureEnv.
+const FIXTURE_ENV = Object.fromEntries(
+  Object.entries(process.env).flatMap(([name, value]) =>
+    name.startsWith("GIT_") || value === undefined ? [] : [[name, value] as const],
+  ),
+);
+
+/** Runs git in `cwd` of a fixture repository, as a test author with no signing. */
+async function git(cwd: string, ...args: string[]): Promise<Ran> {
+  const identity = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
+  const child = Bun.spawn(["git", ...identity, ...args], { cwd, env: FIXTURE_ENV, stdout: "pipe", stderr: "pipe" });
+
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+
+  return { code, stdout, stderr };
+}
+
+/** A repository whose main checkout and whose linked worktree are each on a branch one commit ahead of `origin/dev`. */
+async function fixtureRepository(): Promise<{ readonly main: string; readonly worktree: string }> {
+  const main = realpathSync(mkdtempSync(join(tmpdir(), "stop-repo-")));
+  const worktree = join(main, ".claude", "worktrees", "w");
+
+  await git(main, "init", "--quiet", "--initial-branch", "dev");
+  // The hook keeps its state under `.lab/`, which the repository ignores.
+  writeFileSync(join(main, ".gitignore"), ".lab/\n");
+  await git(main, "add", ".gitignore");
+  await git(main, "commit", "--quiet", "-m", "chore: base");
+  await git(main, "update-ref", "refs/remotes/origin/dev", "HEAD");
+  await git(main, "worktree", "add", "--quiet", "-b", "feat/in-a-worktree", worktree);
+  await git(worktree, "commit", "--quiet", "--allow-empty", "-m", "feat: w");
+  await git(main, "switch", "--quiet", "-c", "feat/in-the-main-checkout");
+  await git(main, "commit", "--quiet", "--allow-empty", "-m", "feat: m");
+  mkdirSync(join(main, "sub"));
+  mkdirSync(join(worktree, "sub"));
+
+  return { main, worktree };
+}
+
+/** One stop in `cwd` of the fixture: git reads the repository for real, GitHub and the forks are the fake's. */
+async function stopAt(cwd: string): Promise<World> {
+  const found = world();
+
+  const run: Run = (argv, options) =>
+    argv[0] === "git" && !argv.includes("push") && !argv.includes("fetch")
+      ? git(options.cwd, ...argv.slice(1))
+      : found.deps.run(argv, options);
+
+  await stop({ ...input(cwd), cwd }, { ...found.deps, run }, found.log);
+
+  return found;
+}
+
+describe("the checkout a stop comes from, as git reads it", () => {
+  test("a stop in the main checkout, or in a directory under it, publishes nothing; one in a linked worktree publishes", async () => {
+    const { main, worktree } = await fixtureRepository();
+
+    for (const cwd of [main, join(main, "sub")]) {
+      const found = await stopAt(cwd);
+
+      expect(writes(found.calls)).toEqual([]);
+      expect(found.outcomes).toMatchObject([
+        {
+          checkout: main,
+          line: {
+            worktree: main,
+            branch: "feat/in-the-main-checkout",
+            outcome: "not-published",
+            reason: "this session works in the main checkout: an Author publishes from its own worktree",
+          },
+        },
+      ]);
+    }
+
+    for (const cwd of [worktree, join(worktree, "sub")]) {
+      const found = await stopAt(cwd);
+
+      expect(writes(found.calls)).toEqual(["push", "pr create"]);
+      expect(found.outcomes).toMatchObject([
+        { checkout: main, line: { worktree, branch: "feat/in-a-worktree", outcome: "published", pr: 12 } },
+      ]);
+      expect(found.relays).toEqual([{ pr: 12, session: "S1", checkout: main }]);
+    }
+  });
+});
+
+describe("the stop of an Author", () => {
+  test("a finished change: the Done judge's fork answers through the schema, then the branch is pushed and the PR opened", async () => {
+    const found = world();
+    const answer = await stopIn(found);
+    const forks = found.calls.filter((call) => call.argv[0] === "claude");
+
+    expect(forks.map((call) => call.argv)).toEqual([
+      forkArgv(doneQuestionOf([]), JSON.stringify(DONE_SCHEMA)),
+      forkArgv(BODY_REQUEST, null),
+    ]);
+    expect(forks.every((call) => !(call.argv[call.argv.indexOf("--tools") + 1] ?? "").includes("Monitor"))).toBe(true);
+    expect(forks.map((call) => call.options)).toEqual([
+      { cwd: found.root, env: { [FORK_FLAG]: "1" }, timeoutMs: 180_000 },
+      { cwd: found.root, env: { [FORK_FLAG]: "1" }, timeoutMs: 180_000 },
+    ]);
+    expect(found.calls.some((call) => call.argv.join(" ") === pushArgs("agent/x").join(" "))).toBe(true);
+
+    const create = found.calls.find((call) => call.argv.join(" ").startsWith("gh pr create"));
+
+    expect(create?.argv).toEqual([
+      "gh",
+      "pr",
+      "create",
+      "--base",
+      "dev",
+      "--head",
+      "agent/x",
+      "--title",
+      "feat: x",
+      "--body-file",
+      "-",
+    ]);
     expect(create?.options.stdin).toBe("Body text.");
-    expect(outcome.kind).toBe("block");
-    expect(outcome.kind === "block" && outcome.reason).toContain("PR #12 is ready");
-    expect(outcome.kind === "block" && outcome.reason).toContain(`bun ${root}/scripts/land-loop/pr-watch.ts 12`);
-    expect(outcome.kind === "block" && outcome.reason).toContain(
-      `\`bun ${root}/scripts/land-loop/thread.ts <thread-id> `,
+    expect(answer).toEqual({ kind: "allow" });
+  });
+
+  test("a Publication ends the stop with no block and no text, and leaves one relay for its PR and its session", async () => {
+    const opened = world();
+
+    expect(await stopIn(opened)).toEqual({ kind: "allow" });
+    expect(opened.relays).toEqual([{ pr: 12, session: "S1", checkout: opened.checkout }]);
+    expect(opened.records).toContainEqual({ step: "relay", pr: 12, relay: "started" });
+
+    const pushed = world({ listed: readyPr("e".repeat(40)) });
+
+    expect(await stopIn(pushed)).toEqual({ kind: "allow" });
+    expect(pushed.relays).toEqual([{ pr: 12, session: "S1", checkout: pushed.checkout }]);
+  });
+
+  test("a stop that publishes nothing leaves no relay", async () => {
+    for (const found of [world({ done: [UNFINISHED] }), world({ listed: readyPr() }), world({ dirty: true })]) {
+      await stopIn(found);
+
+      expect(found.relays).toEqual([]);
+    }
+  });
+
+  test("a relay that cannot be left is logged, and the PR is published all the same", async () => {
+    const found = world();
+
+    const answer = await stop(
+      input(found.root),
+      {
+        ...found.deps,
+        startRelay: () => {
+          throw new Error("no bun on the PATH");
+        },
+      },
+      found.log,
     );
-    expect(outcome.kind === "block" && outcome.reason).toContain(`\`bun ${root}/scripts/land-loop/comment.ts 12 "`);
+
+    expect(answer).toEqual({ kind: "allow" });
+    expect(found.records).toContainEqual({ step: "relay", pr: 12, relay: null, error: "no bun on the PATH" });
+    expect(found.outcomes.map((outcome) => outcome.line)).toMatchObject([{ outcome: "published", pr: 12 }]);
+  });
+
+  test("the done-judge and body-fork lines log the tokens of each fork, and the judge's answer", async () => {
+    const found = world();
+    await stopIn(found);
+
+    for (const step of ["done-judge", "body-fork"]) {
+      expect(found.records.find((record) => record.step === step)).toMatchObject({
+        tokens: { input: 2, output: 4, cacheRead: 9000, cacheCreation: 700 },
+      });
+    }
+
+    expect(found.records.find((record) => record.step === "done-judge")).toMatchObject({
+      model: "claude-haiku-5-5",
+      answer: "finished",
+      reason: "done and tested",
+      rejections: 0,
+      code: 0,
+    });
   });
 
   test("a branch made for an issue opens a PR whose body ends with its closing line, once", async () => {
@@ -263,65 +585,58 @@ describe("stop", () => {
   });
 
   test("the push and every gh call carry the Author's credential; git fetch and the forks do not", async () => {
-    const { run, calls, root } = world(
-      "YES",
-      JSON.stringify([{ number: 12, isDraft: true, headRefOid: "e".repeat(40), labels: [] }]),
-    );
-
-    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
+    const found = world({ listed: draftPr("e".repeat(40)), threads: [thread("T1", "nit")] });
+    await stopIn(found);
 
     const envOf = (prefix: string): RunOptions["env"] =>
-      calls.find((call) => call.argv.join(" ").startsWith(prefix))?.options.env;
+      found.calls.find((call) => call.argv.join(" ").startsWith(prefix))?.options.env;
 
-    expect(calls.find((call) => call.argv.includes("push"))?.argv).toEqual(pushArgs("agent/x"));
+    expect(found.calls.find((call) => call.argv.includes("push"))?.argv).toEqual(pushArgs("agent/x"));
     expect(envOf("git -c")).toEqual({ LAB_AUTHOR_TOKEN: TOKEN });
     expect(envOf("gh pr list")).toEqual({ GH_TOKEN: TOKEN });
     expect(envOf("gh pr ready 12")).toEqual({ GH_TOKEN: TOKEN });
+    expect(envOf("gh api graphql -f query=query")).toEqual({ GH_TOKEN: TOKEN });
+    expect(envOf("gh api graphql -f query=mutation")).toEqual({ GH_TOKEN: TOKEN });
     expect(envOf("git fetch")).toBeUndefined();
-    expect(calls.filter((call) => call.argv[0] === "claude").map((call) => call.options.env)).toEqual([
+    expect(found.calls.filter((call) => call.argv[0] === "claude").map((call) => call.options.env)).toEqual([
       { [FORK_FLAG]: "1" },
     ]);
 
-    const opened = world("YES");
-    await stop(input(opened.root), { run: opened.run, env: TOKEN_ENV, now: () => 0 }, () => {});
+    const opened = world();
+    await stopIn(opened);
 
     expect(opened.calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.options.env).toEqual({
       GH_TOKEN: TOKEN,
     });
-    expect(opened.calls.filter((call) => call.argv[0] === "claude").map((call) => call.options.env)).toEqual([
-      { [FORK_FLAG]: "1" },
-      { [FORK_FLAG]: "1" },
-    ]);
+  });
+
+  test("a draft PR is pushed and readied; a ready PR behind this head is pushed only; neither reads or edits a body", async () => {
+    const draft = world({ listed: draftPr() });
+    await stopIn(draft);
+
+    expect(writes(draft.calls)).toEqual(["push", "pr ready"]);
+    expect(draft.calls.filter((call) => call.argv[0] === "claude")).toHaveLength(1);
+
+    const behind = world({ listed: readyPr("e".repeat(40)) });
+    await stopIn(behind);
+
+    expect(writes(behind.calls)).toEqual(["push"]);
   });
 
   test("no Author token: the hook blocks once with the reason, then lets the session end, and runs no Stop check, fork or push", async () => {
     const missing = join(mkdtempSync(join(tmpdir(), "author-")), "absent");
-    const records: StopLogRecord[] = [];
-    const first = world("YES");
+    const env = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: missing };
+    const first = world({ env });
 
-    const blocked = await stop(
-      input(first.root),
-      { run: first.run, env: { LAB_AUTHOR_TOKEN_FILE: missing }, now: () => 0 },
-      (record) => {
-        records.push(record);
-      },
-    );
-
-    expect(blocked).toEqual({
+    expect(await stopIn(first)).toEqual({
       kind: "block",
       reason: `The Stop hook found no Author token at ${missing}, so nothing was published. The Owner provisions it (AGENTS.md, Identities). Stop, and ask no question.`,
     });
-    expect(records).toContainEqual({ step: "author-token", found: false, path: missing });
+    expect(first.records).toContainEqual({ step: "author-token", found: false, path: missing });
 
-    const second = world("YES");
+    const second = world({ env });
 
-    const ended = await stop(
-      { ...input(second.root), stop_hook_active: true },
-      { run: second.run, env: { LAB_AUTHOR_TOKEN_FILE: missing }, now: () => 0 },
-      () => {},
-    );
-
-    expect(ended).toEqual({ kind: "allow" });
+    expect(await stopIn(second, true)).toEqual({ kind: "allow" });
 
     for (const { calls } of [first, second]) {
       expect(
@@ -331,252 +646,327 @@ describe("stop", () => {
   });
 
   test("a token found is logged with its path", async () => {
-    const records: StopLogRecord[] = [];
-    const { run, root } = world("YES");
-    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
-      records.push(record);
-    });
+    const found = world();
+    await stopIn(found);
 
-    expect(records).toContainEqual({ step: "author-token", found: true, path: TOKEN_ENV.LAB_AUTHOR_TOKEN_FILE });
+    expect(found.records).toContainEqual({ step: "author-token", found: true, path: TOKEN_FILE });
   });
 
-  test("a PR ready at HEAD and not armed yet: the hook asks to arm its PR watch, naming the PR in its commands, and pushes nothing", async () => {
-    const { run, calls, root } = world(
+  test("red Stop checks block once with their report, then let the session end, and no fork runs", async () => {
+    const first = world({ failing: ["bun check"] });
+    const blocked = await stopIn(first);
+
+    expect(blocked).toEqual({
+      kind: "block",
+      reason:
+        "The Stop checks are red on this head, so nothing was published:\n\nbun failed\n\nFix them and commit, then stop.",
+    });
+
+    const second = world({ failing: ["bun check"] });
+
+    expect(await stopIn(second, true)).toEqual({ kind: "allow" });
+
+    for (const { calls } of [first, second]) {
+      expect(calls.some((call) => call.argv[0] === "claude" || call.argv.includes("push"))).toBe(false);
+    }
+  });
+});
+
+describe("the Done judge", () => {
+  test("a change that is not finished publishes nothing, and the stop goes", async () => {
+    const found = world({ done: [UNFINISHED] });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(writes(found.calls)).toEqual([]);
+  });
+
+  test("not finished, then finished, on the same head with no new commit: the second stop publishes", async () => {
+    const found = world({ done: [UNFINISHED, FINISHED] });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(writes(found.calls)).toEqual([]);
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(writes(found.calls)).toEqual(["push", "pr create"]);
+    expect(found.outcomes.map((outcome) => outcome.line)).toMatchObject([
+      {
+        head: HEAD,
+        outcome: "not-published",
+        reason: "the Done judge says the change is not finished: a test is missing",
+      },
+      { head: HEAD, outcome: "published", pr: 12 },
+    ]);
+  });
+
+  test("an answer that does not fit the schema is no answer: the hook blocks once, then lets the session end, and publishes nothing", async () => {
+    const unfit: Array<Schema.Json | undefined> = [
+      undefined,
       "YES",
-      JSON.stringify([{ number: 12, isDraft: false, headRefOid: HEAD, labels: [] }]),
-    );
+      "YES, HOLD: a stored format",
+      { finished: "yes", reason: "done", rejections: [] },
+      { finished: true, reason: "done" },
+    ];
 
-    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
+    for (const answer of unfit) {
+      const first = world({ done: [answer] });
 
-    expect(outcome.kind === "block" && outcome.reason).toContain(`bun ${root}/scripts/land-loop/pr-watch.ts 12`);
-    expect(outcome.kind === "block" && outcome.reason).toContain(
-      `\`bun ${root}/scripts/land-loop/thread.ts <thread-id> `,
-    );
-    expect(outcome.kind === "block" && outcome.reason).toContain(
-      `\`bun ${root}/scripts/land-loop/thread.ts <thread-id> --reject "<your reason>"\``,
-    );
-    expect(outcome.kind === "block" && outcome.reason).toContain(
-      '- A finding you fix in part: it is a fix; start with "Fixed in <sha>: " and name what stays as is.',
-    );
-    expect(outcome.kind === "block" && outcome.reason).toContain(`\`bun ${root}/scripts/land-loop/comment.ts 12 "`);
-    expect(calls.some((call) => call.argv[1] === "push")).toBe(false);
+      expect(await stopIn(first)).toEqual({
+        kind: "block",
+        reason:
+          "The Stop hook could not ask whether your change is finished (the Done judge's fork exited 0 with no answer that reads), so nothing was published. Stop again to retry; ask no question.",
+      });
+      expect(await stopIn(first, true)).toEqual({ kind: "allow" });
+      expect(writes(first.calls)).toEqual([]);
+      expect(first.records.filter((record) => record.step === "done-judge")).toMatchObject([
+        { answer: "none" },
+        { answer: "none" },
+      ]);
+    }
   });
 
-  test("a stop that asks the Owner a question: the Done judge says NO and nothing is pushed", async () => {
-    const { run, calls, root } = world("NO, I asked the Owner which command to add.");
-    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
+  test("a fork that exits non-zero gave no answer, whatever it printed", async () => {
+    const found = world({ doneCode: 124 });
+    const blocked = await stopIn(found);
 
-    expect(outcome).toEqual({ kind: "allow" });
-    expect(calls.some((call) => call.argv[1] === "push")).toBe(false);
+    expect(blocked.kind === "block" && blocked.reason).toContain("exited 124");
+    expect(writes(found.calls)).toEqual([]);
   });
 
-  test("the Done judge's question asks for YES, NO, or YES, HOLD: with a reason", () => {
-    expect(DONE_QUESTION).toBe(
-      `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, with no question pending for the Owner? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason. When it is finished but a human should read it before it lands, answer YES, HOLD: and the reason instead: for example a change to a name or a format stored outside the code, or to a setting the Owner must change on GitHub.`,
-    );
+  test("no answer puts land:human: the hook edits no label and posts no comment, whatever the judge answers", async () => {
+    const answers: Array<Schema.Json | undefined> = [
+      FINISHED,
+      UNFINISHED,
+      "YES, HOLD: a stored format",
+      { finished: true, reason: "HOLD: a human should read this", rejections: [] },
+      { finished: true, reason: "done", rejections: [], hold: "a stored format" },
+    ];
+
+    for (const answer of answers) {
+      for (const listed of ["[]", draftPr(), readyPr("e".repeat(40))]) {
+        const found = world({ done: [answer], listed });
+        await stopIn(found);
+
+        expect(found.calls.filter((call) => /^gh pr (edit|comment)/u.test(call.argv.join(" ")))).toEqual([]);
+        expect(found.calls.some((call) => call.argv.join(" ").includes("land:human"))).toBe(false);
+      }
+    }
   });
 
-  const REASON = "renames the agent-review check, which the dev ruleset requires";
-
-  const COMMENT = `Held for the Owner by the Author: ${REASON}\n\n<!-- lab-author-reply -->`;
-
-  test("a hold on the open path: the PR opens as a draft, gets the label and the comment with the Author's credential, then is readied", async () => {
-    const records: StopLogRecord[] = [];
-    const { run, calls, root } = world(`YES, HOLD: ${REASON}`);
-
-    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
-      records.push(record);
-    });
-
-    expect(publishing(calls)).toEqual([
-      ["push", { LAB_AUTHOR_TOKEN: TOKEN }, undefined],
-      ["gh pr create --base", { GH_TOKEN: TOKEN }, undefined],
-      ["gh pr edit 12", { GH_TOKEN: TOKEN }, undefined],
-      ["gh pr comment 12", { GH_TOKEN: TOKEN }, COMMENT],
-      ["gh pr ready 12", { GH_TOKEN: TOKEN }, undefined],
-    ]);
-    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv.at(-1)).toBe("--draft");
-    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr edit"))?.argv).toEqual([
-      "gh",
-      "pr",
-      "edit",
-      "12",
-      "--add-label",
-      "land:human",
-    ]);
-    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr comment"))?.argv).toEqual([
-      "gh",
-      "pr",
-      "comment",
-      "12",
-      "--body-file",
-      "-",
-    ]);
-    expect(records).toContainEqual({ step: "hold", pr: 12, reason: REASON, added: true });
-    expect(outcome.kind === "block" && outcome.reason.split("\n")[1]).toBe(
-      `The Done judge held this PR for the Owner's read: ${REASON}. Do not remove land:human.`,
-    );
-  });
-
-  test("a label that fails on a held PR just opened leaves it a draft, and the next stop asks the Done judge again", async () => {
-    const { run, calls, root } = world(`YES, HOLD: ${REASON}`);
-
-    const labelFails: Run = (argv, options) =>
-      argv.join(" ").startsWith("gh pr edit")
-        ? Promise.resolve({ code: 1, stdout: "", stderr: "HTTP 502" })
-        : run(argv, options);
-
-    // oxlint-disable-next-line typescript/await-thenable, typescript/no-confusing-void-expression -- bun-types types rejects matchers as void; Bun returns the promise the test awaits.
-    await expect(stop(input(root), { run: labelFails, env: TOKEN_ENV, now: () => 0 }, () => {})).rejects.toThrow(
-      "HTTP 502",
-    );
-    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv.at(-1)).toBe("--draft");
-    expect(calls.some((call) => /^gh pr (comment|ready)/u.test(call.argv.join(" ")))).toBe(false);
-
-    const next = world(
-      `YES, HOLD: ${REASON}`,
-      JSON.stringify([{ number: 12, isDraft: true, headRefOid: HEAD, labels: [] }]),
-    );
-
-    await stop(input(next.root), { run: next.run, env: TOKEN_ENV, now: () => 0 }, () => {});
-
-    expect(next.calls.some((call) => call.argv[0] === "claude" && call.argv.at(-1) === DONE_QUESTION)).toBe(true);
-    expect(publishing(next.calls).map(([line]) => line)).toEqual([
-      "gh pr edit 12",
-      "gh pr comment 12",
-      "push",
-      "gh pr ready 12",
-    ]);
-  });
-
-  test("a hold on the push path: the label, then the comment, go out before the push and gh pr ready", async () => {
-    const records: StopLogRecord[] = [];
-
-    const { run, calls, root } = world(
-      "YES, HOLD:",
-      JSON.stringify([{ number: 12, isDraft: true, headRefOid: "e".repeat(40), labels: [{ name: "enhancement" }] }]),
-    );
-
-    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
-      records.push(record);
-    });
-
-    expect(publishing(calls)).toEqual([
-      ["gh pr edit 12", { GH_TOKEN: TOKEN }, undefined],
-      [
-        "gh pr comment 12",
-        { GH_TOKEN: TOKEN },
-        "Held for the Owner by the Author: (no reason given)\n\n<!-- lab-author-reply -->",
+  test("the question lists the App's open Important and Nit findings of the PR, not a resolved or Pre-existing one", async () => {
+    const found = world({
+      listed: draftPr(),
+      threads: [
+        thread("T1", "important"),
+        thread("T2", "nit"),
+        thread("T3", "nit", true),
+        thread("T4", "pre_existing"),
       ],
-      ["push", { LAB_AUTHOR_TOKEN: TOKEN }, undefined],
-      ["gh pr ready 12", { GH_TOKEN: TOKEN }, undefined],
-    ]);
-    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr edit"))?.argv).toEqual([
-      "gh",
+    });
+
+    await stopIn(found);
+
+    expect(found.calls.find((call) => call.argv[0] === "claude")?.argv.at(-1)).toBe(
+      doneQuestionOf([
+        { thread: "T1", where: "app/src/cli.ts:7", severity: "important", summary: "T1 is wrong" },
+        { thread: "T2", where: "app/src/cli.ts:7", severity: "nit", summary: "T2 is wrong" },
+      ]),
+    );
+  });
+});
+
+describe("rejections and Nit threads", () => {
+  const REJECTING = {
+    finished: true,
+    reason: "done",
+    rejections: [{ thread: "T1", reason: "by design: <cli> reads it" }],
+  };
+
+  test("a rejection is posted with its marks and its thread resolved, before the push", async () => {
+    const found = world({ done: [REJECTING], listed: draftPr(), threads: [thread("T1", "important")] });
+    await stopIn(found);
+
+    expect(writes(found.calls)).toEqual(["reply T1", "resolve T1", "push", "pr ready"]);
+    expect(
+      found.calls.find((call) => call.argv.join(" ").includes("addPullRequestReviewThreadReply"))?.argv.at(-1),
+    ).toBe(`body=Rejected: by design: &lt;cli> reads it\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`);
+    expect(found.records).toContainEqual({ step: "rejection", thread: "T1" });
+  });
+
+  test("when the push fails, nothing is written after the rejection, and the outcome says so", async () => {
+    const found = world({
+      done: [REJECTING],
+      listed: draftPr(),
+      threads: [thread("T1", "important"), thread("T2", "nit")],
+      failing: ["git -c"],
+    });
+
+    expect(stopIn(found)).rejects.toThrow("git -c url.https://github.com/.pushInsteadOf=git@github.com: exited 1");
+    await stopIn(found).catch(() => {});
+
+    expect(writes(found.calls).slice(0, 3)).toEqual(["reply T1", "resolve T1", "push"]);
+    expect(writes(found.calls).filter((write) => write !== "push" && !write.endsWith("T1"))).toEqual([]);
+    expect(found.relays).toEqual([]);
+    expect(found.outcomes[0]?.line).toMatchObject({ outcome: "not-published" });
+    expect(String(found.outcomes[0]?.line.reason)).toStartWith("the Stop hook failed: git -c");
+  });
+
+  test("a rejection that names no open thread of the App is dropped and logged, and nothing is posted for it", async () => {
+    const found = world({
+      done: [
+        {
+          finished: true,
+          reason: "done",
+          rejections: [
+            { thread: "T9", reason: "not mine" },
+            { thread: "T3", reason: "resolved before" },
+          ],
+        },
+      ],
+      listed: draftPr(),
+      threads: [thread("T1", "important"), thread("T3", "nit", true)],
+    });
+
+    await stopIn(found);
+
+    expect(writes(found.calls)).toEqual(["push", "pr ready"]);
+    expect(found.records).toContainEqual({ step: "rejection-dropped", thread: "T9", reason: "not mine" });
+    expect(found.records).toContainEqual({ step: "rejection-dropped", thread: "T3", reason: "resolved before" });
+  });
+
+  test("after a push, the App's open Nit threads are resolved; an Important thread is not", async () => {
+    const found = world({
+      listed: readyPr("e".repeat(40)),
+      threads: [thread("T1", "important"), thread("T2", "nit"), thread("T3", "nit"), thread("T4", "pre_existing")],
+    });
+
+    await stopIn(found);
+
+    expect(writes(found.calls)).toEqual(["push", "resolve T2", "resolve T3"]);
+    expect(found.records).toContainEqual({ step: "nits", resolved: 2 });
+  });
+
+  test("a rejected Nit is resolved once, by its rejection", async () => {
+    const found = world({ done: [REJECTING], listed: draftPr(), threads: [thread("T1", "nit"), thread("T2", "nit")] });
+    await stopIn(found);
+
+    expect(writes(found.calls)).toEqual(["reply T1", "resolve T1", "push", "pr ready", "resolve T2"]);
+  });
+
+  test("no reply the hook posts cites a commit: a fix is declared by nobody", async () => {
+    const found = world({ listed: draftPr(), threads: [thread("T1", "important"), thread("T2", "nit")] });
+    await stopIn(found);
+
+    expect(writes(found.calls).filter((write) => write.startsWith("reply"))).toEqual([]);
+    expect(writes(found.calls)).toEqual(["push", "pr ready", "resolve T2"]);
+  });
+
+  test("Nit threads that cannot be resolved leave the PR published; the next stop of an Author on the PR resolves them", async () => {
+    const failed = world({
+      listed: draftPr(),
+      threads: [thread("T2", "nit")],
+      failing: ["gh api graphql -f query=mutation"],
+    });
+
+    expect(await stopIn(failed)).toEqual({ kind: "allow" });
+    expect(failed.outcomes.map((outcome) => outcome.line)).toMatchObject([{ outcome: "published", pr: 12 }]);
+    expect(failed.records).toContainEqual({
+      step: "nits",
+      resolved: null,
+      error: "gh api graphql exited 1: gh failed",
+    });
+
+    const next = world({ listed: readyPr(), threads: [thread("T1", "important"), thread("T2", "nit")] });
+
+    expect(await stopIn(next)).toEqual({ kind: "allow" });
+    expect(writes(next.calls)).toEqual(["resolve T2"]);
+    expect(next.calls.some((call) => call.argv[0] === "claude" || call.argv[0] === "bun")).toBe(false);
+  });
+});
+
+/** The one outcome line a stop of the fake's session leaves, in its main checkout's log. */
+async function outcomeOf(fake: Partial<Fake>, stopHookActive = false): Promise<OutcomeLine | undefined> {
+  const found = world(fake);
+  await stopIn(found, stopHookActive).catch(() => {});
+
+  expect(found.outcomes).toHaveLength(1);
+  expect(found.outcomes[0]?.checkout).toBe(found.checkout);
+  expect(found.outcomes[0]?.line).toMatchObject({
+    at: "1970-01-01T00:00:00.000Z",
+    session: "S1",
+    worktree: found.root,
+    head: HEAD,
+  });
+
+  return found.outcomes[0]?.line;
+}
+
+describe("the outcome of each stop", () => {
+  test("a Publication leaves one line in the main checkout's log, with the PR it opened or pushed", async () => {
+    expect(await outcomeOf({})).toMatchObject({ branch: "agent/x", outcome: "published", pr: 12 });
+    expect(await outcomeOf({ listed: draftPr() })).toMatchObject({ outcome: "published", pr: 12 });
+    expect(Object.keys((await outcomeOf({})) ?? {})).toEqual([
+      "at",
+      "session",
+      "worktree",
+      "branch",
+      "head",
+      "outcome",
       "pr",
-      "edit",
-      "12",
-      "--add-label",
-      "land:human",
     ]);
-    expect(records).toContainEqual({ step: "hold", pr: 12, reason: "(no reason given)", added: true });
   });
 
-  test("a hold on a PR that carries land:human already publishes as YES and adds nothing", async () => {
-    const records: StopLogRecord[] = [];
+  test("each way of not publishing leaves one line with its reason", async () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "author-")), "absent");
+    const noToken = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: missing };
 
-    const { run, calls, root } = world(
-      `YES, HOLD: ${REASON}`,
-      JSON.stringify([{ number: 12, isDraft: true, headRefOid: "e".repeat(40), labels: [{ name: "land:human" }] }]),
-    );
+    const cases: Array<[Partial<Fake>, boolean, string]> = [
+      [{ branch: null }, false, "HEAD is detached"],
+      [{ branch: "dev" }, false, "dev is never published"],
+      [{ branch: "main" }, false, "main is never published"],
+      [{ branch: "lab/x" }, false, "lab/x is never published"],
+      [
+        { mainCheckout: true },
+        false,
+        "this session works in the main checkout: an Author publishes from its own worktree",
+      ],
+      [{ ahead: 0 }, false, "agent/x has no commit that dev lacks"],
+      [{ dirty: true }, false, "the tree has uncommitted changes"],
+      [{ listed: readyPr() }, false, `#12 is ready at ${HEAD} already`],
+      [{ env: noToken }, false, `no Author token at ${missing}`],
+      [{ env: noToken }, true, "no Author token after a block: nothing is published"],
+      [{ failing: ["bun check"] }, false, `the Stop checks are red on ${HEAD}`],
+      [{ failing: ["bun check"] }, true, "the Stop checks are still red after a block: nothing is published"],
+      [{ done: ["YES"] }, false, "the Done judge gave no answer"],
+      [{ done: ["YES"] }, true, "the Done judge gave no answer after a block: nothing is published"],
+      [{ done: [UNFINISHED] }, false, "the Done judge says the change is not finished: a test is missing"],
+      [
+        { failing: ["git -c"] },
+        false,
+        "the Stop hook failed: git -c url.https://github.com/.pushInsteadOf=git@github.com: exited 1: git failed",
+      ],
+    ];
 
-    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
-      records.push(record);
+    for (const [fake, stopHookActive, reason] of cases) {
+      const line = await outcomeOf(fake, stopHookActive);
+
+      expect(line).toMatchObject({ outcome: "not-published", reason });
+      expect(Object.keys(line ?? {})).toEqual(["at", "session", "worktree", "branch", "head", "outcome", "reason"]);
+    }
+  });
+
+  test("a hook that throws before it reads the branch still leaves its line, then throws", async () => {
+    const found = world({ failing: ["git rev-parse HEAD"] });
+
+    expect(stopIn(found)).rejects.toThrow("git rev-parse HEAD exited 1");
+    await stopIn(found).catch(() => {});
+
+    expect(found.outcomes[0]?.line).toMatchObject({
+      worktree: found.root,
+      branch: null,
+      head: null,
+      outcome: "not-published",
+      reason: "the Stop hook failed: git rev-parse HEAD exited 1: git failed",
     });
-
-    expect(publishing(calls).map(([line]) => line)).toEqual(["push", "gh pr ready 12"]);
-    expect(records).toContainEqual({ step: "hold", pr: 12, reason: REASON, added: false });
-  });
-
-  test("a plain YES adds no label and posts no comment", async () => {
-    const records: StopLogRecord[] = [];
-    const { run, calls, root } = world("YES, done.");
-
-    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, (record) => {
-      records.push(record);
-    });
-
-    expect(publishing(calls).map(([line]) => line)).toEqual(["push", "gh pr create --base"]);
-    expect(calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv).not.toContain("--draft");
-    expect(records.some((record) => record.step === "hold")).toBe(false);
-    expect(outcome.kind === "block" && outcome.reason).not.toContain("held this PR");
-  });
-
-  test("a NO with a hold's words publishes nothing", async () => {
-    const { run, calls, root } = world("NO, HOLD: not finished");
-    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
-
-    expect(outcome).toEqual({ kind: "allow" });
-    expect(publishing(calls)).toEqual([]);
-  });
-
-  test("inside a fork the hook launched, nothing runs past reading HEAD", async () => {
-    const { run, calls, root } = world("YES");
-
-    const outcome = await stop(input(root), { run, env: { [FORK_FLAG]: "1" }, now: () => 0 }, () => {});
-
-    expect(outcome).toEqual({ kind: "allow" });
-    expect(calls.some((call) => call.argv[0] === "claude" || call.argv[1] === "fetch")).toBe(false);
-  });
-  test("a stop on a branch that touches a factoryPaths path publishes after a Done judge YES, and reads neither the branch's paths nor the factory config", async () => {
-    const { run, calls, root } = worldOf({ paths: ["scripts/land-loop/stop/hook.ts"] });
-    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
-    const lines = calls.map((call) => call.argv.join(" "));
-
-    expect(publishing(calls).map(([line]) => line)).toEqual(["push", "gh pr create --base"]);
-    expect(outcome.kind === "block" && outcome.reason).toContain("PR #12 is ready for review.");
-    expect(lines).not.toContain("git diff --name-only --no-renames origin/dev...HEAD");
-    expect(lines).not.toContain("git show origin/dev:.github/software-factory.json");
-  });
-
-  test("a review record left in .lab/state with an unanswered Important does not hold the publication", async () => {
-    const { run, calls, root } = worldOf({ paths: ["scripts/land-loop/stop/hook.ts"] });
-    const state = join(root, ".lab", "state");
-    mkdirSync(state, { recursive: true });
-    writeFileSync(
-      join(state, `review-${HEAD}.json`),
-      JSON.stringify({
-        findings: [
-          {
-            file: "scripts/land-loop/stop/hook.ts",
-            line: 10,
-            severity: "important",
-            summary: "A breaks.",
-            failureScenario: "When A breaks.",
-          },
-        ],
-        model: null,
-        tokens: null,
-      }),
-    );
-
-    const outcome = await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
-
-    expect(publishing(calls).map(([line]) => line)).toEqual(["push", "gh pr create --base"]);
-    expect(outcome.kind === "block" && outcome.reason).toContain("PR #12 is ready for review.");
-  });
-
-  test("a push to a PR that exists reads and edits no body", async () => {
-    const { run, calls, root } = worldOf({
-      listed: JSON.stringify([{ number: 12, isDraft: true, headRefOid: "e".repeat(40), labels: [] }]),
-      paths: ["scripts/land-loop/stop/hook.ts"],
-    });
-
-    await stop(input(root), { run, env: TOKEN_ENV, now: () => 0 }, () => {});
-    const lines = calls.map((call) => call.argv.join(" "));
-
-    expect(publishing(calls).map(([line]) => line)).toEqual(["push", "gh pr ready 12"]);
-    expect(lines.some((line) => line.startsWith("gh pr view") || line.startsWith("gh pr edit"))).toBe(false);
   });
 });
 
@@ -586,6 +976,18 @@ describe("transcript", () => {
     expect(hasForkMarker([{ type: "user", message: { content: [{ text: ` ${FORK_MARKER} q` }] } }])).toBe(true);
     expect(hasForkMarker([{ type: "user", message: { content: `the spec names ${FORK_MARKER}` } }])).toBe(false);
     expect(hasForkMarker([{ type: "assistant", message: { content: `${FORK_MARKER} q` } }])).toBe(false);
+  });
+
+  test("a session whose transcript opens a turn with the marker is a fork, resumed: nothing runs", async () => {
+    const found = world();
+    const transcript = join(mkdtempSync(join(tmpdir(), "transcript-")), "t.jsonl");
+    writeFileSync(transcript, JSON.stringify({ type: "user", message: { content: doneQuestionOf([]) } }));
+
+    expect(
+      await stop({ session_id: "S1", transcript_path: transcript, cwd: found.root }, found.deps, found.log),
+    ).toEqual({ kind: "allow" });
+    expect(found.calls).toEqual([]);
+    expect(found.records).toEqual([{ step: "admit", kind: "none", reason: "this session is a fork, resumed" }]);
   });
 
   test("the model is the last assistant message's, synthetic ones skipped", () => {
@@ -642,46 +1044,50 @@ describe("transcript", () => {
   });
 });
 
+const usage = (scale: number) => ({
+  inputTokens: scale,
+  outputTokens: 2 * scale,
+  cacheReadInputTokens: 5 * scale,
+  cacheCreationInputTokens: 3 * scale,
+});
+
 describe("forkResultOf", () => {
-  test("reads the answer and the tokens of every model `claude -p --output-format json` prints", () => {
+  test("reads the answer, the structured output and the tokens of every model `claude -p --output-format json` prints", () => {
     expect(
       forkResultOf(
         JSON.stringify({
-          result: "YES",
-          modelUsage: {
-            "claude-haiku-5-5": {
-              inputTokens: 1,
-              outputTokens: 2,
-              cacheReadInputTokens: 5,
-              cacheCreationInputTokens: 3,
-            },
-            "claude-opus-5-5": {
-              inputTokens: 10,
-              outputTokens: 20,
-              cacheReadInputTokens: 50,
-              cacheCreationInputTokens: 30,
-            },
-          },
+          result: "text",
+          structured_output: FINISHED,
+          modelUsage: { "claude-haiku-5-5": usage(1), "claude-opus-5-5": usage(10) },
         }),
         0,
         9,
       ),
     ).toEqual({
-      text: "YES",
+      text: "text",
+      structured: FINISHED,
       ms: 9,
       tokens: { input: 11, output: 22, cacheRead: 55, cacheCreation: 33 },
       code: 0,
       unreadable: null,
     });
-    expect(forkResultOf(JSON.stringify({ result: "YES" }), 0, 9).tokens).toBeNull();
+    expect(forkResultOf(JSON.stringify({ result: "YES" }), 0, 9)).toEqual({
+      text: "YES",
+      structured: undefined,
+      ms: 9,
+      tokens: null,
+      code: 0,
+      unreadable: null,
+    });
   });
 
   test("a modelUsage that does not read loses the tokens, never the answer", () => {
     const partial = { "claude-haiku-5-5": { inputTokens: 1, outputTokens: 2, cacheReadInputTokens: null } };
 
     for (const modelUsage of [partial, "none"]) {
-      expect(forkResultOf(JSON.stringify({ result: "YES", modelUsage }), 0, 9)).toEqual({
+      expect(forkResultOf(JSON.stringify({ result: "YES", structured_output: UNFINISHED, modelUsage }), 0, 9)).toEqual({
         text: "YES",
+        structured: UNFINISHED,
         ms: 9,
         tokens: null,
         code: 0,
@@ -693,27 +1099,13 @@ describe("forkResultOf", () => {
   test("output that does not read is no answer, and says why", () => {
     expect(forkResultOf("", 124, 9)).toEqual({
       text: "",
+      structured: undefined,
       ms: 9,
       tokens: null,
       code: 124,
       unreadable: "Expected a valid JSON string",
     });
     expect(forkResultOf(JSON.stringify({ result: 7 }), 0, 9).unreadable).toBe('Expected string\n  at ["result"]');
-  });
-});
-
-describe("doneJudgeFailure", () => {
-  test("an answer is not a failure", () => {
-    expect(doneJudgeFailure(0, "NO, a question is open", false)).toBeNull();
-  });
-
-  test("a Done judge killed or silent blocks once, so it is asked again, then lets the session end", () => {
-    const blocked = doneJudgeFailure(124, "", false);
-
-    expect(blocked?.kind).toBe("block");
-    expect(blocked?.kind === "block" && blocked.reason).toContain("exited 124");
-    expect(doneJudgeFailure(0, "  ", false)?.kind).toBe("block");
-    expect(doneJudgeFailure(124, "", true)).toEqual({ kind: "allow" });
   });
 });
 

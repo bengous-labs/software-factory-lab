@@ -47,7 +47,7 @@ export interface RoutingAnswer {
   /**
    * On a Patch delta: whether the delta deserves another read on its own: it touches a path a Routing
    * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names; never when it
-   * only answers the Nits after a Review round 3 with no Important (`withNitAnswers`). After Review
+   * only answers the Nits of the last Review round, which posted no Important (`withNitAnswers`). After Review
    * round 1 it runs Review round 2, after Review round 2 Review round 3; after Review round 3 it holds the
    * change for the Owner.
    */
@@ -207,12 +207,20 @@ export function storedOfRecord(record: StateRecord): StoredRecord {
   return { ...record, triage: Object.fromEntries(triage) };
 }
 
+/** An unresolved Important thread of the App: its id, and the patch and round of the review that posted it, null when its review names none. */
+export interface ImportantThread {
+  readonly thread: string;
+  readonly review: { readonly patch: string; readonly round: number } | null;
+}
+
 export interface Snapshot {
   readonly number: number;
   readonly state: "OPEN" | "CLOSED" | "MERGED";
   readonly sameRepository: boolean;
   /** The PR was opened by the Owner or by the Author's machine account, the only logins this public lab works for. */
   readonly openedByFactory: boolean;
+  /** The PR was opened by the Author's machine account: a round that posts a finding sends it back to draft. */
+  readonly openedByAuthor: boolean;
   readonly draft: boolean;
   readonly head: string;
   readonly patch: string;
@@ -222,15 +230,18 @@ export interface Snapshot {
   readonly ci: "success" | "failure" | null;
   readonly labels: readonly string[];
   /**
-   * Who set the PR's `land:human`, by its latest `labeled` event: the Merge bot's App, any other login
-   * (an actor that does not read, or no such event, included), or null when the PR has no `land:human`.
+   * Who set the PR's `land:human`, by its latest `labeled` event: the Merge bot's App, the Author's
+   * machine account, any other login (an actor that does not read, or no such event, included), or null
+   * when the PR has no `land:human`. Only `other` holds the PR: the Owner's veto. An agent's label
+   * follows the route.
    */
-  readonly humanLabelBy: "merge-bot" | "other" | null;
+  readonly humanLabelBy: "merge-bot" | "author" | "other" | null;
   /** The Land approval label is on the PR and the owner put it there, after this head was pushed. */
   readonly landApprovalByOwner: boolean;
   /** The Land approval label is on the PR and the owner put it there, before or after this head was pushed. */
   readonly landApprovalPutByOwner: boolean;
-  readonly openImportant: number;
+  /** The App's unresolved Important threads. */
+  readonly openImportant: readonly ImportantThread[];
   /** The App's Important findings the Author resolved with a rejection. */
   readonly rejectedImportant: number;
   /** CI is red on the Trunk's head: validate or mutation completed other than success. A check still running, or not yet posted, does not read as red. */
@@ -309,7 +320,12 @@ export type Step =
       /** Whether the review runs a security pass after the Code review: the whole PR's Routing answer says so. */
       readonly security: boolean;
     }
-  | { readonly kind: "post-review"; readonly result: ReportedResult }
+  /** Posts the review of `result` once: a new thread per finding, but a reply in its own thread for an Important that reports again one of `heldOpen`. */
+  | { readonly kind: "post-review"; readonly result: ReportedResult; readonly heldOpen: readonly string[] }
+  /** Resolves review threads of the App: the Importants a later round no longer holds, or those the Owner's Land approval closes. */
+  | { readonly kind: "resolve-threads"; readonly threads: readonly string[] }
+  /** Sends the PR back to draft: its Author's turn. */
+  | { readonly kind: "to-draft" }
   | { readonly kind: "review-check"; readonly check: CheckState }
   | { readonly kind: "land-gate"; readonly check: CheckState }
   | { readonly kind: "record"; readonly record: StateRecord }
@@ -322,8 +338,8 @@ export type Decision =
   { readonly kind: "ignore"; readonly reason: string } | { readonly kind: "steps"; readonly steps: readonly Step[] };
 
 /**
- * The `land:*` label follows the route the decision computes, except a `land:human` that a login other
- * than the Merge bot's App set: the Owner's veto, which stays. The `review:*` label only rises. The
+ * The `land:*` label follows the route the decision computes, except a `land:human` that neither the
+ * Merge bot's App nor the Author's machine account set: the Owner's veto, which stays. The `review:*` label only rises. The
  * `land:*` and `review:*` labels, read here and quoted in the check summaries below, are external names:
  * open PRs carry them, so the strings stay.
  */
@@ -397,9 +413,8 @@ const OWNER_WAIT = `Waiting for the Owner's Land approval (label ${LAND_APPROVAL
 
 /**
  * Why a PR that waits for the Owner's Land approval waits, the first reason that applies: the Owner
- * hold, a `land:human` the Merge bot did not set, then the Routing rules. `asked` is the reason the
- * comment that asks the Owner gives, null when no comment asks: the Owner set that label, or the
- * Author's hold comment already says why.
+ * hold, a `land:human` no agent set, then the Routing rules. `asked` is the reason the
+ * comment that asks the Owner gives, null when no comment asks: the Owner set that label.
  */
 interface OwnerWait {
   readonly summary: string;
@@ -575,16 +590,88 @@ function failedOf(record: StateRecord, review: ReviewState, cause: string): Revi
   };
 }
 
+/** What a reported round makes of the Important threads open before it. */
+export interface EarlierImportants {
+  /** The earlier threads the round reports again: they stay open, and each takes the round's finding as a reply. */
+  readonly kept: readonly string[];
+  /** The earlier threads the round no longer holds: the Merge bot resolves them. */
+  readonly closed: readonly string[];
+  /** The threads open before a round that named no earlier finding, a Review round 1 or one whose report predates the naming: they stay as they are. */
+  readonly left: number;
+}
+
 /**
- * The review is posted, then its Review check counts the Important findings open once it is: those it
- * posts and those of an earlier round still open.
+ * The fix of an Important is never declared by its author: a later round closes it. Each round after the
+ * first reports again every earlier Important that is still wrong, naming its thread in `earlier`; an
+ * open Important thread of an earlier review that the round does not name is closed. A thread the
+ * review of `result` posted itself, when its posting is retried, is not an earlier one. A report that was
+ * not asked to name the earlier findings closes none.
  */
-function postedSteps(snapshot: Snapshot, result: ReportedResult): readonly Step[] {
+export function earlierImportantsOf(result: ReportedResult, open: readonly ImportantThread[]): EarlierImportants {
+  const { patch, round } = result.request;
+
+  const earlier = open.flatMap((found) =>
+    found.review === null || found.review.patch !== patch || found.review.round !== round ? [found.thread] : [],
+  );
+
+  if (round === 1 || !result.report.namesEarlier) {
+    return { kept: [], closed: [], left: earlier.length };
+  }
+
+  const again = new Set<string | null>();
+
+  for (const finding of result.report.findings) {
+    if (finding.severity === "important") {
+      again.add(finding.earlier);
+    }
+  }
+
+  return {
+    kept: earlier.filter((thread) => again.has(thread)),
+    closed: earlier.filter((thread) => !again.has(thread)),
+    left: 0,
+  };
+}
+
+/** The findings of `result` the review posts as new threads: all but an Important that reports again a thread of `heldOpen`, which takes it as a reply. */
+export function postedFindingsOf(
+  result: ReportedResult,
+  heldOpen: readonly string[],
+): ReportedResult["report"]["findings"] {
+  return result.report.findings.filter(
+    (finding) => !(finding.severity === "important" && heldOpen.some((thread) => thread === finding.earlier)),
+  );
+}
+
+/**
+ * Whether the review of `result` sends the PR back to draft, for its Author's turn: an Important does,
+ * whoever opened the PR; a Nit does on a PR the Author's machine account opened, which then cannot land
+ * before that Author's next stop. A PR the Owner opened stays ready after Nits alone.
+ */
+function sendsBack(snapshot: Snapshot, result: ReportedResult): boolean {
+  const reports = (severity: "important" | "nit"): boolean =>
+    result.report.findings.some((finding) => finding.severity === severity);
+
+  return !snapshot.draft && (reports("important") || (reports("nit") && snapshot.openedByAuthor));
+}
+
+/**
+ * The review is posted, the earlier Importants it no longer holds are resolved, the PR goes back to
+ * draft when the round asks its Author for something, and only then is the round recorded: a run that
+ * stops before the record does all of it again. The Review check counts the Important findings open
+ * once the review is posted.
+ */
+function postedSteps(snapshot: Snapshot, record: StateRecord, result: ReportedResult): readonly Step[] {
+  const earlier = earlierImportantsOf(result, snapshot.openImportant);
+
   return [
-    { kind: "post-review", result },
+    { kind: "post-review", result, heldOpen: earlier.kept },
+    ...(earlier.closed.length === 0 ? [] : [{ kind: "resolve-threads", threads: earlier.closed } as const]),
+    ...(sendsBack(snapshot, result) ? [{ kind: "to-draft" } as const] : []),
+    { kind: "record", record: afterReview(record, result) },
     {
       kind: "review-check",
-      check: importantCheckOf(importantOf(result) + snapshot.openImportant, snapshot.rejectedImportant),
+      check: importantCheckOf(importantOf(result) + earlier.left, snapshot.rejectedImportant),
     },
   ];
 }
@@ -596,6 +683,24 @@ function importantCheckOf(open: number, rejected: number): CheckState {
   return open === 0
     ? { kind: "success", summary: `No Important finding open${rejectedText}.` }
     : { kind: "failure", summary: `${open} Important finding(s) open${rejectedText}.` };
+}
+
+/**
+ * The Review check of a PR no review is running or owed on: green when the Owner's Land approval closes
+ * the open Importants or when none is open, red while one waits.
+ */
+function reviewCheckOf(snapshot: Snapshot, depth: ReviewDepth, ownerCloses: boolean): CheckState {
+  const open = snapshot.openImportant.length;
+
+  if (ownerCloses) {
+    return { kind: "success", summary: `${open} Important finding(s) closed by the Owner's Land approval.` };
+  }
+
+  if (open === 0 && depth === "none") {
+    return { kind: "success", summary: "review:none, nothing to read." };
+  }
+
+  return importantCheckOf(open, snapshot.rejectedImportant);
 }
 
 /** A review whose run has not completed: a request waits up to the deadline, a failed review stays failed. */
@@ -644,7 +749,7 @@ export function reviewStepsOf(snapshot: Snapshot, record: StateRecord): ReviewMa
     return failedOf(record, review, outcome.cause);
   }
 
-  return { record, end: postedSteps(snapshot, outcome.result) };
+  return { record, end: postedSteps(snapshot, record, outcome.result) };
 }
 
 /** The Review round to request for this patch, at the PR's risen depth. */
@@ -655,29 +760,26 @@ interface RoundNeed {
 
 /**
  * The Review round this patch needs; null when none. A later patch is read again when its Patch delta
- * needs a read; after Review round 2, also when round 2 posted an Important, or its count is unknown.
- * Review round 3 is the last.
+ * needs a read, and always when the last round posted an Important, or its count is unknown, whatever
+ * the Routing answer says of the delta. Review round 3 is the last.
  */
 function roundNeedOf(record: StateRecord, routing: RoutingAnswer, depth: ReviewDepth, patch: string): RoundNeed | null {
   if (depth === "none" || record.reviewedPatch === patch) {
     return null;
   }
 
-  const round2Important = record.importantByRound?.[1] ?? null;
-
   if (record.reviewRounds === 0) {
     return { depth, round: 1 };
   }
 
-  if (record.reviewRounds === 1) {
-    return routing.secondRound ? { depth, round: 2 } : null;
+  if (record.reviewRounds !== 1 && record.reviewRounds !== 2) {
+    return null;
   }
 
-  if (record.reviewRounds === 2) {
-    return routing.secondRound || round2Important === null || round2Important > 0 ? { depth, round: 3 } : null;
-  }
+  const lastImportant = record.importantByRound?.[record.reviewRounds - 1] ?? null;
+  const owed = routing.secondRound || lastImportant === null || lastImportant > 0;
 
-  return null;
+  return owed ? { depth, round: record.reviewRounds === 1 ? 2 : 3 } : null;
 }
 
 /** The decision on a PR that gets no route: one closed or from outside is ignored, an empty one has nothing to land. */
@@ -710,8 +812,8 @@ export function decide(snapshot: Snapshot): Decision {
 
   const steps: Step[] = [];
   const approval = landApprovalOf(snapshot, record);
-  const machine = reviewStepsOf(snapshot, approval.next);
-  const next = heldAfterRound3(machine.record, snapshot.patch);
+  const machine = reviewStepsOf(snapshot, heldAfterRound3(approval.next, snapshot.patch));
+  const next = machine.record;
 
   if (approval.removed !== null) {
     steps.push({ kind: "remove-land-approval" }, { kind: "owner-comment", body: REMOVAL_COMMENTS[approval.removed] });
@@ -780,19 +882,23 @@ export function decide(snapshot: Snapshot): Decision {
     return { kind: "steps", steps };
   }
 
-  if (snapshot.openImportant > 0) {
-    steps.push({ kind: "review-check", check: importantCheckOf(snapshot.openImportant, snapshot.rejectedImportant) });
+  const open = snapshot.openImportant.length;
+
+  if (open > 0 && next.ownerHold === undefined) {
+    steps.push({ kind: "review-check", check: importantCheckOf(open, snapshot.rejectedImportant) });
 
     return finish(pending("Not landable: Important findings are open."));
   }
 
-  steps.push({
-    kind: "review-check",
-    check:
-      labels.depth === "none"
-        ? { kind: "success", summary: "review:none, nothing to read." }
-        : importantCheckOf(0, snapshot.rejectedImportant),
-  });
+  // After Review round 3 the Owner is the last reader: an Important still open here is on a PR held for
+  // the Owner, whose Land approval for this patch lands it whatever threads are open, and closes them.
+  const ownerCloses = open > 0 && landApproved;
+
+  if (ownerCloses) {
+    steps.push({ kind: "resolve-threads", threads: snapshot.openImportant.map((found) => found.thread) });
+  }
+
+  steps.push({ kind: "review-check", check: reviewCheckOf(snapshot, labels.depth, ownerCloses) });
 
   const { route } = labels;
 

@@ -16,6 +16,7 @@ import {
   HUMAN_LABEL_BY,
   LAB,
   LABELS,
+  OPEN_IMPORTANT,
   PATCH,
   recordOf,
   reviewStateOf,
@@ -38,13 +39,27 @@ const ANY_PATH = fc.array(SEGMENT, { minLength: 1, maxLength: 4 }).map((segments
 
 const GLOB_CHARS = /[*?[\]{}!\\]/u;
 
+const INFIX = fc.stringMatching(/^[\w.-]{0,8}$/u);
+
+// A directory, any depth under it, then a file name that ends with a suffix, as in `scripts/land-loop/**/*-prompt.ts`.
+const SUFFIX_UNDER = /^(?<dir>[^*?[\]{}!\\]+)\/\*\*\/\*(?<suffix>[^*?[\]{}!\\/]+)$/u;
+
 /**
- * The paths a glob of the config matches: `dir/**`, a literal path, or one `*` inside a file name. A
- * glob of another form throws, so a new form in the config cannot slip past the guarantees unquantified.
+ * The paths a glob of the config matches: `dir/**`, the files with a suffix at any depth under a
+ * directory, a literal path, or one `*` inside a file name. A glob of another form throws, so a new form
+ * in the config cannot slip past the guarantees unquantified.
  */
 function pathsOf(glob: string): fc.Arbitrary<string> {
   if (glob.endsWith("/**") && !GLOB_CHARS.test(glob.slice(0, -3))) {
     return UNDER(glob.slice(0, -3));
+  }
+
+  const { dir, suffix: ending } = SUFFIX_UNDER.exec(glob)?.groups ?? {};
+
+  if (dir !== undefined && ending !== undefined) {
+    return fc
+      .tuple(fc.array(SEGMENT, { maxLength: 3 }), INFIX)
+      .map(([between, infix]) => [dir, ...between, `${infix}${ending}`].join("/"));
   }
 
   if (!GLOB_CHARS.test(glob)) {
@@ -219,6 +234,7 @@ const NEAR_LANDABLE: fc.Arbitrary<Snapshot> = PATCH.chain((patch) =>
     state: fc.constant("OPEN"),
     sameRepository: fc.constant(true),
     openedByFactory: fc.constant(true),
+    openedByAuthor: fc.boolean(),
     draft: mostly(false, fc.constant(true)),
     head: HEAD,
     patch: fc.constant(patch),
@@ -228,7 +244,7 @@ const NEAR_LANDABLE: fc.Arbitrary<Snapshot> = PATCH.chain((patch) =>
     humanLabelBy: HUMAN_LABEL_BY,
     landApprovalByOwner: fc.boolean(),
     landApprovalPutByOwner: fc.boolean(),
-    openImportant: mostly(0, fc.integer({ min: 1, max: 2 })),
+    openImportant: mostly<Snapshot["openImportant"]>([], OPEN_IMPORTANT),
     rejectedImportant: fc.nat({ max: 2 }),
     devRed: mostly(false, fc.constant(true)),
     conflicting: mostly(false, fc.constant(true)),
@@ -328,12 +344,76 @@ describe("the Merge bot's guarantees", () => {
           draft: false,
           empty: false,
           ci: "success",
-          openImportant: 0,
           devRed: false,
           conflicting: false,
         });
         expect(snapshot.record.dequeued?.head).not.toBe(snapshot.head);
         expect(snapshot.record.triage[snapshot.patch]).toBeDefined();
+      }
+    });
+  });
+
+  test("a PR with an open Important merges only when it is held for the Owner, with the Owner's Land approval for its patch, and the merge resolves each open Important thread", () => {
+    holdsForSnapshots((snapshot) => {
+      const { record } = snapshot;
+
+      const pushAfterRound3 =
+        record.reviewRounds === 3 &&
+        record.reviewedPatch !== snapshot.patch &&
+        record.triage[snapshot.patch]?.secondRound === true;
+
+      if (merges(snapshot) && snapshot.openImportant.length > 0) {
+        expect(record.ownerHold !== undefined || pushAfterRound3).toBe(true);
+        expectLandApproval(snapshot);
+        expect(stepsOrNone(snapshot)).toContainEqual({
+          kind: "resolve-threads",
+          threads: snapshot.openImportant.map((found) => found.thread),
+        });
+      }
+    });
+  });
+
+  test("a round that reports an Important or a Nit on a ready PR its Author opened sends it to draft before the round is recorded, and merges nothing", () => {
+    holdsForSnapshots((snapshot) => {
+      const steps = stepsOrNone(snapshot);
+      const kinds = steps.map((step) => step.kind);
+      const post = steps.find((step) => step.kind === "post-review");
+
+      const asksTheAuthor =
+        post?.kind === "post-review" &&
+        post.result.report.findings.some((finding) => finding.severity !== "pre_existing");
+
+      if (asksTheAuthor && snapshot.openedByAuthor && !snapshot.draft) {
+        expect(kinds).toContain("to-draft");
+        expect(kinds.indexOf("to-draft")).toBeLessThan(kinds.lastIndexOf("record"));
+        expect(kinds.indexOf("post-review")).toBeLessThan(kinds.indexOf("to-draft"));
+        expect(kinds).not.toContain("auto-merge");
+      }
+    });
+  });
+
+  test("a patch after a Review round 1 that posted an Important never merges before Review round 2 read it", () => {
+    holdsForSnapshots((snapshot) => {
+      const { record } = snapshot;
+      const round1 = record.importantByRound?.[0];
+      const posted = round1 === undefined || round1 === null || round1 > 0;
+
+      const roundTwoOwed =
+        asksReview(snapshot) && record.reviewedPatch !== snapshot.patch && record.reviewRounds === 1 && posted;
+
+      if (roundTwoOwed) {
+        expect(merges(snapshot)).toBe(false);
+      }
+    });
+  });
+
+  test("an agent's land:human sends no PR to the Owner: only the label of another login holds one the route lands", () => {
+    holdsForSnapshots((snapshot) => {
+      const gate = stepsOrNone(snapshot).find((step) => step.kind === "land-gate");
+      const summary = gate?.kind === "land-gate" ? gate.check.summary : "";
+
+      if (snapshot.humanLabelBy !== "other") {
+        expect(summary).not.toContain("a land:human the Merge bot did not set");
       }
     });
   });

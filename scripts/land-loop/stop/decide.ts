@@ -1,12 +1,15 @@
 /**
- * The Stop decision of the Author's session, as pure functions over what the hook read. `admit`
- * settles what git and the transcript alone settle; `afterAuthorToken` whether the Author's token
- * lets it publish; `afterStopChecks` what the Stop checks' result
- * adds; `decide` what the Done judge's answer adds. Each returns the next thing the hook does.
+ * The Stop decision of an Author's session, as pure functions over what the hook read. `bystanderOf`
+ * says whose stop the hook leaves alone; `admit` settles what git and the PR alone settle;
+ * `afterAuthorToken` whether the Author's token lets it publish; `afterStopChecks` what the Stop checks'
+ * result adds; `decide` what the Done judge's answer adds. Each returns the next thing the hook does.
  */
 
-import { escapeInline } from "../../lib/markdown.ts";
-import { AUTHOR_MARK } from "../author-mark.ts";
+import { Result, Schema } from "effect";
+
+import { AUTHOR_VARIABLE } from "../../lib/author-session.ts";
+import { escapeHtml } from "../../lib/markdown.ts";
+import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 
 /**
  * The marker that opens every question the hook puts to a fork, so a fork stays recognisable. The
@@ -15,73 +18,111 @@ import { AUTHOR_MARK } from "../author-mark.ts";
 export const FORK_MARKER = "[harness:fork-probe]";
 
 /** Branches the hook never publishes: the trunk, the release branch, and the lab's own test branches. */
-export const IGNORED_BRANCH = /^(dev|main|lab\/.*)$/u;
+const IGNORED_BRANCH = /^(dev|main|lab\/.*)$/u;
+
+export interface Session {
+  /** The session's environment holds `LAB_AUTHOR=1`. */
+  readonly author: boolean;
+  /** The hook runs inside a fork it launched: the environment flag is set. */
+  readonly forkFlag: boolean;
+  /** The session's transcript opens a user turn with the fork marker: a fork, resumed later. */
+  readonly forkMarker: boolean;
+}
+
+/**
+ * Why the hook does nothing for this session, or null for an Author's own session. A fork is read
+ * first: it inherits the environment of the Author it forks.
+ */
+export function bystanderOf(session: Session): string | null {
+  if (session.forkFlag) {
+    return "this session is a fork the hook launched";
+  }
+
+  if (session.forkMarker) {
+    return "this session is a fork, resumed";
+  }
+
+  return session.author ? null : `this session is not an Author: its environment holds no ${AUTHOR_VARIABLE}=1`;
+}
 
 export interface PullRequest {
   readonly number: number;
   readonly draft: boolean;
   readonly headSha: string;
-  readonly labels: readonly string[];
+}
+
+/** Where an Author's session stops: its checkout and the branch checked out there. */
+export interface Checkout {
+  /** The directory is the repository's main checkout, not a worktree of its own. */
+  readonly mainCheckout: boolean;
+  /** Null on a detached HEAD. */
+  readonly branch: string | null;
+}
+
+export type CheckoutVerdict =
+  { readonly kind: "refused"; readonly reason: string } | { readonly kind: "publishable"; readonly branch: string };
+
+const refused = (reason: string): CheckoutVerdict => ({ kind: "refused", reason });
+
+/** Whether the hook may publish from this checkout: its branch, or why it publishes nothing from there. */
+export function checkoutOf({ mainCheckout, branch }: Checkout): CheckoutVerdict {
+  if (branch === null) {
+    return refused("HEAD is detached");
+  }
+
+  if (IGNORED_BRANCH.test(branch)) {
+    return refused(`${branch} is never published`);
+  }
+
+  return mainCheckout
+    ? refused("this session works in the main checkout: an Author publishes from its own worktree")
+    : { kind: "publishable", branch };
 }
 
 export interface Snapshot {
-  /** The hook runs inside a fork it launched: the environment flag is set. */
-  readonly forkFlag: boolean;
-  /** The session's transcript opens a user turn with the fork marker: a fork, resumed later. */
-  readonly forkMarker: boolean;
-  /** Claude Code's `stop_hook_active`: this stop follows a block of this hook. */
-  readonly stopHookActive: boolean;
-  /** Null on a detached HEAD. */
-  readonly branch: string | null;
+  readonly branch: string;
   readonly head: string;
   readonly treeClean: boolean;
   /** Commits on HEAD that `origin/dev` lacks. */
   readonly ahead: number;
   readonly pr: PullRequest | null;
-  /** The PR watch was already asked for on this PR at this head. */
-  readonly armed: boolean;
 }
 
 export type Admission =
   | { readonly kind: "none"; readonly reason: string }
-  | { readonly kind: "arm"; readonly pr: number }
+  /** The PR is ready at this head: nothing to publish; the Nit threads a stop closes are closed. */
+  | { readonly kind: "ready"; readonly pr: number; readonly reason: string }
   | { readonly kind: "stop-checks" };
 
 export type StopChecks = { readonly kind: "green" } | { readonly kind: "red"; readonly report: string };
 
-export type Next =
-  | { readonly kind: "none"; readonly reason: string }
-  | { readonly kind: "block"; readonly reason: string }
-  | { readonly kind: "ask-done-judge" };
+/** A stop that publishes nothing: let go, or blocked once with a reason the Author reads. */
+export type Refusal =
+  { readonly kind: "none"; readonly reason: string } | { readonly kind: "block"; readonly reason: string };
 
-export type Answer =
-  { readonly kind: "yes" } | { readonly kind: "hold"; readonly reason: string } | { readonly kind: "no" };
+export type Next = Refusal | { readonly kind: "ask-done-judge" };
 
-/** `hold` is the reason the Done judge held the PR for the Owner's read, or null. */
+/** A finding the Author rejects: the thread it names, and the Author's reason. */
+export interface Rejection {
+  readonly thread: string;
+  readonly reason: string;
+}
+
+/** The Done judge's answer: whether the change is finished, why, and the findings the Author rejects. */
+export interface DoneAnswer {
+  readonly finished: boolean;
+  readonly reason: string;
+  readonly rejections: readonly Rejection[];
+}
+
 export type Action =
   | { readonly kind: "none"; readonly reason: string }
-  | { readonly kind: "open"; readonly hold: string | null }
-  | { readonly kind: "push"; readonly pr: number; readonly ready: boolean; readonly hold: string | null };
+  | { readonly kind: "open" }
+  | { readonly kind: "push"; readonly pr: number; readonly ready: boolean };
 
-const none = (reason: string): Extract<Admission, { kind: "none" }> => ({ kind: "none", reason });
+const none = (reason: string): Extract<Refusal, { kind: "none" }> => ({ kind: "none", reason });
 
 export function admit(snapshot: Snapshot): Admission {
-  if (snapshot.forkFlag) {
-    return none("this session is a fork the hook launched");
-  }
-
-  if (snapshot.forkMarker) {
-    return none("this session is a fork, resumed");
-  }
-
-  if (snapshot.branch === null) {
-    return none("HEAD is detached");
-  }
-
-  if (IGNORED_BRANCH.test(snapshot.branch)) {
-    return none(`${snapshot.branch} is never published`);
-  }
-
   if (snapshot.ahead === 0) {
     return none(`${snapshot.branch} has no commit that dev lacks`);
   }
@@ -93,18 +134,14 @@ export function admit(snapshot: Snapshot): Admission {
   const { pr } = snapshot;
 
   if (pr !== null && !pr.draft && pr.headSha === snapshot.head) {
-    return snapshot.armed ? none(`#${pr.number} is ready at ${snapshot.head} already`) : { kind: "arm", pr: pr.number };
+    return { kind: "ready", pr: pr.number, reason: `#${pr.number} is ready at ${snapshot.head} already` };
   }
 
   return { kind: "stop-checks" };
 }
 
 /** No Author token blocks once, naming where it was looked for; a second stop without it lets the session end. */
-export function afterAuthorToken(found: boolean, path: string, stopHookActive: boolean): Next | null {
-  if (found) {
-    return null;
-  }
-
+export function noAuthorToken(path: string, stopHookActive: boolean): Refusal {
   if (stopHookActive) {
     return none("no Author token after a block: nothing is published");
   }
@@ -131,69 +168,102 @@ export function afterStopChecks(stopChecks: StopChecks, stopHookActive: boolean)
   };
 }
 
-/** The label that holds a PR for the Owner; open PRs and GitHub's ruleset carry this spelling. */
-const HUMAN_LABEL = "land:human";
+/** The JSON Schema of the Done judge's answer, which the fork's structured output must follow. */
+export const DONE_SCHEMA = {
+  type: "object",
+  properties: {
+    finished: { type: "boolean" },
+    reason: { type: "string" },
+    rejections: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { thread: { type: "string" }, reason: { type: "string" } },
+        required: ["thread", "reason"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["finished", "reason", "rejections"],
+  additionalProperties: false,
+};
 
-const HOLD_REASON_MAX = 300;
+const DoneAnswerSchema = Schema.Struct({
+  finished: Schema.Boolean,
+  reason: Schema.String,
+  rejections: Schema.Array(Schema.Struct({ thread: Schema.String, reason: Schema.String })),
+});
 
-/** YES first on the line, as a word, after a heading marker or the emphasis it opens. */
-const YES_FIRST = /^[#\s]*([*_]*)YES(?![\p{L}\p{N}])/u;
+const decodeDoneAnswer = Schema.decodeUnknownResult(DoneAnswerSchema);
 
-/** HOLD as a word, then its closing emphasis, a separator and the emphasis that closes it, then the reason. */
-const HOLD_WORD = /(?<![\p{L}\p{N}])HOLD(?![\p{L}\p{N}])[*_]*\s*[:\-–—]?(?:[*_]+(?=\s|$))?\s*(.*)/u;
+/** What the Done judge's fork gave: its exit code, and its structured output, undefined when it gave none. */
+export interface ForkAnswer {
+  readonly code: number;
+  readonly structured: unknown;
+}
 
 /**
- * The Done judge's text answer, read on its first line: YES first, as a word, is yes, and a hold when
- * HOLD follows it, with the rest as its reason; anything else, an empty answer included, is no.
+ * The Done judge's answer a fork gave; null, no answer, for a fork that failed or whose structured
+ * output does not fit `DONE_SCHEMA`.
  */
-export function answerOf(text: string): Answer {
-  const first = text.trimStart().split("\n")[0] ?? "";
-  const yes = YES_FIRST.exec(first);
-
-  if (yes === null) {
-    return { kind: "no" };
-  }
-
-  // Any YES line that names HOLD holds, so an answer worded off the `YES, HOLD:` form fails closed.
-  const hold = HOLD_WORD.exec(first);
-
-  if (hold === null) {
-    return { kind: "yes" };
-  }
-
-  const rest = hold[1] ?? "";
-  // The emphasis that opened the line closes at its end, as in `**YES, HOLD: reason**`.
-  const reason = (yes[1] === "" ? rest : rest.replace(/[*_]+\s*$/u, "")).trim();
-
-  return { kind: "hold", reason: (reason === "" ? "(no reason given)" : reason).slice(0, HOLD_REASON_MAX) };
+export function doneAnswerOf(fork: ForkAnswer): DoneAnswer | null {
+  return fork.code === 0 ? Result.getOrNull(decodeDoneAnswer(fork.structured)) : null;
 }
 
-export function decide(pr: PullRequest | null, answer: Answer): Action {
-  if (answer.kind === "no") {
-    return none("the Done judge says the task is not finished");
+/**
+ * A Done judge that gave no answer, its fork failed or its output fits no schema, is not a "not
+ * finished": the first such stop blocks so the Author stops again and the hook asks again; a second one
+ * lets the session end.
+ */
+export function noDoneAnswer(code: number, stopHookActive: boolean): Refusal {
+  if (stopHookActive) {
+    return none("the Done judge gave no answer after a block: nothing is published");
   }
 
-  const hold = answer.kind === "hold" ? answer.reason : null;
-
-  if (pr === null) {
-    return { kind: "open", hold };
-  }
-
-  return { kind: "push", pr: pr.number, ready: pr.draft, hold };
+  return {
+    kind: "block",
+    reason: `The Stop hook could not ask whether your change is finished (the Done judge's fork exited ${code} with no answer that reads), so nothing was published. Stop again to retry; ask no question.`,
+  };
 }
 
-/** What a hold puts on the PR: the label and the Author's comment, both only when the PR lacks the label. */
-export interface HoldSteps {
-  readonly addLabel: boolean;
-  readonly comment: string | null;
-}
-
-export function holdStepsOf(hold: string | null, labels: readonly string[]): HoldSteps {
-  if (hold === null || labels.includes(HUMAN_LABEL)) {
-    return { addLabel: false, comment: null };
+export function decide(pr: PullRequest | null, answer: DoneAnswer): Action {
+  if (!answer.finished) {
+    return none(`the Done judge says the change is not finished: ${answer.reason}`);
   }
 
-  return { addLabel: true, comment: `Held for the Owner by the Author: ${escapeInline(hold)}\n\n${AUTHOR_MARK}` };
+  return pr === null ? { kind: "open" } : { kind: "push", pr: pr.number, ready: pr.draft };
+}
+
+/** The rejections the hook posts, and those it drops. */
+export interface SortedRejections {
+  readonly posted: readonly Rejection[];
+  readonly dropped: readonly Rejection[];
+}
+
+/**
+ * The rejections of the Done judge's answer, sorted: one is posted when it names an open thread of the
+ * App, once per thread, with a reason; any other is dropped.
+ */
+export function rejectionsOf(rejections: readonly Rejection[], openThreads: readonly string[]): SortedRejections {
+  const open = new Set(openThreads);
+  const posted: Rejection[] = [];
+  const dropped: Rejection[] = [];
+
+  for (const rejection of rejections) {
+    const known = open.has(rejection.thread) && !posted.some((earlier) => earlier.thread === rejection.thread);
+
+    (known && rejection.reason.trim() !== "" ? posted : dropped).push(rejection);
+  }
+
+  return { posted, dropped };
+}
+
+/**
+ * The reply the hook posts in the thread of a finding the Author rejects: the Author's reason, the
+ * reject mark the Review check counts, and the Author's mark. It cites no commit: nobody declares a fix.
+ */
+export function rejectionReplyOf(reason: string): string {
+  return `Rejected: ${escapeHtml(reason.trim())}\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`;
 }
 
 /** A Worker's branch is `<type>/<N>-<slug>`, made for issue N. */
@@ -212,35 +282,24 @@ export function closingLineOf(branch: string, body: string): string | null {
   return closes.test(body) ? null : `Closes #${issue}`;
 }
 
-/** The commands the Author runs on its PR: the PR watch, a thread reply, a comment on the conversation. */
-export interface ArmCommands {
-  readonly prWatch: string;
-  readonly thread: string;
-  readonly comment: string;
+/** What one stop of an Author left: a Publication with its PR, or nothing published and why. */
+export type Outcome =
+  { readonly kind: "published"; readonly pr: number } | { readonly kind: "not-published"; readonly reason: string };
+
+/** Where and when an Author stopped. `branch` and `head` are null when the hook could not read them. */
+export interface StopFacts {
+  readonly at: string;
+  readonly session: string;
+  readonly worktree: string;
+  readonly branch: string | null;
+  readonly head: string | null;
 }
 
-/** What the hook tells the author once its PR is ready: arm the PR watch, then stop. */
-export function armReason(pr: number, commands: ArmCommands, hold: string | null = null): string {
-  const { prWatch: prWatchCommand, thread: threadCommand, comment: commentCommand } = commands;
-
-  return [
-    `PR #${pr} is ready for review. The Stop hook pushed your branch; you do not push, open or ready anything yourself.`,
-    ...(hold === null
-      ? []
-      : [`The Done judge held this PR for the Owner's read: ${hold.replace(/\.$/u, "")}. Do not remove land:human.`]),
-    "",
-    "Arm the PR watch on it now with Monitor, with the longest timeout:",
-    "",
-    `    ${prWatchCommand}`,
-    "",
-    "Each line it prints is a failing check, an Important or Nit finding, a human comment, or a change of state of the PR. Judge every finding, a Nit as an Important: fix it or reject it. Pre-existing findings never block: leave them.",
-    "",
-    "- A failing check: fix it with a commit, then stop.",
-    `- A finding you accept: fix it with a commit, then reply and resolve its thread: \`${threadCommand} <thread-id> "Fixed in <sha>: <what changed>"\`. Then stop.`,
-    `- A finding you reject: reply with your reason and resolve: \`${threadCommand} <thread-id> --reject "<your reason>"\`. Then stop.`,
-    '- A finding you fix in part: it is a fix; start with "Fixed in <sha>: " and name what stays as is.',
-    `- To explain a decision on the PR, post it with \`${commentCommand} "<what you decided and why>"\`, never with \`gh pr comment\`: the PR watch prints an unmarked comment back to you as a human's.`,
-    "",
-    "Never ask the Owner a question about the PR: the Land loop and the Owner handle the rest. When the PR watch expires, arm it again, until it reports the PR landed or closed. Then stop.",
-  ].join("\n");
+/** One line of `.lab/outcomes.log`, without its newline: the stop, then `published` with the PR or `not-published` with its reason. */
+export function outcomeLineOf(facts: StopFacts, outcome: Outcome): string {
+  return JSON.stringify(
+    outcome.kind === "published"
+      ? { ...facts, outcome: outcome.kind, pr: outcome.pr }
+      : { ...facts, outcome: outcome.kind, reason: outcome.reason },
+  );
 }

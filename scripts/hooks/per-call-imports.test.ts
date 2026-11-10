@@ -62,7 +62,7 @@ async function packagesOf(file: string, seen = new Set<string>()): Promise<Reado
 
 describe("the per-call hooks", () => {
   test("are the ones .claude/settings.json wires on tool calls", async () => {
-    expect(await perCallHooks()).toEqual(["refuse-commit-on-dev.ts", "fix-edited.ts"]);
+    expect(await perCallHooks()).toEqual(["refuse-commit-on-dev.ts", "refuse-author-publish.ts", "fix-edited.ts"]);
   });
 
   test("load only bun and node: modules, never effect", async () => {

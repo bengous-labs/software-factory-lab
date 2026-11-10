@@ -3,7 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
 
 import { markerOf } from "./findings.ts";
-import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "./post-plan.ts";
+import type { ReviewThread } from "./findings.ts";
+import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "./post-plan.ts";
 import type { DiffLines } from "./post-plan.ts";
 import type { ReportedFinding, ReportedResult } from "./review-report.ts";
 
@@ -75,6 +76,7 @@ const finding = (severity: ReportedFinding["severity"], file: string, line: numb
   summary: `${severity} at ${file}`,
   failureScenario: "the scenario",
   breaks: null,
+  earlier: null,
   pass: "code",
 });
 
@@ -200,7 +202,7 @@ const REQUEST = {
 
 const resultOf = (...findings: ReportedFinding[]): ReportedResult => ({
   kind: "reported",
-  report: { findings },
+  report: { findings, namesEarlier: true },
   request: REQUEST,
   model: "claude-sonnet-5-5",
   claudeCodeVersion: "2.1.318",
@@ -382,6 +384,122 @@ describe("reviewOf", () => {
       "Review round 1 (claude-opus-5-5, /code-review high): 0 important, 0 nit; security: 0 important, 1 nit.",
     );
     expect(firstLine(withPass())).toBe("Review round 1 (claude-opus-5-5, /code-review high): nothing to fix.");
+  });
+});
+
+const APP = "bengous-labs-agents";
+
+/** A review thread whose comments are `comments`, each a login and a body, the first one the finding. */
+const threadOf = (id: string, ...comments: ReadonlyArray<readonly [string, string]>): ReviewThread => ({
+  id,
+  isResolved: false,
+  path: "b.ts",
+  line: 1,
+  comments: { nodes: comments.map(([login, body]) => ({ author: { login }, body })) },
+});
+
+/** An Important that reports again the earlier one in `thread`. */
+const again = (thread: string, summary = "still off by one"): ReportedFinding => ({
+  ...finding("important", "b.ts", 1),
+  summary,
+  earlier: thread,
+});
+
+const FIRST: readonly [string, string] = [APP, `**Important**: off by one\n\nwhy\n\n${markerOf("important")}`];
+
+const MARKER = "<!-- lab-review patch=p1 round=2 -->";
+
+describe("againRepliesOf", () => {
+  test("an Important that reports an open thread again is posted there: the round, what is still wrong, the finding's marker and the review's", () => {
+    const result = resultOf(again("T1"));
+
+    expect(againRepliesOf(result, ["T1"], [threadOf("T1", FIRST)], APP)).toEqual([
+      {
+        thread: "T1",
+        body: [
+          "Review round 2 still holds this finding.",
+          "",
+          "**Important**: still off by one",
+          "",
+          "the scenario",
+          "",
+          "<!-- lab-finding severity=important -->",
+          MARKER,
+        ].join("\n"),
+      },
+    ]);
+  });
+
+  test("a thread takes one reply per review, with every finding that names it: the Code review's, then the security pass's under its label", () => {
+    const leak: ReportedFinding = {
+      ...again("T1", "Reads review-<head>.json"),
+      failureScenario: "The body reads '<code counts>'.",
+      pass: "security",
+    };
+
+    const result = resultOf(again("T1", "first"), again("T2", "third"), leak);
+    const replies = againRepliesOf(result, ["T1", "T2"], [threadOf("T1", FIRST), threadOf("T2", FIRST)], APP);
+
+    expect(replies.map((reply) => reply.thread)).toEqual(["T1", "T2"]);
+    expect(replies[0]?.body).toBe(
+      [
+        "Review round 2 still holds this finding.",
+        "",
+        "**Important**: first",
+        "",
+        "the scenario",
+        "",
+        "**Important (security)**: Reads review-&lt;head>.json",
+        "",
+        "The body reads '&lt;code counts>'.",
+        "",
+        "<!-- lab-finding severity=important -->",
+        MARKER,
+      ].join("\n"),
+    );
+    expect(replies[1]?.body).toContain("**Important**: third\n");
+    expect(replies[1]?.body).not.toContain("first");
+  });
+
+  test("a thread that holds the App's reply for this review takes none again; another login's marker, or another round's, does not count", () => {
+    const result = resultOf(again("T1"), again("T2"));
+
+    const threadsOf = (...t1: ReadonlyArray<readonly [string, string]>): ReviewThread[] => [
+      threadOf("T1", FIRST, ...t1),
+      threadOf("T2", FIRST),
+    ];
+
+    const repliedTo = (threads: readonly ReviewThread[]): string[] =>
+      againRepliesOf(result, ["T1", "T2"], threads, APP).map((reply) => reply.thread);
+
+    expect(repliedTo(threadsOf([APP, `Review round 2 still holds this finding.\n\n${MARKER}`]))).toEqual(["T2"]);
+    expect(repliedTo(threadsOf(["someone", MARKER]))).toEqual(["T1", "T2"]);
+    expect(repliedTo(threadsOf([APP, "<!-- lab-review patch=p1 round=3 -->"]))).toEqual(["T1", "T2"]);
+    expect(repliedTo(threadsOf([APP, "<!-- lab-review patch=p2 round=2 -->"]))).toEqual(["T1", "T2"]);
+    expect(repliedTo([threadOf("T2", FIRST, [APP, MARKER]), threadOf("T1", FIRST)])).toEqual(["T1"]);
+  });
+
+  test("a deleted user's comment that holds the marker does not count either", () => {
+    const deleted: ReviewThread = {
+      ...threadOf("T1", FIRST),
+      comments: { nodes: [...threadOf("T1", FIRST).comments.nodes, { author: null, body: MARKER }] },
+    };
+
+    expect(againRepliesOf(resultOf(again("T1")), ["T1"], [deleted], APP).map((reply) => reply.thread)).toEqual(["T1"]);
+  });
+
+  test("only an Important that names a thread held open is posted as a reply", () => {
+    const result = resultOf(
+      again("T1"),
+      again("T-closed"),
+      finding("important", "b.ts", 1),
+      { ...again("T2"), severity: "nit" },
+      { ...again("T2"), severity: "pre_existing" },
+    );
+
+    expect(againRepliesOf(result, ["T1", "T2"], [], APP).map((reply) => reply.thread)).toEqual(["T1"]);
+    expect(againRepliesOf(result, [], [], APP)).toEqual([]);
+    expect(againRepliesOf(resultOf(), ["T1"], [], APP)).toEqual([]);
   });
 });
 

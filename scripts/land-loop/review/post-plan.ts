@@ -9,6 +9,7 @@ import type { Schema } from "effect";
 
 import { codeSpan, escapeHtml, escapeInline } from "../../lib/markdown.ts";
 import { markerOf, movedLineOf } from "./findings.ts";
+import type { ReviewThread } from "./findings.ts";
 import type { ReportedFinding, ReportedResult, ReviewRequest, Severity } from "./review-report.ts";
 
 /** The RIGHT-side lines of each hunk of the PR's whole diff, context included: GitHub accepts an inline comment only there. */
@@ -154,6 +155,63 @@ function commentOf(planned: PlannedComment): string {
 /** The marker of the review of `request`'s patch and round. An external name: posted reviews carry it, so the string stays. */
 export function reviewMarkerOf(request: ReviewRequest): string {
   return `<!-- lab-review patch=${request.patch} round=${request.round} -->`;
+}
+
+/** A reply the Merge bot posts in the open thread of an earlier Important that a later round reports again. */
+export interface AgainReply {
+  readonly thread: string;
+  readonly body: string;
+}
+
+/**
+ * The replies that carry, each in its open thread of `heldOpen`, the Importants the round of `result`
+ * reports again: what is still wrong, under the finding's marker, so the relay delivers it to the
+ * Author, and under the review's marker, so a posting that is retried posts none twice. A thread takes
+ * one reply per review, with every finding of the round that names it, the Code review's and the
+ * security pass's. Only a comment of the App counts as that reply: `appLogin` is its login as GraphQL
+ * prints it, and any login can write the marker.
+ */
+export function againRepliesOf(
+  result: ReportedResult,
+  heldOpen: readonly string[],
+  threads: readonly ReviewThread[],
+  appLogin: string,
+): AgainReply[] {
+  const { request } = result;
+  const marker = reviewMarkerOf(request);
+
+  return heldOpen.flatMap((thread) => {
+    const posted = threads.some(
+      (found) =>
+        found.id === thread &&
+        found.comments.nodes.some((comment) => comment.author?.login === appLogin && comment.body.includes(marker)),
+    );
+
+    const again = result.report.findings.filter(
+      (finding) => finding.severity === "important" && finding.earlier === thread,
+    );
+
+    if (posted || again.length === 0) {
+      return [];
+    }
+
+    const reports = again.flatMap((finding) => [
+      `**${finding.pass === "security" ? `${LABEL.important} (security)` : LABEL.important}**: ${escapeInline(finding.summary)}`,
+      "",
+      escapeHtml(finding.failureScenario),
+      "",
+    ]);
+
+    const body = [
+      `Review round ${request.round} still holds this finding.`,
+      "",
+      ...reports,
+      markerOf("important"),
+      marker,
+    ].join("\n");
+
+    return [{ thread, body }];
+  });
 }
 
 function bodyOf(plan: PostPlan, result: ReportedResult): string {
