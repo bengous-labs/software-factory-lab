@@ -2,6 +2,7 @@
  * The prompt of the review job. It starts with `/code-review`, so the session runs the native skill as
  * a forked command and the main session stays a relay that judges nothing. Everything after the target
  * reaches the fork as part of its review target.
+ * The security pass's prompt is in security-prompt.ts.
  */
 
 import type { EarlierThread } from "./findings.ts";
