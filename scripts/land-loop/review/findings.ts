@@ -2,7 +2,7 @@
  * The App's findings as GitHub holds them. Each posted finding carries a marker that names its
  * severity, read back to count the open Important threads and by the author's PR watch. A pull
  * request's review threads come from one GraphQL query: the Merge bot counts them, and the review job
- * gives every Review round the earlier findings with the author's answers.
+ * gives Review rounds 2 and 3 the earlier findings with the author's answers.
  */
 
 import { Option, Schema } from "effect";
