@@ -45,7 +45,7 @@ export function run(argv: readonly string[], path: string): string {
       const tasks = done(load(path), id);
       save(path, tasks);
 
-      return `done #${id} ${tasks.at(id - 1)?.title}`;
+      return `done #${id} ${tasks.find((task) => task.id === id)?.title}`;
     }
 
     case "clear": {
