@@ -10,17 +10,35 @@ import type { Delivery } from "./deliver.ts";
 
 const RESUME = ["claude", "--bg", "--resume", "S1", "the lines"];
 
-const delivery = (route: Delivery["route"]): Delivery => ({ route, socketLine: "LINE\n", resumeArgs: RESUME });
+/** A delivery whose session the listing shows stopped from its `stoppedAt`th look on; never when null. */
+const delivery = (route: Delivery["route"], stoppedAt: number | null = 1): Delivery => {
+  const looks = { count: 0 };
+
+  return {
+    route,
+    socketLine: "LINE\n",
+    resumeArgs: RESUME,
+    stopped: () => {
+      looks.count += 1;
+
+      return Promise.resolve(stoppedAt !== null && looks.count >= stoppedAt);
+    },
+  };
+};
+
+const STOP = { kind: "stop", id: "725ecfab", pid: 34_502 } as const;
 
 interface World {
   readonly posts: string[];
   readonly runs: Array<{ argv: readonly string[]; env: unknown }>;
+  readonly sleeps: number[];
 }
 
 /** A deliverer whose sockets take a line only at the paths `open`, and whose resume exits `code`. */
 function world(open: readonly string[], code = 0): World & { deliver: ReturnType<typeof deliverer> } {
   const posts: string[] = [];
   const runs: World["runs"] = [];
+  const sleeps: number[] = [];
 
   const run: Run = (argv, options): Promise<Ran> => {
     runs.push({ argv, env: options.env });
@@ -35,12 +53,17 @@ function world(open: readonly string[], code = 0): World & { deliver: ReturnType
 
       return Promise.resolve(open.includes(path));
     },
+    sleep: (ms) => {
+      sleeps.push(ms);
+
+      return Promise.resolve();
+    },
     env: { XDG_RUNTIME_DIR: "/run/user/1000" },
     uid: 1000,
     cwd: "/main",
   });
 
-  return { posts, runs, deliver };
+  return { posts, runs, sleeps, deliver };
 }
 
 describe("socketPathsOf", () => {
@@ -88,18 +111,28 @@ describe("deliverer", () => {
     expect(await world([], 1).deliver(delivery({ kind: "resume" }))).toBeNull();
   });
 
-  test("a stop stops the session and delivers nothing: a resume in the same turn would start a copy of it", async () => {
+  test("a stop stops the session, waits until the listing shows it stopped, then resumes it with the text", async () => {
     const found = world(["/run/user/1000/cc-socks/34502.sock"]);
 
-    expect(await found.deliver(delivery({ kind: "stop", id: "725ecfab" }))).toBeNull();
-    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
+    expect(await found.deliver(delivery(STOP, 3))).toBe("resume");
+    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"], RESUME]);
+    expect(found.sleeps).toEqual([2000, 2000, 2000]);
     expect(found.posts).toEqual([]);
+  });
+
+  test("a session the listing still shows running after the stop is never resumed: its text goes on its socket", async () => {
+    const found = world(["/run/user/1000/cc-socks/34502.sock"]);
+
+    expect(await found.deliver(delivery(STOP, null))).toBe("socket");
+    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
+    expect(found.sleeps).toHaveLength(15);
+    expect(found.posts).toEqual(["/run/user/1000/cc-socks/34502.sock LINE\n"]);
   });
 
   test("a stop that fails throws, naming the command, and resumes nothing", async () => {
     const found = world([], 1);
 
-    const failure = await found.deliver(delivery({ kind: "stop", id: "725ecfab" })).then(
+    const failure = await found.deliver(delivery(STOP)).then(
       () => null,
       (error: Error) => error.message,
     );

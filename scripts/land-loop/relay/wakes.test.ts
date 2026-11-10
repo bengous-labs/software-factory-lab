@@ -506,18 +506,25 @@ describe("routeOf", () => {
     }
   });
 
-  test("the Owner's words reach a running background session as a turn of its user: it is stopped, and a later turn resumes it", () => {
-    expect(routeOf(agents, "S-running", owners)).toEqual({ kind: "stop", id: "725ecfab" });
-    expect(routeOf(agents, "S-asking", owners)).toEqual({ kind: "stop", id: "a4a3c146" });
-    expect(routeOf(agents, "S-idle", owners)).toEqual({ kind: "stop", id: "7e05aa33" });
+  test("the Owner's words reach an idle background session as a turn of its user: it is stopped, then resumed", () => {
+    expect(routeOf(agents, "S-running", owners)).toEqual({ kind: "stop", id: "725ecfab", pid: 34_502 });
+    expect(routeOf(agents, "S-asking", owners)).toEqual({ kind: "stop", id: "a4a3c146", pid: 34_503 });
+    expect(routeOf(agents, "S-idle", owners)).toEqual({ kind: "stop", id: "7e05aa33", pid: 34_505 });
   });
 
   test("the Owner's words wait while the session works: stopping it would cut its turn", () => {
     expect(routeOf(agents, "S-working", owners)).toEqual({ kind: "wait" });
   });
 
-  test("a session Claude Code cannot stop gets the Owner's words on its socket", () => {
+  test("a session Claude Code cannot stop, or whose status says no idle, gets the Owner's words on its socket", () => {
+    const unread = JSON.stringify([
+      { pid: 34_506, id: "c1", kind: "background", sessionId: "S-no-status", state: "done" },
+      { pid: 34_507, id: "c2", kind: "background", sessionId: "S-other-status", status: "running", state: "done" },
+    ]);
+
     expect(routeOf(agents, "S-terminal", owners)).toEqual({ kind: "socket", pid: 8484 });
+    expect(routeOf(unread, "S-no-status", owners)).toEqual({ kind: "socket", pid: 34_506 });
+    expect(routeOf(unread, "S-other-status", owners)).toEqual({ kind: "socket", pid: 34_507 });
   });
 
   test("a listing that does not read throws, naming the command", () => {

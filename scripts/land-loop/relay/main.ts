@@ -4,8 +4,8 @@
  * The relay of one pull request, left detached by the Stop hook at a Publication, in the main checkout.
  * Every 30 s it reads the PR as the Author's machine account and delivers the Wakes it has not
  * delivered yet, as one turn in the session of the PR's latest Publication: on that session's messaging
- * socket while it runs, else by resuming it. The Owner's words go by a resume alone, so that they reach it
- * as its user's: a turn stops the running session, and the next one resumes it. The keys it delivered are
+ * socket while it runs, else by resuming it. The Owner's words reach an idle background session as its
+ * user's: the relay stops it, then resumes it with them. The keys it delivered are
  * kept in `.lab/state/watch-<pr>.json`. It ends when the PR is landed or closed, and writes its start and its
  * end to `.lab/outcomes.log`.
  *
@@ -126,16 +126,27 @@ if (import.meta.main) {
   };
 
   const gh: RunOptions = { cwd, env: ghEnv(requiredAuthorToken(process.env)) };
-  const deliver = deliverer({ run, post: postToSocket, env: process.env, uid: process.getuid?.() ?? 0, cwd });
+
+  const deliver = deliverer({
+    run,
+    post: postToSocket,
+    sleep: (ms) => Bun.sleep(ms),
+    env: process.env,
+    uid: process.getuid?.() ?? 0,
+    cwd,
+  });
+
+  const agents = (): Promise<string> => checked(run, ["claude", "agents", "--json"], { cwd });
 
   const io: RelayIo = {
     read: () => readPr(run, gh, pr),
     session: () => readFileSync(files.session, "utf8").trim(),
     deliver: async (session, text, ownerWords) =>
       deliver({
-        route: routeOf(await checked(run, ["claude", "agents", "--json"], { cwd }), session, ownerWords),
+        route: routeOf(await agents(), session, ownerWords),
         socketLine: socketLineOf(text),
         resumeArgs: resumeArgsOf(session, text),
+        stopped: async () => routeOf(await agents(), session, false).kind === "resume",
       }),
   };
 

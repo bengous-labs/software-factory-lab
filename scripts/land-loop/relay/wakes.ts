@@ -292,20 +292,21 @@ const Agent = Schema.Struct({
 
 /**
  * How a Wake reaches the Author's session: its messaging socket while it runs, a resume when it no
- * longer does; for the Owner's words, a stop so that a later turn resumes it, or nothing yet.
+ * longer does; for the Owner's words, a stop then a resume, or nothing yet.
  */
 export type Route =
   | { readonly kind: "socket"; readonly pid: number }
   | { readonly kind: "resume" }
-  | { readonly kind: "stop"; readonly id: string }
+  | { readonly kind: "stop"; readonly id: string; readonly pid: number }
   | { readonly kind: "wait" };
 
 /**
  * The route to `session` from what `claude agents --json` printed. A running session is never resumed:
  * Claude Code would start a copy of it. Claude Code hands a socket message to the session as a peer's,
  * never as its user's approval, so a running background session that the Owner's words must reach is
- * stopped once its turn is over, and a later turn resumes it with them: stopping it during a turn would
- * cut that turn.
+ * stopped, then resumed with them, when its status reads `idle`; it waits while its status reads `busy`,
+ * since a stop would cut its turn. Any other status, or none, is not read as idle: the words go on the
+ * socket, as they do to a session Claude Code cannot stop.
  */
 export function routeOf(agents: string, session: string, ownerWords: boolean): Route {
   const found = decodeJson(Schema.Array(Agent), "claude agents --json", agents).find(
@@ -316,11 +317,15 @@ export function routeOf(agents: string, session: string, ownerWords: boolean): R
     return { kind: "resume" };
   }
 
-  if (!ownerWords || found.id === undefined) {
-    return { kind: "socket", pid: found.pid };
+  if (ownerWords && found.id !== undefined && found.status === "idle") {
+    return { kind: "stop", id: found.id, pid: found.pid };
   }
 
-  return found.status === "busy" ? { kind: "wait" } : { kind: "stop", id: found.id };
+  if (ownerWords && found.id !== undefined && found.status === "busy") {
+    return { kind: "wait" };
+  }
+
+  return { kind: "socket", pid: found.pid };
 }
 
 /** The line the relay writes on a session's messaging socket: one user message. An external format: Claude Code reads it. */
