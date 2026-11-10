@@ -30,9 +30,7 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["scripts/land-loop/merge-bot/main.ts", at("land-loop", "entry")],
   ["scripts/land-loop/stop/hook.ts", at("land-loop", "entry")],
   ["scripts/land-loop/stop/fork-guard.ts", at("land-loop", "entry")],
-  ["scripts/land-loop/pr-watch.ts", at("land-loop", "entry")],
-  ["scripts/land-loop/thread.ts", at("land-loop", "entry")],
-  ["scripts/land-loop/comment.ts", at("land-loop", "entry")],
+  ["scripts/land-loop/relay/main.ts", at("land-loop", "entry")],
   ["scripts/land-loop/queue/repost.ts", at("land-loop", "entry")],
   ["scripts/land-loop/review/run-review.ts", at("land-loop", "entry")],
   ["scripts/land-loop/review/read-threads.ts", at("land-loop", "entry")],
@@ -41,9 +39,12 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["scripts/land-loop/routing/routing-rules.ts", at("land-loop", "domain")],
   ["scripts/land-loop/factory-config.ts", at("land-loop", "domain")],
   ["scripts/land-loop/author-mark.ts", at("land-loop", "domain")],
+  ["scripts/land-loop/stop/done-prompt.ts", at("land-loop", "domain")],
   ["scripts/land-loop/ports/*.ts", at("land-loop", "ports")],
   ["scripts/land-loop/review/*.ts", at("land-loop", "application")],
   ["scripts/land-loop/routing/routing-judge.ts", at("land-loop", "application")],
+  ["scripts/land-loop/routing/routing-prompt.ts", at("land-loop", "application")],
+  ["scripts/land-loop/relay/wakes.ts", at("land-loop", "application")],
   ["scripts/land-loop/lib/*.ts", at("land-loop", "infra")],
 
   // Pure helpers both the Land loop and the tooling import.

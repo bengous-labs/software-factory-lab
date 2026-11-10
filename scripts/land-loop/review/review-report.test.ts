@@ -48,6 +48,7 @@ const FINDING = {
   summary: "rename accepts a blank title",
   failure_scenario: "rename 1 ' ' saves an empty title",
   breaks: { file: "app/src/commands/rename.ts", line: 5 },
+  earlier: null,
 };
 
 describe("ReviewInputs", () => {
@@ -160,6 +161,7 @@ describe("resultOf", () => {
             summary: "rename accepts a blank title",
             failureScenario: "rename 1 ' ' saves an empty title",
             breaks: { file: "app/src/commands/rename.ts", line: 5 },
+            earlier: null,
             pass: "code",
           },
         ],
@@ -218,6 +220,22 @@ describe("resultOf", () => {
     const findings = current.kind === "reported" ? current.report.findings.map(({ pass: _pass, ...rest }) => rest) : [];
 
     expect(resultOfJson(JSON.stringify({ ...current, request, report: { findings } }))).toEqual(current);
+  });
+
+  test("an artifact written before a round named the earlier findings it reports again, with no earlier, reads as naming none", () => {
+    const current = resultOf(REQUEST, answered({ findings: [FINDING] }), RUN_URL);
+
+    const findings =
+      current.kind === "reported" ? current.report.findings.map(({ earlier: _earlier, ...rest }) => rest) : [];
+
+    expect(resultOfJson(JSON.stringify({ ...current, report: { findings } }))).toEqual(current);
+  });
+
+  test("a finding that reports an earlier one again keeps the id it names", () => {
+    const again = resultOf(REQUEST, answered({ findings: [{ ...FINDING, earlier: "E2" }] }), RUN_URL);
+
+    expect(again.kind === "reported" && again.report.findings[0]?.earlier).toBe("E2");
+    expect(resultOfJson(JSON.stringify(again))).toEqual(again);
   });
 
   test("an artifact that is not JSON, or not a result, reads as none", () => {

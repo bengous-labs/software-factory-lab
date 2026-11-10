@@ -39,7 +39,12 @@ describe("promptOf", () => {
 
   test("round 2 names the head round 1 read and lists the earlier threads with the author's answers", () => {
     const threads = [
-      { where: "app/src/task.ts:22", finding: "rename accepts a blank title", reply: "Fixed in abc123" },
+      {
+        thread: "PRRT_1",
+        where: "app/src/task.ts:22",
+        finding: "rename accepts a blank title",
+        reply: "Fixed in abc123",
+      },
     ];
 
     const prompt = promptOf({ ...REQUEST, round: 2 }, GUIDES, threads);
@@ -48,9 +53,11 @@ describe("promptOf", () => {
       `\nThis is review round 2. ${BASE} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.\n`,
     );
     expect(prompt).not.toContain("the last one");
-    expect(prompt).toContain("- app/src/task.ts:22: rename accepts a blank title | Author: Fixed in abc123");
+    expect(prompt).toContain("- [E1] app/src/task.ts:22: rename accepts a blank title | Author: Fixed in abc123");
     expect(
-      prompt.endsWith("Never report again a finding the author resolved with a valid reason, nor one already open."),
+      prompt.endsWith(
+        "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.",
+      ),
     ).toBe(true);
   });
 
@@ -74,26 +81,34 @@ describe("promptOf", () => {
     ]);
 
     expect(promptOf({ ...REQUEST, round: 2 }, GUIDES, rejected === undefined ? [] : [rejected])).toContain(
-      "- a.ts:3: **Important**: off by one | Author: Rejected: the bound is inclusive (thread resolved: rejected by the Author)\n",
+      "- [E1] a.ts:3: **Important**: off by one | Author: Rejected: the bound is inclusive (thread resolved: rejected by the Author)\n",
     );
   });
 
   test("round 3, the last, names the head round 2 read and lists the earlier threads with the author's answers", () => {
-    const threads = [{ where: "a.ts:3", finding: "off by one", reply: "Rejected: the bound is inclusive" }];
+    const threads = [
+      { thread: "PRRT_1", where: "a.ts:3", finding: "off by one", reply: "Rejected: the bound is inclusive" },
+    ];
+
     const prompt = promptOf({ ...REQUEST, round: 3 }, GUIDES, threads);
 
     expect(prompt).toContain(
-      `\nThis is review round 3, the last one. ${BASE} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.\nEarlier findings and the author's answers:\n- a.ts:3: off by one | Author: Rejected: the bound is inclusive\n`,
+      `\nThis is review round 3, the last one. ${BASE} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.\nEarlier findings and the author's answers:\n- [E1] a.ts:3: off by one | Author: Rejected: the bound is inclusive\n`,
     );
     expect(
-      prompt.endsWith("Never report again a finding the author resolved with a valid reason, nor one already open."),
+      prompt.endsWith(
+        "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.",
+      ),
     ).toBe(true);
   });
 });
 
 describe("round 1", () => {
   test("it has no round text, whatever the threads", () => {
-    const threads = [{ where: "a.ts:3", finding: "off by one", reply: "Fixed in fa2392d (thread resolved)" }];
+    const threads = [
+      { thread: "PRRT_1", where: "a.ts:3", finding: "off by one", reply: "Fixed in fa2392d (thread resolved)" },
+    ];
+
     const request: ReviewRequest = { ...REQUEST, round: 1 };
 
     expect(roundText(request, threads)).toEqual([]);

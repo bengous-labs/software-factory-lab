@@ -67,6 +67,11 @@ const ReportedFinding = Schema.Struct({
   failureScenario: Schema.String,
   /** Where the defect shows, when that is another place; null when it shows on the causing line. */
   breaks: Schema.NullOr(Location),
+  /**
+   * The review thread of the earlier Important this finding reports again, on a round after the first; null for
+   * a finding of this round. An artifact written before a round named them has none, read as null.
+   */
+  earlier: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** The pass that reported it; an artifact written before the security pass has none, read as the Code review's. */
   pass: Schema.Literals(["code", "security"]).pipe(Schema.withDecodingDefaultKey(Effect.succeed("code" as const))),
 });
@@ -87,6 +92,8 @@ export const StructuredReport = Schema.Struct({
       summary: Schema.String,
       failure_scenario: Schema.String,
       breaks: Schema.NullOr(Location),
+      /** The id of the earlier finding this one reports again, as the prompt lists it; null for a finding of this round. */
+      earlier: Schema.NullOr(Schema.String),
     }),
   ),
 });
@@ -113,8 +120,9 @@ export const OUTPUT_SCHEMA = {
           summary: { type: "string" },
           failure_scenario: { type: "string" },
           breaks: { anyOf: [LOCATION_SCHEMA, { type: "null" }] },
+          earlier: { type: ["string", "null"] },
         },
-        required: ["file", "line", "severity", "summary", "failure_scenario", "breaks"],
+        required: ["file", "line", "severity", "summary", "failure_scenario", "breaks", "earlier"],
         additionalProperties: false,
       },
     },
@@ -193,6 +201,7 @@ export function resultOf(request: ReviewRequest, answer: SessionAnswer, runUrl: 
           summary: finding.summary,
           failureScenario: finding.failure_scenario,
           breaks: finding.breaks,
+          earlier: finding.earlier,
           pass: "code",
         })),
       },

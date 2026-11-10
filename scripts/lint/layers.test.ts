@@ -92,14 +92,14 @@ describe("edgeRefusal", () => {
     expect(edgeRefusal(DECIDE, DOMAIN, typeOnly("../review/post-plan.ts"))).toBeNull();
     expect(edgeRefusal(DECIDE, DOMAIN, value("../review/post-plan.ts", "x"))).toContain("(application)");
     expect(edgeRefusal(DECIDE, DOMAIN, typeOnly("../lib/ask.ts"))).toContain("(infra)");
-    expect(edgeRefusal(DECIDE, DOMAIN, typeOnly("../pr-watch.ts"))).toContain("(entry)");
+    expect(edgeRefusal(DECIDE, DOMAIN, typeOnly("../relay/main.ts"))).toContain("(entry)");
   });
 
   test("refuses an entry point that imports another", () => {
     const entry: Place = { package: "land-loop", layer: "entry" };
 
-    expect(edgeRefusal("scripts/land-loop/pr-watch.ts", entry, value("./thread.ts", "x"))).toContain(
-      "`scripts/land-loop/pr-watch.ts` (entry) imports `scripts/land-loop/thread.ts` (entry)",
+    expect(edgeRefusal("scripts/land-loop/relay/main.ts", entry, value("../stop/fork-guard.ts", "x"))).toContain(
+      "`scripts/land-loop/relay/main.ts` (entry) imports `scripts/land-loop/stop/fork-guard.ts` (entry)",
     );
   });
 
@@ -176,8 +176,8 @@ const SOURCES = {
     "const fetch = (url: string): string => url;",
     'export const fetched = fetch("a");',
   ].join("\n"),
-  "scripts/land-loop/pr-watch.ts": 'import { x } from "./thread.ts";\nexport const y = x;\n',
-  "scripts/land-loop/thread.ts":
+  "scripts/land-loop/relay/main.ts": 'import { x } from "../stop/fork-guard.ts";\nexport const y = x;\n',
+  "scripts/land-loop/stop/fork-guard.ts":
     'export const x = 1;\nBun.spawn(["ls"]);\nexport const env = globalThis.process.env;\n',
   "scripts/land-loop/new.ts": "export const z = 1;\n",
   "scripts/land-loop/lib/run.ts":
@@ -266,8 +266,8 @@ describe("local/layers through oxlint", () => {
   });
 
   test("reports an entry point that imports another, and leaves the I/O of an entry point and of the infra", () => {
-    expect(lines("scripts/land-loop/pr-watch.ts")).toEqual([1]);
-    expect(lines("scripts/land-loop/thread.ts")).toEqual([]);
+    expect(lines("scripts/land-loop/relay/main.ts")).toEqual([1]);
+    expect(lines("scripts/land-loop/stop/fork-guard.ts")).toEqual([]);
     expect(lines("scripts/land-loop/lib/run.ts")).toEqual([]);
   });
 

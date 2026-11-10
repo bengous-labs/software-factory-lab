@@ -75,6 +75,7 @@ const finding = (severity: ReportedFinding["severity"], file: string, line: numb
   summary: `${severity} at ${file}`,
   failureScenario: "the scenario",
   breaks: null,
+  earlier: null,
   pass: "code",
 });
 

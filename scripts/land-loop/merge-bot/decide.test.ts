@@ -9,10 +9,12 @@ import {
   ciOf,
   conflictingOf,
   decide,
+  earlierImportantsOf,
   EMPTY_RECORD,
   LAND_APPROVAL_LABEL,
   landApprovalCounts,
   patchDeltaStart,
+  postedFindingsOf,
   recordOfJson,
   recordOfStored,
   REVIEW_DEADLINE_MS,
@@ -46,6 +48,7 @@ const READY: Snapshot = {
   state: "OPEN",
   sameRepository: true,
   openedByFactory: true,
+  openedByAuthor: false,
   draft: false,
   head: "h1",
   patch: P1,
@@ -55,7 +58,7 @@ const READY: Snapshot = {
   humanLabelBy: null,
   landApprovalByOwner: false,
   landApprovalPutByOwner: false,
-  openImportant: 0,
+  openImportant: [],
   rejectedImportant: 0,
   devRed: false,
   conflicting: false,
@@ -63,6 +66,10 @@ const READY: Snapshot = {
   now: "2026-11-07T12:00:00.000Z",
   reviewJob: null,
 };
+
+/** `count` open Important threads of the App, each posted by Review round 1 of an earlier patch. */
+const important = (count: number): Snapshot["openImportant"] =>
+  Array.from({ length: count }, (_, index) => ({ thread: `T${index + 1}`, review: { patch: "patch-0", round: 1 } }));
 
 function stepsOf(snapshot: Snapshot): readonly Step[] {
   const decision = decide(snapshot);
@@ -152,7 +159,12 @@ describe("decide", () => {
   });
 
   test("a reviewed patch with an open Important keeps the Review check red and the Land gate pending", () => {
-    const snapshot = { ...READY, openImportant: 1, record: { ...READY.record, reviewedPatch: P1, reviewRounds: 1 } };
+    const snapshot = {
+      ...READY,
+      openImportant: important(1),
+      record: { ...READY.record, reviewedPatch: P1, reviewRounds: 1 },
+    };
+
     const review = stepsOf(snapshot).find((step) => step.kind === "review-check");
 
     expect(review?.kind === "review-check" && review.check.kind).toBe("failure");
@@ -313,14 +325,14 @@ describe("Review rounds", () => {
       landGate: "success",
     },
     {
-      name: "an Important in Review round 1, then a fix that needs no read, resolved: no round 2, landable",
+      name: "an Important in Review round 1, then a push the Routing answer asks no read of: Review round 2 all the same",
       reviewRounds: 1,
       reviewedPatch: "patch-0",
       routing: LIGHT,
       record: { importantByRound: [2] },
-      round: null,
+      round: { round: 2, depth: "light" },
       owner: false,
-      landGate: "success",
+      landGate: "pending",
     },
     {
       name: "an Important in Review round 1, then its fix that needs a read: Review round 2, its thread still open",
@@ -476,7 +488,7 @@ describe("Review rounds", () => {
         ...row.record,
       };
 
-      const snapshot = { ...READY, labels: row.labels ?? [], openImportant: row.openImportant ?? 0, record };
+      const snapshot = { ...READY, labels: row.labels ?? [], openImportant: important(row.openImportant ?? 0), record };
       const steps = stepsOf(snapshot);
       const review = steps.find((step) => step.kind === "request-review");
       const labels = steps.flatMap((step) => (step.kind === "labels" ? [step.route] : []));
@@ -489,6 +501,44 @@ describe("Review rounds", () => {
       expect(steps.some((step) => step.kind === "auto-merge")).toBe(row.landGate === "success");
     });
   }
+
+  test("after a round 1 that posted an Important on a path no rule names, round 2 runs even when the Routing judge asks for none", () => {
+    const judged: RoutingAnswer = {
+      land: "auto",
+      review: "light",
+      secondRound: false,
+      reason: "the Routing judge: a nit fix",
+      model: "claude-haiku-5-5",
+      security: false,
+    };
+
+    const uncounted: StateRecord = {
+      ...EMPTY_RECORD,
+      reviewRounds: 1,
+      reviewedPatch: "patch-0",
+      reviewedHead: "h0",
+      triage: { [P1]: judged },
+    };
+
+    const after = (importantByRound: StateRecord["importantByRound"]): Snapshot => ({
+      ...READY,
+      openImportant: important(1),
+      record: importantByRound === undefined ? uncounted : { ...uncounted, importantByRound },
+    });
+
+    for (const counts of [[1], [3], [null], undefined] as const) {
+      expect(stepsOf(after(counts))).toContainEqual({
+        kind: "request-review",
+        depth: "light",
+        reviewRound: 2,
+        security: false,
+      });
+      expect(kinds(after(counts))).not.toContain("auto-merge");
+    }
+
+    expect(kinds({ ...after([0]), openImportant: [] })).not.toContain("request-review");
+    expect(kinds({ ...after([0]), openImportant: [] })).toContain("auto-merge");
+  });
 
   test("Review round 2 reads the Patch delta from the head Review round 1 read, or the whole PR once that head left its history", () => {
     expect(patchDeltaStart("base", "h0", 0)).toBe("h0");
@@ -525,6 +575,115 @@ describe("an Owner hold", () => {
         summary:
           "Held for the Owner: A push after Review round 3 needs a read. Waiting for the Owner's Land approval (label land-ok).",
       },
+    });
+  });
+
+  describe("after Review round 3, the Owner is the last reader", () => {
+    const held = afterRound3(LIGHT, {
+      reviewedPatch: P1,
+      importantByRound: [1, 1, 2],
+      ownerHold: "Review round 3 posted 2 Important finding(s).",
+      ownerAskedPatch: P1,
+    });
+
+    const open = { ...READY, openImportant: important(2), record: held };
+
+    const approved = {
+      ...open,
+      labels: [LAND_APPROVAL_LABEL],
+      landApprovalByOwner: true,
+      record: { ...held, landOkPatch: P1 },
+    };
+
+    test("a PR with an open Important lands with the Owner's Land approval for its patch, which resolves each open thread", () => {
+      expect(stepsOf(approved)).toEqual([
+        { kind: "labels", route: "owner", depth: "light" },
+        { kind: "resolve-threads", threads: ["T1", "T2"] },
+        {
+          kind: "review-check",
+          check: { kind: "success", summary: "2 Important finding(s) closed by the Owner's Land approval." },
+        },
+        {
+          kind: "land-gate",
+          check: { kind: "success", summary: "Landable, with the Owner's Land approval (label land-ok)." },
+        },
+        { kind: "auto-merge" },
+      ]);
+    });
+
+    test("it does not land without it: its Review check stays red, and its Land gate waits for the Owner", () => {
+      expect(stepsOf(open)).toEqual([
+        { kind: "labels", route: "owner", depth: "light" },
+        { kind: "review-check", check: { kind: "failure", summary: "2 Important finding(s) open." } },
+        {
+          kind: "land-gate",
+          check: {
+            kind: "pending",
+            summary:
+              "Held for the Owner: Review round 3 posted 2 Important finding(s). Waiting for the Owner's Land approval (label land-ok).",
+          },
+        },
+      ]);
+    });
+
+    test("the Owner is asked once per patch, though Important threads are open", () => {
+      const { ownerAskedPatch: _asked, ...unasked } = held;
+
+      expect(kinds({ ...open, record: unasked })).toEqual([
+        "labels",
+        "review-check",
+        "owner-comment",
+        "record",
+        "land-gate",
+      ]);
+    });
+
+    test("a Land approval given for another patch, or by another login, closes nothing and lands nothing", () => {
+      const earlier = { ...approved, record: { ...held, landOkPatch: "patch-0" } };
+      const notOwner = { ...approved, landApprovalByOwner: false };
+
+      for (const snapshot of [earlier, notOwner]) {
+        expect(kinds(snapshot)).not.toContain("resolve-threads");
+        expect(kinds(snapshot)).not.toContain("auto-merge");
+      }
+    });
+
+    test("with no Owner hold, a Land approval lands no PR whose Important is open: a round or a rejection closes it", () => {
+      const { ownerHold: _hold, ...unheld } = held;
+      const snapshot = { ...approved, record: { ...unheld, reviewRounds: 2, landOkPatch: P1 } };
+
+      expect(kinds(snapshot)).not.toContain("resolve-threads");
+      expect(kinds(snapshot)).not.toContain("auto-merge");
+      expect(stepsOf(snapshot).at(-1)).toEqual({
+        kind: "land-gate",
+        check: { kind: "pending", summary: "Not landable: Important findings are open." },
+      });
+    });
+
+    test("while dev is red the approved PR waits, its threads closed", () => {
+      expect(kinds({ ...approved, devRed: true })).toEqual(["labels", "resolve-threads", "review-check", "land-gate"]);
+      expect(gate({ ...approved, devRed: true })).toBe("pending");
+    });
+
+    test("with no Important open, the approved PR lands as any other: nothing to resolve", () => {
+      expect(stepsOf({ ...approved, openImportant: [] })).toEqual([
+        { kind: "labels", route: "owner", depth: "light" },
+        { kind: "review-check", check: { kind: "success", summary: "No Important finding open." } },
+        {
+          kind: "land-gate",
+          check: { kind: "success", summary: "Landable, with the Owner's Land approval (label land-ok)." },
+        },
+        { kind: "auto-merge" },
+      ]);
+    });
+
+    test("an open Important keeps the Review check red on a held PR whose depth is none", () => {
+      const unread = { ...held, triage: { [P1]: { ...LIGHT, review: "none" as const } } };
+
+      expect(stepsOf({ ...open, record: unread })).toContainEqual({
+        kind: "review-check",
+        check: { kind: "failure", summary: "2 Important finding(s) open." },
+      });
     });
   });
 
@@ -629,6 +788,14 @@ describe("a land:human label", () => {
 
     expect(landRoute(snapshot)).toBe("owner");
     expect(kinds(snapshot)).not.toContain("auto-merge");
+  });
+
+  test("the Author's machine account set sends no PR to the Owner: it falls to land:auto when the route is auto", () => {
+    const snapshot = { ...BOT_LABELED, humanLabelBy: "author" as const, record: reviewed(LIGHT) };
+
+    expect(landRoute(snapshot)).toBe("auto");
+    expect(kinds(snapshot)).toContain("auto-merge");
+    expect(landRoute({ ...snapshot, record: reviewed({ ...LIGHT, land: "owner" }) })).toBe("owner");
   });
 
   test("another login set is the Owner's veto and stays though the route is auto", () => {
@@ -890,7 +1057,10 @@ describe("landApprovalCounts", () => {
     ];
 
     for (const [openImportant, rejectedImportant, check] of rows) {
-      expect(stepsOf({ ...read, openImportant, rejectedImportant })).toContainEqual({ kind: "review-check", check });
+      expect(stepsOf({ ...read, openImportant: important(openImportant), rejectedImportant })).toContainEqual({
+        kind: "review-check",
+        check,
+      });
     }
 
     const unread = { ...READY, record: { ...READY.record, triage: { [P1]: { ...LIGHT, review: "none" as const } } } };
@@ -919,7 +1089,18 @@ const finding = (severity: ReportedFinding["severity"]): ReportedFinding => ({
   summary: "s",
   failureScenario: "f",
   breaks: null,
+  earlier: null,
   pass: "code",
+});
+
+/** An Important that reports again the earlier one in `thread`. */
+const again = (thread: string): ReportedFinding => ({ ...finding("important"), earlier: thread });
+
+const GREEN: Step = { kind: "review-check", check: { kind: "success", summary: "No Important finding open." } };
+
+const red = (open: number): Step => ({
+  kind: "review-check",
+  check: { kind: "failure", summary: `${open} Important finding(s) open.` },
 });
 
 const completed = (result: ReviewResult | null, conclusion = "success"): ReviewJob => ({
@@ -1009,25 +1190,168 @@ describe("the review job's run", () => {
     ]);
   });
 
-  test("a completed run that reports for this PR, patch and round posts the review, even on a draft, then says whether it found an Important", () => {
-    expect(stepsOf({ ...asked, reviewJob: completed(reported(finding("important"), finding("nit"))) })).toEqual([
-      { kind: "post-review", result: reported(finding("important"), finding("nit")) },
-      { kind: "review-check", check: { kind: "failure", summary: "1 Important finding(s) open." } },
+  const inRound2 = (...findings: ReportedFinding[]): ReportedResult => ({
+    ...reported(...findings),
+    request: { ...REQUEST, round: 2 },
+  });
+
+  test("a completed run that reports for this PR, patch and round posts the review, even on a draft, records the round, then says whether it found an Important", () => {
+    const both = reported(finding("important"), finding("nit"));
+    const nit = reported(finding("nit"));
+
+    expect(stepsOf({ ...asked, reviewJob: completed(both) })).toEqual([
+      { kind: "post-review", result: both, heldOpen: [] },
+      { kind: "to-draft" },
+      { kind: "record", record: afterReview(asked.record, both) },
+      red(1),
     ]);
-    expect(stepsOf({ ...asked, draft: true, reviewJob: completed(reported(finding("nit"))) })).toEqual([
-      { kind: "post-review", result: reported(finding("nit")) },
-      { kind: "review-check", check: { kind: "success", summary: "No Important finding open." } },
+    expect(stepsOf({ ...asked, draft: true, reviewJob: completed(nit) })).toEqual([
+      { kind: "post-review", result: nit, heldOpen: [] },
+      { kind: "record", record: afterReview(asked.record, nit) },
+      GREEN,
     ]);
   });
 
-  test("a report with no Important still leaves the Review check red while an earlier round's Important is open", () => {
-    expect(stepsOf({ ...asked, openImportant: 1, reviewJob: completed(reported(finding("nit"))) })).toEqual([
-      { kind: "post-review", result: reported(finding("nit")) },
-      { kind: "review-check", check: { kind: "failure", summary: "1 Important finding(s) open." } },
+  test("a round with a Nit and no Important sends an Author's PR to draft, and leaves an Owner's PR ready", () => {
+    const nit = reported(finding("nit"), finding("pre_existing"));
+    const byAuthor = { ...asked, openedByAuthor: true, reviewJob: completed(nit) };
+
+    expect(stepsOf(byAuthor)).toEqual([
+      { kind: "post-review", result: nit, heldOpen: [] },
+      { kind: "to-draft" },
+      { kind: "record", record: afterReview(asked.record, nit) },
+      GREEN,
+    ]);
+    expect(kinds({ ...byAuthor, openedByAuthor: false })).toEqual(["post-review", "record", "review-check"]);
+  });
+
+  test("a round with no Important and no Nit leaves the PR ready, whoever opened it; a PR already in draft is not sent again", () => {
+    for (const result of [reported(), reported(finding("pre_existing"))]) {
+      expect(kinds({ ...asked, openedByAuthor: true, reviewJob: completed(result) })).toEqual([
+        "post-review",
+        "record",
+        "review-check",
+      ]);
+    }
+
+    for (const result of [reported(finding("nit")), reported(finding("important"))]) {
+      expect(kinds({ ...asked, openedByAuthor: true, draft: true, reviewJob: completed(result) })).not.toContain(
+        "to-draft",
+      );
+    }
+  });
+
+  test("an Important sends the PR to draft whoever opened it, before the round is recorded", () => {
+    for (const openedByAuthor of [true, false]) {
+      expect(kinds({ ...asked, openedByAuthor, reviewJob: completed(reported(finding("important"))) })).toEqual([
+        "post-review",
+        "to-draft",
+        "record",
+        "review-check",
+      ]);
+    }
+  });
+
+  test("a Review round 1 was shown no earlier finding: it leaves an open Important as it is, and its Review check counts it", () => {
+    const nit = reported(finding("nit"));
+
+    expect(stepsOf({ ...asked, openImportant: important(1), reviewJob: completed(nit) })).toEqual([
+      { kind: "post-review", result: nit, heldOpen: [] },
+      { kind: "record", record: afterReview(asked.record, nit) },
+      red(1),
     ]);
     expect(
-      stepsOf({ ...asked, openImportant: 1, reviewJob: completed(reported(finding("important"))) }),
-    ).toContainEqual({ kind: "review-check", check: { kind: "failure", summary: "2 Important finding(s) open." } });
+      stepsOf({ ...asked, openImportant: important(1), reviewJob: completed(reported(finding("important"))) }),
+    ).toContainEqual(red(2));
+  });
+
+  describe("a later round and the earlier Importants", () => {
+    const ROUND_2: ReviewState = { ...REQUESTED, round: 2 };
+
+    const second = {
+      ...READY,
+      openImportant: important(2),
+      record: { ...READY.record, reviewedPatch: "patch-0", reviewRounds: 1, importantByRound: [2], review: ROUND_2 },
+    };
+
+    test("a round that does not report an earlier Important again resolves its thread; one that does leaves it open", () => {
+      const result = inRound2(again("T1"), finding("nit"));
+
+      expect(stepsOf({ ...second, reviewJob: completed(result) })).toEqual([
+        { kind: "post-review", result, heldOpen: ["T1"] },
+        { kind: "resolve-threads", threads: ["T2"] },
+        { kind: "to-draft" },
+        { kind: "record", record: afterReview(second.record, result) },
+        red(1),
+      ]);
+    });
+
+    test("a round that reports no earlier Important again resolves each of them, and its Review check is green", () => {
+      const result = inRound2();
+
+      expect(stepsOf({ ...second, reviewJob: completed(result) })).toEqual([
+        { kind: "post-review", result, heldOpen: [] },
+        { kind: "resolve-threads", threads: ["T1", "T2"] },
+        { kind: "record", record: afterReview(second.record, result) },
+        GREEN,
+      ]);
+    });
+
+    test("a round that reports each earlier Important again resolves none", () => {
+      const result = inRound2(again("T1"), again("T2"), finding("important"));
+      const steps = stepsOf({ ...second, reviewJob: completed(result) });
+
+      expect(steps[0]).toEqual({ kind: "post-review", result, heldOpen: ["T1", "T2"] });
+      expect(steps.map((step) => step.kind)).not.toContain("resolve-threads");
+      expect(steps.at(-1)).toEqual(red(3));
+    });
+
+    test("only an Important names an earlier thread: a Nit that names one keeps nothing open", () => {
+      const result = inRound2({ ...finding("nit"), earlier: "T1" });
+
+      expect(stepsOf({ ...second, reviewJob: completed(result) })).toContainEqual({
+        kind: "resolve-threads",
+        threads: ["T1", "T2"],
+      });
+    });
+
+    test("a thread the review posted itself, when its posting is retried, is not an earlier one: it stays open", () => {
+      const result = inRound2(finding("important"));
+      const own = { thread: "T3", review: { patch: P1, round: 2 } };
+      const otherPatch = { thread: "T4", review: { patch: "patch-0", round: 2 } };
+      const unmarked = { thread: "T5", review: null };
+
+      expect(
+        stepsOf({ ...second, openImportant: [own, otherPatch, unmarked], reviewJob: completed(result) }),
+      ).toContainEqual({ kind: "resolve-threads", threads: ["T4", "T5"] });
+      expect(
+        stepsOf({
+          ...second,
+          openImportant: [{ thread: "T3", review: { patch: P1, round: 1 } }],
+          reviewJob: completed(result),
+        }),
+      ).toContainEqual({ kind: "resolve-threads", threads: ["T3"] });
+    });
+
+    test("the findings posted leave out an Important whose earlier thread stays open, and keep every other finding", () => {
+      const result = inRound2(again("T1"), again("T-resolved"), finding("nit"), { ...finding("nit"), earlier: "T1" });
+
+      expect(postedFindingsOf(result, ["T1"])).toEqual([
+        again("T-resolved"),
+        finding("nit"),
+        { ...finding("nit"), earlier: "T1" },
+      ]);
+      expect(postedFindingsOf(result, [])).toEqual(result.report.findings);
+    });
+
+    test("earlierImportantsOf sorts the open threads of earlier reviews by what the round reports again", () => {
+      expect(earlierImportantsOf(inRound2(again("T2"), again("T9")), important(2))).toEqual({
+        kept: ["T2"],
+        closed: ["T1"],
+        left: 0,
+      });
+      expect(earlierImportantsOf(reported(again("T2")), important(2))).toEqual({ kept: [], closed: [], left: 2 });
+    });
   });
 
   test("the posted review's Review check counts the Importants the Author rejected apart; its conclusion follows the open count alone", () => {
@@ -1040,7 +1364,12 @@ describe("the review job's run", () => {
 
     for (const [openImportant, rejectedImportant, check] of rows) {
       expect(
-        stepsOf({ ...asked, openImportant, rejectedImportant, reviewJob: completed(reported(finding("nit"))) }),
+        stepsOf({
+          ...asked,
+          openImportant: important(openImportant),
+          rejectedImportant,
+          reviewJob: completed(reported(finding("nit"))),
+        }),
       ).toContainEqual({ kind: "review-check", check });
     }
 
@@ -1094,7 +1423,7 @@ describe("the review job's run", () => {
   test("a failed review whose run reran and reports for its patch and round is posted", () => {
     const failed = { ...asked, record: { ...asked.record, review: failedState("c") } };
 
-    expect(kinds({ ...failed, reviewJob: completed(reported()) })).toEqual(["post-review", "review-check"]);
+    expect(kinds({ ...failed, reviewJob: completed(reported()) })).toEqual(["post-review", "record", "review-check"]);
   });
 
   test("a review asked for another patch is stale: it is cleared, and the decision goes on for this patch", () => {
@@ -1420,13 +1749,18 @@ describe("the Merge bot's invariants", () => {
         const last = steps.at(-1);
         const summary = last?.kind === "land-gate" ? last.check.summary : "";
 
+        // After Review round 3 the Owner is the last reader: an open Important does not keep a held PR from waiting for the Owner.
+        const held =
+          snapshot.record.ownerHold !== undefined ||
+          steps.some((step) => step.kind === "record" && step.record.ownerHold !== undefined);
+
         const waitsForOwner =
           labels?.kind === "labels" &&
           labels.route === "owner" &&
           last?.kind === "land-gate" &&
           last.check.kind === "pending" &&
           !steps.some((step) => step.kind === "request-review") &&
-          snapshot.openImportant === 0 &&
+          (snapshot.openImportant.length === 0 || held) &&
           !snapshot.devRed;
 
         expect(OWNER_WAIT.test(summary)).toBe(waitsForOwner);
@@ -1489,14 +1823,21 @@ describe("the Merge bot's invariants", () => {
     );
   });
 
-  test("a decision that posts a review ends with its Review check and posts no Land gate: the next decision reads the review", () => {
+  test("a decision that posts a review records the round, ends with its Review check and posts no Land gate: the next decision reads the review", () => {
     fc.assert(
       fc.property(SNAPSHOT, (snapshot) => {
         const steps = stepsOrNone(snapshot);
         const post = steps.findIndex((step) => step.kind === "post-review");
 
         if (post !== -1) {
-          expect(steps.slice(post + 1).map((step) => step.kind)).toEqual(["review-check"]);
+          const after = steps.slice(post + 1).map((step) => step.kind);
+
+          expect(after.filter((kind) => kind !== "resolve-threads" && kind !== "to-draft")).toEqual([
+            "record",
+            "review-check",
+          ]);
+          expect(after.indexOf("to-draft")).toBeLessThan(after.indexOf("record"));
+          expect(after.indexOf("resolve-threads")).toBeLessThan(after.indexOf("record"));
           expect(steps.some((step) => step.kind === "land-gate")).toBe(false);
         }
       }),

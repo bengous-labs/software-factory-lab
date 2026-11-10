@@ -1,87 +1,130 @@
 import { describe, expect, test } from "bun:test";
 
-import { AUTHOR_MARK } from "../author-mark.ts";
+import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import {
   admit,
-  afterAuthorToken,
   afterStopChecks,
-  answerOf,
-  armReason,
+  bystanderOf,
+  checkoutOf,
   closingLineOf,
   decide,
-  holdStepsOf,
+  DONE_SCHEMA,
+  doneAnswerOf,
+  noAuthorToken,
+  noDoneAnswer,
+  outcomeLineOf,
+  rejectionReplyOf,
+  rejectionsOf,
 } from "./decide.ts";
-import type { Answer, Snapshot } from "./decide.ts";
+import type { DoneAnswer, Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
 
 const SNAPSHOT: Snapshot = {
-  forkFlag: false,
-  forkMarker: false,
-  stopHookActive: false,
   branch: "agent/clear-command",
   head: HEAD,
   treeClean: true,
   ahead: 2,
   pr: null,
-  armed: false,
 };
+
+const FINISHED: DoneAnswer = { finished: true, reason: "done and tested", rejections: [] };
+
+describe("bystanderOf", () => {
+  test("a session whose environment holds LAB_AUTHOR=1, and is no fork, is an Author", () => {
+    expect(bystanderOf({ author: true, forkFlag: false, forkMarker: false })).toBeNull();
+  });
+
+  test("a session without the marker is left alone, whatever its branch", () => {
+    expect(bystanderOf({ author: false, forkFlag: false, forkMarker: false })).toBe(
+      "this session is not an Author: its environment holds no LAB_AUTHOR=1",
+    );
+  });
+
+  test("a fork is left alone though it inherits the Author's marker", () => {
+    expect(bystanderOf({ author: true, forkFlag: true, forkMarker: false })).toBe(
+      "this session is a fork the hook launched",
+    );
+    expect(bystanderOf({ author: true, forkFlag: false, forkMarker: true })).toBe("this session is a fork, resumed");
+    expect(bystanderOf({ author: false, forkFlag: true, forkMarker: true })).toBe(
+      "this session is a fork the hook launched",
+    );
+  });
+});
+
+describe("checkoutOf", () => {
+  test("a branch checked out in a worktree of its own may be published", () => {
+    expect(checkoutOf({ mainCheckout: false, branch: "feat/1-x" })).toEqual({
+      kind: "publishable",
+      branch: "feat/1-x",
+    });
+  });
+
+  test("nothing is published from a detached HEAD, an ignored branch, or the main checkout", () => {
+    const cases: Array<[boolean, string | null, string]> = [
+      [false, null, "HEAD is detached"],
+      [false, "dev", "dev is never published"],
+      [false, "main", "main is never published"],
+      [false, "lab/q1-docs", "lab/q1-docs is never published"],
+      [true, "feat/1-x", "this session works in the main checkout: an Author publishes from its own worktree"],
+      [true, "dev", "dev is never published"],
+      [true, null, "HEAD is detached"],
+    ];
+
+    for (const [mainCheckout, branch, reason] of cases) {
+      expect(checkoutOf({ mainCheckout, branch })).toEqual({ kind: "refused", reason });
+    }
+  });
+
+  test("a branch that only starts like an ignored one is published", () => {
+    for (const branch of ["develop", "mainline", "lab", "labs/x", "feat/dev", "x/lab/y"]) {
+      expect(checkoutOf({ mainCheckout: false, branch }).kind).toBe("publishable");
+    }
+  });
+});
 
 describe("admit", () => {
   test("a clean branch with commits dev lacks runs the Stop checks", () => {
     expect(admit(SNAPSHOT)).toEqual({ kind: "stop-checks" });
   });
 
-  test("nothing is published from a fork, a detached HEAD, an ignored branch, a dirty tree, or no new commit", () => {
-    const cases: Array<[Partial<Snapshot>, string]> = [
-      [{ forkFlag: true }, "a fork the hook launched"],
-      [{ forkMarker: true }, "a fork, resumed"],
-      [{ branch: null }, "HEAD is detached"],
-      [{ branch: "dev" }, "dev is never published"],
-      [{ branch: "main" }, "main is never published"],
-      [{ branch: "lab/q1-docs" }, "lab/q1-docs is never published"],
-      [{ ahead: 0 }, "has no commit that dev lacks"],
-      [{ treeClean: false }, "uncommitted changes"],
-    ];
-
-    for (const [fields, reason] of cases) {
-      const admission = admit({ ...SNAPSHOT, ...fields });
-
-      expect(admission.kind).toBe("none");
-      expect(admission.kind === "none" && admission.reason).toContain(reason);
-    }
+  test("nothing is published from a dirty tree, or with no new commit", () => {
+    expect(admit({ ...SNAPSHOT, ahead: 0 })).toEqual({
+      kind: "none",
+      reason: "agent/clear-command has no commit that dev lacks",
+    });
+    expect(admit({ ...SNAPSHOT, treeClean: false })).toEqual({
+      kind: "none",
+      reason: "the tree has uncommitted changes",
+    });
+    expect(admit({ ...SNAPSHOT, ahead: 0, treeClean: false }).kind).toBe("none");
+    expect(admit({ ...SNAPSHOT, ahead: 1 })).toEqual({ kind: "stop-checks" });
   });
 
-  test("a ready PR at this head asks for the PR watch once, then leaves the session alone", () => {
-    const pr = { number: 7, draft: false, headSha: HEAD, labels: [] };
-
-    expect(admit({ ...SNAPSHOT, pr })).toEqual({ kind: "arm", pr: 7 });
-    expect(admit({ ...SNAPSHOT, pr, armed: true }).kind).toBe("none");
+  test("a PR ready at this head publishes nothing", () => {
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: HEAD } })).toEqual({
+      kind: "ready",
+      pr: 7,
+      reason: `#7 is ready at ${HEAD} already`,
+    });
   });
 
   test("a draft PR, or a ready one behind this head, runs the Stop checks again", () => {
-    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD, labels: [] } })).toEqual({
-      kind: "stop-checks",
-    });
-    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40), labels: [] } })).toEqual({
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({ kind: "stop-checks" });
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40) } })).toEqual({
       kind: "stop-checks",
     });
   });
 });
 
-describe("afterAuthorToken", () => {
-  test("a token found goes on to the Stop checks", () => {
-    expect(afterAuthorToken(true, "/h/author-token", false)).toBeNull();
-    expect(afterAuthorToken(true, "/h/author-token", true)).toBeNull();
-  });
-
+describe("noAuthorToken", () => {
   test("no token blocks once, naming its path, then lets the session end with nothing published", () => {
-    expect(afterAuthorToken(false, "/h/author-token", false)).toEqual({
+    expect(noAuthorToken("/h/author-token", false)).toEqual({
       kind: "block",
       reason:
         "The Stop hook found no Author token at /h/author-token, so nothing was published. The Owner provisions it (AGENTS.md, Identities). Stop, and ask no question.",
     });
-    expect(afterAuthorToken(false, "/h/author-token", true)).toEqual({
+    expect(noAuthorToken("/h/author-token", true)).toEqual({
       kind: "none",
       reason: "no Author token after a block: nothing is published",
     });
@@ -91,204 +134,199 @@ describe("afterAuthorToken", () => {
 describe("afterStopChecks", () => {
   test("green Stop checks ask the Done judge", () => {
     expect(afterStopChecks({ kind: "green" }, false)).toEqual({ kind: "ask-done-judge" });
+    expect(afterStopChecks({ kind: "green" }, true)).toEqual({ kind: "ask-done-judge" });
   });
 
   test("red Stop checks block once with their report, then let the session end", () => {
     const red = { kind: "red", report: "1 fail" } as const;
-    const first = afterStopChecks(red, false);
 
-    expect(first.kind).toBe("block");
-    expect(first.kind === "block" && first.reason).toContain("1 fail");
-    expect(afterStopChecks(red, true).kind).toBe("none");
+    expect(afterStopChecks(red, false)).toEqual({
+      kind: "block",
+      reason:
+        "The Stop checks are red on this head, so nothing was published:\n\n1 fail\n\nFix them and commit, then stop.",
+    });
+    expect(afterStopChecks(red, true)).toEqual({
+      kind: "none",
+      reason: "the Stop checks are still red after a block: nothing is published",
+    });
   });
 });
 
-describe("answerOf", () => {
-  test("YES first is yes; NO, a hedge, an empty or a lower-case answer is no", () => {
-    const cases: Array<[string, Answer]> = [
-      ["YES, the task is done and tested.", { kind: "yes" }],
-      ["  **YES** done", { kind: "yes" }],
-      ["NO: I asked the Owner which file to change.", { kind: "no" }],
-      ["I think YES", { kind: "no" }],
-      ["yes", { kind: "no" }],
-      ["", { kind: "no" }],
-      ["YESTERDAY", { kind: "no" }],
-    ];
+describe("doneAnswerOf", () => {
+  test("a structured output that fits the schema is the Done judge's answer", () => {
+    const finished = { finished: true, reason: "done", rejections: [] };
 
-    for (const [text, answer] of cases) {
-      expect(answerOf(text)).toEqual(answer);
+    const unfinished = {
+      finished: false,
+      reason: "a test is missing",
+      rejections: [{ thread: "T1", reason: "by design" }],
+    };
+
+    expect(doneAnswerOf({ code: 0, structured: finished })).toEqual(finished);
+    expect(doneAnswerOf({ code: 0, structured: unfinished })).toEqual(unfinished);
+  });
+
+  test("a fork that exits non-zero gave no answer, whatever its output", () => {
+    const structured = { finished: true, reason: "done", rejections: [] };
+
+    for (const code of [1, 124, -1]) {
+      expect(doneAnswerOf({ code, structured })).toBeNull();
     }
   });
 
-  test("YES, HOLD: on the first line is a hold with the trimmed rest of that line as its reason", () => {
-    const cases: Array<[string, Answer]> = [
-      [
-        "YES, HOLD: renames the agent-review check, which the dev ruleset requires",
-        { kind: "hold", reason: "renames the agent-review check, which the dev ruleset requires" },
-      ],
-      ["\n **YES,HOLD:   a stored format  \nmore text", { kind: "hold", reason: "a stored format" }],
-      ["YES, HOLD:", { kind: "hold", reason: "(no reason given)" }],
-      ["YES, HOLD:   \nthe reason is on the next line", { kind: "hold", reason: "(no reason given)" }],
-      [`YES, HOLD: ${"r".repeat(400)}`, { kind: "hold", reason: "r".repeat(300) }],
-      ["YES, HOLD:no space after the colon", { kind: "hold", reason: "no space after the colon" }],
-      ["Maybe YES, HOLD: a hedge", { kind: "no" }],
-      ["**YES, HOLD**: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
-      ["**YES**, HOLD: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
-      ["**YES, HOLD:** renames a stored label", { kind: "hold", reason: "renames a stored label" }],
-      ["__YES, HOLD__: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
-      ["_YES_, HOLD: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
-      ["YES, **HOLD**: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
-      ["# YES, HOLD: renames a stored label", { kind: "hold", reason: "renames a stored label" }],
-      [
-        "YES, HOLD: changes the scripts/**/*.ts glob in layers.map.ts",
-        { kind: "hold", reason: "changes the scripts/**/*.ts glob in layers.map.ts" },
-      ],
-      ["__YES__ done", { kind: "yes" }],
-      ["# YES done", { kind: "yes" }],
-      ["YESÉ", { kind: "no" }],
-      ["YES7", { kind: "no" }],
-      ["YES, hold: lower case", { kind: "yes" }],
-      ["NO, HOLD: not finished", { kind: "no" }],
+  test("an output that does not fit the schema is no answer", () => {
+    const unfit: unknown[] = [
+      undefined,
+      null,
+      "YES",
+      "YES, HOLD: a stored format",
+      {},
+      { finished: "yes", reason: "done", rejections: [] },
+      { finished: true, rejections: [] },
+      { finished: true, reason: "done" },
+      { finished: true, reason: "done", rejections: [{ thread: "T1" }] },
+      { finished: true, reason: "done", rejections: "none" },
     ];
 
-    for (const [text, answer] of cases) {
-      expect(answerOf(text)).toEqual(answer);
+    for (const structured of unfit) {
+      expect(doneAnswerOf({ code: 0, structured })).toBeNull();
     }
   });
 
-  test("a YES line that names HOLD off the YES, HOLD: form still holds, so it fails closed", () => {
-    const cases: Array<[string, string]> = [
-      ["YES, HOLD - renames a stored label", "renames a stored label"],
-      ["YES, HOLD — renames a stored label", "renames a stored label"],
-      ["YES, HOLD – renames a stored label", "renames a stored label"],
-      ["YES, HOLD : renames a stored label", "renames a stored label"],
-      ["**YES, HOLD** renames a stored label", "renames a stored label"],
-      ["YES. HOLD: renames a stored label", "renames a stored label"],
-      ["# YES, HOLD — renames a stored label", "renames a stored label"],
-      ["__YES__ - HOLD: renames a stored label", "renames a stored label"],
-      ["YES HOLD", "(no reason given)"],
-    ];
-
-    for (const [text, reason] of cases) {
-      expect(answerOf(text)).toEqual({ kind: "hold", reason });
-    }
+  test("the schema the fork follows names the three fields, and no hold", () => {
+    expect(DONE_SCHEMA).toEqual({
+      type: "object",
+      properties: {
+        finished: { type: "boolean" },
+        reason: { type: "string" },
+        rejections: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { thread: { type: "string" }, reason: { type: "string" } },
+            required: ["thread", "reason"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["finished", "reason", "rejections"],
+      additionalProperties: false,
+    });
   });
+});
 
-  test("the reason loses the emphasis that closes a bolded line, and keeps its own markup", () => {
-    const cases: Array<[string, string]> = [
-      ["**YES, HOLD: renames a stored label**", "renames a stored label"],
-      ["**YES, HOLD: renames a stored label**  ", "renames a stored label"],
-      ["**YES, HOLD: renames a stored label **", "renames a stored label"],
-      ["**YES, HOLD: changes the scripts/**/*.ts glob**", "changes the scripts/**/*.ts glob"],
-      ["__YES, HOLD: renames a stored label.__", "renames a stored label."],
-      ["YES, HOLD:_id field renamed", "_id field renamed"],
-      ["YES, HOLD: renames the id_", "renames the id_"],
-      ["YES, HOLD:** renames a stored label", "renames a stored label"],
-      ["YES, HOLD:**", "(no reason given)"],
-    ];
-
-    for (const [text, reason] of cases) {
-      expect(answerOf(text)).toEqual({ kind: "hold", reason });
-    }
-  });
-
-  test("HOLD inside a longer word is no hold", () => {
-    expect(answerOf("YES, the THRESHOLD is met")).toEqual({ kind: "yes" });
-    expect(answerOf("YES, HOLDS up")).toEqual({ kind: "yes" });
-    expect(answerOf("YES, HOLD7 is a name")).toEqual({ kind: "yes" });
-    expect(answerOf("YES, 7HOLD is a name")).toEqual({ kind: "yes" });
+describe("noDoneAnswer", () => {
+  test("no answer blocks once, naming the fork's exit code, then lets the session end", () => {
+    expect(noDoneAnswer(1, false)).toEqual({
+      kind: "block",
+      reason:
+        "The Stop hook could not ask whether your change is finished (the Done judge's fork exited 1 with no answer that reads), so nothing was published. Stop again to retry; ask no question.",
+    });
+    expect(noDoneAnswer(0, true)).toEqual({
+      kind: "none",
+      reason: "the Done judge gave no answer after a block: nothing is published",
+    });
   });
 });
 
 describe("decide", () => {
-  const draft = { number: 7, draft: true, headSha: HEAD, labels: [] };
-  const ready = { number: 7, draft: false, headSha: HEAD, labels: [] };
+  const draft = { number: 7, draft: true, headSha: HEAD };
+  const ready = { number: 7, draft: false, headSha: HEAD };
 
-  test("no from the Done judge changes nothing", () => {
-    expect(decide(null, { kind: "no" }).kind).toBe("none");
-    expect(decide(draft, { kind: "no" }).kind).toBe("none");
+  test("a change the Done judge says is not finished publishes nothing, and says why", () => {
+    const unfinished: DoneAnswer = { finished: false, reason: "a test is missing", rejections: [] };
+
+    expect(decide(null, unfinished)).toEqual({
+      kind: "none",
+      reason: "the Done judge says the change is not finished: a test is missing",
+    });
+    expect(decide(draft, unfinished).kind).toBe("none");
   });
 
-  test("yes opens the PR when there is none, pushes and readies a draft, pushes a ready one", () => {
-    expect(decide(null, { kind: "yes" })).toEqual({ kind: "open", hold: null });
-    expect(decide(draft, { kind: "yes" })).toEqual({ kind: "push", pr: 7, ready: true, hold: null });
-    expect(decide(ready, { kind: "yes" })).toEqual({ kind: "push", pr: 7, ready: false, hold: null });
+  test("a finished change opens the PR when there is none, pushes and readies a draft, pushes a ready one", () => {
+    expect(decide(null, FINISHED)).toEqual({ kind: "open" });
+    expect(decide(draft, FINISHED)).toEqual({ kind: "push", pr: 7, ready: true });
+    expect(decide(ready, FINISHED)).toEqual({ kind: "push", pr: 7, ready: false });
   });
 
-  test("a hold publishes as yes does, carrying its reason", () => {
-    const hold: Answer = { kind: "hold", reason: "a stored format" };
-
-    expect(decide(null, hold)).toEqual({ kind: "open", hold: "a stored format" });
-    expect(decide(draft, hold)).toEqual({ kind: "push", pr: 7, ready: true, hold: "a stored format" });
-    expect(decide(ready, hold)).toEqual({ kind: "push", pr: 7, ready: false, hold: "a stored format" });
+  test("no answer holds a PR: an action names no label", () => {
+    for (const action of [decide(null, FINISHED), decide(draft, FINISHED), decide(ready, FINISHED)]) {
+      expect(JSON.stringify(action)).not.toContain("hold");
+      expect(JSON.stringify(action)).not.toContain("land:human");
+    }
   });
 });
 
-describe("holdStepsOf", () => {
-  test("a hold on a PR without land:human adds the label and posts the Author's marked comment", () => {
-    expect(holdStepsOf("renames the agent-review check, which the dev ruleset requires", ["enhancement"])).toEqual({
-      addLabel: true,
-      comment: `Held for the Owner by the Author: renames the agent-review check, which the dev ruleset requires\n\n${AUTHOR_MARK}`,
-    });
-    expect(holdStepsOf("(no reason given)", [])).toEqual({
-      addLabel: true,
-      comment: "Held for the Owner by the Author: (no reason given)\n\n<!-- lab-author-reply -->",
+describe("rejectionsOf", () => {
+  test("a rejection that names an open thread of the App is posted", () => {
+    expect(rejectionsOf([{ thread: "T1", reason: "by design" }], ["T1", "T2"])).toEqual({
+      posted: [{ thread: "T1", reason: "by design" }],
+      dropped: [],
     });
   });
 
-  test("a placeholder in the reason is escaped for GitHub; the Author's mark is not", () => {
-    expect(holdStepsOf("rewrites <file> paths", [])).toEqual({
-      addLabel: true,
-      comment: "Held for the Owner by the Author: rewrites &lt;file> paths\n\n<!-- lab-author-reply -->",
-    });
+  test("each open thread takes its own rejection", () => {
+    const both = [
+      { thread: "T1", reason: "by design" },
+      { thread: "T2", reason: "out of scope" },
+    ];
+
+    expect(rejectionsOf(both, ["T1", "T2"])).toEqual({ posted: both, dropped: [] });
   });
 
-  test("no hold, or a PR that carries land:human already, adds nothing and posts nothing", () => {
-    expect(holdStepsOf(null, [])).toEqual({ addLabel: false, comment: null });
-    expect(holdStepsOf(null, ["land:human"])).toEqual({ addLabel: false, comment: null });
-    expect(holdStepsOf("a stored format", ["land-ok", "land:human"])).toEqual({ addLabel: false, comment: null });
+  test("a rejection that names no open thread, names one twice, or gives no reason is dropped", () => {
+    expect(
+      rejectionsOf(
+        [
+          { thread: "T9", reason: "not a thread of this PR" },
+          { thread: "T1", reason: "by design" },
+          { thread: "T1", reason: "again" },
+          { thread: "T2", reason: "  " },
+        ],
+        ["T1", "T2"],
+      ),
+    ).toEqual({
+      posted: [{ thread: "T1", reason: "by design" }],
+      dropped: [
+        { thread: "T9", reason: "not a thread of this PR" },
+        { thread: "T1", reason: "again" },
+        { thread: "T2", reason: "  " },
+      ],
+    });
+    expect(rejectionsOf([{ thread: "T1", reason: "by design" }], [])).toEqual({
+      posted: [],
+      dropped: [{ thread: "T1", reason: "by design" }],
+    });
   });
 });
 
-describe("armReason", () => {
-  test("names the PR, the PR watch, thread and comment commands, and asks for no question", () => {
-    const reason = armReason(12, {
-      prWatch: "bun /r/scripts/land-loop/pr-watch.ts 12",
-      thread: "bun /r/scripts/land-loop/thread.ts",
-      comment: "bun /r/scripts/land-loop/comment.ts 12",
-    });
+describe("rejectionReplyOf", () => {
+  test("the reply carries the Author's reason, the reject mark and the Author's mark", () => {
+    expect(rejectionReplyOf("  the flag is read by <cli>  ")).toBe(
+      `Rejected: the flag is read by &lt;cli>\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`,
+    );
+  });
+});
 
-    expect(reason).toContain("PR #12 is ready");
-    expect(reason).toContain("    bun /r/scripts/land-loop/pr-watch.ts 12");
-    expect(reason).toContain('`bun /r/scripts/land-loop/thread.ts <thread-id> "Fixed in <sha>: <what changed>"`');
-    expect(reason).toContain(
-      '- A finding you reject: reply with your reason and resolve: `bun /r/scripts/land-loop/thread.ts <thread-id> --reject "<your reason>"`. Then stop.\n- A finding you fix in part: it is a fix; start with "Fixed in <sha>: " and name what stays as is.\n',
-    );
-    expect(reason).toContain('`bun /r/scripts/land-loop/comment.ts 12 "<what you decided and why>"`');
-    expect(reason).toContain("never with `gh pr comment`");
-    expect(reason).toContain(
-      "Each line it prints is a failing check, an Important or Nit finding, a human comment, or a change of state of the PR. Judge every finding, a Nit as an Important: fix it or reject it. Pre-existing findings never block: leave them.",
-    );
-    expect(reason).not.toContain("Nit and Pre-existing findings never block");
-    expect(reason).toContain("Never ask the Owner a question");
-    expect(reason).not.toContain("held this PR");
+describe("outcomeLineOf", () => {
+  const facts = { at: "2026-11-10T10:00:00.000Z", session: "S1", worktree: "/w", branch: "feat/1-x", head: HEAD };
+
+  test("a Publication names its PR", () => {
+    expect(JSON.parse(outcomeLineOf(facts, { kind: "published", pr: 12 }))).toEqual({
+      ...facts,
+      outcome: "published",
+      pr: 12,
+    });
   });
 
-  test("with a hold, the line right after the first one says why and keeps land:human on", () => {
-    const commands = { prWatch: "w", thread: "t", comment: "c" };
-    const lines = armReason(12, commands, "a stored format").split("\n");
+  test("a stop that publishes nothing says why", () => {
+    expect(
+      JSON.parse(outcomeLineOf(facts, { kind: "not-published", reason: "the tree has uncommitted changes" })),
+    ).toEqual({ ...facts, outcome: "not-published", reason: "the tree has uncommitted changes" });
+  });
 
-    expect(lines[0]).toStartWith("PR #12 is ready for review.");
-    expect(lines[1]).toBe(
-      "The Done judge held this PR for the Owner's read: a stored format. Do not remove land:human.",
-    );
-    expect(lines.slice(2)).toEqual(armReason(12, commands).split("\n").slice(1));
-    expect(armReason(12, commands, "a stored format.").split("\n")[1]).toBe(
-      "The Done judge held this PR for the Owner's read: a stored format. Do not remove land:human.",
-    );
-    expect(armReason(12, commands, "renames .lab/state files").split("\n")[1]).toBe(
-      "The Done judge held this PR for the Owner's read: renames .lab/state files. Do not remove land:human.",
-    );
+  test("the line is one line", () => {
+    expect(outcomeLineOf(facts, { kind: "not-published", reason: "a\nb" })).not.toContain("\n");
   });
 });
 

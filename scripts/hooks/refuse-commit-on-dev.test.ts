@@ -5,7 +5,8 @@ import { join } from "node:path";
 
 import { $ } from "bun";
 
-import { bashCallOf, cdTargetOf, commitDirOf, commitDirsOf, partsOf, refusalFor } from "./refuse-commit-on-dev.ts";
+import { bashCallOf, partsOf } from "../lib/bash.ts";
+import { cdTargetOf, commitDirOf, commitDirsOf, refusalFor } from "./refuse-commit-on-dev.ts";
 
 const SCRIPT = join(import.meta.dir, "refuse-commit-on-dev.ts");
 

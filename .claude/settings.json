@@ -44,6 +44,11 @@
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR\"/scripts/hooks/refuse-commit-on-dev.ts",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR\"/scripts/hooks/refuse-author-publish.ts",
+            "timeout": 30
           }
         ]
       }

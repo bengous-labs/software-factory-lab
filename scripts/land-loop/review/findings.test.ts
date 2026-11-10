@@ -12,6 +12,7 @@ import {
   markerOf,
   movedLineOf,
   nitPathsOf,
+  openFindingsOf,
   openImportantOf,
   rejectedImportantOf,
   reviewOfBody,
@@ -104,15 +105,50 @@ describe("openImportantOf", () => {
         thread(IMPORTANT, [], { by: "bengous" }),
         thread(IMPORTANT, [], { by: null }),
       ]),
-    ).toBe(2);
-    expect(openImportantOf(APP, [])).toBe(0);
+    ).toEqual([
+      { thread: "T", review: null },
+      { thread: "T", review: null },
+    ]);
+    expect(openImportantOf(APP, [])).toEqual([]);
+  });
+
+  test("each open Important names the patch and round of the review that posted it", () => {
+    expect(
+      openImportantOf(APP, [
+        postedIn(thread(IMPORTANT), { patch: "p1", round: 2 }, "a.ts"),
+        { ...thread(IMPORTANT), id: "T2" },
+      ]),
+    ).toEqual([
+      { thread: "T", review: { patch: "p1", round: 2 } },
+      { thread: "T2", review: null },
+    ]);
+  });
+
+  test("openFindingsOf lists the App's unresolved Important and Nit threads, each with its place and its first line without the label", () => {
+    const security = `**Nit (security)**: reads &lt;token>\n\nwhy\n\n${markerOf("nit")}`;
+
+    expect(
+      openFindingsOf(APP, [
+        thread(IMPORTANT),
+        thread(NIT, [], { line: null }),
+        thread(security),
+        thread(NIT, [], { isResolved: true }),
+        thread(`p\n\n${markerOf("pre_existing")}`),
+        thread(IMPORTANT, [], { by: "bengous" }),
+        thread("a human's comment", [], { by: "bengous" }),
+      ]),
+    ).toEqual([
+      { thread: "T", path: "a.ts", line: 3, severity: "important", summary: "off by one" },
+      { thread: "T", path: "a.ts", line: null, severity: "nit", summary: "a name" },
+      { thread: "T", path: "a.ts", line: 3, severity: "nit", summary: "reads <token>" },
+    ]);
   });
 
   test("a security pass's Important counts as any other, through the same marker, and reaches the next round's earlier findings", () => {
     const security = `**Important (security)**: the token reaches the log\n\nwhy\n\n${markerOf("important")}`;
 
     expect(severityOfBody(security)).toBe("important");
-    expect(openImportantOf(APP, [thread(security), thread(IMPORTANT)])).toBe(2);
+    expect(openImportantOf(APP, [thread(security), thread(IMPORTANT)])).toHaveLength(2);
     expect(earlierThreadsOf(APP, [thread(security)]).map((earlier) => earlier.finding)).toEqual([
       "**Important (security)**: the token reaches the log",
     ]);
@@ -163,7 +199,7 @@ describe("rejectedImportantOf", () => {
     const before = [thread(IMPORTANT, [[AUTHOR, `Rejected: intended\n\n${AUTHOR_MARK}`]], { isResolved: true })];
 
     expect(rejectedImportantOf(APP, before)).toBe(0);
-    expect(openImportantOf(APP, before)).toBe(0);
+    expect(openImportantOf(APP, before)).toEqual([]);
   });
 });
 
@@ -283,11 +319,12 @@ describe("earlierThreadsOf", () => {
       ]),
     ).toEqual([
       {
+        thread: "T",
         where: "a.ts:3",
         finding: "**Important**: off by one",
         reply: "Rejected: intended / see the test (thread resolved)",
       },
-      { where: "a.ts:?", finding: "**Nit**: a name", reply: "no answer (thread open)" },
+      { thread: "T", where: "a.ts:?", finding: "**Nit**: a name", reply: "no answer (thread open)" },
     ]);
   });
 
@@ -298,6 +335,7 @@ describe("earlierThreadsOf", () => {
       earlierThreadsOf(APP, [thread(escaped, [[AUTHOR, `Rejected: &lt;sha> holds it\n\n${AUTHOR_MARK}`]])]),
     ).toEqual([
       {
+        thread: "T",
         where: "a.ts:3",
         finding: "**Important**: reads review-<head>.json",
         reply: "Rejected: <sha> holds it (thread open)",
@@ -309,6 +347,7 @@ describe("earlierThreadsOf", () => {
     expect(earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous", String.raw`the pattern &lt;word matches`]])])).toEqual(
       [
         {
+          thread: "T",
           where: "a.ts:3",
           finding: "**Important**: off by one",
           reply: String.raw`the pattern &lt;word matches (thread open)`,
@@ -321,7 +360,12 @@ describe("earlierThreadsOf", () => {
     expect(
       earlierThreadsOf(APP, [thread(IMPORTANT, [["bengous-labs-author", "Fixed in abc: bound checked"]])]),
     ).toEqual([
-      { where: "a.ts:3", finding: "**Important**: off by one", reply: "Fixed in abc: bound checked (thread open)" },
+      {
+        thread: "T",
+        where: "a.ts:3",
+        finding: "**Important**: off by one",
+        reply: "Fixed in abc: bound checked (thread open)",
+      },
     ]);
   });
 

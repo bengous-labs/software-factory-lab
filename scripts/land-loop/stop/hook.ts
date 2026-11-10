@@ -1,40 +1,54 @@
 #!/usr/bin/env bun
 
 /**
- * The Stop hook of the Author's session. It reads the session, git and the branch's PR, decides with
- * `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the session
- * whether the task is finished, then publishes: pushes the branch, opens or readies the PR, and tells
- * the Author to arm its PR watch. Every step is appended to `.lab/stop.log` as one JSON line, with the
- * fork's latency and tokens.
+ * The Stop hook. It does nothing for a session that is not an Author, whose environment holds no
+ * `LAB_AUTHOR=1`, nor for a fork it launched. For an Author it reads git and the branch's PR, decides
+ * with `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the
+ * session whether the change is finished and which findings the Author rejects, then publishes: posts
+ * the rejections, pushes the branch, opens or readies the PR, resolves the App's open Nit threads, and
+ * leaves the PR's relay. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's
+ * latency and tokens, and every stop of an Author leaves one line in `.lab/outcomes.log` of the main
+ * checkout.
  *
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { Predicate, Result, Schema } from "effect";
 
+import { isAuthor } from "../../lib/author-session.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { ModelUsage, tokensOf } from "../../lib/tokens.ts";
 import type { TokenCounts } from "../../lib/tokens.ts";
 import { authorTokenOf, ghEnv, pushArgs } from "../lib/author.ts";
 import type { AuthorToken } from "../lib/author.ts";
+import { startRelay } from "../lib/relay-start.ts";
 import { checked, run as runCli } from "../lib/run.ts";
+import { replyInThread, resolveThread } from "../lib/threads.ts";
+import type { StartRelay } from "../ports/relay.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
+import { APP_LOGIN, openFindingsOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
+import type { OpenFinding } from "../review/findings.ts";
 import {
   admit,
-  afterAuthorToken,
   afterStopChecks,
-  answerOf,
-  armReason,
+  bystanderOf,
+  checkoutOf,
   closingLineOf,
   decide,
+  DONE_SCHEMA,
+  doneAnswerOf,
   FORK_MARKER,
-  holdStepsOf,
-  IGNORED_BRANCH,
+  noAuthorToken,
+  noDoneAnswer,
+  outcomeLineOf,
+  rejectionReplyOf,
+  rejectionsOf,
 } from "./decide.ts";
-import type { Action, HoldSteps, PullRequest, Snapshot, StopChecks } from "./decide.ts";
+import type { DoneAnswer, Outcome, PullRequest, Refusal, Snapshot, StopChecks, StopFacts } from "./decide.ts";
+import { BODY_REQUEST, doneQuestionOf } from "./done-prompt.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
 
@@ -47,7 +61,7 @@ const STOP_CHECKS_TIMEOUT_MS = 300_000;
 /** The repository of the hook's own files, where the fork guard lives; the Author's cwd may be another checkout. */
 const REPO = resolve(import.meta.dir, "..", "..", "..");
 
-// No Monitor: a fork that re-armed the session's PR watch waited on it until it was killed (#38, #39).
+// No Monitor: a fork that armed a watch waited on it until it was killed (#38, #39).
 const FORK_TOOLS = "Read,Grep,Glob,Bash";
 
 const FORK_SETTINGS = JSON.stringify({
@@ -67,10 +81,6 @@ const FORK_SETTINGS = JSON.stringify({
   },
 });
 
-export const DONE_QUESTION = `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, with no question pending for the Owner? Watching the pull request is the Land loop's job, not part of this answer. Answer YES or NO, then a reason. When it is finished but a human should read it before it lands, answer YES, HOLD: and the reason instead: for example a change to a name or a format stored outside the code, or to a setting the Owner must change on GitHub.`;
-
-export const BODY_REQUEST = `${FORK_MARKER} Stop hook request, not the Owner's: write the pull request for the commits on this branch. First line: its title, as a conventional commit subject. Then a blank line, then its body in Markdown: what changed and why, and how you verified it. Print nothing else.`;
-
 export const StopInput = Schema.Struct({
   session_id: Schema.String,
   transcript_path: Schema.String,
@@ -84,6 +94,9 @@ export interface Deps {
   readonly run: Run;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly now: () => number;
+  readonly startRelay: StartRelay;
+  /** Appends `line` to `.lab/outcomes.log` of the main checkout `checkout`. */
+  readonly recordOutcome: (checkout: string, line: string) => void;
 }
 
 /** One line of a session transcript, as far as this hook reads it: a message's model and its text blocks. */
@@ -155,6 +168,8 @@ export function prTextOf(text: string): { title: string; body: string } | null {
 /** What `claude -p --output-format json` prints, as far as this hook reads it. */
 export const ForkOutput = Schema.Struct({
   result: Schema.optionalKey(Schema.String),
+  /** The answer a fork asked with `--json-schema` gives. */
+  structured_output: Schema.optionalKey(Schema.Unknown),
   // Read on its own: a usage that does not read loses the tokens, never the fork's answer.
   modelUsage: Schema.optionalKey(Schema.Unknown),
 });
@@ -166,6 +181,8 @@ const decodeModelUsage = Schema.decodeUnknownResult(ModelUsage);
 /** `unreadable` says why the fork's output did not read: such a fork gave no answer. */
 export interface ForkResult {
   readonly text: string;
+  /** The fork's structured output; undefined when it gave none. */
+  readonly structured: unknown;
   readonly ms: number;
   readonly tokens: TokenCounts | null;
   readonly code: number;
@@ -177,19 +194,37 @@ export function forkResultOf(stdout: string, code: number, ms: number): ForkResu
   const out = decodeForkOutput(stdout);
 
   if (Result.isFailure(out)) {
-    return { text: "", ms, tokens: null, code, unreadable: out.failure.message };
+    return {
+      text: "",
+      structured: undefined,
+      ms,
+      tokens: null,
+      code,
+      unreadable: out.failure.message,
+    };
   }
 
   return {
     text: out.success.result ?? "",
+    structured: out.success.structured_output,
     ms,
-    tokens: Result.match(decodeModelUsage(out.success.modelUsage), { onFailure: () => null, onSuccess: tokensOf }),
+    tokens: Result.match(decodeModelUsage(out.success.modelUsage), {
+      onFailure: () => null,
+      onSuccess: tokensOf,
+    }),
     code,
     unreadable: null,
   };
 }
 
-async function askFork(deps: Deps, input: StopInput, model: string | null, prompt: string): Promise<ForkResult> {
+/** What the hook asks a fork: the prompt, on the session's model, and the JSON Schema its answer follows, if any. */
+interface ForkAsk {
+  readonly model: string | null;
+  readonly prompt: string;
+  readonly schema: Schema.JsonObject | null;
+}
+
+async function askFork(deps: Deps, input: StopInput, ask: ForkAsk): Promise<ForkResult> {
   const started = deps.now();
 
   const argv = [
@@ -205,11 +240,14 @@ async function askFork(deps: Deps, input: StopInput, model: string | null, promp
     "--settings",
     FORK_SETTINGS,
     "--strict-mcp-config",
+    ...(ask.schema === null ? [] : ["--json-schema", JSON.stringify(ask.schema)]),
     "--output-format",
     "json",
+    ...(ask.model === null ? [] : ["--model", ask.model]),
+    ask.prompt,
   ];
 
-  const ran = await deps.run([...argv, ...(model === null ? [] : ["--model", model]), prompt], {
+  const ran = await deps.run(argv, {
     cwd: input.cwd,
     env: { [FORK_FLAG]: "1" },
     timeoutMs: FORK_TIMEOUT_MS,
@@ -223,12 +261,7 @@ async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise
 }
 
 export const ListedPrs = Schema.Array(
-  Schema.Struct({
-    number: Schema.Finite,
-    isDraft: Schema.Boolean,
-    headRefOid: Schema.String,
-    labels: Schema.Array(Schema.Struct({ name: Schema.String })),
-  }),
+  Schema.Struct({ number: Schema.Finite, isDraft: Schema.Boolean, headRefOid: Schema.String }),
 );
 
 /** The options of a `gh` call: with the Author's credential once its token is found. */
@@ -236,64 +269,34 @@ function ghOptions(cwd: string, author: AuthorToken): RunOptions {
   return author.kind === "found" ? { cwd, env: ghEnv(author.token) } : { cwd };
 }
 
-async function prOf(deps: Deps, cwd: string, branch: string, author: AuthorToken): Promise<PullRequest | null> {
+async function prOf(deps: Deps, gh: RunOptions, branch: string): Promise<PullRequest | null> {
   const listed = decodeJson(
     ListedPrs,
     "gh pr list",
     await checked(
       deps.run,
-      ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,isDraft,headRefOid,labels"],
-      ghOptions(cwd, author),
+      ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,isDraft,headRefOid"],
+      gh,
     ),
   );
 
   const pr = listed[0];
 
-  return pr === undefined
-    ? null
-    : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid, labels: pr.labels.map((label) => label.name) };
+  return pr === undefined ? null : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid };
 }
 
-/** The Done judge's hold on a PR, and what it puts there; `ready` readies the draft a held PR opened as. */
-interface HoldTarget {
-  readonly pr: number;
-  readonly hold: string | null;
-  readonly steps: HoldSteps;
-  readonly ready: boolean;
-}
+/** The App's open Important and Nit findings on PR `pr`, read as the Author. */
+async function openFindings(deps: Deps, gh: RunOptions, pr: number): Promise<readonly OpenFinding[]> {
+  const answer = await checked(
+    deps.run,
+    ["gh", "api", "graphql", "-f", `query=${threadsQueryOf(pr)}`, "-F", "owner={owner}", "-F", "name={repo}"],
+    gh,
+  );
 
-/**
- * Puts the hold's label, then posts its comment, with the Author's credential, and logs the hold. The
- * label goes first: a failure after it leaves the PR held, never a hold comment with no hold behind it.
- */
-async function putHold(
-  deps: Deps,
-  options: RunOptions,
-  target: HoldTarget,
-  log: (record: StopLogRecord) => void,
-): Promise<void> {
-  const { pr, hold, steps, ready } = target;
+  const threads = decodeJson(ReviewThreads, "the review threads query", answer).data.repository.pullRequest
+    .reviewThreads.nodes;
 
-  if (hold === null) {
-    return;
-  }
-
-  if (steps.addLabel) {
-    await checked(deps.run, ["gh", "pr", "edit", String(pr), "--add-label", "land:human"], options);
-  }
-
-  if (steps.comment !== null) {
-    await checked(deps.run, ["gh", "pr", "comment", String(pr), "--body-file", "-"], {
-      ...options,
-      stdin: steps.comment,
-    });
-  }
-
-  log({ step: "hold", pr, reason: hold, added: steps.addLabel });
-
-  if (ready) {
-    await checked(deps.run, ["gh", "pr", "ready", String(pr)], options);
-  }
+  return openFindingsOf(APP_LOGIN, threads);
 }
 
 async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: string): Promise<StopChecks> {
@@ -320,217 +323,365 @@ function openBodyOf(branch: string, forkBody: string): string {
   return [forkBody, closingLineOf(branch, forkBody)].filter((part) => part !== null && part !== "").join("\n\n");
 }
 
-export type Outcome = { readonly kind: "allow" } | { readonly kind: "block"; readonly reason: string };
+/** What Claude Code is told: let the session stop, or block the stop with a reason the Author reads. */
+export type Answer = { readonly kind: "allow" } | { readonly kind: "block"; readonly reason: string };
 
-/**
- * A Done judge whose fork exits non-zero or prints nothing gave no answer, which is not a NO: the
- * first such stop blocks so the Author stops again and the hook asks again; a second one lets the
- * session end.
- */
-export function doneJudgeFailure(code: number, text: string, stopHookActive: boolean): Outcome | null {
-  if (code === 0 && text.trim() !== "") {
-    return null;
-  }
+const ALLOW: Answer = { kind: "allow" };
 
-  if (stopHookActive) {
-    return { kind: "allow" };
-  }
-
-  return {
-    kind: "block",
-    reason: `The Stop hook could not ask whether your change is finished (the Done judge's fork exited ${code} with no answer), so nothing was published. Stop again to retry; ask no question.`,
-  };
-}
-
-/** Reads, decides and acts; returns what Claude Code is told. `log` gets one record per step. */
 /** One `.lab/stop.log` record: the step it logs, and that step's fields. */
 export interface StopLogRecord {
   readonly step: string;
   readonly [field: string]: Schema.Json;
 }
 
-export async function stop(input: StopInput, deps: Deps, log: (record: StopLogRecord) => void): Promise<Outcome> {
-  const { cwd } = input;
-  const root = await gitOut(deps, cwd, ["rev-parse", "--show-toplevel"]);
-  const stateDir = join(root, ".lab", "state");
-  mkdirSync(stateDir, { recursive: true });
+type Log = (record: StopLogRecord) => void;
 
-  const transcript = linesOf(input.transcript_path);
-  const branch = (await deps.run(["git", "symbolic-ref", "--short", "-q", "HEAD"], { cwd })).stdout.trim() || null;
-  const head = await gitOut(deps, cwd, ["rev-parse", "HEAD"]);
-  const forkFlag = deps.env[FORK_FLAG] === "1";
-  const forkMarker = hasForkMarker(transcript);
+/** What one stop of an Author gave: the hook's answer, and the outcome it leaves. */
+interface Stopped {
+  readonly answer: Answer;
+  readonly outcome: Outcome;
+}
 
-  const early: Pick<Snapshot, "forkFlag" | "forkMarker" | "branch"> = { forkFlag, forkMarker, branch };
+const notPublished = (reason: string, answer: Answer = ALLOW): Stopped => ({
+  answer,
+  outcome: { kind: "not-published", reason },
+});
 
-  if (forkFlag || forkMarker || branch === null || IGNORED_BRANCH.test(branch)) {
-    const admission = admit({
-      ...early,
-      stopHookActive: false,
-      head,
-      treeClean: true,
-      ahead: 1,
-      pr: null,
-      armed: false,
+/** The stop of a decision that publishes nothing: blocked with its reason, or let go. */
+const stoppedOf = (next: Refusal, why: string): Stopped =>
+  next.kind === "block" ? notPublished(why, next) : notPublished(next.reason);
+
+/** The Author's stop, as its steps read it. */
+interface AuthorStop {
+  readonly deps: Deps;
+  readonly input: StopInput;
+  readonly log: Log;
+  readonly branch: string;
+  readonly head: string;
+  /** The main checkout, where the relay runs. */
+  readonly checkout: string;
+  readonly model: string | null;
+}
+
+/** The Author's credential, found. */
+interface Credential {
+  readonly token: string;
+  readonly gh: RunOptions;
+}
+
+/**
+ * Resolves the App's open Nit threads of `findings`: the Author's stop closes them. A failure leaves the
+ * rest open and is logged: the next stop of an Author on the PR closes them.
+ */
+async function closeNits(stopping: AuthorStop, gh: RunOptions, findings: readonly OpenFinding[]): Promise<void> {
+  const nits = findings.filter((finding) => finding.severity === "nit");
+
+  try {
+    for (const nit of nits) {
+      await resolveThread(stopping.deps.run, gh, nit.thread);
+    }
+
+    stopping.log({ step: "nits", resolved: nits.length });
+  } catch (error) {
+    stopping.log({
+      step: "nits",
+      resolved: null,
+      error: error instanceof Error ? error.message : String(error),
     });
-
-    log({ step: "admit", ...admission });
-
-    return { kind: "allow" };
   }
+}
 
-  await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
-
-  // Read before the PR list, which the Author's credential reads too; only publishing needs the token.
-  const author = authorTokenOf(deps.env);
-
-  const snapshot: Snapshot = {
-    ...early,
-    stopHookActive: input.stop_hook_active === true,
-    head,
-    treeClean: (await gitOut(deps, cwd, ["status", "--porcelain"])) === "",
-    ahead: Number(await gitOut(deps, cwd, ["rev-list", "--count", `origin/${TRUNK}..HEAD`])),
-    pr: IGNORED_BRANCH.test(branch) ? null : await prOf(deps, cwd, branch, author),
-    armed: false,
-  };
-
-  const armedFile = (pr: number): string => join(stateDir, `armed-${pr}-${head}`);
-  const withArmed = { ...snapshot, armed: snapshot.pr !== null && existsSync(armedFile(snapshot.pr.number)) };
-  const prWatch = `bun ${join(root, "scripts", "land-loop", "pr-watch.ts")}`;
-  const thread = `bun ${join(root, "scripts", "land-loop", "thread.ts")}`;
-  const comment = `bun ${join(root, "scripts", "land-loop", "comment.ts")}`;
-
-  const admission = admit(withArmed);
-  log({ step: "admit", branch, head, pr: withArmed.pr?.number ?? null, ...admission });
-
-  if (admission.kind === "none") {
-    return { kind: "allow" };
+/** Leaves the PR's relay, when none watches it. A failure is logged: the PR is published either way. */
+function leaveRelay(stopping: AuthorStop, pr: number): void {
+  try {
+    const { input, checkout } = stopping;
+    const started = stopping.deps.startRelay({ pr, session: input.session_id, checkout });
+    stopping.log({ step: "relay", pr, relay: started });
+  } catch (error) {
+    stopping.log({
+      step: "relay",
+      pr,
+      relay: null,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
+}
 
-  if (admission.kind === "arm") {
-    writeFileSync(armedFile(admission.pr), "asked\n");
+/** Opens the PR of the pushed branch, with the title and body a fork writes; returns its number. */
+async function openPr(stopping: AuthorStop, gh: RunOptions): Promise<number> {
+  const { deps, input, branch } = stopping;
 
-    return {
-      kind: "block",
-      reason: armReason(admission.pr, {
-        prWatch: `${prWatch} ${admission.pr}`,
-        thread,
-        comment: `${comment} ${admission.pr}`,
-      }),
-    };
-  }
-
-  const noToken = afterAuthorToken(author.kind === "found", author.path, withArmed.stopHookActive);
-  log({ step: "author-token", found: author.kind === "found", path: author.path });
-
-  if (author.kind === "missing") {
-    return noToken?.kind === "block" ? { kind: "block", reason: noToken.reason } : { kind: "allow" };
-  }
-
-  const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), withArmed.stopHookActive);
-  log({ step: "stop-checks", next: next.kind });
-
-  if (next.kind === "none") {
-    return { kind: "allow" };
-  }
-
-  if (next.kind === "block") {
-    return { kind: "block", reason: next.reason };
-  }
-
-  const model = modelOf(transcript);
-  const doneJudge = await askFork(deps, input, model, DONE_QUESTION);
-  const answer = answerOf(doneJudge.text);
-  log({
-    step: "done-judge",
-    model,
-    answer: answer.kind,
-    ms: doneJudge.ms,
-    tokens: doneJudge.tokens,
-    code: doneJudge.code,
-    unreadable: doneJudge.unreadable,
-    text: doneJudge.text.slice(0, 300),
+  const bodyFork = await askFork(deps, input, {
+    model: stopping.model,
+    prompt: BODY_REQUEST,
+    schema: null,
   });
 
-  const failed = doneJudgeFailure(doneJudge.code, doneJudge.text, withArmed.stopHookActive);
+  const subject = await gitOut(deps, input.cwd, ["log", "-1", "--format=%s"]);
+  const text = prTextOf(bodyFork.text) ?? { title: subject, body: "" };
+  stopping.log({
+    step: "body-fork",
+    ms: bodyFork.ms,
+    tokens: bodyFork.tokens,
+    unreadable: bodyFork.unreadable,
+    title: text.title,
+  });
 
-  if (failed !== null) {
-    return failed;
-  }
+  const body = openBodyOf(branch, text.body);
 
-  const action: Action = decide(withArmed.pr, answer);
+  const url = await checked(
+    deps.run,
+    ["gh", "pr", "create", "--base", TRUNK, "--head", branch, "--title", text.title, "--body-file", "-"],
+    { ...gh, stdin: body === "" ? "(no body)" : body },
+  );
+
+  return Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
+}
+
+/** What the Done judge's fork was asked about, and what it answered. */
+interface Judged {
+  readonly pr: PullRequest | null;
+  readonly findings: readonly OpenFinding[];
+  readonly answer: DoneAnswer;
+}
+
+/**
+ * The Publication: the rejections first, each a reply and a resolved thread, then the push, the PR opened
+ * or readied, the Nit threads resolved and the relay left. A push that fails writes nothing after it.
+ */
+async function publish(stopping: AuthorStop, author: Credential, judged: Judged): Promise<Stopped> {
+  const { deps, input, log, branch, head } = stopping;
+  const action = decide(judged.pr, judged.answer);
 
   if (action.kind === "none") {
-    return { kind: "allow" };
+    return notPublished(action.reason);
   }
 
-  // A PR the hook opens carries no label yet.
-  const hold = holdStepsOf(action.hold, action.kind === "push" ? (withArmed.pr?.labels ?? []) : []);
+  const rejections = rejectionsOf(
+    judged.answer.rejections,
+    judged.findings.map((finding) => finding.thread),
+  );
 
-  // The hold goes on before the push, so neither the Merge bot nor a review its push starts reads the new head without it.
-  if (action.kind === "push") {
-    await putHold(deps, ghOptions(cwd, author), { pr: action.pr, hold: action.hold, steps: hold, ready: false }, log);
+  for (const dropped of rejections.dropped) {
+    log({
+      step: "rejection-dropped",
+      thread: dropped.thread,
+      reason: dropped.reason.slice(0, 300),
+    });
   }
 
-  await checked(deps.run, pushArgs(branch), { cwd, env: { LAB_AUTHOR_TOKEN: author.token }, timeoutMs: 120_000 });
+  for (const rejection of rejections.posted) {
+    await replyInThread(deps.run, author.gh, rejection.thread, rejectionReplyOf(rejection.reason));
+    await resolveThread(deps.run, author.gh, rejection.thread);
+    log({ step: "rejection", thread: rejection.thread });
+  }
+
+  await checked(deps.run, pushArgs(branch), {
+    cwd: input.cwd,
+    env: { LAB_AUTHOR_TOKEN: author.token },
+    timeoutMs: 120_000,
+  });
 
   let number: number;
 
   if (action.kind === "open") {
-    const bodyFork = await askFork(deps, input, model, BODY_REQUEST);
-    const subject = await gitOut(deps, cwd, ["log", "-1", "--format=%s"]);
-    const text = prTextOf(bodyFork.text) ?? { title: subject, body: "" };
-    log({
-      step: "body-fork",
-      ms: bodyFork.ms,
-      tokens: bodyFork.tokens,
-      unreadable: bodyFork.unreadable,
-      title: text.title,
-    });
-
-    const body = openBodyOf(branch, text.body);
-
-    const url = await checked(
-      deps.run,
-      [
-        "gh",
-        "pr",
-        "create",
-        "--base",
-        TRUNK,
-        "--head",
-        branch,
-        "--title",
-        text.title,
-        "--body-file",
-        "-",
-        // A held PR opens as a draft and is readied once held: a failure in between leaves a draft, which the next stop asks about again.
-        ...(hold.addLabel ? ["--draft"] : []),
-      ],
-      { ...ghOptions(cwd, author), stdin: body === "" ? "(no body)" : body },
-    );
-
-    number = Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
-    await putHold(deps, ghOptions(cwd, author), { pr: number, hold: action.hold, steps: hold, ready: true }, log);
+    number = await openPr(stopping, author.gh);
   } else {
     number = action.pr;
 
     if (action.ready) {
-      await checked(deps.run, ["gh", "pr", "ready", String(number)], ghOptions(cwd, author));
+      await checked(deps.run, ["gh", "pr", "ready", String(number)], author.gh);
     }
   }
 
   log({ step: "published", action: action.kind, pr: number, head });
-  writeFileSync(armedFile(number), "asked\n");
 
-  return {
-    kind: "block",
-    reason: armReason(
-      number,
-      { prWatch: `${prWatch} ${number}`, thread, comment: `${comment} ${number}` },
-      action.hold,
-    ),
+  const rejected = new Set(rejections.posted.map((rejection) => rejection.thread));
+
+  await closeNits(
+    stopping,
+    author.gh,
+    judged.findings.filter((finding) => !rejected.has(finding.thread)),
+  );
+  leaveRelay(stopping, number);
+
+  return { answer: ALLOW, outcome: { kind: "published", pr: number } };
+}
+
+/** The Done judge: a fork of the session answers whether the change is finished and which findings the Author rejects. */
+function askDoneJudge(stopping: AuthorStop, findings: readonly OpenFinding[]): Promise<ForkResult> {
+  const question = doneQuestionOf(
+    findings.map((finding) => ({
+      thread: finding.thread,
+      where: finding.line === null ? finding.path : `${finding.path}:${finding.line}`,
+      severity: finding.severity,
+      summary: finding.summary,
+    })),
+  );
+
+  return askFork(stopping.deps, stopping.input, {
+    model: stopping.model,
+    prompt: question,
+    schema: DONE_SCHEMA,
+  });
+}
+
+/** The stop of an Author whose branch may be published: admission, the Stop checks, the Done judge, the Publication. */
+async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopped> {
+  const { deps, input, log, branch, head } = stopping;
+  const { cwd } = input;
+  const stopHookActive = input.stop_hook_active === true;
+
+  await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
+
+  // Read before the PR list, which the Author's credential reads too; only publishing needs the token.
+  const token = authorTokenOf(deps.env);
+  const gh = ghOptions(cwd, token);
+
+  const snapshot: Snapshot = {
+    branch,
+    head,
+    treeClean: (await gitOut(deps, cwd, ["status", "--porcelain"])) === "",
+    ahead: Number(await gitOut(deps, cwd, ["rev-list", "--count", `origin/${TRUNK}..HEAD`])),
+    pr: await prOf(deps, gh, branch),
   };
+
+  const admission = admit(snapshot);
+  log({ step: "admit", branch, head, pr: snapshot.pr?.number ?? null, ...admission });
+
+  if (admission.kind === "none") {
+    return notPublished(admission.reason);
+  }
+
+  if (admission.kind === "ready") {
+    if (token.kind === "found") {
+      await closeNits(stopping, gh, await openFindings(deps, gh, admission.pr));
+    }
+
+    return notPublished(admission.reason);
+  }
+
+  log({ step: "author-token", found: token.kind === "found", path: token.path });
+
+  if (token.kind === "missing") {
+    return stoppedOf(noAuthorToken(token.path, stopHookActive), `no Author token at ${token.path}`);
+  }
+
+  const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), stopHookActive);
+  log({ step: "stop-checks", next: next.kind });
+
+  if (next.kind !== "ask-done-judge") {
+    return stoppedOf(next, `the Stop checks are red on ${head}`);
+  }
+
+  const findings = snapshot.pr === null ? [] : await openFindings(deps, gh, snapshot.pr.number);
+  const doneJudge = await askDoneJudge(stopping, findings);
+  const answer = doneAnswerOf(doneJudge);
+  log({
+    step: "done-judge",
+    model: stopping.model,
+    answer: answer === null ? "none" : answer.finished ? "finished" : "not-finished",
+    reason: answer?.reason.slice(0, 300) ?? null,
+    rejections: answer?.rejections.length ?? null,
+    ms: doneJudge.ms,
+    tokens: doneJudge.tokens,
+    code: doneJudge.code,
+    unreadable: doneJudge.unreadable,
+  });
+
+  if (answer === null) {
+    return stoppedOf(noDoneAnswer(doneJudge.code, stopHookActive), "the Done judge gave no answer");
+  }
+
+  return publish(stopping, { token: token.token, gh }, { pr: snapshot.pr, findings, answer });
+}
+
+/** Where a session stops: its worktree, the repository's main checkout, and whether they are the same. */
+interface Place {
+  readonly worktree: string;
+  readonly checkout: string;
+  readonly mainCheckout: boolean;
+}
+
+async function placeOf(deps: Deps, cwd: string): Promise<Place> {
+  const worktree = await gitOut(deps, cwd, ["rev-parse", "--show-toplevel"]);
+  const gitDir = await gitOut(deps, cwd, ["rev-parse", "--absolute-git-dir"]);
+  const commonDir = await gitOut(deps, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+
+  return { worktree, checkout: dirname(commonDir), mainCheckout: gitDir === commonDir };
+}
+
+/** The stop of an Author in `place`, on `branch` at `head`: what git alone refuses, then `authorStop`. */
+function stopIn(
+  place: Place,
+  { branch, head }: { readonly branch: string | null; readonly head: string },
+  stopping: Pick<AuthorStop, "deps" | "input" | "log" | "model">,
+): Promise<Stopped> {
+  const checkout = checkoutOf({ mainCheckout: place.mainCheckout, branch });
+
+  if (checkout.kind === "refused") {
+    stopping.log({ step: "admit", kind: "none", reason: checkout.reason });
+
+    return Promise.resolve(notPublished(checkout.reason));
+  }
+
+  const stateDir = join(place.worktree, ".lab", "state");
+  mkdirSync(stateDir, { recursive: true });
+
+  return authorStop({ ...stopping, branch: checkout.branch, head, checkout: place.checkout }, stateDir);
+}
+
+/** Appends `line` to `.lab/outcomes.log` of the main checkout `checkout`. */
+function appendOutcome(checkout: string, line: string): void {
+  mkdirSync(join(checkout, ".lab"), { recursive: true });
+  appendFileSync(join(checkout, ".lab", "outcomes.log"), `${line}\n`);
+}
+
+/** Reads, decides and acts; returns what Claude Code is told. `log` gets one record per step. */
+export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answer> {
+  const { cwd } = input;
+  const author = isAuthor(deps.env);
+  const forkFlag = deps.env[FORK_FLAG] === "1";
+  // Only an Author's own session has its transcript read: any other session's stop costs nothing.
+  const transcript = author && !forkFlag ? linesOf(input.transcript_path) : [];
+  const bystander = bystanderOf({ author, forkFlag, forkMarker: hasForkMarker(transcript) });
+
+  if (bystander !== null) {
+    log({ step: "admit", kind: "none", reason: bystander });
+
+    return ALLOW;
+  }
+
+  const place = await placeOf(deps, cwd);
+
+  let facts: StopFacts = {
+    at: new Date(deps.now()).toISOString(),
+    session: input.session_id,
+    worktree: place.worktree,
+    branch: null,
+    head: null,
+  };
+
+  let stopped: Stopped;
+  let failure: { readonly error: unknown } | null = null;
+
+  try {
+    const branch = (await deps.run(["git", "symbolic-ref", "--short", "-q", "HEAD"], { cwd })).stdout.trim() || null;
+    const head = await gitOut(deps, cwd, ["rev-parse", "HEAD"]);
+    facts = { ...facts, branch, head };
+    stopped = await stopIn(place, { branch, head }, { deps, input, log, model: modelOf(transcript) });
+  } catch (error) {
+    failure = { error };
+    stopped = notPublished(`the Stop hook failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  deps.recordOutcome(place.checkout, outcomeLineOf(facts, stopped.outcome));
+
+  if (failure !== null) {
+    throw failure.error;
+  }
+
+  return stopped.answer;
 }
 
 if (import.meta.main) {
@@ -546,13 +697,18 @@ if (import.meta.main) {
   };
 
   try {
-    const outcome = await stop(input, { run: runCli, env: process.env, now: Date.now }, log);
+    const answer = await stop(
+      input,
+      { run: runCli, env: process.env, now: Date.now, startRelay, recordOutcome: appendOutcome },
+      log,
+    );
 
-    if (outcome.kind === "block") {
-      console.log(JSON.stringify({ decision: "block", reason: outcome.reason }));
+    if (answer.kind === "block") {
+      console.log(JSON.stringify({ decision: "block", reason: answer.reason }));
     }
   } catch (error) {
-    log({ step: "error", message: error instanceof Error ? error.message : String(error) });
-    console.error(`stop hook: ${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    log({ step: "error", message });
+    console.error(`stop hook: ${message}`);
   }
 }

@@ -35,13 +35,13 @@ const BODY = [
   "Project guide (AGENTS.md, from dev):",
   "# Project\n\nThe map.",
   "",
-  'Report every finding in the final structured answer. Set `severity` to "important" for a security defect this change introduces, "pre_existing" for one it did not introduce, and "nit" for a hardening worth saying. Set `file` and `line` to the changed line of this pull request that causes the defect. When the defect shows in another place, set `breaks` to that place: { "file": ..., "line": ... }; otherwise set it to null.',
+  'Report every finding in the final structured answer. Set `severity` to "important" for a security defect this change introduces, "pre_existing" for one it did not introduce, and "nit" for a hardening worth saying. Set `file` and `line` to the changed line of this pull request that causes the defect. When the defect shows in another place, set `breaks` to that place: { "file": ..., "line": ... }; otherwise set it to null. Set `earlier` to null, unless this prompt lists earlier findings and you report one of them again.',
   "",
   "Run one git command per Bash call, with no shell operator. Use Read and Grep for everything else.",
 ].join("\n");
 
 const ANSWERED =
-  "Report only what is wrong now. Never report again a finding the author resolved with a valid reason, nor one already open.";
+  "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.";
 
 describe("securityPromptOf", () => {
   test("round 1 is the security pass's prompt alone, on the review's range", () => {
@@ -51,17 +51,18 @@ describe("securityPromptOf", () => {
   test("rounds 2 and 3 name the head the round before read and list the earlier threads, the security ones among them", () => {
     const threads = [
       {
+        thread: "PRRT_0",
         where: ".github/workflows/code-review.yml:70",
         finding: "**Important (security)**: the head reaches a run: line",
         reply: "Fixed in abc123 (thread resolved)",
       },
-      { where: "a.ts:3", finding: "**Nit**: a name", reply: "no answer (thread open)" },
+      { thread: "PRRT_1", where: "a.ts:3", finding: "**Nit**: a name", reply: "no answer (thread open)" },
     ];
 
     const listed = [
       "Earlier findings and the author's answers:",
-      "- .github/workflows/code-review.yml:70: **Important (security)**: the head reaches a run: line | Author: Fixed in abc123 (thread resolved)",
-      "- a.ts:3: **Nit**: a name | Author: no answer (thread open)",
+      "- [E1] .github/workflows/code-review.yml:70: **Important (security)**: the head reaches a run: line | Author: Fixed in abc123 (thread resolved)",
+      "- [E2] a.ts:3: **Nit**: a name | Author: no answer (thread open)",
       ANSWERED,
     ];
 

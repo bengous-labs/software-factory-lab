@@ -1,20 +1,32 @@
 import { describe, expect, test } from "bun:test";
 
-import { decodeJson } from "../lib/json.ts";
-import { AUTHOR_MARK } from "./author-mark.ts";
-import { END_KEY, endOf, prStateOf, readingOf, SeenKeys, wakesOf } from "./pr-watch.ts";
-import type { PrState } from "./pr-watch.ts";
+import { decodeJson } from "../../lib/json.ts";
+import { AUTHOR_MARK } from "../author-mark.ts";
+import {
+  END_KEY,
+  endOf,
+  prStateOf,
+  readingOf,
+  relayLineOf,
+  resumeArgsOf,
+  routeOf,
+  SeenKeys,
+  socketLineOf,
+  wakesOf,
+  wakeTextOf,
+} from "./wakes.ts";
+import type { PrState } from "./wakes.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
 const OPEN: PrState = { state: "OPEN", draft: false, head: HEAD, checks: [], threads: [], comments: [] };
 
 describe("wakesOf", () => {
-  test("a quiet ready PR prints nothing", () => {
+  test("a quiet ready PR makes no Wake", () => {
     expect(wakesOf(7, OPEN)).toEqual([]);
   });
 
-  test("a failing check prints once per head; a passing or pending one prints nothing", () => {
+  test("a failing check wakes once per head; a passing or pending one makes no Wake", () => {
     const checks = [
       { name: "validate", bucket: "fail", link: "https://ci/1" },
       { name: "land-gate", bucket: "pending", link: "" },
@@ -26,7 +38,7 @@ describe("wakesOf", () => {
     ]);
   });
 
-  test("an open Important or Nit finding prints as a Finding and a human thread as a Comment, with its thread id; a resolved one or a Pre-existing prints nothing", () => {
+  test("an open Important or Nit finding wakes as a Finding and a human thread as a Comment, with its thread id; a resolved one or a Pre-existing makes no Wake", () => {
     const threads = [
       {
         id: "T1",
@@ -79,7 +91,7 @@ describe("wakesOf", () => {
     expect(wakes[3]?.line).toStartWith("Comment T6 on a.ts:5 by bengous: quoting");
   });
 
-  test("a reply in an open thread prints, a Nit thread included, keyed by its comment id; the author's own marked reply does not", () => {
+  test("a reply in an open thread wakes, a Nit thread included, keyed by its comment id; the author's own marked reply does not", () => {
     const nit = "**Nit**: n <!-- lab-finding severity=nit -->";
 
     const threads = [
@@ -92,7 +104,7 @@ describe("wakesOf", () => {
         body: nit,
         replies: [
           { id: "C1", author: "bengous", body: "please fix this one anyway" },
-          { id: "C2", author: "bengous-labs-author", body: `Fixed in abc.\n\n${AUTHOR_MARK}` },
+          { id: "C2", author: "bengous-labs-author", body: `Rejected: by design.\n\n${AUTHOR_MARK}` },
           { id: "C4", author: "bengous-labs-agents", body: "re-checked" },
         ],
       },
@@ -113,7 +125,7 @@ describe("wakesOf", () => {
     ]);
   });
 
-  test("the App's finding prints as the reviewer wrote it, its escapes read back; a human's as written", () => {
+  test("the App's finding is delivered as the reviewer wrote it, its escapes read back; a human's as written", () => {
     const threads = [
       {
         id: "T9",
@@ -141,7 +153,7 @@ describe("wakesOf", () => {
     ]);
   });
 
-  test("a conversation comment prints, except the App's own and the author's marked ones", () => {
+  test("a conversation comment wakes, except the App's own and the author's marked ones", () => {
     const comments = [
       { id: "11", author: "bengous", body: "rename the command to reopen" },
       { id: "12", author: "bengous-labs-agents", body: "Merge bot state for this PR" },
@@ -153,9 +165,9 @@ describe("wakesOf", () => {
     ]);
   });
 
-  test("a draft PR says it is the author's turn, once per head", () => {
+  test("a PR back in draft says so, once per head", () => {
     expect(wakesOf(7, { ...OPEN, draft: true })).toEqual([
-      { key: `draft:${HEAD}`, line: "PR #7 is a draft again at c0ffee1: fix or answer the findings, then stop." },
+      { key: `draft:${HEAD}`, line: "PR #7 is back in draft at c0ffee1: it lands only after your next stop." },
     ]);
   });
 
@@ -168,35 +180,33 @@ describe("wakesOf", () => {
 });
 
 describe("endOf", () => {
-  test("a landed or closed PR ends the PR watch with its end line; an open one does not", () => {
-    expect(endOf(7, { ...OPEN, state: "MERGED", draft: true })).toBe("PR #7 landed. Stop watching.");
-    expect(endOf(7, { ...OPEN, state: "CLOSED" })).toBe("PR #7 closed. Stop watching.");
+  test("a landed or closed PR ends the relay with its end line; an open one does not", () => {
+    expect(endOf(7, { ...OPEN, state: "MERGED", draft: true })).toBe("PR #7 landed.");
+    expect(endOf(7, { ...OPEN, state: "CLOSED" })).toBe("PR #7 closed.");
     expect(endOf(7, OPEN)).toBeNull();
   });
 });
 
 describe("readingOf", () => {
-  test("a PR watch armed again after its end line was printed ends at once and prints nothing", () => {
+  test("a relay started again after its end line was delivered ends at once and delivers nothing", () => {
     expect(readingOf(7, { ...OPEN, state: "MERGED" }, new Set([END_KEY]))).toEqual({ wakes: [], ends: true });
     expect(readingOf(7, { ...OPEN, state: "CLOSED" }, new Set([END_KEY]))).toEqual({ wakes: [], ends: true });
   });
 
-  test("a landed PR prints its end line, and only it, then ends", () => {
+  test("a landed PR delivers its end line, and only it, then ends", () => {
     const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
 
     expect(readingOf(7, { ...OPEN, state: "MERGED", checks }, new Set())).toEqual({
-      wakes: [{ key: END_KEY, line: "PR #7 landed. Stop watching." }],
+      wakes: [{ key: END_KEY, line: "PR #7 landed." }],
       ends: true,
     });
   });
 
-  test("an open PR prints only the Wakes not printed yet, and goes on", () => {
+  test("an open PR delivers only the Wakes not delivered yet, and goes on", () => {
     const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
 
     expect(readingOf(7, { ...OPEN, draft: true, checks }, new Set([`check:validate:${HEAD}`]))).toEqual({
-      wakes: [
-        { key: `draft:${HEAD}`, line: "PR #7 is a draft again at c0ffee1: fix or answer the findings, then stop." },
-      ],
+      wakes: [{ key: `draft:${HEAD}`, line: "PR #7 is back in draft at c0ffee1: it lands only after your next stop." }],
       ends: false,
     });
   });
@@ -283,5 +293,80 @@ describe("SeenKeys", () => {
   test("the seen file is a list of keys; anything else is refused", () => {
     expect(decodeJson(SeenKeys, "watch-7.json", JSON.stringify(["end", "draft:x"]))).toEqual(["end", "draft:x"]);
     expect(() => decodeJson(SeenKeys, "watch-7.json", JSON.stringify({ end: true }))).toThrow("watch-7.json: ");
+  });
+});
+
+describe("wakeTextOf", () => {
+  test("the Wakes of an open PR are one text: its opening, each line, then how the Author answers", () => {
+    const wakes = [
+      { key: "thread:T1", line: "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n" },
+      { key: `draft:${HEAD}`, line: "PR #7 is back in draft at c0ffee1: it lands only after your next stop." },
+    ];
+
+    expect(wakeTextOf(7, { wakes, ends: false })).toBe(
+      [
+        "The Land loop, about your pull request #7:",
+        "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n",
+        "PR #7 is back in draft at c0ffee1: it lands only after your next stop.",
+        "Fix what you accept with a commit, say in your last message which findings you reject and why, then stop.",
+      ].join("\n"),
+    );
+  });
+
+  test("the end line asks for nothing", () => {
+    expect(wakeTextOf(7, { wakes: [{ key: END_KEY, line: "PR #7 landed." }], ends: true })).toBe(
+      "The Land loop, about your pull request #7:\nPR #7 landed.",
+    );
+  });
+
+  test("the text names no command to arm or to answer with", () => {
+    const text = wakeTextOf(7, readingOf(7, { ...OPEN, draft: true }, new Set()));
+
+    for (const gone of ["pr-watch", "thread.ts", "comment.ts", "Monitor", "Fixed in"]) {
+      expect(text).not.toContain(gone);
+    }
+  });
+});
+
+describe("routeOf", () => {
+  const agents = JSON.stringify([
+    { pid: 34_502, id: "725ecfab", kind: "background", sessionId: "S-running", status: "idle", state: "done" },
+    { id: "8e4f90bd", kind: "background", sessionId: "S-stopped", state: "done" },
+    { kind: "interactive", pid: 8483, name: "no session id" },
+  ]);
+
+  test("a session that runs is reached on the socket of its process", () => {
+    expect(routeOf(agents, "S-running")).toEqual({ kind: "socket", pid: 34_502 });
+  });
+
+  test("a session that no longer runs, listed without a pid or not listed, is resumed", () => {
+    expect(routeOf(agents, "S-stopped")).toEqual({ kind: "resume" });
+    expect(routeOf(agents, "S-gone")).toEqual({ kind: "resume" });
+    expect(routeOf("[]", "S-running")).toEqual({ kind: "resume" });
+  });
+
+  test("a listing that does not read throws, naming the command", () => {
+    expect(() => routeOf("{}", "S-running")).toThrow("claude agents --json: ");
+  });
+});
+
+describe("the forms Claude Code reads", () => {
+  test("the socket line is one user message, on one line", () => {
+    expect(socketLineOf("a\nb")).toBe('{"type":"user","message":{"role":"user","content":"a\\nb"}}\n');
+  });
+
+  test("the resume is bare: the session, the text, and no other flag", () => {
+    expect(resumeArgsOf("S1", "a\nb")).toEqual(["claude", "--bg", "--resume", "S1", "a\nb"]);
+  });
+});
+
+describe("relayLineOf", () => {
+  test("the relay's start and its end are one line each, the end with its reason", () => {
+    expect(relayLineOf("2026-11-10T10:00:00.000Z", 7, "started", null)).toBe(
+      '{"at":"2026-11-10T10:00:00.000Z","relay":"started","pr":7}',
+    );
+    expect(relayLineOf("2026-11-10T10:00:00.000Z", 7, "ended", "the PR landed or closed")).toBe(
+      '{"at":"2026-11-10T10:00:00.000Z","relay":"ended","pr":7,"reason":"the PR landed or closed"}',
+    );
   });
 });

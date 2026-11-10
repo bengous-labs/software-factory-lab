@@ -25,6 +25,7 @@ import type { RoutingPolicy } from "../factory-config.ts";
 import { ask } from "../lib/ask.ts";
 import { resolverOf } from "../lib/resolve.ts";
 import { checked, run } from "../lib/run.ts";
+import { resolveThread } from "../lib/threads.ts";
 import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
 import {
@@ -45,7 +46,6 @@ import type { RoutingVerdict } from "../routing/routing-judge.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
 import type { JudgeAsk } from "../routing/routing-rules.ts";
 import {
-  afterReview,
   CI_CHECKS,
   ciOf,
   conflictingOf,
@@ -55,6 +55,7 @@ import {
   LAND_GATE,
   landApprovalCounts,
   patchDeltaStart,
+  postedFindingsOf,
   recordOfJson,
   REVIEW_CHECK,
   storedLandRouteOf,
@@ -230,7 +231,7 @@ export function landApprovalByOwnerOf(
 export function humanLabelByOf(
   events: typeof IssueEvents.Type,
   labels: readonly string[],
-  appLogin: string,
+  { appLogin, authorLogin }: { readonly appLogin: string; readonly authorLogin: string },
 ): Snapshot["humanLabelBy"] {
   const humanLabel = `land:${storedLandRouteOf("owner")}`;
 
@@ -243,7 +244,16 @@ export function humanLabelByOf(
     .filter((event) => (event.event === "labeled" || event.event === "unlabeled") && event.label?.name === humanLabel)
     .at(-1);
 
-  return last?.event === "labeled" && last.actor?.login === appLogin ? "merge-bot" : "other";
+  if (last?.event !== "labeled") {
+    return "other";
+  }
+
+  if (last.actor?.login === appLogin) {
+    return "merge-bot";
+  }
+
+  // The Author's label is an agent's: it sends no PR to the Owner.
+  return last.actor?.login === authorLogin ? "author" : "other";
 }
 
 /** Every page of `repos/<repo>/issues/<n>/events`: past 100 events, the latest `labeled` is on a later page. */
@@ -541,13 +551,14 @@ async function snapshotOf(
     state: pr.merged ? "MERGED" : pr.state === "open" ? "OPEN" : "CLOSED",
     sameRepository: pr.head.repo?.full_name === env.repo,
     openedByFactory: openedByFactoryOf(pr.user?.login, env),
+    openedByAuthor: pr.user?.login === env.authorLogin,
     draft: pr.draft,
     head: pr.head.sha,
     patch,
     empty,
     ci: ciOfRuns(ciRuns),
     labels,
-    humanLabelBy: humanLabelByOf(events, labels, env.appLogin),
+    humanLabelBy: humanLabelByOf(events, labels, env),
     landApprovalByOwner,
     landApprovalPutByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
@@ -581,6 +592,31 @@ export function checkSetter(
 }
 
 const setCheck = checkSetter(run);
+
+const TO_DRAFT = "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}";
+
+/** Sends the PR whose node id is `nodeId` back to draft. */
+export function draftConverter(runner: Run): (where: Pick<Env, "cwd">, nodeId: string) => Promise<void> {
+  return async (where, nodeId) => {
+    await checked(runner, ["gh", "api", "-X", "POST", "graphql", "--input", "-"], {
+      cwd: where.cwd,
+      stdin: JSON.stringify({ query: TO_DRAFT, variables: { id: nodeId } }),
+    });
+  };
+}
+
+const convertToDraft = draftConverter(run);
+
+/** Resolves each review thread of `threads`, as the App. */
+export function threadsResolver(runner: Run): (where: Pick<Env, "cwd">, threads: readonly string[]) => Promise<void> {
+  return async (where, threads) => {
+    for (const thread of threads) {
+      await resolveThread(runner, { cwd: where.cwd }, thread);
+    }
+  };
+}
+
+const resolveThreads = threadsResolver(run);
 
 /** Sets the `land:*` and `review:*` labels. Their names are external: open PRs carry them, so the strings stay. */
 async function setLabels(env: Env, pr: Pull, landRoute: LandRoute, depth: ReviewDepth): Promise<void> {
@@ -816,7 +852,7 @@ async function route(
 
   const nitPaths = nitPathsOf(
     graphqlLogin(env.appLogin),
-    { patch: record.reviewedPatch, round: 3 },
+    { patch: record.reviewedPatch, round: record.reviewRounds },
     await threadsOf(env, pr),
   );
 
@@ -892,7 +928,7 @@ async function perform(
       if (!posted) {
         try {
           const diff = await git(env, diffArgsOf(range.base, range.head));
-          const plan = postPlanOf(result.report.findings, diffLinesOf(diff));
+          const plan = postPlanOf(postedFindingsOf(result, step.heldOpen), diffLinesOf(diff));
 
           await send(env, "POST", `repos/${env.repo}/pulls/${pr.number}/reviews`, reviewOf(plan, result, range.head));
         } catch (error) {
@@ -906,16 +942,21 @@ async function perform(
       }
 
       log(`#${pr.number} ${summaryOf(result)}${posted ? ", posted before" : ""}`);
-      const next = afterReview(record, result);
-      await writeRecord(env, pr.number, recordId, next);
 
-      if (!pr.draft && result.report.findings.some((finding) => finding.severity === "important")) {
-        await mutate(env, "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}", {
-          id: pr.node_id,
-        });
-      }
+      return record;
+    }
 
-      return next;
+    case "resolve-threads": {
+      await resolveThreads(env, step.threads);
+      log(`#${pr.number} resolved ${step.threads.length} Important thread(s)`);
+
+      return record;
+    }
+
+    case "to-draft": {
+      await convertToDraft(env, pr.node_id);
+
+      return record;
     }
 
     case "labels": {
