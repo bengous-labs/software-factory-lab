@@ -297,7 +297,7 @@ const Agent = Schema.Struct({
 export type Route =
   | { readonly kind: "socket"; readonly pid: number }
   | { readonly kind: "resume" }
-  | { readonly kind: "stop"; readonly id: string; readonly pid: number }
+  | { readonly kind: "stop"; readonly id: string }
   | { readonly kind: "wait" };
 
 /**
@@ -306,7 +306,9 @@ export type Route =
  * never as its user's approval, so a running background session that the Owner's words must reach is
  * stopped, then resumed with them, when its status reads `idle`; it waits while its status reads `busy`,
  * since a stop would cut its turn. Any other status, or none, is not read as idle: the words go on the
- * socket, as they do to a session Claude Code cannot stop.
+ * socket, as they do to a session Claude Code cannot stop. The status is the listing's: a turn that
+ * starts between the listing and the stop is cut, since Claude Code offers no stop that holds off a busy
+ * session.
  */
 export function routeOf(agents: string, session: string, ownerWords: boolean): Route {
   const found = decodeJson(Schema.Array(Agent), "claude agents --json", agents).find(
@@ -317,16 +319,22 @@ export function routeOf(agents: string, session: string, ownerWords: boolean): R
     return { kind: "resume" };
   }
 
-  if (ownerWords && found.id !== undefined && found.status === "idle") {
-    return { kind: "stop", id: found.id, pid: found.pid };
+  const socket: Route = { kind: "socket", pid: found.pid };
+
+  if (!ownerWords || found.id === undefined) {
+    return socket;
   }
 
-  if (ownerWords && found.id !== undefined && found.status === "busy") {
-    return { kind: "wait" };
+  if (found.status === "idle") {
+    return { kind: "stop", id: found.id };
   }
 
-  return { kind: "socket", pid: found.pid };
+  return found.status === "busy" ? { kind: "wait" } : socket;
 }
+
+/** Whether what `claude agents --json` printed shows `session` stopped: listed without a pid, or not listed. */
+export const stoppedIn = (agents: string, session: string): boolean =>
+  routeOf(agents, session, false).kind === "resume";
 
 /** The line the relay writes on a session's messaging socket: one user message. An external format: Claude Code reads it. */
 export function socketLineOf(text: string): string {

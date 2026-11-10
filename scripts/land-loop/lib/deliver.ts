@@ -10,6 +10,7 @@ import { connect } from "node:net";
 import { join } from "node:path";
 
 import type { Run } from "../ports/run.ts";
+import type { Route } from "../relay/wakes.ts";
 import { checked } from "./run.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -50,13 +51,6 @@ export interface DeliverIo {
   readonly uid: number;
   readonly cwd: string;
 }
-
-/** The route to a session, as `relay/wakes.ts` `routeOf` reads it. */
-type Route =
-  | { readonly kind: "socket"; readonly pid: number }
-  | { readonly kind: "resume" }
-  | { readonly kind: "stop"; readonly id: string; readonly pid: number }
-  | { readonly kind: "wait" };
 
 /**
  * What `deliverer` sends: the route, the line for a socket, the command for a resume, and whether the
@@ -102,8 +96,9 @@ async function onSocket(io: DeliverIo, pid: number, line: string): Promise<Deliv
  * to one that no longer runs, the resume. Null when neither went through: a running session whose
  * socket takes nothing is not resumed, which would start a copy of it. A stop runs `claude stop`, then
  * resumes the session once the listing shows it stopped: a resume right after the stop still finds it
- * running and starts a copy. A session still listed running after the looks gets the line on its socket
- * instead. A stop that fails throws. A wait delivers nothing.
+ * running and starts a copy. A stop that fails throws, and so does a session still listed running after
+ * the looks: its process is ending, and its socket may never read a line; the Wakes stay pending, and a
+ * later poll resumes the session once it is stopped. A wait delivers nothing.
  */
 export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delivered | null> {
   return async ({ route, socketLine, resumeArgs, stopped }) => {
@@ -119,7 +114,7 @@ export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delive
       await checked(io.run, ["claude", "stop", route.id], { cwd: io.cwd, timeoutMs: 120_000 });
 
       if (!(await stoppedWithin(io, stopped))) {
-        return onSocket(io, route.pid, socketLine);
+        throw new Error(`claude stop ${route.id}: the session is still listed running after 30 s`);
       }
     }
 

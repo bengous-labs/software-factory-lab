@@ -26,7 +26,14 @@ const delivery = (route: Delivery["route"], stoppedAt: number | null = 1): Deliv
   };
 };
 
-const STOP = { kind: "stop", id: "725ecfab", pid: 34_502 } as const;
+const STOP = { kind: "stop", id: "725ecfab" } as const;
+
+/** The message a delivery rejects with; null when it resolves. */
+const failureOf = (delivered: Promise<unknown>): Promise<string | null> =>
+  delivered.then(
+    () => null,
+    (error: Error) => error.message,
+  );
 
 interface World {
   readonly posts: string[];
@@ -120,24 +127,33 @@ describe("deliverer", () => {
     expect(found.posts).toEqual([]);
   });
 
-  test("a session the listing still shows running after the stop is never resumed: its text goes on its socket", async () => {
+  test("a session the listing still shows running 30 s after the stop is neither resumed nor written to: the delivery throws", async () => {
     const found = world(["/run/user/1000/cc-socks/34502.sock"]);
 
-    expect(await found.deliver(delivery(STOP, null))).toBe("socket");
+    expect(await failureOf(found.deliver(delivery(STOP, null)))).toBe(
+      "claude stop 725ecfab: the session is still listed running after 30 s",
+    );
     expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
     expect(found.sleeps).toHaveLength(15);
-    expect(found.posts).toEqual(["/run/user/1000/cc-socks/34502.sock LINE\n"]);
+    expect(found.posts).toEqual([]);
+  });
+
+  test("a listing that fails after the stop throws, and resumes nothing: a later poll finds the session stopped", async () => {
+    const found = world([]);
+
+    const listingFails: Delivery = {
+      ...delivery(STOP),
+      stopped: () => Promise.reject(new Error("claude agents --json exited 1")),
+    };
+
+    expect(await failureOf(found.deliver(listingFails))).toBe("claude agents --json exited 1");
+    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
   });
 
   test("a stop that fails throws, naming the command, and resumes nothing", async () => {
     const found = world([], 1);
 
-    const failure = await found.deliver(delivery(STOP)).then(
-      () => null,
-      (error: Error) => error.message,
-    );
-
-    expect(failure).toStartWith("claude stop 725ecfab exited 1");
+    expect(await failureOf(found.deliver(delivery(STOP)))).toStartWith("claude stop 725ecfab exited 1");
     expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
   });
 

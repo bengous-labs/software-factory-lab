@@ -13,6 +13,7 @@ import {
   routeOf,
   SeenKeys,
   socketLineOf,
+  stoppedIn,
   wakesOf,
   wakeTextOf,
 } from "./wakes.ts";
@@ -507,9 +508,19 @@ describe("routeOf", () => {
   });
 
   test("the Owner's words reach an idle background session as a turn of its user: it is stopped, then resumed", () => {
-    expect(routeOf(agents, "S-running", owners)).toEqual({ kind: "stop", id: "725ecfab", pid: 34_502 });
-    expect(routeOf(agents, "S-asking", owners)).toEqual({ kind: "stop", id: "a4a3c146", pid: 34_503 });
-    expect(routeOf(agents, "S-idle", owners)).toEqual({ kind: "stop", id: "7e05aa33", pid: 34_505 });
+    expect(routeOf(agents, "S-running", owners)).toEqual({ kind: "stop", id: "725ecfab" });
+    expect(routeOf(agents, "S-asking", owners)).toEqual({ kind: "stop", id: "a4a3c146" });
+    expect(routeOf(agents, "S-idle", owners)).toEqual({ kind: "stop", id: "7e05aa33" });
+  });
+
+  test("a session reads stopped once the listing gives it no pid, whatever the Owner's words", () => {
+    expect(stoppedIn(agents, "S-stopped")).toBe(true);
+    expect(stoppedIn(agents, "S-gone")).toBe(true);
+    expect(stoppedIn("[]", "S-running")).toBe(true);
+
+    for (const running of ["S-running", "S-asking", "S-working", "S-idle", "S-terminal"]) {
+      expect(stoppedIn(agents, running)).toBe(false);
+    }
   });
 
   test("the Owner's words wait while the session works: stopping it would cut its turn", () => {

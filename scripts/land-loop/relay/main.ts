@@ -31,6 +31,7 @@ import {
   routeOf,
   SeenKeys,
   socketLineOf,
+  stoppedIn,
   wakeTextOf,
   wakeThreadsQueryOf,
 } from "./wakes.ts";
@@ -146,7 +147,7 @@ if (import.meta.main) {
         route: routeOf(await agents(), session, ownerWords),
         socketLine: socketLineOf(text),
         resumeArgs: resumeArgsOf(session, text),
-        stopped: async () => routeOf(await agents(), session, false).kind === "resume",
+        stopped: async () => stoppedIn(await agents(), session),
       }),
   };
 
