@@ -129,7 +129,8 @@ interface World {
 
 const draftPr = (head = HEAD): string => JSON.stringify([{ number: 12, isDraft: true, headRefOid: head }]);
 
-const closedPr = (state: string, head = HEAD): string => JSON.stringify([{ number: 146, headRefOid: head, state }]);
+const closedPr = (state: string, head = HEAD, isCrossRepository = false): string =>
+  JSON.stringify([{ number: 146, headRefOid: head, state, isCrossRepository }]);
 
 const readyPr = (head = HEAD): string => JSON.stringify([{ number: 12, isDraft: false, headRefOid: head }]);
 
@@ -948,13 +949,26 @@ describe("a PR closed without landing", () => {
       "--state",
       "closed",
       "--json",
-      "number,headRefOid,state",
+      "number,headRefOid,state,isCrossRepository",
     ]);
     expect(closedList?.options.env).toEqual({ GH_TOKEN: TOKEN });
   });
 
-  test("a landed PR at this head, or a PR closed at another head, still lets the branch open a PR", async () => {
-    for (const closedListed of [closedPr("MERGED"), closedPr("CLOSED", "b".repeat(40))]) {
+  test("the closed list is not read when the stop publishes nothing anyway, or a PR is open", async () => {
+    for (const fake of [{ ahead: 0 }, { dirty: true }, { listed: draftPr() }]) {
+      const found = world({ ...fake, closedListed: closedPr("CLOSED") });
+      await stopIn(found);
+
+      expect(found.calls.some((call) => call.argv.join(" ").includes("--state closed"))).toBe(false);
+    }
+  });
+
+  test("a landed PR at this head, a PR closed at another head, or a fork's PR closed at this head, still lets the branch open a PR", async () => {
+    for (const closedListed of [
+      closedPr("MERGED"),
+      closedPr("CLOSED", "b".repeat(40)),
+      closedPr("CLOSED", HEAD, true),
+    ]) {
       const found = world({ closedListed });
       await stopIn(found);
 
