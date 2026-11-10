@@ -108,9 +108,13 @@ export interface Rejection {
   readonly reason: string;
 }
 
-/** The Done judge's answer: whether the change is finished, why, and the findings the Author rejects. */
+/**
+ * The Done judge's answer: whether the change is finished, the question the Author's last message
+ * leaves to its user (empty when it asks none), why, and the findings the Author rejects.
+ */
 export interface DoneAnswer {
   readonly finished: boolean;
+  readonly question: string;
   readonly reason: string;
   readonly rejections: readonly Rejection[];
 }
@@ -173,6 +177,7 @@ export const DONE_SCHEMA = {
   type: "object",
   properties: {
     finished: { type: "boolean" },
+    question: { type: "string" },
     reason: { type: "string" },
     rejections: {
       type: "array",
@@ -184,12 +189,13 @@ export const DONE_SCHEMA = {
       },
     },
   },
-  required: ["finished", "reason", "rejections"],
+  required: ["finished", "question", "reason", "rejections"],
   additionalProperties: false,
 };
 
 const DoneAnswerSchema = Schema.Struct({
   finished: Schema.Boolean,
+  question: Schema.String,
   reason: Schema.String,
   rejections: Schema.Array(Schema.Struct({ thread: Schema.String, reason: Schema.String })),
 });
@@ -227,6 +233,12 @@ export function noDoneAnswer(code: number, stopHookActive: boolean): Refusal {
 }
 
 export function decide(pr: PullRequest | null, answer: DoneAnswer): Action {
+  const question = answer.question.trim();
+
+  if (question !== "") {
+    return none(`the Author's last message leaves a question to its user: ${question}`);
+  }
+
   if (!answer.finished) {
     return none(`the Done judge says the change is not finished: ${answer.reason}`);
   }

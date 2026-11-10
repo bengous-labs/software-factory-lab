@@ -28,7 +28,7 @@ const SNAPSHOT: Snapshot = {
   pr: null,
 };
 
-const FINISHED: DoneAnswer = { finished: true, reason: "done and tested", rejections: [] };
+const FINISHED: DoneAnswer = { finished: true, question: "", reason: "done and tested", rejections: [] };
 
 describe("bystanderOf", () => {
   test("a session whose environment holds LAB_AUTHOR=1, and is no fork, is an Author", () => {
@@ -154,10 +154,11 @@ describe("afterStopChecks", () => {
 
 describe("doneAnswerOf", () => {
   test("a structured output that fits the schema is the Done judge's answer", () => {
-    const finished = { finished: true, reason: "done", rejections: [] };
+    const finished = { finished: true, question: "", reason: "done", rejections: [] };
 
     const unfinished = {
       finished: false,
+      question: "Which wording do you want?",
       reason: "a test is missing",
       rejections: [{ thread: "T1", reason: "by design" }],
     };
@@ -167,7 +168,7 @@ describe("doneAnswerOf", () => {
   });
 
   test("a fork that exits non-zero gave no answer, whatever its output", () => {
-    const structured = { finished: true, reason: "done", rejections: [] };
+    const structured = { finished: true, question: "", reason: "done", rejections: [] };
 
     for (const code of [1, 124, -1]) {
       expect(doneAnswerOf({ code, structured })).toBeNull();
@@ -181,11 +182,13 @@ describe("doneAnswerOf", () => {
       "YES",
       "YES, HOLD: a stored format",
       {},
-      { finished: "yes", reason: "done", rejections: [] },
-      { finished: true, rejections: [] },
-      { finished: true, reason: "done" },
-      { finished: true, reason: "done", rejections: [{ thread: "T1" }] },
-      { finished: true, reason: "done", rejections: "none" },
+      { finished: "yes", question: "", reason: "done", rejections: [] },
+      { finished: true, reason: "done", rejections: [] },
+      { finished: true, question: null, reason: "done", rejections: [] },
+      { finished: true, question: "", rejections: [] },
+      { finished: true, question: "", reason: "done" },
+      { finished: true, question: "", reason: "done", rejections: [{ thread: "T1" }] },
+      { finished: true, question: "", reason: "done", rejections: "none" },
     ];
 
     for (const structured of unfit) {
@@ -193,11 +196,12 @@ describe("doneAnswerOf", () => {
     }
   });
 
-  test("the schema the fork follows names the three fields, and no hold", () => {
+  test("the schema the fork follows names the four fields, and no hold", () => {
     expect(DONE_SCHEMA).toEqual({
       type: "object",
       properties: {
         finished: { type: "boolean" },
+        question: { type: "string" },
         reason: { type: "string" },
         rejections: {
           type: "array",
@@ -209,7 +213,7 @@ describe("doneAnswerOf", () => {
           },
         },
       },
-      required: ["finished", "reason", "rejections"],
+      required: ["finished", "question", "reason", "rejections"],
       additionalProperties: false,
     });
   });
@@ -234,13 +238,28 @@ describe("decide", () => {
   const ready = { number: 7, draft: false, headSha: HEAD };
 
   test("a change the Done judge says is not finished publishes nothing, and says why", () => {
-    const unfinished: DoneAnswer = { finished: false, reason: "a test is missing", rejections: [] };
+    const unfinished: DoneAnswer = { finished: false, question: "", reason: "a test is missing", rejections: [] };
 
     expect(decide(null, unfinished)).toEqual({
       kind: "none",
       reason: "the Done judge says the change is not finished: a test is missing",
     });
     expect(decide(draft, unfinished).kind).toBe("none");
+  });
+
+  test("a question left to the user publishes nothing, whatever the Done judge says of the change, and quotes it", () => {
+    const asking: DoneAnswer = { ...FINISHED, question: "  Leave the doc, or update it in this PR?\n" };
+
+    expect(decide(null, asking)).toEqual({
+      kind: "none",
+      reason: "the Author's last message leaves a question to its user: Leave the doc, or update it in this PR?",
+    });
+    expect(decide(draft, asking).kind).toBe("none");
+    expect(decide(ready, { ...asking, finished: false })).toEqual(decide(null, asking));
+  });
+
+  test("a question of blanks alone is no question", () => {
+    expect(decide(null, { ...FINISHED, question: " \n\t" })).toEqual({ kind: "open" });
   });
 
   test("a finished change opens the PR when there is none, pushes and readies a draft, pushes a ready one", () => {
