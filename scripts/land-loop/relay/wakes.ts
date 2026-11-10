@@ -63,7 +63,13 @@ export interface Wake {
 /** The key that keeps the end line from being delivered twice. */
 export const END_KEY = "end";
 
-const flat = (body: string): string => body.replaceAll(/\s+/gu, " ").slice(0, 400);
+/** `body` on one line, cut at `max` characters. */
+const flatTo = (body: string, max: number): string => body.replaceAll(/\s+/gu, " ").slice(0, max);
+
+const flat = (body: string): string => flatTo(body, 400);
+
+/** The most characters of a reply that reports an Important again: it may hold the finding of each pass of its round. */
+const AGAIN_MAX = 3000;
 
 /** The end line of a landed or closed PR; null while it is open. */
 export function endOf(pr: number, state: PrState): string | null {
@@ -112,7 +118,7 @@ function replyWakesOf(thread: Thread, where: string, reply: Comment): readonly W
 
   if (reply.author === APP_LOGIN) {
     const again = thread.author === APP_LOGIN && severityOfBody(reply.body) === "important";
-    const line = `Finding ${thread.id} on ${where} by ${reply.author}, still wrong: ${flat(unescapeHtml(reply.body))}`;
+    const line = `Finding ${thread.id} on ${where} by ${reply.author}, still wrong: ${flatTo(unescapeHtml(reply.body), AGAIN_MAX)}`;
 
     return again ? [{ key, line }] : [];
   }

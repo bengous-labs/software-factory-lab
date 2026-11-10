@@ -217,8 +217,22 @@ describe("wakesOf", () => {
   test("an Important a later round reports again wakes with the App's reply in its thread, once per reply", () => {
     const first = "**Important**: off by one\n\nscenario\n\n<!-- lab-finding severity=important -->";
 
-    const again =
-      "**Important**: still off by one &lt;here>\nStill wrong at Review round 2.\n\nscenario\n\n<!-- lab-finding severity=important -->\n<!-- lab-review patch=p1 round=2 -->";
+    const scenario = "s".repeat(450);
+
+    const again = [
+      "Review round 2 still holds this finding.",
+      "",
+      "**Important**: still off by one &lt;here>",
+      "",
+      scenario,
+      "",
+      "**Important (security)**: the token reaches the log",
+      "",
+      "the security pass's scenario",
+      "",
+      "<!-- lab-finding severity=important -->",
+      "<!-- lab-review patch=p1 round=2 -->",
+    ].join("\n");
 
     const threads = [
       {
@@ -249,7 +263,7 @@ describe("wakesOf", () => {
 
     expect(wakes.map((wake) => wake.key)).toEqual(["thread:T14", "comment:C9", "thread:T15"]);
     expect(wakes[1]?.line).toBe(
-      "Finding T14 on a.ts:4 by bengous-labs-agents, still wrong: **Important**: still off by one <here> Still wrong at Review round 2. scenario <!-- lab-finding severity=important --> <!-- lab-review patch=p1 round=2 -->",
+      `Finding T14 on a.ts:4 by bengous-labs-agents, still wrong: Review round 2 still holds this finding. **Important**: still off by one <here> ${scenario} **Important (security)**: the token reaches the log the security pass's scenario <!-- lab-finding severity=important --> <!-- lab-review patch=p1 round=2 -->`,
     );
     expect(
       readingOf(7, { ...OPEN, threads }, new Set(["thread:T14", "thread:T15"])).wakes.map((wake) => wake.key),

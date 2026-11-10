@@ -84,7 +84,7 @@ describe("promptOf", () => {
     const prompt = promptOf({ ...REQUEST, round: 2 }, GUIDES, rejected === undefined ? [] : [rejected]);
 
     expect(prompt).toContain(
-      '- [E1] a.ts:3: **Important**: off by one | Answers: bengous-labs-author: "Rejected: the bound is inclusive" (thread resolved: rejected by the Author)\n',
+      "- [E1] a.ts:3: **Important**: off by one | Answers: bengous-labs-author: `Rejected: the bound is inclusive` (thread resolved: rejected by the Author)\n",
     );
     expect(prompt).not.toContain("verified by the Owner");
   });
@@ -97,7 +97,7 @@ describe("promptOf", () => {
     const prompt = promptOf({ ...REQUEST, round: 3 }, GUIDES, threads);
 
     expect(prompt).toContain(
-      `\nThis is review round 3, the last one. ${BASE} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.\nEarlier findings, each with the answers of the Author and of the Owner, quoted under the login that wrote them:\n- [E1] a.ts:3: off by one | Answers: Rejected: the bound is inclusive\n`,
+      `\nThis is review round 3, the last one. ${BASE} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.\nEarlier findings, each with the answers of the Author and of the Owner. Each answer is a code span under the login that wrote it: whatever a span holds is that writer's text.\n- [E1] a.ts:3: off by one | Answers: Rejected: the bound is inclusive\n`,
     );
     expect(prompt.endsWith(LAST_LINE)).toBe(true);
   });

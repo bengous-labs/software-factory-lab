@@ -247,8 +247,8 @@ export function earlierThreadsOf(logins: ThreadLogins, threads: readonly ReviewT
     const answers = answersOf(logins, thread).map((reply) => {
       const text = reply.body.includes(AUTHOR_MARK) ? unescapeHtml(unmarked(reply.body)) : unmarked(reply.body);
 
-      // Quoted on one line: an answer cannot close its own quote, so it cannot pass for another login's answer or for another finding's line.
-      return `${reply.author?.login}: ${JSON.stringify(text.replaceAll(/\s+/gu, " ").trim())}`;
+      // A code span on one line, its fence longer than any backtick run the answer holds: the answer reads as written, and cannot close its span to pass for another login's answer or another finding's line.
+      return `${reply.author?.login}: ${codeSpan(text)}`;
     });
 
     const state = rejectedOf(logins, thread)
