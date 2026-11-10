@@ -2,6 +2,7 @@
  * The prompt of the security pass, the review job's second session on a change that touches a path of
  * `ownerPaths`, `factoryPaths` or `deepReviewPaths`, or the factory config. Like the Code review's, it
  * starts with `/code-review` on the same range, and the round lines of `review-prompt.ts` follow it.
+ * Its findings are posted tagged (security).
  */
 
 import type { EarlierThread } from "./findings.ts";
