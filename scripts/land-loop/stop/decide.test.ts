@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import {
   admit,
+  afterClosed,
   afterStopChecks,
   bystanderOf,
   checkoutOf,
@@ -85,11 +86,12 @@ describe("checkoutOf", () => {
 });
 
 describe("admit", () => {
-  test("a clean branch with commits dev lacks runs the Stop checks", () => {
-    expect(admit(SNAPSHOT)).toEqual({ kind: "stop-checks" });
+  test("a clean branch with commits dev lacks and no open PR asks for the branch's closed PRs", () => {
+    expect(admit(SNAPSHOT)).toEqual({ kind: "read-closed" });
+    expect(admit({ ...SNAPSHOT, ahead: 1 })).toEqual({ kind: "read-closed" });
   });
 
-  test("nothing is published from a dirty tree, or with no new commit", () => {
+  test("nothing is published from a dirty tree, or with no new commit, and no closed PR is asked for", () => {
     expect(admit({ ...SNAPSHOT, ahead: 0 })).toEqual({
       kind: "none",
       reason: "agent/clear-command has no commit that dev lacks",
@@ -99,7 +101,6 @@ describe("admit", () => {
       reason: "the tree has uncommitted changes",
     });
     expect(admit({ ...SNAPSHOT, ahead: 0, treeClean: false }).kind).toBe("none");
-    expect(admit({ ...SNAPSHOT, ahead: 1 })).toEqual({ kind: "stop-checks" });
   });
 
   test("a PR ready at this head publishes nothing", () => {
@@ -115,6 +116,25 @@ describe("admit", () => {
     expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40) } })).toEqual({
       kind: "stop-checks",
     });
+  });
+});
+
+describe("afterClosed", () => {
+  test("a PR closed without landing at this head publishes nothing, and the reason names it", () => {
+    expect(
+      afterClosed(HEAD, [
+        { number: 9, headSha: "b".repeat(40) },
+        { number: 146, headSha: HEAD },
+      ]),
+    ).toEqual({
+      kind: "none",
+      reason: `#146 was closed without landing at ${HEAD}: a stop at the head it had publishes nothing`,
+    });
+  });
+
+  test("no closed PR, or one closed at another head, runs the Stop checks", () => {
+    expect(afterClosed(HEAD, [])).toEqual({ kind: "stop-checks" });
+    expect(afterClosed(HEAD, [{ number: 146, headSha: "b".repeat(40) }])).toEqual({ kind: "stop-checks" });
   });
 });
 

@@ -51,6 +51,12 @@ export interface PullRequest {
   readonly headSha: string;
 }
 
+/** A PR of the branch that was closed without landing, and the head it had when it was closed. */
+export interface ClosedPullRequest {
+  readonly number: number;
+  readonly headSha: string;
+}
+
 /** Where an Author's session stops: its checkout and the branch checked out there. */
 export interface Checkout {
   /** The directory is the repository's main checkout, not a worktree of its own. */
@@ -90,6 +96,8 @@ export interface Snapshot {
 
 export type Admission =
   | { readonly kind: "none"; readonly reason: string }
+  /** The stop could open a PR: `afterClosed` decides, once the branch's closed PRs are read. */
+  | { readonly kind: "read-closed" }
   /** The PR is ready at this head: nothing to publish; the Nit threads a stop closes are closed. */
   | { readonly kind: "ready"; readonly pr: number; readonly reason: string }
   | { readonly kind: "stop-checks" };
@@ -137,11 +145,27 @@ export function admit(snapshot: Snapshot): Admission {
 
   const { pr } = snapshot;
 
-  if (pr !== null && !pr.draft && pr.headSha === snapshot.head) {
+  if (pr === null) {
+    return { kind: "read-closed" };
+  }
+
+  if (!pr.draft && pr.headSha === snapshot.head) {
     return { kind: "ready", pr: pr.number, reason: `#${pr.number} is ready at ${snapshot.head} already` };
   }
 
   return { kind: "stop-checks" };
+}
+
+/** What a stop that could open a PR does, given the branch's PRs closed without landing. */
+export function afterClosed(
+  head: string,
+  closed: readonly ClosedPullRequest[],
+): Extract<Admission, { kind: "none" | "stop-checks" }> {
+  const closedHere = closed.find((one) => one.headSha === head);
+
+  return closedHere === undefined
+    ? { kind: "stop-checks" }
+    : none(`#${closedHere.number} was closed without landing at ${head}: a stop at the head it had publishes nothing`);
 }
 
 /** No Author token blocks once, naming where it was looked for; a second stop without it lets the session end. */
