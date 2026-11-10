@@ -42,9 +42,10 @@ export function run(argv: readonly string[], path: string): string {
         throw new TaskError(`not a task id: ${String(rest[0])}`);
       }
 
-      save(path, done(load(path), id));
+      const tasks = done(load(path), id);
+      save(path, tasks);
 
-      return `done #${id}`;
+      return `done #${id} ${tasks.at(id - 1)?.title}`;
     }
 
     case "clear": {

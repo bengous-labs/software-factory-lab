@@ -149,7 +149,7 @@ describe("cli", () => {
 
     expect(run(["add", "write", "tests"], path)).toBe("added #1");
     expect(run(["add", "ship"], path)).toBe("added #2");
-    expect(run(["done", "1"], path)).toBe("done #1");
+    expect(run(["done", "1"], path)).toBe("done #1 write tests");
     expect(run(["list"], path)).toBe("[ ] #2 ship");
   });
 
