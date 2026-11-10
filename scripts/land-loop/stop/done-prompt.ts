@@ -18,11 +18,12 @@ export interface AskedFinding {
 
 const SEVERITY: Readonly<Record<AskedFinding["severity"], string>> = { important: "Important", nit: "Nit" };
 
-const QUESTION = `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, with no question pending for the Owner? Publishing the branch and watching the pull request are the Land loop's job, not part of this answer.`;
+const QUESTION = `${FORK_MARKER} Stop hook question, not the Owner's: is your current change finished and committed, and does your last message before this question leave a question or a choice to your user? Publishing the branch and watching the pull request are the Land loop's job, not part of this answer.`;
 
 const ANSWER = [
   "Answer in the structured output:",
   "- finished: true when the change is finished and committed, false otherwise.",
+  "- question: the question or choice your last message puts to your user, quoted; an empty string when it puts none. A choice you offered stays open even where you recommended one option or acted on it for now: only your user's answer settles it.",
   "- reason: one sentence.",
   "- rejections: the open review findings listed below that you decided not to fix, each with the id of its thread and your own reason, as you gave it in this conversation. Declare a rejection only where you had decided, before this question, not to fix the finding. A finding you fixed, or one you have not decided on, is no rejection: leave it out. A reason never cites a commit.",
 ];

@@ -68,9 +68,9 @@ const OutcomeLine = Schema.Struct({
 
 type OutcomeLine = typeof OutcomeLine.Type;
 
-const FINISHED = { finished: true, reason: "done and tested", rejections: [] };
+const FINISHED = { finished: true, question: "", reason: "done and tested", rejections: [] };
 
-const UNFINISHED = { finished: false, reason: "a test is missing", rejections: [] };
+const UNFINISHED = { finished: false, question: "", reason: "a test is missing", rejections: [] };
 
 /** A review thread of the App as the threads query gives it. */
 function thread(id: string, severity: "important" | "nit" | "pre_existing", resolved = false) {
@@ -570,6 +570,7 @@ describe("the stop of an Author", () => {
     expect(found.records.find((record) => record.step === "done-judge")).toMatchObject({
       model: "claude-haiku-5-5",
       answer: "finished",
+      question: "",
       reason: "done and tested",
       rejections: 0,
       code: 0,
@@ -680,6 +681,21 @@ describe("the Done judge", () => {
     expect(writes(found.calls)).toEqual([]);
   });
 
+  test("a finished change whose last message leaves a question to the user publishes nothing, and the log quotes it", async () => {
+    const found = world({ done: [{ ...FINISHED, question: "  Leave the doc, or update it?\n" }] });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(writes(found.calls)).toEqual([]);
+    expect(found.records.find((record) => record.step === "done-judge")).toMatchObject({
+      answer: "finished",
+      question: "Leave the doc, or update it?",
+    });
+    expect(found.outcomes[0]?.line).toMatchObject({
+      outcome: "not-published",
+      reason: "the Author's last message leaves a question to its user: Leave the doc, or update it?",
+    });
+  });
+
   test("not finished, then finished, on the same head with no new commit: the second stop publishes", async () => {
     const found = world({ done: [UNFINISHED, FINISHED] });
 
@@ -737,8 +753,8 @@ describe("the Done judge", () => {
       FINISHED,
       UNFINISHED,
       "YES, HOLD: a stored format",
-      { finished: true, reason: "HOLD: a human should read this", rejections: [] },
-      { finished: true, reason: "done", rejections: [], hold: "a stored format" },
+      { finished: true, question: "", reason: "HOLD: a human should read this", rejections: [] },
+      { finished: true, question: "", reason: "done", rejections: [], hold: "a stored format" },
     ];
 
     for (const answer of answers) {
@@ -777,6 +793,7 @@ describe("the Done judge", () => {
 describe("rejections and Nit threads", () => {
   const REJECTING = {
     finished: true,
+    question: "",
     reason: "done",
     rejections: [{ thread: "T1", reason: "by design: <cli> reads it" }],
   };
@@ -815,6 +832,7 @@ describe("rejections and Nit threads", () => {
       done: [
         {
           finished: true,
+          question: "",
           reason: "done",
           rejections: [
             { thread: "T9", reason: "not mine" },
