@@ -233,14 +233,17 @@ export function noDoneAnswer(code: number, stopHookActive: boolean): Refusal {
 }
 
 export function decide(pr: PullRequest | null, answer: DoneAnswer): Action {
-  const question = answer.question.trim();
+  const question = answer.question.trim().slice(0, 300);
+  const unfinished = `the Done judge says the change is not finished: ${answer.reason}`;
 
   if (question !== "") {
-    return none(`the Author's last message leaves a question to its user: ${question}`);
+    const asking = `the Author's last message leaves a question to its user: ${question}`;
+
+    return none(answer.finished ? asking : `${asking}; ${unfinished}`);
   }
 
   if (!answer.finished) {
-    return none(`the Done judge says the change is not finished: ${answer.reason}`);
+    return none(unfinished);
   }
 
   return pr === null ? { kind: "open" } : { kind: "push", pr: pr.number, ready: pr.draft };

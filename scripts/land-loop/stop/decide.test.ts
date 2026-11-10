@@ -255,7 +255,30 @@ describe("decide", () => {
       reason: "the Author's last message leaves a question to its user: Leave the doc, or update it in this PR?",
     });
     expect(decide(draft, asking).kind).toBe("none");
-    expect(decide(ready, { ...asking, finished: false })).toEqual(decide(null, asking));
+  });
+
+  test("a change both unfinished and asking keeps both reasons", () => {
+    const asking: DoneAnswer = {
+      finished: false,
+      question: "Which wording?",
+      reason: "a test is missing",
+      rejections: [],
+    };
+
+    expect(decide(ready, asking)).toEqual({
+      kind: "none",
+      reason:
+        "the Author's last message leaves a question to its user: Which wording?; the Done judge says the change is not finished: a test is missing",
+    });
+  });
+
+  test("the quoted question is cut to its first 300 characters", () => {
+    const action = decide(null, { ...FINISHED, question: `${"a".repeat(300)}b` });
+
+    expect(action).toEqual({
+      kind: "none",
+      reason: `the Author's last message leaves a question to its user: ${"a".repeat(300)}`,
+    });
   });
 
   test("a question of blanks alone is no question", () => {
