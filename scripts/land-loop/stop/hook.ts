@@ -49,7 +49,16 @@ import {
   rejectionReplyOf,
   rejectionsOf,
 } from "./decide.ts";
-import type { DoneAnswer, Outcome, PullRequest, Refusal, Snapshot, StopChecks, StopFacts } from "./decide.ts";
+import type {
+  ClosedPullRequest,
+  DoneAnswer,
+  Outcome,
+  PullRequest,
+  Refusal,
+  Snapshot,
+  StopChecks,
+  StopFacts,
+} from "./decide.ts";
 import { BODY_REQUEST, doneQuestionOf } from "./done-prompt.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
@@ -285,6 +294,25 @@ async function prOf(deps: Deps, gh: RunOptions, branch: string): Promise<PullReq
   const pr = listed[0];
 
   return pr === undefined ? null : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid };
+}
+
+const ListedClosedPrs = Schema.Array(
+  Schema.Struct({ number: Schema.Finite, headRefOid: Schema.String, state: Schema.String }),
+);
+
+/** The branch's PRs closed without landing: `--state closed` lists the landed ones too. */
+async function closedPrsOf(deps: Deps, gh: RunOptions, branch: string): Promise<readonly ClosedPullRequest[]> {
+  const listed = decodeJson(
+    ListedClosedPrs,
+    "gh pr list --state closed",
+    await checked(
+      deps.run,
+      ["gh", "pr", "list", "--head", branch, "--state", "closed", "--json", "number,headRefOid,state"],
+      gh,
+    ),
+  );
+
+  return listed.filter((pr) => pr.state === "CLOSED").map((pr) => ({ number: pr.number, headSha: pr.headRefOid }));
 }
 
 /** The App's open Important and Nit findings on PR `pr`, read as the Author. */
@@ -540,12 +568,15 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
   const token = authorTokenOf(deps.env);
   const gh = ghOptions(cwd, token);
 
+  const pr = await prOf(deps, gh, branch);
+
   const snapshot: Snapshot = {
     branch,
     head,
     treeClean: (await gitOut(deps, cwd, ["status", "--porcelain"])) === "",
     ahead: Number(await gitOut(deps, cwd, ["rev-list", "--count", `origin/${TRUNK}..HEAD`])),
-    pr: await prOf(deps, gh, branch),
+    pr,
+    closed: pr === null ? await closedPrsOf(deps, gh, branch) : [],
   };
 
   const admission = admit(snapshot);

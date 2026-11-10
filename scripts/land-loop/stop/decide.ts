@@ -51,6 +51,12 @@ export interface PullRequest {
   readonly headSha: string;
 }
 
+/** A PR of the branch that was closed without landing, and the head it had when it was closed. */
+export interface ClosedPullRequest {
+  readonly number: number;
+  readonly headSha: string;
+}
+
 /** Where an Author's session stops: its checkout and the branch checked out there. */
 export interface Checkout {
   /** The directory is the repository's main checkout, not a worktree of its own. */
@@ -86,6 +92,8 @@ export interface Snapshot {
   /** Commits on HEAD that `origin/dev` lacks. */
   readonly ahead: number;
   readonly pr: PullRequest | null;
+  /** The branch's PRs closed without landing. */
+  readonly closed: readonly ClosedPullRequest[];
 }
 
 export type Admission =
@@ -136,6 +144,13 @@ export function admit(snapshot: Snapshot): Admission {
   }
 
   const { pr } = snapshot;
+  const closedHere = pr === null ? snapshot.closed.find((closed) => closed.headSha === snapshot.head) : undefined;
+
+  if (closedHere !== undefined) {
+    return none(
+      `#${closedHere.number} was closed without landing at ${snapshot.head}: a stop at the head it had publishes nothing`,
+    );
+  }
 
   if (pr !== null && !pr.draft && pr.headSha === snapshot.head) {
     return { kind: "ready", pr: pr.number, reason: `#${pr.number} is ready at ${snapshot.head} already` };

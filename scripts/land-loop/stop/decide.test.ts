@@ -27,6 +27,7 @@ const SNAPSHOT: Snapshot = {
   treeClean: true,
   ahead: 2,
   pr: null,
+  closed: [],
 };
 
 const FINISHED: DoneAnswer = { finished: true, question: "", reason: "done and tested", rejections: [] };
@@ -114,6 +115,41 @@ describe("admit", () => {
     expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({ kind: "stop-checks" });
     expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40) } })).toEqual({
       kind: "stop-checks",
+    });
+  });
+
+  test("a PR closed without landing at this head publishes nothing, and the reason names it", () => {
+    expect(
+      admit({
+        ...SNAPSHOT,
+        closed: [
+          { number: 9, headSha: "b".repeat(40) },
+          { number: 146, headSha: HEAD },
+        ],
+      }),
+    ).toEqual({
+      kind: "none",
+      reason: `#146 was closed without landing at ${HEAD}: a stop at the head it had publishes nothing`,
+    });
+  });
+
+  test("a PR closed at another head, or an open PR beside a closed one, does not hold the stop", () => {
+    expect(admit({ ...SNAPSHOT, closed: [{ number: 146, headSha: "b".repeat(40) }] })).toEqual({ kind: "stop-checks" });
+    expect(
+      admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD }, closed: [{ number: 146, headSha: HEAD }] }),
+    ).toEqual({ kind: "stop-checks" });
+  });
+
+  test("a dirty tree or no new commit is said first, whatever was closed", () => {
+    const closed = [{ number: 146, headSha: HEAD }];
+
+    expect(admit({ ...SNAPSHOT, ahead: 0, closed })).toEqual({
+      kind: "none",
+      reason: "agent/clear-command has no commit that dev lacks",
+    });
+    expect(admit({ ...SNAPSHOT, treeClean: false, closed })).toEqual({
+      kind: "none",
+      reason: "the tree has uncommitted changes",
     });
   });
 });

@@ -102,6 +102,8 @@ interface Fake {
   /** The exit code of the Done judge's fork. */
   readonly doneCode: number;
   readonly listed: string;
+  /** What `gh pr list --state closed` prints: the branch's closed and landed PRs. */
+  readonly closedListed: string;
   readonly branch: string | null;
   readonly forkBody: string;
   readonly mainCheckout: boolean;
@@ -127,6 +129,8 @@ interface World {
 
 const draftPr = (head = HEAD): string => JSON.stringify([{ number: 12, isDraft: true, headRefOid: head }]);
 
+const closedPr = (state: string, head = HEAD): string => JSON.stringify([{ number: 146, headRefOid: head, state }]);
+
 const readyPr = (head = HEAD): string => JSON.stringify([{ number: 12, isDraft: false, headRefOid: head }]);
 
 /** A fake of git, gh, bun and claude for an Author's session in a worktree, on `branch`, one commit ahead of dev. */
@@ -135,6 +139,7 @@ function world(fake: Partial<Fake> = {}): World {
     done = [FINISHED],
     doneCode = 0,
     listed = "[]",
+    closedListed = "[]",
     branch = "agent/x",
     forkBody = "Body text.",
     mainCheckout = false,
@@ -204,7 +209,7 @@ function world(fake: Partial<Fake> = {}): World {
     }
 
     if (line.startsWith("gh pr list")) {
-      return ok(listed);
+      return ok(argv.includes("closed") ? closedListed : listed);
     }
 
     if (line.startsWith("gh pr create")) {
@@ -918,6 +923,46 @@ async function outcomeOf(fake: Partial<Fake>, stopHookActive = false): Promise<O
   return found.outcomes[0]?.line;
 }
 
+describe("a PR closed without landing", () => {
+  test("a stop at the head the closed PR had pushes nothing, opens nothing and asks no fork", async () => {
+    const found = world({ closedListed: closedPr("CLOSED") });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(writes(found.calls)).toEqual([]);
+    expect(found.calls.some((call) => call.argv[0] === "claude")).toBe(false);
+    expect(found.relays).toEqual([]);
+  });
+
+  test("the closed list is read as the Author, closed PRs only", async () => {
+    const found = world();
+    await stopIn(found);
+
+    const closedList = found.calls.find((call) => call.argv.join(" ").includes("--state closed"));
+
+    expect(closedList?.argv).toEqual([
+      "gh",
+      "pr",
+      "list",
+      "--head",
+      "agent/x",
+      "--state",
+      "closed",
+      "--json",
+      "number,headRefOid,state",
+    ]);
+    expect(closedList?.options.env).toEqual({ GH_TOKEN: TOKEN });
+  });
+
+  test("a landed PR at this head, or a PR closed at another head, still lets the branch open a PR", async () => {
+    for (const closedListed of [closedPr("MERGED"), closedPr("CLOSED", "b".repeat(40))]) {
+      const found = world({ closedListed });
+      await stopIn(found);
+
+      expect(writes(found.calls)).toEqual(["push", "pr create"]);
+    }
+  });
+});
+
 describe("the outcome of each stop", () => {
   test("a Publication leaves one line in the main checkout's log, with the PR it opened or pushed", async () => {
     expect(await outcomeOf({})).toMatchObject({ branch: "agent/x", outcome: "published", pr: 12 });
@@ -950,6 +995,11 @@ describe("the outcome of each stop", () => {
       [{ ahead: 0 }, false, "agent/x has no commit that dev lacks"],
       [{ dirty: true }, false, "the tree has uncommitted changes"],
       [{ listed: readyPr() }, false, `#12 is ready at ${HEAD} already`],
+      [
+        { closedListed: closedPr("CLOSED") },
+        false,
+        `#146 was closed without landing at ${HEAD}: a stop at the head it had publishes nothing`,
+      ],
       [{ env: noToken }, false, `no Author token at ${missing}`],
       [{ env: noToken }, true, "no Author token after a block: nothing is published"],
       [{ failing: ["bun check"] }, false, `the Stop checks are red on ${HEAD}`],
