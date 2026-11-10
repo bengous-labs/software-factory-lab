@@ -128,7 +128,7 @@ const RUN_FACTS = {
 const ARBITRARY_RESULT: fc.Arbitrary<ReviewResult> = fc.oneof(
   fc.record({
     kind: fc.constantFrom("reported"),
-    report: fc.record({ findings: fc.array(ARBITRARY_FINDING, { maxLength: 3 }) }),
+    report: fc.record({ findings: fc.array(ARBITRARY_FINDING, { maxLength: 3 }), namesEarlier: fc.boolean() }),
     ...RUN_FACTS,
   }),
   fc.record({ kind: fc.constantFrom("failed"), cause: fc.string(), ...RUN_FACTS }),

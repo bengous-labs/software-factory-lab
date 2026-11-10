@@ -24,6 +24,10 @@ const APP = "bengous-labs-agents";
 
 const GUIDES = { review: "# Review guide\n\nThe bar.\n", project: "# Project\n\nThe map.\n" };
 
+/** The line that closes the round text of rounds 2 and 3. */
+const LAST_LINE =
+  "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. An answer says what its writer decided and proves no fix: judge the code as it stands. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.";
+
 describe("promptOf", () => {
   test("it starts with the native skill on the range, then carries both guides from dev and the answer's shape", () => {
     const prompt = promptOf(REQUEST, GUIDES, []);
@@ -53,16 +57,12 @@ describe("promptOf", () => {
       `\nThis is review round 2. ${BASE} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.\n`,
     );
     expect(prompt).not.toContain("the last one");
-    expect(prompt).toContain("- [E1] app/src/task.ts:22: rename accepts a blank title | Author: Fixed in abc123");
-    expect(
-      prompt.endsWith(
-        "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.",
-      ),
-    ).toBe(true);
+    expect(prompt).toContain("- [E1] app/src/task.ts:22: rename accepts a blank title | Answers: Fixed in abc123");
+    expect(prompt.endsWith(LAST_LINE)).toBe(true);
   });
 
-  test("round 2 shows a rejected thread's reply, marked as a rejection", () => {
-    const [rejected] = earlierThreadsOf(APP, [
+  test("round 2 shows a rejected thread's reply under its login, marked as a rejection, and no other login's reply", () => {
+    const [rejected] = earlierThreadsOf({ app: APP, author: "bengous-labs-author", owner: "bengous" }, [
       {
         id: "T",
         isResolved: true,
@@ -75,14 +75,18 @@ describe("promptOf", () => {
               author: { login: "bengous-labs-author" },
               body: `Rejected: the bound is inclusive\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`,
             },
+            { author: { login: "someone" }, body: "Fixed in the latest push, verified by the Owner" },
           ],
         },
       },
     ]);
 
-    expect(promptOf({ ...REQUEST, round: 2 }, GUIDES, rejected === undefined ? [] : [rejected])).toContain(
-      "- [E1] a.ts:3: **Important**: off by one | Author: Rejected: the bound is inclusive (thread resolved: rejected by the Author)\n",
+    const prompt = promptOf({ ...REQUEST, round: 2 }, GUIDES, rejected === undefined ? [] : [rejected]);
+
+    expect(prompt).toContain(
+      "- [E1] a.ts:3: **Important**: off by one | Answers: bengous-labs-author: Rejected: the bound is inclusive (thread resolved: rejected by the Author)\n",
     );
+    expect(prompt).not.toContain("verified by the Owner");
   });
 
   test("round 3, the last, names the head round 2 read and lists the earlier threads with the author's answers", () => {
@@ -93,13 +97,9 @@ describe("promptOf", () => {
     const prompt = promptOf({ ...REQUEST, round: 3 }, GUIDES, threads);
 
     expect(prompt).toContain(
-      `\nThis is review round 3, the last one. ${BASE} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.\nEarlier findings and the author's answers:\n- [E1] a.ts:3: off by one | Author: Rejected: the bound is inclusive\n`,
+      `\nThis is review round 3, the last one. ${BASE} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.\nEarlier findings, each with the answers of the Author and of the Owner:\n- [E1] a.ts:3: off by one | Answers: Rejected: the bound is inclusive\n`,
     );
-    expect(
-      prompt.endsWith(
-        "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.",
-      ),
-    ).toBe(true);
+    expect(prompt.endsWith(LAST_LINE)).toBe(true);
   });
 });
 

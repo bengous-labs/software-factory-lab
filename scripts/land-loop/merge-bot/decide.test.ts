@@ -1143,7 +1143,7 @@ describe("the review job's run", () => {
 
   const reported = (...findings: ReportedFinding[]): ReportedResult => ({
     kind: "reported",
-    report: { findings },
+    report: { findings, namesEarlier: true },
     ...FACTS,
   });
 
@@ -1304,6 +1304,19 @@ describe("the review job's run", () => {
       expect(steps[0]).toEqual({ kind: "post-review", result, heldOpen: ["T1", "T2"] });
       expect(steps.map((step) => step.kind)).not.toContain("resolve-threads");
       expect(steps.at(-1)).toEqual(red(3));
+    });
+
+    test("a report that was not asked to name the earlier findings, as one written before rounds were, closes none and leaves each open", () => {
+      const named = inRound2(finding("nit"));
+      const unnamed: ReportedResult = { ...named, report: { ...named.report, namesEarlier: false } };
+
+      expect(stepsOf({ ...second, reviewJob: completed(unnamed) })).toEqual([
+        { kind: "post-review", result: unnamed, heldOpen: [] },
+        { kind: "record", record: afterReview(second.record, unnamed) },
+        red(2),
+      ]);
+      expect(earlierImportantsOf(unnamed, important(2))).toEqual({ kept: [], closed: [], left: 2 });
+      expect(earlierImportantsOf(named, important(2))).toEqual({ kept: [], closed: ["T1", "T2"], left: 0 });
     });
 
     test("only an Important names an earlier thread: a Nit that names one keeps nothing open", () => {

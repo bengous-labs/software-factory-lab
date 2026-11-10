@@ -65,9 +65,6 @@ export function threadsQueryOf(pr: number): string {
   return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{author{login} body pullRequestReview{body}}}}}}}}`;
 }
 
-/** The App's login as GraphQL prints it, for the code that runs outside the Merge bot's workflow, which names it in `APP_LOGIN`. */
-export const APP_LOGIN = "bengous-labs-agents";
-
 /** The App's login as GraphQL prints it, without REST's `[bot]` suffix. */
 export function graphqlLogin(login: string): string {
   return login.replace(/\[bot\]$/u, "");
@@ -114,25 +111,40 @@ export function openFindingsOf(appLogin: string, threads: readonly ReviewThread[
   });
 }
 
-/** The replies of `thread` another login than the App's posted, the author's answers. */
-function answersOf(appLogin: string, thread: ReviewThread): ReviewThread["comments"]["nodes"] {
-  return thread.comments.nodes.slice(1).filter((reply) => reply.author?.login !== appLogin);
+/**
+ * The logins whose words the Land loop reads in a review thread: the App's findings, and the answers of
+ * the Author's machine account and of the Owner. `app` is the App's login as GraphQL prints it.
+ */
+export interface ThreadLogins {
+  readonly app: string;
+  readonly author: string;
+  readonly owner: string;
+}
+
+/**
+ * The answers in `thread`: the replies of the Author's machine account and of the Owner. The lab is
+ * public: another login's reply is no answer, and reaches neither a count nor a reviewer's prompt.
+ */
+function answersOf(logins: ThreadLogins, thread: ReviewThread): ReviewThread["comments"]["nodes"] {
+  return thread.comments.nodes
+    .slice(1)
+    .filter((reply) => reply.author?.login === logins.author || reply.author?.login === logins.owner);
 }
 
 /** A resolved thread whose latest answer carries `REJECT_MARK`; a thread unresolved again is open, never rejected. */
-function rejectedOf(appLogin: string, thread: ReviewThread): boolean {
-  return thread.isResolved && answersOf(appLogin, thread).at(-1)?.body.includes(REJECT_MARK) === true;
+function rejectedOf(logins: ThreadLogins, thread: ReviewThread): boolean {
+  return thread.isResolved && answersOf(logins, thread).at(-1)?.body.includes(REJECT_MARK) === true;
 }
 
-/** The App's Important threads the author rejected. `appLogin` is the App's login as GraphQL prints it. */
-export function rejectedImportantOf(appLogin: string, threads: readonly ReviewThread[]): number {
+/** The App's Important threads the author rejected. */
+export function rejectedImportantOf(logins: ThreadLogins, threads: readonly ReviewThread[]): number {
   return threads.filter((thread) => {
     const [finding] = thread.comments.nodes;
 
     return (
-      finding?.author?.login === appLogin &&
+      finding?.author?.login === logins.app &&
       severityOfBody(finding.body) === "important" &&
-      rejectedOf(appLogin, thread)
+      rejectedOf(logins, thread)
     );
   }).length;
 }
@@ -207,7 +219,7 @@ const EarlierThread = Schema.Struct({
   reply: Schema.String,
 });
 
-/** A thread of an earlier round: its id, where its finding sits, the finding's first line, and the author's answers with the thread's state. */
+/** A thread of an earlier round: its id, where its finding sits, the finding's first line, and the answers of the Author and of the Owner, each under its login, with the thread's state. */
 export type EarlierThread = typeof EarlierThread.Type;
 
 /** `review-threads.json`, which the review job's thread step writes and its runner reads. */
@@ -219,23 +231,26 @@ function unmarked(body: string): string {
 }
 
 /**
- * The App's findings, open or resolved, each with the author's answers and whether its thread is
- * resolved: a later Review round reports again each Important that is still wrong, and no finding the author
- * rejected with a valid reason. `appLogin` is the App's login as GraphQL prints it.
+ * The App's findings, open or resolved, each with the answers of the Author's machine account and of
+ * the Owner, each under its login, and whether its thread is resolved: a later Review round reports again
+ * each Important that is still wrong, and no finding the author rejected with a valid reason. No other
+ * login's reply reaches the round: what it leaves out, the Merge bot closes.
  */
-export function earlierThreadsOf(appLogin: string, threads: readonly ReviewThread[]): EarlierThread[] {
+export function earlierThreadsOf(logins: ThreadLogins, threads: readonly ReviewThread[]): EarlierThread[] {
   return threads.flatMap((thread) => {
     const [finding] = thread.comments.nodes;
 
-    if (finding?.author?.login !== appLogin) {
+    if (finding?.author?.login !== logins.app) {
       return [];
     }
 
-    const answers = answersOf(appLogin, thread).map((reply) =>
-      reply.body.includes(AUTHOR_MARK) ? unescapeHtml(unmarked(reply.body)) : unmarked(reply.body),
-    );
+    const answers = answersOf(logins, thread).map((reply) => {
+      const text = reply.body.includes(AUTHOR_MARK) ? unescapeHtml(unmarked(reply.body)) : unmarked(reply.body);
 
-    const state = rejectedOf(appLogin, thread)
+      return `${reply.author?.login}: ${text}`;
+    });
+
+    const state = rejectedOf(logins, thread)
       ? "resolved: rejected by the Author"
       : thread.isResolved
         ? "resolved"

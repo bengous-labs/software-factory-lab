@@ -78,7 +78,14 @@ const ReportedFinding = Schema.Struct({
 
 export type ReportedFinding = typeof ReportedFinding.Type;
 
-const ReviewReport = Schema.Struct({ findings: Schema.Array(ReportedFinding) });
+const ReviewReport = Schema.Struct({
+  findings: Schema.Array(ReportedFinding),
+  /**
+   * Whether the round was asked to name, in `earlier`, each earlier finding it reports again. A report written
+   * before rounds were asked has none, read as false: such a round closes no earlier Important.
+   */
+  namesEarlier: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+});
 
 type ReviewReport = typeof ReviewReport.Type;
 
@@ -204,6 +211,7 @@ export function resultOf(request: ReviewRequest, answer: SessionAnswer, runUrl: 
           earlier: finding.earlier,
           pass: "code",
         })),
+        namesEarlier: true,
       },
       ...facts,
     }),
@@ -252,7 +260,9 @@ export function mergedResultOf(
 
   const securityFindings = securityResult.report.findings.map((finding) => ({ ...finding, pass: "security" as const }));
 
-  return { ...codeResult, report: { findings: [...codeResult.report.findings, ...securityFindings] }, tokens };
+  const findings = [...codeResult.report.findings, ...securityFindings];
+
+  return { ...codeResult, report: { ...codeResult.report, findings }, tokens };
 }
 
 /** One line for the job's log: the request, what ran, and the findings by severity or the cause. */

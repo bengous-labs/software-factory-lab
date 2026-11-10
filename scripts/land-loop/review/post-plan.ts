@@ -9,6 +9,7 @@ import type { Schema } from "effect";
 
 import { codeSpan, escapeHtml, escapeInline } from "../../lib/markdown.ts";
 import { markerOf, movedLineOf } from "./findings.ts";
+import type { ReviewThread } from "./findings.ts";
 import type { ReportedFinding, ReportedResult, ReviewRequest, Severity } from "./review-report.ts";
 
 /** The RIGHT-side lines of each hunk of the PR's whole diff, context included: GitHub accepts an inline comment only there. */
@@ -154,6 +155,61 @@ function commentOf(planned: PlannedComment): string {
 /** The marker of the review of `request`'s patch and round. An external name: posted reviews carry it, so the string stays. */
 export function reviewMarkerOf(request: ReviewRequest): string {
   return `<!-- lab-review patch=${request.patch} round=${request.round} -->`;
+}
+
+/** A reply the Merge bot posts in the open thread of an earlier Important that a later round reports again. */
+export interface AgainReply {
+  readonly thread: string;
+  readonly body: string;
+}
+
+/**
+ * The replies that carry, each in its open thread of `heldOpen`, the Importants the round of `result`
+ * reports again: what is still wrong, under the finding's marker, so the relay delivers it to the
+ * Author, and under the review's marker, so a posting that is retried posts none twice. A thread takes
+ * one reply per review: the first finding that names it.
+ */
+export function againRepliesOf(
+  result: ReportedResult,
+  heldOpen: readonly string[],
+  threads: readonly ReviewThread[],
+): AgainReply[] {
+  const { request } = result;
+  const marker = reviewMarkerOf(request);
+
+  const replied = new Set<string>();
+
+  for (const thread of threads) {
+    if (thread.comments.nodes.some((comment) => comment.body.includes(marker))) {
+      replied.add(thread.id);
+    }
+  }
+
+  const replies: AgainReply[] = [];
+
+  for (const finding of result.report.findings) {
+    const thread = heldOpen.find((held) => held === finding.earlier);
+
+    if (finding.severity === "important" && thread !== undefined && !replied.has(thread)) {
+      replied.add(thread);
+
+      const label = finding.pass === "security" ? `${LABEL.important} (security)` : LABEL.important;
+
+      const body = [
+        `**${label}**: ${escapeInline(finding.summary)}`,
+        `Still wrong at Review round ${request.round}.`,
+        "",
+        escapeHtml(finding.failureScenario),
+        "",
+        markerOf("important"),
+        marker,
+      ].join("\n");
+
+      replies.push({ thread, body });
+    }
+  }
+
+  return replies;
 }
 
 function bodyOf(plan: PostPlan, result: ReportedResult): string {

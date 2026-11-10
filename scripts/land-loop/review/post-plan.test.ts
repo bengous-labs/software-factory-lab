@@ -3,7 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
 
 import { markerOf } from "./findings.ts";
-import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "./post-plan.ts";
+import type { ReviewThread } from "./findings.ts";
+import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "./post-plan.ts";
 import type { DiffLines } from "./post-plan.ts";
 import type { ReportedFinding, ReportedResult } from "./review-report.ts";
 
@@ -201,7 +202,7 @@ const REQUEST = {
 
 const resultOf = (...findings: ReportedFinding[]): ReportedResult => ({
   kind: "reported",
-  report: { findings },
+  report: { findings, namesEarlier: true },
   request: REQUEST,
   model: "claude-sonnet-5-5",
   claudeCodeVersion: "2.1.318",
@@ -383,6 +384,92 @@ describe("reviewOf", () => {
       "Review round 1 (claude-opus-5-5, /code-review high): 0 important, 0 nit; security: 0 important, 1 nit.",
     );
     expect(firstLine(withPass())).toBe("Review round 1 (claude-opus-5-5, /code-review high): nothing to fix.");
+  });
+});
+
+/** A review thread with `bodies` as its comments, the first one the finding. */
+const threadOf = (id: string, ...bodies: string[]): ReviewThread => ({
+  id,
+  isResolved: false,
+  path: "b.ts",
+  line: 1,
+  comments: { nodes: bodies.map((body) => ({ author: { login: "bengous-labs-agents" }, body })) },
+});
+
+/** An Important that reports again the earlier one in `thread`. */
+const again = (thread: string, summary = "still off by one"): ReportedFinding => ({
+  ...finding("important", "b.ts", 1),
+  summary,
+  earlier: thread,
+});
+
+const FIRST = `**Important**: off by one\n\nwhy\n\n${markerOf("important")}`;
+
+describe("againRepliesOf", () => {
+  test("an Important that reports an open thread again is posted there: what is still wrong, the round, the finding's marker and the review's", () => {
+    const result = resultOf(again("T1"));
+
+    expect(againRepliesOf(result, ["T1"], [threadOf("T1", FIRST)])).toEqual([
+      {
+        thread: "T1",
+        body: [
+          "**Important**: still off by one",
+          "Still wrong at Review round 2.",
+          "",
+          "the scenario",
+          "",
+          "<!-- lab-finding severity=important -->",
+          "<!-- lab-review patch=p1 round=2 -->",
+        ].join("\n"),
+      },
+    ]);
+  });
+
+  test("a placeholder in the summary or the scenario is escaped for GitHub, and a security finding names its pass", () => {
+    const leak: ReportedFinding = {
+      ...again("T1", "Reads review-<head>.json"),
+      failureScenario: "The body reads '<code counts>'.",
+      pass: "security",
+    };
+
+    expect(againRepliesOf(resultOf(leak), ["T1"], [])[0]?.body.split("\n").slice(0, 4)).toEqual([
+      "**Important (security)**: Reads review-&lt;head>.json",
+      "Still wrong at Review round 2.",
+      "",
+      "The body reads '&lt;code counts>'.",
+    ]);
+  });
+
+  test("a thread takes one reply per review: the first finding that names it, and none once it holds the review's marker", () => {
+    const result = resultOf(again("T1", "first"), again("T1", "second"), again("T2", "third"));
+    const marker = reviewMarkerOf(REQUEST);
+    const replies = againRepliesOf(result, ["T1", "T2"], [threadOf("T1", FIRST), threadOf("T2", FIRST)]);
+
+    expect(replies.map((reply) => reply.thread)).toEqual(["T1", "T2"]);
+    expect(replies[0]?.body).toStartWith("**Important**: first\n");
+    expect(replies[1]?.body).toStartWith("**Important**: third\n");
+
+    const posted = [threadOf("T1", FIRST, `**Important**: first\n\n${marker}`), threadOf("T2", FIRST)];
+
+    expect(againRepliesOf(result, ["T1", "T2"], posted).map((reply) => reply.thread)).toEqual(["T2"]);
+
+    const otherRound = [threadOf("T1", FIRST, "<!-- lab-review patch=p1 round=3 -->"), threadOf("T2", FIRST)];
+
+    expect(againRepliesOf(result, ["T1", "T2"], otherRound).map((reply) => reply.thread)).toEqual(["T1", "T2"]);
+  });
+
+  test("only an Important that names a thread held open is posted as a reply", () => {
+    const result = resultOf(
+      again("T1"),
+      again("T-closed"),
+      finding("important", "b.ts", 1),
+      { ...again("T1"), severity: "nit" },
+      { ...again("T2"), severity: "pre_existing" },
+    );
+
+    expect(againRepliesOf(result, ["T1", "T2"], []).map((reply) => reply.thread)).toEqual(["T1"]);
+    expect(againRepliesOf(result, [], [])).toEqual([]);
+    expect(againRepliesOf(resultOf(), ["T1"], [])).toEqual([]);
   });
 });
 

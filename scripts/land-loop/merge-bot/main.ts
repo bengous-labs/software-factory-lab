@@ -25,7 +25,7 @@ import type { RoutingPolicy } from "../factory-config.ts";
 import { ask } from "../lib/ask.ts";
 import { resolverOf } from "../lib/resolve.ts";
 import { checked, run } from "../lib/run.ts";
-import { resolveThread } from "../lib/threads.ts";
+import { replyInThread, resolveThread } from "../lib/threads.ts";
 import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
 import {
@@ -37,7 +37,8 @@ import {
   threadsQueryOf,
 } from "../review/findings.ts";
 import type { ReviewThread } from "../review/findings.ts";
-import { diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
+import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
+import type { AgainReply } from "../review/post-plan.ts";
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
 import { REVIEW_SETTINGS } from "../review/review-settings.ts";
 import { readGuardOf } from "../review/tool-guard.ts";
@@ -562,7 +563,10 @@ async function snapshotOf(
     landApprovalByOwner,
     landApprovalPutByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
-    rejectedImportant: rejectedImportantOf(graphqlLogin(env.appLogin), threads),
+    rejectedImportant: rejectedImportantOf(
+      { app: graphqlLogin(env.appLogin), author: env.authorLogin, owner: env.owner },
+      threads,
+    ),
     devRed: devRedOf(devRuns),
     conflicting: conflictingOf(pr.mergeable_state),
     record,
@@ -617,6 +621,17 @@ export function threadsResolver(runner: Run): (where: Pick<Env, "cwd">, threads:
 }
 
 const resolveThreads = threadsResolver(run);
+
+/** Posts each reply in its review thread, as the App. */
+export function againPoster(runner: Run): (where: Pick<Env, "cwd">, replies: readonly AgainReply[]) => Promise<void> {
+  return async (where, replies) => {
+    for (const reply of replies) {
+      await replyInThread(runner, { cwd: where.cwd }, reply.thread, reply.body);
+    }
+  };
+}
+
+const postAgain = againPoster(run);
 
 /** Sets the `land:*` and `review:*` labels. Their names are external: open PRs carry them, so the strings stay. */
 async function setLabels(env: Env, pr: Pull, landRoute: LandRoute, depth: ReviewDepth): Promise<void> {
@@ -939,6 +954,10 @@ async function perform(
 
           return null;
         }
+      }
+
+      if (step.heldOpen.length > 0) {
+        await postAgain(env, againRepliesOf(result, step.heldOpen, await threadsOf(env, pr.number)));
       }
 
       log(`#${pr.number} ${summaryOf(result)}${posted ? ", posted before" : ""}`);

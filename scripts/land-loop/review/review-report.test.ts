@@ -165,6 +165,7 @@ describe("resultOf", () => {
             pass: "code",
           },
         ],
+        namesEarlier: true,
       },
       request: REQUEST,
       runUrl: RUN_URL,
@@ -219,16 +220,19 @@ describe("resultOf", () => {
     const { security: _security, ...request } = current.request;
     const findings = current.kind === "reported" ? current.report.findings.map(({ pass: _pass, ...rest }) => rest) : [];
 
-    expect(resultOfJson(JSON.stringify({ ...current, request, report: { findings } }))).toEqual(current);
+    expect(resultOfJson(JSON.stringify({ ...current, request, report: { findings, namesEarlier: true } }))).toEqual(
+      current,
+    );
   });
 
-  test("an artifact written before a round named the earlier findings it reports again, with no earlier, reads as naming none", () => {
+  test("an artifact written before rounds named the earlier findings they report again reads as naming none, and says it was not asked to", () => {
     const current = resultOf(REQUEST, answered({ findings: [FINDING] }), RUN_URL);
+    const findings = current.kind === "reported" ? current.report.findings : [];
+    const before = findings.map(({ earlier: _earlier, ...rest }) => rest);
 
-    const findings =
-      current.kind === "reported" ? current.report.findings.map(({ earlier: _earlier, ...rest }) => rest) : [];
+    const read = resultOfJson(JSON.stringify({ ...current, report: { findings: before } }));
 
-    expect(resultOfJson(JSON.stringify({ ...current, report: { findings } }))).toEqual(current);
+    expect(read?.kind === "reported" ? read.report : null).toEqual({ findings, namesEarlier: false });
   });
 
   test("a finding that reports an earlier one again keeps the id it names", () => {
@@ -278,6 +282,7 @@ describe("mergedResultOf", () => {
       ["the token reaches the log", "security"],
       ["rename accepts a blank title", "security"],
     ]);
+    expect(result.kind === "reported" && result.report.namesEarlier).toBe(true);
   });
 
   test("a failed security session fails the result, its cause prefixed, even when the Code review answered", () => {

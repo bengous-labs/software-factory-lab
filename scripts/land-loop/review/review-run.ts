@@ -32,7 +32,7 @@ export function withEarlierThreads(result: ReviewResult, threads: readonly Earli
     earlier: finding.earlier === null ? null : (byId.get(finding.earlier.replaceAll(/[[\]\s]/gu, "")) ?? null),
   }));
 
-  return { ...result, report: { findings } };
+  return { ...result, report: { ...result.report, findings } };
 }
 
 export async function reviewRunOf(

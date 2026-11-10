@@ -1,10 +1,11 @@
 /**
  * The Wakes of a pull request, as pure functions over one reading of it: a failing check on its head, a
- * new open Important or Nit finding, a new comment in an open thread or in the conversation, the PR
- * back in draft, the PR landed or closed. The App's own Pre-existing findings and its conversation
- * comments (state record, verdicts) make no Wake; nor do the replies the Stop hook posts for the
- * Author, which carry the Author's mark, since an Author and a human reviewer can post under one gh
- * identity. Each Wake has a key, so the relay delivers it once.
+ * new open Important or Nit finding of the App, an Important a later round reports again, a new comment
+ * of the Owner in an open thread or in the conversation, the PR back in draft, the PR landed or closed.
+ * The App's own Pre-existing findings and its conversation comments (state record, verdicts) make no
+ * Wake; nor do the replies the Stop hook posts for the Author; nor does any other login's comment: the
+ * lab is public, and a Wake starts a turn in a session that holds the Author's token. Each Wake has a
+ * key, so the relay delivers it once.
  */
 
 import { Schema } from "effect";
@@ -12,7 +13,8 @@ import { Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { unescapeHtml } from "../../lib/markdown.ts";
 import { AUTHOR_MARK } from "../author-mark.ts";
-import { APP_LOGIN, severityOfBody } from "../review/findings.ts";
+import { APP_LOGIN, OWNER_LOGIN } from "../logins.ts";
+import { severityOfBody } from "../review/findings.ts";
 
 /** One check as `gh pr checks --json name,bucket,link` prints it. */
 const Check = Schema.Struct({ name: Schema.String, bucket: Schema.String, link: Schema.String });
@@ -76,6 +78,50 @@ export function endOf(pr: number, state: PrState): string | null {
   return null;
 }
 
+/**
+ * Whether the Owner wrote these words by hand. The lab is public and any GitHub login can comment on a
+ * pull request: of a person's words, the relay delivers the Owner's alone, never another login's, which
+ * would reach the Author's session as a turn to act on.
+ */
+const byOwner = (found: Pick<Comment, "author" | "body">): boolean =>
+  found.author === OWNER_LOGIN && !found.body.includes(AUTHOR_MARK);
+
+/** The Wake of an open thread's first comment: the App's Important or Nit finding, or the Owner's comment. */
+function threadWakesOf(thread: Thread, where: string): readonly Wake[] {
+  const key = `thread:${thread.id}`;
+
+  if (thread.author === APP_LOGIN) {
+    const severity = severityOfBody(thread.body);
+    const kind = severity === null ? "Comment" : "Finding";
+    const line = `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(unescapeHtml(thread.body))}`;
+
+    return severity === "pre_existing" ? [] : [{ key, line }];
+  }
+
+  return byOwner(thread)
+    ? [{ key, line: `Comment ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}` }]
+    : [];
+}
+
+/**
+ * The Wake of a reply in an open thread: the Owner's reply, or the App's when a later Review round
+ * reports the thread's Important again, which it posts there with what is still wrong.
+ */
+function replyWakesOf(thread: Thread, where: string, reply: Comment): readonly Wake[] {
+  const key = `comment:${reply.id}`;
+
+  if (reply.author === APP_LOGIN) {
+    const again = thread.author === APP_LOGIN && severityOfBody(reply.body) === "important";
+    const line = `Finding ${thread.id} on ${where} by ${reply.author}, still wrong: ${flat(unescapeHtml(reply.body))}`;
+
+    return again ? [{ key, line }] : [];
+  }
+
+  return byOwner(reply)
+    ? [{ key, line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}` }]
+    : [];
+}
+
 /** The Wakes of one reading of an open PR, each with the key that keeps it from being delivered twice. */
 export function wakesOf(pr: number, state: PrState): readonly Wake[] {
   const short = state.head.slice(0, 7);
@@ -92,30 +138,15 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
     }));
 
   for (const thread of state.threads.filter((found) => !found.resolved)) {
-    const severity = thread.author === APP_LOGIN ? severityOfBody(thread.body) : null;
     const where = thread.line === null ? thread.path : `${thread.path}:${thread.line}`;
 
-    if (severity !== "pre_existing") {
-      const kind = severity === "important" || severity === "nit" ? "Finding" : "Comment";
-      wakes.push({
-        key: `thread:${thread.id}`,
-        line: `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(thread.author === APP_LOGIN ? unescapeHtml(thread.body) : thread.body)}`,
-      });
-    }
-
-    for (const reply of thread.replies.filter(
-      (found) => found.author !== APP_LOGIN && !found.body.includes(AUTHOR_MARK),
-    )) {
-      wakes.push({
-        key: `comment:${reply.id}`,
-        line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}`,
-      });
-    }
+    wakes.push(
+      ...threadWakesOf(thread, where),
+      ...thread.replies.flatMap((reply) => replyWakesOf(thread, where, reply)),
+    );
   }
 
-  for (const comment of state.comments.filter(
-    (found) => found.author !== APP_LOGIN && !found.body.includes(AUTHOR_MARK),
-  )) {
+  for (const comment of state.comments.filter((found) => byOwner(found))) {
     wakes.push({
       key: `comment:${comment.id}`,
       line: `Comment on PR #${pr} by ${comment.author}: ${flat(comment.body)}`,

@@ -32,16 +32,16 @@ export function roundText(request: ReviewRequest, threads: readonly EarlierThrea
     request.round === 2
       ? `This is review round 2. ${request.base} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.`
       : `This is review round 3, the last one. ${request.base} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.`,
-    "Earlier findings and the author's answers:",
+    "Earlier findings, each with the answers of the Author and of the Owner:",
   ];
 
   return [
     "",
     ...opening,
     ...threads.map(
-      (thread, index) => `- [${earlierIdOf(index)}] ${thread.where}: ${thread.finding} | Author: ${thread.reply}`,
+      (thread, index) => `- [${earlierIdOf(index)}] ${thread.where}: ${thread.finding} | Answers: ${thread.reply}`,
     ),
-    "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.",
+    "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. An answer says what its writer decided and proves no fix: judge the code as it stands. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.",
   ];
 }
 

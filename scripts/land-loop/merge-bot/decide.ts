@@ -320,7 +320,7 @@ export type Step =
       /** Whether the review runs a security pass after the Code review: the whole PR's Routing answer says so. */
       readonly security: boolean;
     }
-  /** Posts the review of `result` once: every finding but those of `heldOpen`, whose earlier threads stay open in their place. */
+  /** Posts the review of `result` once: a new thread per finding, but a reply in its own thread for an Important that reports again one of `heldOpen`. */
   | { readonly kind: "post-review"; readonly result: ReportedResult; readonly heldOpen: readonly string[] }
   /** Resolves review threads of the App: the Importants a later round no longer holds, or those the Owner's Land approval closes. */
   | { readonly kind: "resolve-threads"; readonly threads: readonly string[] }
@@ -592,11 +592,11 @@ function failedOf(record: StateRecord, review: ReviewState, cause: string): Revi
 
 /** What a reported round makes of the Important threads open before it. */
 export interface EarlierImportants {
-  /** The earlier threads the round reports again: they stay open, and their findings are not posted again. */
+  /** The earlier threads the round reports again: they stay open, and each takes the round's finding as a reply. */
   readonly kept: readonly string[];
   /** The earlier threads the round no longer holds: the Merge bot resolves them. */
   readonly closed: readonly string[];
-  /** The threads open before a Review round 1, which was shown no earlier finding: they stay as they are. */
+  /** The threads open before a round that named no earlier finding, a Review round 1 or one whose report predates the naming: they stay as they are. */
   readonly left: number;
 }
 
@@ -604,7 +604,8 @@ export interface EarlierImportants {
  * The fix of an Important is never declared by its author: a later round closes it. Each round after the
  * first reports again every earlier Important that is still wrong, naming its thread in `earlier`; an
  * open Important thread of an earlier review that the round does not name is closed. A thread the
- * review of `result` posted itself, when its posting is retried, is not an earlier one.
+ * review of `result` posted itself, when its posting is retried, is not an earlier one. A report that was
+ * not asked to name the earlier findings closes none.
  */
 export function earlierImportantsOf(result: ReportedResult, open: readonly ImportantThread[]): EarlierImportants {
   const { patch, round } = result.request;
@@ -613,7 +614,7 @@ export function earlierImportantsOf(result: ReportedResult, open: readonly Impor
     found.review === null || found.review.patch !== patch || found.review.round !== round ? [found.thread] : [],
   );
 
-  if (round === 1) {
+  if (round === 1 || !result.report.namesEarlier) {
     return { kept: [], closed: [], left: earlier.length };
   }
 
@@ -632,7 +633,7 @@ export function earlierImportantsOf(result: ReportedResult, open: readonly Impor
   };
 }
 
-/** The findings of `result` the review posts: all but an Important that reports again a thread of `heldOpen`, which carries it already. */
+/** The findings of `result` the review posts as new threads: all but an Important that reports again a thread of `heldOpen`, which takes it as a reply. */
 export function postedFindingsOf(
   result: ReportedResult,
   heldOpen: readonly string[],

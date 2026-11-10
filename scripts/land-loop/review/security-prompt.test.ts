@@ -41,7 +41,7 @@ const BODY = [
 ].join("\n");
 
 const ANSWERED =
-  "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.";
+  "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. An answer says what its writer decided and proves no fix: judge the code as it stands. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.";
 
 describe("securityPromptOf", () => {
   test("round 1 is the security pass's prompt alone, on the review's range", () => {
@@ -60,9 +60,9 @@ describe("securityPromptOf", () => {
     ];
 
     const listed = [
-      "Earlier findings and the author's answers:",
-      "- [E1] .github/workflows/code-review.yml:70: **Important (security)**: the head reaches a run: line | Author: Fixed in abc123 (thread resolved)",
-      "- [E2] a.ts:3: **Nit**: a name | Author: no answer (thread open)",
+      "Earlier findings, each with the answers of the Author and of the Owner:",
+      "- [E1] .github/workflows/code-review.yml:70: **Important (security)**: the head reaches a run: line | Answers: Fixed in abc123 (thread resolved)",
+      "- [E2] a.ts:3: **Nit**: a name | Answers: no answer (thread open)",
       ANSWERED,
     ];
 

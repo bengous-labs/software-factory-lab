@@ -16,6 +16,7 @@ import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../rou
 import type { ReviewState } from "./decide.ts";
 import {
   ActionsRun,
+  againPoster,
   changedPathsArgs,
   checkRunBodyOf,
   CheckRuns,
@@ -519,6 +520,37 @@ describe("threadsResolver", () => {
     ]);
     expect(threadsResolver(runner)(WHERE, ["T2", "T3"])).rejects.toThrow("gh api graphql exited 1: HTTP 502");
     expect(calls.some((call) => call.includes("id=T3"))).toBe(false);
+  });
+});
+
+describe("againPoster", () => {
+  test("posts each reply in its review thread, in its order", async () => {
+    const calls: string[][] = [];
+
+    const runner: Run = (argv) => {
+      calls.push([...argv]);
+
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    };
+
+    await againPoster(runner)(WHERE, [
+      { thread: "T1", body: "still wrong" },
+      { thread: "T2", body: "again" },
+    ]);
+
+    const reply =
+      "query=mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}";
+
+    expect(calls).toEqual([
+      ["gh", "api", "graphql", "-f", reply, "-f", "id=T1", "-f", "body=still wrong"],
+      ["gh", "api", "graphql", "-f", reply, "-f", "id=T2", "-f", "body=again"],
+    ]);
+  });
+
+  test("a reply GitHub refuses throws, so the round is not recorded and a later run posts what is left", () => {
+    expect(againPoster(REFUSED)(WHERE, [{ thread: "T1", body: "still wrong" }])).rejects.toThrow(
+      "gh api graphql exited 1: HTTP 502",
+    );
   });
 });
 

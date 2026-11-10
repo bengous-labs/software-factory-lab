@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { decodeJson } from "../../lib/json.ts";
 import { checked, run } from "../lib/run.ts";
+import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
 import { earlierThreadsOf, graphqlLogin, ReviewThreads, threadsQueryOf } from "./findings.ts";
 
 function required(name: string): string {
@@ -41,7 +42,10 @@ const answer = await checked(
 const threads = decodeJson(ReviewThreads, "the review threads query", answer).data.repository.pullRequest.reviewThreads
   .nodes;
 
-const earlier = earlierThreadsOf(graphqlLogin(required("APP_LOGIN")), threads);
+const earlier = earlierThreadsOf(
+  { app: graphqlLogin(required("APP_LOGIN")), author: AUTHOR_LOGIN, owner: OWNER_LOGIN },
+  threads,
+);
 
 writeFileSync(join(process.cwd(), "review-threads.json"), `${JSON.stringify(earlier, null, 2)}\n`);
 

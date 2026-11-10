@@ -27,9 +27,10 @@ import type { AuthorToken } from "../lib/author.ts";
 import { startRelay } from "../lib/relay-start.ts";
 import { checked, run as runCli } from "../lib/run.ts";
 import { replyInThread, resolveThread } from "../lib/threads.ts";
+import { APP_LOGIN } from "../logins.ts";
 import type { StartRelay } from "../ports/relay.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
-import { APP_LOGIN, openFindingsOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
+import { openFindingsOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
 import type { OpenFinding } from "../review/findings.ts";
 import {
   admit,
