@@ -5,22 +5,47 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Ran, Run } from "../ports/run.ts";
-import { deliverer, postToSocket, socketPathsOf } from "./deliver.ts";
+import { deliverer, NotStopped, postToSocket, socketPathsOf } from "./deliver.ts";
 import type { Delivery } from "./deliver.ts";
 
 const RESUME = ["claude", "--bg", "--resume", "S1", "the lines"];
 
-const delivery = (route: Delivery["route"]): Delivery => ({ route, socketLine: "LINE\n", resumeArgs: RESUME });
+/** A delivery whose session the listing shows stopped from its `stoppedAt`th look on; never when null. */
+const delivery = (route: Delivery["route"], stoppedAt: number | null = 1): Delivery => {
+  const looks = { count: 0 };
+
+  return {
+    route,
+    socketLine: "LINE\n",
+    resumeArgs: RESUME,
+    stopped: () => {
+      looks.count += 1;
+
+      return Promise.resolve(stoppedAt !== null && looks.count >= stoppedAt);
+    },
+  };
+};
+
+const STOP = { kind: "stop", id: "725ecfab" } as const;
+
+/** The message a delivery rejects with; null when it resolves. */
+const failureOf = (delivered: Promise<unknown>): Promise<string | null> =>
+  delivered.then(
+    () => null,
+    (error: Error) => error.message,
+  );
 
 interface World {
   readonly posts: string[];
   readonly runs: Array<{ argv: readonly string[]; env: unknown }>;
+  readonly sleeps: number[];
 }
 
 /** A deliverer whose sockets take a line only at the paths `open`, and whose resume exits `code`. */
 function world(open: readonly string[], code = 0): World & { deliver: ReturnType<typeof deliverer> } {
   const posts: string[] = [];
   const runs: World["runs"] = [];
+  const sleeps: number[] = [];
 
   const run: Run = (argv, options): Promise<Ran> => {
     runs.push({ argv, env: options.env });
@@ -35,12 +60,17 @@ function world(open: readonly string[], code = 0): World & { deliver: ReturnType
 
       return Promise.resolve(open.includes(path));
     },
+    sleep: (ms) => {
+      sleeps.push(ms);
+
+      return Promise.resolve();
+    },
     env: { XDG_RUNTIME_DIR: "/run/user/1000" },
     uid: 1000,
     cwd: "/main",
   });
 
-  return { posts, runs, deliver };
+  return { posts, runs, sleeps, deliver };
 }
 
 describe("socketPathsOf", () => {
@@ -86,6 +116,57 @@ describe("deliverer", () => {
 
   test("a resume that fails delivered nothing", async () => {
     expect(await world([], 1).deliver(delivery({ kind: "resume" }))).toBeNull();
+  });
+
+  test("a stop stops the session, waits until the listing shows it stopped, then resumes it with the text", async () => {
+    const found = world(["/run/user/1000/cc-socks/34502.sock"]);
+
+    expect(await found.deliver(delivery(STOP, 3))).toBe("resume");
+    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"], RESUME]);
+    expect(found.sleeps).toEqual([2000, 2000, 2000]);
+    expect(found.posts).toEqual([]);
+  });
+
+  test("a session the listing still shows running 30 s after the stop is neither resumed nor written to: the delivery throws", async () => {
+    const found = world(["/run/user/1000/cc-socks/34502.sock"]);
+
+    const failure = await found.deliver(delivery(STOP, null)).then(
+      () => null,
+      (error: Error) => error,
+    );
+
+    expect(failure).toBeInstanceOf(NotStopped);
+    expect(failure?.message).toBe("claude stop 725ecfab: the session is still listed running after 30 s");
+    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
+    expect(found.sleeps).toHaveLength(15);
+    expect(found.posts).toEqual([]);
+  });
+
+  test("a listing that fails after the stop throws, and resumes nothing: a later poll finds the session stopped", async () => {
+    const found = world([]);
+
+    const listingFails: Delivery = {
+      ...delivery(STOP),
+      stopped: () => Promise.reject(new Error("claude agents --json exited 1")),
+    };
+
+    expect(await failureOf(found.deliver(listingFails))).toBe("claude agents --json exited 1");
+    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
+  });
+
+  test("a stop that fails throws, naming the command, and resumes nothing", async () => {
+    const found = world([], 1);
+
+    expect(await failureOf(found.deliver(delivery(STOP)))).toStartWith("claude stop 725ecfab exited 1");
+    expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
+  });
+
+  test("a wait delivers nothing and touches nothing: a later turn sends the text again", async () => {
+    const found = world(["/run/user/1000/cc-socks/34502.sock"]);
+
+    expect(await found.deliver(delivery({ kind: "wait" }))).toBeNull();
+    expect(found.runs).toEqual([]);
+    expect(found.posts).toEqual([]);
   });
 });
 

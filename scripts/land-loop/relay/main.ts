@@ -4,8 +4,9 @@
  * The relay of one pull request, left detached by the Stop hook at a Publication, in the main checkout.
  * Every 30 s it reads the PR as the Author's machine account and delivers the Wakes it has not
  * delivered yet, as one turn in the session of the PR's latest Publication: on that session's messaging
- * socket while it runs, else by resuming it. The keys it delivered are kept in
- * `.lab/state/watch-<pr>.json`. It ends when the PR is landed or closed, and writes its start and its
+ * socket while it runs, else by resuming it. The Owner's words reach an idle background session as its
+ * user's: the relay stops it, then resumes it with them. The keys it delivered are
+ * kept in `.lab/state/watch-<pr>.json`. It ends when the PR is landed or closed, and writes its start and its
  * end to `.lab/outcomes.log`.
  *
  *   bun scripts/land-loop/relay/main.ts <pr>
@@ -16,12 +17,13 @@ import { join } from "node:path";
 
 import { decodeJson } from "../../lib/json.ts";
 import { ghEnv, requiredAuthorToken } from "../lib/author.ts";
-import { deliverer, postToSocket } from "../lib/deliver.ts";
+import { deliverer, NotStopped, postToSocket } from "../lib/deliver.ts";
 import type { Delivered } from "../lib/deliver.ts";
 import { relayFilesOf } from "../lib/relay-start.ts";
 import { checked, run } from "../lib/run.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
 import {
+  ownerWordsIn,
   prStateOf,
   readingOf,
   relayLineOf,
@@ -29,6 +31,8 @@ import {
   routeOf,
   SeenKeys,
   socketLineOf,
+  stoppedIn,
+  stopWanted,
   wakeTextOf,
   wakeThreadsQueryOf,
 } from "./wakes.ts";
@@ -68,8 +72,8 @@ export interface RelayIo {
   readonly read: () => Promise<PrState>;
   /** The session of the PR's latest Publication. */
   readonly session: () => string;
-  /** Delivers `text` to `session`; null when it did not go through. */
-  readonly deliver: (session: string, text: string) => Promise<Delivered | null>;
+  /** Delivers `text` to `session`, as the Owner's words when `ownerWords`; null when it did not go through. */
+  readonly deliver: (session: string, text: string, ownerWords: boolean) => Promise<Delivered | null>;
 }
 
 /** What one turn of the relay did: the keys it delivered, and whether the relay ends. */
@@ -96,7 +100,7 @@ export async function turn(pr: number, seen: ReadonlySet<string>, io: RelayIo): 
   }
 
   const keys = reading.wakes.map((wake) => wake.key);
-  const via = await io.deliver(io.session(), wakeTextOf(pr, reading));
+  const via = await io.deliver(io.session(), wakeTextOf(pr, reading), ownerWordsIn(reading));
 
   return { delivered: via === null ? [] : keys, via, pending: keys.length, ends: reading.ends };
 }
@@ -124,17 +128,44 @@ if (import.meta.main) {
   };
 
   const gh: RunOptions = { cwd, env: ghEnv(requiredAuthorToken(process.env)) };
-  const deliver = deliverer({ run, post: postToSocket, env: process.env, uid: process.getuid?.() ?? 0, cwd });
+
+  const deliver = deliverer({
+    run,
+    post: postToSocket,
+    sleep: (ms) => Bun.sleep(ms),
+    env: process.env,
+    uid: process.getuid?.() ?? 0,
+    cwd,
+  });
+
+  const agents = (): Promise<string> => checked(run, ["claude", "agents", "--json"], { cwd });
+  const stops = { failed: 0 };
 
   const io: RelayIo = {
     read: () => readPr(run, gh, pr),
     session: () => readFileSync(files.session, "utf8").trim(),
-    deliver: async (session, text) =>
-      deliver({
-        route: routeOf(await checked(run, ["claude", "agents", "--json"], { cwd }), session),
-        socketLine: socketLineOf(text),
-        resumeArgs: resumeArgsOf(session, text),
-      }),
+    deliver: async (session, text, ownerWords) => {
+      try {
+        const via = await deliver({
+          route: routeOf(await agents(), session, stopWanted(ownerWords, stops.failed)),
+          socketLine: socketLineOf(text),
+          resumeArgs: resumeArgsOf(session, text),
+          stopped: async () => stoppedIn(await agents(), session),
+        });
+
+        if (via !== null) {
+          stops.failed = 0;
+        }
+
+        return via;
+      } catch (error) {
+        if (error instanceof NotStopped) {
+          stops.failed += 1;
+        }
+
+        throw error;
+      }
+    },
   };
 
   outcomes("started", null);
