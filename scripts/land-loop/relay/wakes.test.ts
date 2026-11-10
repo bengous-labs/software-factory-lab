@@ -14,6 +14,7 @@ import {
   SeenKeys,
   socketLineOf,
   stoppedIn,
+  stopWanted,
   wakesOf,
   wakeTextOf,
 } from "./wakes.ts";
@@ -250,6 +251,19 @@ describe("wakesOf", () => {
       "Finding T16 on a.ts:1 by bengous-labs-agents: **Important**: off Comment on PR",
     );
     expect(wakeTextOf(7, readingOf(7, { ...OPEN, threads, comments }, new Set())).split("\n")).toHaveLength(4);
+  });
+
+  test("a landed or closed PR's reading holds no Owner's words, an unseen Owner's comment included: it never stops the session", () => {
+    const comments = [{ id: "11", author: "bengous", body: "use wording B" }];
+
+    for (const state of ["MERGED", "CLOSED"] as const) {
+      expect(ownerWordsIn(readingOf(7, { ...OPEN, state, comments }, new Set()))).toBe(false);
+    }
+  });
+
+  test("the Owner's words take the stop until three stops in a row did not show, then the socket", () => {
+    expect([0, 1, 2, 3, 4].map((failed) => stopWanted(true, failed))).toEqual([true, true, true, false, false]);
+    expect(stopWanted(false, 0)).toBe(false);
   });
 
   test("a reading holds the Owner's words only when a Wake it delivers is the Owner's", () => {

@@ -63,6 +63,11 @@ export interface Delivery {
   readonly stopped: () => Promise<boolean>;
 }
 
+/** A stop the listing did not show in time: the relay counts these to bound its stops. */
+export class NotStopped extends Error {
+  override readonly name = "NotStopped";
+}
+
 /** How often, and how many times, a stop looks for the session to have stopped: 30 s in all. */
 const STOP_LOOK_MS = 2000;
 
@@ -114,7 +119,7 @@ export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delive
       await checked(io.run, ["claude", "stop", route.id], { cwd: io.cwd, timeoutMs: 120_000 });
 
       if (!(await stoppedWithin(io, stopped))) {
-        throw new Error(`claude stop ${route.id}: the session is still listed running after 30 s`);
+        throw new NotStopped(`claude stop ${route.id}: the session is still listed running after 30 s`);
       }
     }
 

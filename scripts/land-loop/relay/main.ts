@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import { decodeJson } from "../../lib/json.ts";
 import { ghEnv, requiredAuthorToken } from "../lib/author.ts";
-import { deliverer, postToSocket } from "../lib/deliver.ts";
+import { deliverer, NotStopped, postToSocket } from "../lib/deliver.ts";
 import type { Delivered } from "../lib/deliver.ts";
 import { relayFilesOf } from "../lib/relay-start.ts";
 import { checked, run } from "../lib/run.ts";
@@ -32,6 +32,7 @@ import {
   SeenKeys,
   socketLineOf,
   stoppedIn,
+  stopWanted,
   wakeTextOf,
   wakeThreadsQueryOf,
 } from "./wakes.ts";
@@ -138,17 +139,33 @@ if (import.meta.main) {
   });
 
   const agents = (): Promise<string> => checked(run, ["claude", "agents", "--json"], { cwd });
+  const stops = { failed: 0 };
 
   const io: RelayIo = {
     read: () => readPr(run, gh, pr),
     session: () => readFileSync(files.session, "utf8").trim(),
-    deliver: async (session, text, ownerWords) =>
-      deliver({
-        route: routeOf(await agents(), session, ownerWords),
-        socketLine: socketLineOf(text),
-        resumeArgs: resumeArgsOf(session, text),
-        stopped: async () => stoppedIn(await agents(), session),
-      }),
+    deliver: async (session, text, ownerWords) => {
+      try {
+        const via = await deliver({
+          route: routeOf(await agents(), session, stopWanted(ownerWords, stops.failed)),
+          socketLine: socketLineOf(text),
+          resumeArgs: resumeArgsOf(session, text),
+          stopped: async () => stoppedIn(await agents(), session),
+        });
+
+        if (via !== null) {
+          stops.failed = 0;
+        }
+
+        return via;
+      } catch (error) {
+        if (error instanceof NotStopped) {
+          stops.failed += 1;
+        }
+
+        throw error;
+      }
+    },
   };
 
   outcomes("started", null);

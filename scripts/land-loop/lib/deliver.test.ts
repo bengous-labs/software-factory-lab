@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Ran, Run } from "../ports/run.ts";
-import { deliverer, postToSocket, socketPathsOf } from "./deliver.ts";
+import { deliverer, NotStopped, postToSocket, socketPathsOf } from "./deliver.ts";
 import type { Delivery } from "./deliver.ts";
 
 const RESUME = ["claude", "--bg", "--resume", "S1", "the lines"];
@@ -130,9 +130,13 @@ describe("deliverer", () => {
   test("a session the listing still shows running 30 s after the stop is neither resumed nor written to: the delivery throws", async () => {
     const found = world(["/run/user/1000/cc-socks/34502.sock"]);
 
-    expect(await failureOf(found.deliver(delivery(STOP, null)))).toBe(
-      "claude stop 725ecfab: the session is still listed running after 30 s",
+    const failure = await found.deliver(delivery(STOP, null)).then(
+      () => null,
+      (error: Error) => error,
     );
+
+    expect(failure).toBeInstanceOf(NotStopped);
+    expect(failure?.message).toBe("claude stop 725ecfab: the session is still listed running after 30 s");
     expect(found.runs.map((ran) => ran.argv)).toEqual([["claude", "stop", "725ecfab"]]);
     expect(found.sleeps).toHaveLength(15);
     expect(found.posts).toEqual([]);

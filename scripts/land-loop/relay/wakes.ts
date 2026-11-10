@@ -332,6 +332,16 @@ export function routeOf(agents: string, session: string, ownerWords: boolean): R
   return found.status === "busy" ? { kind: "wait" } : socket;
 }
 
+/** How many stops in a row may fail to show before the Owner's words take the socket. */
+const MAX_FAILED_STOPS = 3;
+
+/**
+ * Whether the Owner's words still seek a stop and a resume, after `failedStops` stops in a row that the
+ * listing did not show: past the bound they go on the socket, as a peer's message, rather than never.
+ */
+export const stopWanted = (ownerWords: boolean, failedStops: number): boolean =>
+  ownerWords && failedStops < MAX_FAILED_STOPS;
+
 /** Whether what `claude agents --json` printed shows `session` stopped: listed without a pid, or not listed. */
 export const stoppedIn = (agents: string, session: string): boolean =>
   routeOf(agents, session, false).kind === "resume";
