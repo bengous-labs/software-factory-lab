@@ -200,6 +200,15 @@ describe("cli", () => {
     expect(run(["list"], path)).toBe("[ ] #1 final text");
   });
 
+  test("rename with the title the task already has is refused and the file keeps its tasks", () => {
+    const path = tempFile();
+
+    run(["add", "draft"], path);
+
+    expect(() => run(["rename", "1", "draft"], path)).toThrow("task #1 already has that title");
+    expect(run(["list"], path)).toBe("[ ] #1 draft");
+  });
+
   test("remove deletes the task it names and says so", () => {
     const path = tempFile();
 
