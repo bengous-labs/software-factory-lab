@@ -14,24 +14,18 @@ export interface Guides {
   readonly project: string;
 }
 
-const ROUND_1_LOCAL =
-  "This is review round 1. A local review in the author's session read this change first. Its findings and the author's answers:";
-
-/** Round 1 reads the local review's findings, when the Stop hook wrote some; rounds 2 and 3 the earlier threads. */
+/** Round 1 has no round text; rounds 2 and 3 read the earlier threads. */
 export function roundText(request: ReviewRequest, threads: readonly EarlierThread[]): readonly string[] {
-  if (request.round === 1 && threads.length === 0) {
+  if (request.round === 1) {
     return [];
   }
 
-  const opening =
-    request.round === 1
-      ? [ROUND_1_LOCAL]
-      : [
-          request.round === 2
-            ? `This is review round 2. ${request.base} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.`
-            : `This is review round 3, the last one. ${request.base} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.`,
-          "Earlier findings and the author's answers:",
-        ];
+  const opening = [
+    request.round === 2
+      ? `This is review round 2. ${request.base} is the head review round 1 read: focus on what changed since, and read the rest only to judge it.`
+      : `This is review round 3, the last one. ${request.base} is the head review round 2 read: focus on what changed since, and read the rest only to judge it.`,
+    "Earlier findings and the author's answers:",
+  ];
 
   return [
     "",

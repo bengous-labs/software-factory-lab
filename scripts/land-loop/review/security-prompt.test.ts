@@ -44,22 +44,8 @@ const ANSWERED =
   "Report only what is wrong now. Never report again a finding the author resolved with a valid reason, nor one already open.";
 
 describe("securityPromptOf", () => {
-  test("round 1 with no local review is the security pass's prompt alone, on the review's range", () => {
+  test("round 1 is the security pass's prompt alone, on the review's range", () => {
     expect(securityPromptOf(REQUEST, GUIDES, [])).toBe(BODY);
-  });
-
-  test("round 1 with a local review's entries lists them, as the Code review's prompt does", () => {
-    const threads = [{ where: "a.ts:3", finding: "off by one", reply: "Fixed in fa2392d (local review)" }];
-
-    expect(securityPromptOf(REQUEST, GUIDES, threads)).toBe(
-      [
-        BODY,
-        "",
-        "This is review round 1. A local review in the author's session read this change first. Its findings and the author's answers:",
-        "- a.ts:3: off by one | Author: Fixed in fa2392d (local review)",
-        ANSWERED,
-      ].join("\n"),
-    );
   });
 
   test("rounds 2 and 3 name the head the round before read and list the earlier threads, the security ones among them", () => {

@@ -33,7 +33,6 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["scripts/land-loop/pr-watch.ts", at("land-loop", "entry")],
   ["scripts/land-loop/thread.ts", at("land-loop", "entry")],
   ["scripts/land-loop/comment.ts", at("land-loop", "entry")],
-  ["scripts/land-loop/local-review.ts", at("land-loop", "entry")],
   ["scripts/land-loop/queue/repost.ts", at("land-loop", "entry")],
   ["scripts/land-loop/review/run-review.ts", at("land-loop", "entry")],
   ["scripts/land-loop/review/read-threads.ts", at("land-loop", "entry")],
