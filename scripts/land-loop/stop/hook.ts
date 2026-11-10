@@ -588,21 +588,20 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
   const token = authorTokenOf(deps.env);
   const gh = ghOptions(cwd, token);
 
-  const treeClean = (await gitOut(deps, cwd, ["status", "--porcelain"])) === "";
-  const ahead = Number(await gitOut(deps, cwd, ["rev-list", "--count", `origin/${TRUNK}..HEAD`]));
-  const pr = await prOf(deps, gh, branch);
-  const mayOpen = pr === null && treeClean && ahead > 0;
-
   const snapshot: Snapshot = {
     branch,
     head,
-    treeClean,
-    ahead,
-    pr,
-    closed: mayOpen ? await closedPrsOf(deps, gh, branch) : [],
+    treeClean: (await gitOut(deps, cwd, ["status", "--porcelain"])) === "",
+    ahead: Number(await gitOut(deps, cwd, ["rev-list", "--count", `origin/${TRUNK}..HEAD`])),
+    pr: await prOf(deps, gh, branch),
+    closed: null,
   };
 
-  const admission = admit(snapshot);
+  const first = admit(snapshot);
+
+  const admission =
+    first.kind === "read-closed" ? admit({ ...snapshot, closed: await closedPrsOf(deps, gh, branch) }) : first;
+
   log({ step: "admit", branch, head, pr: snapshot.pr?.number ?? null, ...admission });
 
   if (admission.kind === "none") {

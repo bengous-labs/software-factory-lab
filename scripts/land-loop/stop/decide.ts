@@ -92,12 +92,14 @@ export interface Snapshot {
   /** Commits on HEAD that `origin/dev` lacks. */
   readonly ahead: number;
   readonly pr: PullRequest | null;
-  /** The branch's PRs closed without landing. */
-  readonly closed: readonly ClosedPullRequest[];
+  /** The branch's PRs closed without landing; null until the hook reads them, which `admit` asks for when it needs them. */
+  readonly closed: readonly ClosedPullRequest[] | null;
 }
 
 export type Admission =
   | { readonly kind: "none"; readonly reason: string }
+  /** The stop could open a PR: admit again with the branch's closed PRs read. */
+  | { readonly kind: "read-closed" }
   /** The PR is ready at this head: nothing to publish; the Nit threads a stop closes are closed. */
   | { readonly kind: "ready"; readonly pr: number; readonly reason: string }
   | { readonly kind: "stop-checks" };
@@ -143,13 +145,20 @@ export function admit(snapshot: Snapshot): Admission {
     return none("the tree has uncommitted changes");
   }
 
-  const { pr } = snapshot;
-  const closedHere = pr === null ? snapshot.closed.find((closed) => closed.headSha === snapshot.head) : undefined;
+  const { pr, closed } = snapshot;
 
-  if (closedHere !== undefined) {
-    return none(
-      `#${closedHere.number} was closed without landing at ${snapshot.head}: a stop at the head it had publishes nothing`,
-    );
+  if (pr === null) {
+    if (closed === null) {
+      return { kind: "read-closed" };
+    }
+
+    const closedHere = closed.find((one) => one.headSha === snapshot.head);
+
+    if (closedHere !== undefined) {
+      return none(
+        `#${closedHere.number} was closed without landing at ${snapshot.head}: a stop at the head it had publishes nothing`,
+      );
+    }
   }
 
   if (pr !== null && !pr.draft && pr.headSha === snapshot.head) {

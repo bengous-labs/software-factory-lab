@@ -140,6 +140,21 @@ describe("admit", () => {
     ).toEqual({ kind: "stop-checks" });
   });
 
+  test("closed PRs not read yet are asked for only when the stop could open a PR", () => {
+    expect(admit({ ...SNAPSHOT, closed: null })).toEqual({ kind: "read-closed" });
+    expect(admit({ ...SNAPSHOT, closed: null, ahead: 0 })).toEqual({
+      kind: "none",
+      reason: "agent/clear-command has no commit that dev lacks",
+    });
+    expect(admit({ ...SNAPSHOT, closed: null, treeClean: false })).toEqual({
+      kind: "none",
+      reason: "the tree has uncommitted changes",
+    });
+    expect(admit({ ...SNAPSHOT, closed: null, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({
+      kind: "stop-checks",
+    });
+  });
+
   test("a dirty tree or no new commit is said first, whatever was closed", () => {
     const closed = [{ number: 146, headSha: HEAD }];
 
