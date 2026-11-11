@@ -6,3 +6,6 @@ preload = ["./scripts/ci/fast-check-seed.ts"]
 printWidth = 120
 sortImports = true
 ignorePatterns = ["scripts/vendor/anti-slop/**"]
+
+[run]
+silent = true
