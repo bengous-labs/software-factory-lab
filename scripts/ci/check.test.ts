@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { runStages, spawnStage, STAGES, testsLabel } from "./check.ts";
+import { finish, runStages, spawnStage, STAGES, testsLabel } from "./check.ts";
 import type { Stage } from "./check.ts";
 
 const sh = (name: string, script: string): Stage => ({ name, command: ["sh", "-c", script] });
@@ -30,6 +30,22 @@ describe("runStages", () => {
     expect(verdict).toEqual({ kind: "red", exitCode: 3, report: "out\nerr\nfailed: broken" });
   });
 
+  test("a failing stage's output keeps the order its stdout and stderr lines came in", async () => {
+    const verdict = await runStages([sh("mixed", "echo a; echo b >&2; echo c; exit 1")], spawnStage);
+
+    expect(verdict).toEqual({ kind: "red", exitCode: 1, report: "a\nb\nc\nfailed: mixed" });
+  });
+
+  test("a passing stage whose label throws fails as that stage, with the error and the output", async () => {
+    const verdict = await runStages([{ ...sh("tests", "echo done"), label: testsLabel }, sh("never", "")], spawnStage);
+
+    expect(verdict).toEqual({
+      kind: "red",
+      exitCode: 1,
+      report: "done\nbun test printed no `Ran N tests` summary\nfailed: tests",
+    });
+  });
+
   test("the stages after a failing one do not run", async () => {
     const ran: string[] = [];
 
@@ -41,6 +57,30 @@ describe("runStages", () => {
 
     expect(ran).toEqual(["sh -c ", "sh -c "]);
     expect(verdict).toEqual({ kind: "red", exitCode: 1, report: "failed: b" });
+  });
+});
+
+function recorder() {
+  const out: string[] = [];
+  const err: string[] = [];
+  const lines = { out, err };
+
+  return { lines, write: { out: (line: string) => lines.out.push(line), err: (line: string) => lines.err.push(line) } };
+}
+
+describe("finish", () => {
+  test("green prints its line on stdout and exits 0", () => {
+    const { lines, write } = recorder();
+
+    expect(finish({ kind: "green", line: "ok: a" }, write)).toBe(0);
+    expect(lines).toEqual({ out: ["ok: a"], err: [] });
+  });
+
+  test("red prints its report on stderr and exits with the stage's code", () => {
+    const { lines, write } = recorder();
+
+    expect(finish({ kind: "red", exitCode: 3, report: "failed: a" }, write)).toBe(3);
+    expect(lines).toEqual({ out: [], err: ["failed: a"] });
   });
 });
 

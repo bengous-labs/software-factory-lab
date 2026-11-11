@@ -48,18 +48,20 @@ export const STAGES: readonly Stage[] = [
   { name: "coverage floor", command: ["bun", "scripts/gates/check-coverage-floor.ts"] },
 ];
 
-/** Runs `command` in the current directory, its stdout then its stderr captured as its output. */
+/** Runs `command` in the current directory, its stderr sent into its stdout so the lines keep their order. */
 export async function spawnStage(command: readonly string[]): Promise<Ran> {
-  const child = Bun.spawn([...command], { stdout: "pipe", stderr: "pipe" });
+  // `sh` merges the two streams: `Bun.spawn` gives each its own pipe.
+  const child = Bun.spawn(["sh", "-c", '"$@" 2>&1', "sh", ...command], { stdout: "pipe", stderr: "inherit" });
+  const [output, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
 
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-
-  return { exitCode, output: stdout + stderr };
+  return { exitCode, output };
 }
+
+const failed = (stage: Stage, exitCode: number, output: string): Verdict => {
+  const shown = output.trimEnd();
+
+  return { kind: "red", exitCode, report: `${shown === "" ? "" : `${shown}\n`}failed: ${stage.name}` };
+};
 
 export async function runStages(
   stages: readonly Stage[],
@@ -71,28 +73,35 @@ export async function runStages(
     const ran = await run(stage.command);
 
     if (ran.exitCode !== 0) {
-      const output = ran.output.trimEnd();
-
-      return {
-        kind: "red",
-        exitCode: ran.exitCode,
-        report: `${output === "" ? "" : `${output}\n`}failed: ${stage.name}`,
-      };
+      return failed(stage, ran.exitCode, ran.output);
     }
 
-    labels.push(stage.label === undefined ? stage.name : stage.label(ran.output));
+    try {
+      labels.push(stage.label === undefined ? stage.name : stage.label(ran.output));
+    } catch (error) {
+      return failed(stage, 1, `${ran.output.trimEnd()}\n${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   return { kind: "green", line: `ok: ${labels.join(", ")}` };
 }
 
-if (import.meta.main) {
-  const verdict = await runStages(STAGES, spawnStage);
-
+/** Prints `verdict` (green on stdout, red on stderr) and returns the exit code `bun check` ends with. */
+export function finish(
+  verdict: Verdict,
+  write: { readonly out: (line: string) => void; readonly err: (line: string) => void },
+): number {
   if (verdict.kind === "red") {
-    console.error(verdict.report);
-    process.exit(verdict.exitCode);
+    write.err(verdict.report);
+
+    return verdict.exitCode;
   }
 
-  console.log(verdict.line);
+  write.out(verdict.line);
+
+  return 0;
+}
+
+if (import.meta.main) {
+  process.exit(finish(await runStages(STAGES, spawnStage), { out: console.log, err: console.error }));
 }
