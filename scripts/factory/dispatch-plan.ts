@@ -137,11 +137,30 @@ export function launchArgvOf({ issue, model, settings, prompt }: Launch): string
 }
 
 /**
- * The variables the launch keeps of the caller's environment. A launch that starts Claude Code's
- * background service gives its environment to every session started after it, so the caller's token,
- * Author marker or session variables never reach it.
+ * The variables the launch keeps of the caller's environment: what a session needs to start, to
+ * authenticate to the API and to reach it. When this launch starts Claude Code's background service,
+ * the service gives its environment to every session started after it, so the caller's `GH_TOKEN`,
+ * Author marker or session variables stay out of it. A service already running keeps the environment
+ * it started with; the Worker settings' `env` still sets the Worker's identity over it.
  */
-const KEPT = ["HOME", "PATH", "USER", "SHELL", "LANG", "TERM", "XDG_RUNTIME_DIR", "CLAUDE_CONFIG_DIR"];
+const KEPT = [
+  "HOME",
+  "PATH",
+  "USER",
+  "SHELL",
+  "LANG",
+  "TERM",
+  "TMPDIR",
+  "XDG_RUNTIME_DIR",
+  "XDG_CONFIG_HOME",
+  "CLAUDE_CONFIG_DIR",
+  "ANTHROPIC_API_KEY",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "NO_PROXY",
+  "NODE_EXTRA_CA_CERTS",
+];
 
 export function launchEnvOf(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
   return Object.fromEntries(KEPT.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));

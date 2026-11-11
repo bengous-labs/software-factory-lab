@@ -7,7 +7,7 @@
 import { Schema } from "effect";
 
 import { OWNER_LOGIN } from "../land-loop/logins.ts";
-import type { Run, RunOptions } from "../land-loop/ports/run.ts";
+import type { Ran, Run, RunOptions } from "../land-loop/ports/run.ts";
 import { decodeJson } from "../lib/json.ts";
 import {
   branchOf,
@@ -54,14 +54,37 @@ const IssueView = Schema.Struct({
   author: Schema.Struct({ login: Schema.String }),
 });
 
+function failureOf(command: string, ran: Ran): string {
+  return `${command} exited ${ran.code}: ${(ran.stderr || ran.stdout).trim()}`;
+}
+
 async function out(run: Run, argv: readonly string[], options: RunOptions): Promise<string> {
   const ran = await run(argv, options);
 
   if (ran.code !== 0) {
-    throw new Error(`${argv.slice(0, 3).join(" ")} exited ${ran.code}: ${(ran.stderr || ran.stdout).trim()}`);
+    throw new Error(failureOf(argv.slice(0, 3).join(" "), ran));
   }
 
   return ran.stdout;
+}
+
+/** Runs each removal, whatever the one before did, and returns the failures, with the command each names. */
+async function removalFailures(
+  run: Run,
+  removals: ReadonlyArray<readonly string[]>,
+  options: RunOptions,
+): Promise<string[]> {
+  const failures: string[] = [];
+
+  for (const argv of removals) {
+    const ran = await run(argv, options);
+
+    if (ran.code !== 0) {
+      failures.push(failureOf(argv.join(" "), ran));
+    }
+  }
+
+  return failures;
 }
 
 /** Throws unless `path` makes the Worker an Author with the machine account's token. */
@@ -154,10 +177,18 @@ export async function dispatch(
   const launched = await launch(argv, { cwd: checkout, env: launchEnvOf(env) });
 
   if (launched.code !== 0) {
-    await out(run, ["git", "worktree", "remove", worktree], at);
-    await out(run, ["git", "branch", "-D", branch], at);
+    const left = await removalFailures(
+      run,
+      [
+        ["git", "worktree", "remove", worktree],
+        ["git", "branch", "-D", branch],
+      ],
+      at,
+    );
 
-    throw new Error(`claude --bg exited ${launched.code}: ${(launched.stderr || launched.stdout).trim()}`);
+    throw new Error(
+      `${failureOf("claude --bg", launched)}${left.length === 0 ? "" : `. Remove what it left: ${left.join("; ")}`}`,
+    );
   }
 
   return { issue, title, worktree, branch, session: sessionIdOf(launched.stdout) };

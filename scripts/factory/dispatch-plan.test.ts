@@ -148,6 +148,21 @@ describe("launchArgvOf", () => {
 });
 
 describe("launchEnvOf", () => {
+  test("keeps what Claude Code needs to authenticate and reach the API", () => {
+    const reach = {
+      ANTHROPIC_API_KEY: "k",
+      CLAUDE_CODE_OAUTH_TOKEN: "o",
+      HTTPS_PROXY: "http://p",
+      HTTP_PROXY: "http://p",
+      NO_PROXY: "localhost",
+      NODE_EXTRA_CA_CERTS: "/ca.pem",
+      TMPDIR: "/tmp/x",
+      XDG_CONFIG_HOME: "/h/.config",
+    };
+
+    expect(launchEnvOf({ ...reach, GH_TOKEN: "t" })).toEqual(reach);
+  });
+
   test("keeps only what a session needs to start, so no token or Author marker of the caller reaches it", () => {
     expect(
       launchEnvOf({ HOME: "/h", PATH: "/bin", GH_TOKEN: "t", LAB_AUTHOR: "1", CLAUDECODE: "1", LANG: undefined }),

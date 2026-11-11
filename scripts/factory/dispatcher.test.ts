@@ -198,6 +198,22 @@ describe("dispatch", () => {
     ]);
   });
 
+  test("keeps the launch's error and tries both removals when the cleanup fails", async () => {
+    const { ports, calls } = world({
+      "claude --bg": { code: 1, stdout: "", stderr: "no such model" },
+      "git worktree remove": { code: 128, stdout: "", stderr: "worktree is locked" },
+      "git branch -D": { code: 1, stdout: "", stderr: "branch is checked out" },
+    });
+
+    expect(await failureOf(dispatch(ports, REQUEST))).toBe(
+      `claude --bg exited 1: no such model. Remove what it left: git worktree remove ${WORKTREE} exited 128: worktree is locked; git branch -D issue/7-add-a-flag exited 1: branch is checked out`,
+    );
+    expect(calls.slice(-2).map((call) => call.argv.slice(0, 3).join(" "))).toEqual([
+      "git worktree remove",
+      "git branch -D",
+    ]);
+  });
+
   test("fails with what gh printed when the issue cannot be read", async () => {
     const { ports } = world({ "gh issue": { code: 1, stdout: "", stderr: "could not find issue" } });
 
