@@ -376,6 +376,8 @@ describe("decide", () => {
         reason: "#7 holds a question to the Owner with no answer: nothing is pushed or readied",
       });
     }
+
+    expect(decide(null, FINISHED, true)).toEqual({ kind: "open" });
   });
 
   test("a question of blanks alone is no question", () => {
