@@ -7,7 +7,7 @@
 import { Effect, Result, Schema, SchemaGetter, SchemaTransformation } from "effect";
 
 import { TokenCounts, tokensText } from "../../lib/tokens.ts";
-import { DELTA_READ } from "../merge-bot/decide.ts";
+import { Round } from "../merge-bot/decide.ts";
 import type { SessionAnswer } from "../ports/review.ts";
 
 export const Severity = Schema.Literals(["important", "nit", "pre_existing"]);
@@ -15,9 +15,6 @@ export const Severity = Schema.Literals(["important", "nit", "pre_existing"]);
 export type Severity = typeof Severity.Type;
 
 const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
-
-/** Review rounds 1 to 3, and the Delta read. */
-const Round = Schema.Literals([1, 2, 3, DELTA_READ]);
 
 const Sha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/u));
 

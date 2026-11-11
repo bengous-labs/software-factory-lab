@@ -166,28 +166,42 @@ export function ownerWaitOf(pr: PrData): number {
 
 const ROUND = /^Review round (\d+) /u;
 
+/** A Delta read's body as `post-plan.ts` writes it, with the patch its marker names. */
+const DELTA_READ = /^Delta read [\s\S]*<!-- lab-review patch=(\S+) round=\d+ -->/u;
+
 /** A round's counts as `post-plan.ts` writes them: the Code review's, then the security pass's when it ran. */
 const IMPORTANT_COUNT = /: (\d+) important, \d+ nit(?:; security: (\d+) important, \d+ nit)?\./u;
 
-/** The latest review of each round the App posted, keyed by its round number. */
-function latestRounds(reviews: PrData["reviews"]): ReadonlyMap<number, string> {
-  const rounds = new Map<number, string>();
+/**
+ * The latest review the App posted of each round, keyed `round <n>`, and of each patch's Delta read,
+ * keyed `delta <patch>`: a review posted again counts once.
+ */
+function latestReviews(reviews: PrData["reviews"]): ReadonlyMap<string, string> {
+  const latest = new Map<string, string>();
 
   for (const review of reviews.toSorted((a, b) => (a.submitted_at ?? "").localeCompare(b.submitted_at ?? ""))) {
-    const round = review.user?.login === APP ? ROUND.exec(review.body)?.[1] : undefined;
+    if (review.user?.login !== APP) {
+      continue;
+    }
 
-    if (round !== undefined) {
-      rounds.set(Number(round), review.body);
+    const round = ROUND.exec(review.body)?.[1];
+    const patch = DELTA_READ.exec(review.body)?.[1];
+    const key = round === undefined ? (patch === undefined ? undefined : `delta ${patch}`) : `round ${round}`;
+
+    if (key !== undefined) {
+      latest.set(key, review.body);
     }
   }
 
-  return rounds;
+  return latest;
 }
 
-export const roundsOf = (reviews: PrData["reviews"]): number => latestRounds(reviews).size;
+export const roundsOf = (reviews: PrData["reviews"]): number =>
+  [...latestReviews(reviews).keys()].filter((key) => key.startsWith("round ")).length;
 
+/** The Importants of each round and each Delta read, from the latest posting of each. */
 export const importantFoundOf = (reviews: PrData["reviews"]): number =>
-  [...latestRounds(reviews).values()].reduce((sum, body) => {
+  [...latestReviews(reviews).values()].reduce((sum, body) => {
     const [, code = "0", security = "0"] = IMPORTANT_COUNT.exec(body) ?? [];
 
     return sum + Number(code) + Number(security);

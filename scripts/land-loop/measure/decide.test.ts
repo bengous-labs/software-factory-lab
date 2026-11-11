@@ -145,6 +145,13 @@ describe("Owner wait", () => {
   });
 });
 
+/** A Delta read the App posted on `patch`, as `post-plan.ts` writes its body. */
+const read = (patch: string, important: number, at: string) => ({
+  user: { login: "bengous-labs-agents[bot]" },
+  body: `Delta read (m, /code-review medium): ${important} important, 0 nit.\n\nReview run: u\n\n<!-- lab-review patch=${patch} round=4 -->`,
+  submitted_at: at,
+});
+
 describe("Rounds and Important found", () => {
   test("from the fixtures: #86 ran 2 rounds and found 2, #88 2 and 1, #91 1 and 0", () => {
     expect([PR86, PR88, PR91].map((pr) => [roundsOf(pr.reviews), importantFoundOf(pr.reviews)])).toEqual([
@@ -191,14 +198,21 @@ describe("Rounds and Important found", () => {
     expect(importantFoundOf(reviews)).toBe(3);
   });
 
-  test("a Delta read is no round: it is not counted among them", () => {
-    const read = {
-      user: { login: "bengous-labs-agents[bot]" },
-      body: "Delta read (m, /code-review medium): 1 important, 0 nit.",
-      submitted_at: "2026-11-07T21:40:00Z",
-    };
+  test("a Delta read is no round, but its Importants are found: the latest posting of each patch's read counts once", () => {
+    const reviews = [
+      {
+        user: { login: "bengous-labs-agents[bot]" },
+        body: "Review round 3 (m, /code-review high): 1 important, 0 nit.",
+        submitted_at: "2026-11-07T21:30:00Z",
+      },
+      read("p4", 3, "2026-11-07T21:40:00Z"),
+      read("p4", 1, "2026-11-07T21:45:00Z"),
+      read("p5", 2, "2026-11-07T21:50:00Z"),
+      { ...read("p6", 9, "2026-11-07T21:55:00Z"), user: { login: "bengous" } },
+    ];
 
-    expect(roundsOf([read])).toBe(0);
+    expect(roundsOf(reviews)).toBe(1);
+    expect(importantFoundOf(reviews)).toBe(4);
   });
 
   test("a round with a security pass counts the Importants of both passes", () => {

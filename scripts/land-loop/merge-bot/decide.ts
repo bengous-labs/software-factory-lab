@@ -71,8 +71,8 @@ export interface RoutingAnswer {
  */
 export const DELTA_READ = 4;
 
-/** Review rounds 1 to 3, and the Delta read. */
-const Round = Schema.Literals([1, 2, 3, DELTA_READ]);
+/** Review rounds 1 to 3, and the Delta read: the review job's request reads the same numbers. */
+export const Round = Schema.Literals([1, 2, 3, DELTA_READ]);
 
 export type ReviewRound = typeof Round.Type;
 
