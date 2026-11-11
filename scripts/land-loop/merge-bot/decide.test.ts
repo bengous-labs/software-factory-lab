@@ -2136,6 +2136,12 @@ describe("the Delta read after Review round 3", () => {
         expect(kinds({ ...asking, reviewJob: completed(result) })).not.toContain("to-draft");
         expect(kinds({ ...asking, record: unheld, reviewJob: completed(result) })).toContain("to-draft");
       }
+
+      // A Review round asks its Author whatever the record holds.
+      const round3: ReportedResult = { ...read(finding("important")), request: { ...read().request, round: 3 } };
+      const asking3 = { ...asking, record: { ...asking.record, review: { ...asked, round: 3 as const } } };
+
+      expect(kinds({ ...asking3, reviewJob: completed(round3) })).toContain("to-draft");
     });
 
     test("a Land approval given before the Delta read posted a new Important goes, with a comment that says why; one before a read that only reports open ones again stays", () => {

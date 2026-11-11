@@ -737,20 +737,17 @@ export function postedFindingsOf(
 /**
  * Whether the review of `result` sends the PR back to draft, for its Author's turn: an Important does,
  * whoever opened the PR; a Nit does on a PR the Author's machine account opened, which then cannot land
- * before that Author's next stop. A PR the Owner opened stays ready after Nits alone. A read on a PR
+ * before that Author's next stop. A PR the Owner opened stays ready after Nits alone. A Delta read on a PR
  * `record` holds for the Owner sends nothing back: the Owner, the last reader, is asked after each read,
- * and a draft would keep the Owner out while the Author pushes again.
+ * and a draft would keep the Owner out while the Author pushes again. A Review round always asks its Author.
  */
 function sendsBack(snapshot: Snapshot, record: StateRecord, result: ReportedResult): boolean {
   const reports = (severity: "important" | "nit"): boolean =>
     result.report.findings.some((finding) => finding.severity === severity);
 
-  // Only a Delta read runs on a PR held for the Owner: no Review round follows round 3.
-  return (
-    !snapshot.draft &&
-    record.ownerHold === undefined &&
-    (reports("important") || (reports("nit") && snapshot.openedByAuthor))
-  );
+  const heldRead = result.request.round === DELTA_READ && record.ownerHold !== undefined;
+
+  return !snapshot.draft && !heldRead && (reports("important") || (reports("nit") && snapshot.openedByAuthor));
 }
 
 /**
