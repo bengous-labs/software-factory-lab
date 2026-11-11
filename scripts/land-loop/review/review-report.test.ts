@@ -78,7 +78,7 @@ describe("ReviewInputs", () => {
     }
   });
 
-  test("a round outside 1 to 3, a number that is not one, a head that is not a SHA, an unknown effort or a security flag that is not true or false is refused", () => {
+  test("a round outside 1 to 4, a number that is not one, a head that is not a SHA, an unknown effort or a security flag that is not true or false is refused", () => {
     const inputs = {
       pr: "80",
       head: HEAD,
@@ -92,7 +92,7 @@ describe("ReviewInputs", () => {
 
     for (const wrong of [
       { round: "0" },
-      { round: "4" },
+      { round: "5" },
       { pr: "eighty" },
       { pr: "8.5" },
       { head: "HEAD" },

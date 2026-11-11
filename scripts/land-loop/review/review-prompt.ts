@@ -4,6 +4,7 @@
  * reaches the fork as part of its review target.
  */
 
+import { DELTA_READ } from "../merge-bot/decide.ts";
 import type { EarlierThread } from "./findings.ts";
 import type { ReviewRequest } from "./review-report.ts";
 
@@ -38,10 +39,19 @@ export function earlierIdOf(index: number): string {
 /**
  * Round 1 has no round text; rounds 2 and 3 read the earlier threads, each under its id, and report
  * again every earlier Important that is still wrong: the Merge bot closes the open ones they leave out.
+ * The Delta read reads the push after round 3 alone and reports only what blocks.
  */
 export function roundText(request: ReviewRequest, threads: readonly EarlierThread[]): readonly string[] {
   if (request.round === 1) {
     return [];
+  }
+
+  if (request.round === DELTA_READ) {
+    return [
+      "",
+      `This is a read of a push after review round 3, the last round. ${request.base} is the head review round 3 read: read only what changed since, and the rest only to judge it.`,
+      "Report Important findings only: a Nit is not worth another turn now.",
+    ];
   }
 
   const opening = [

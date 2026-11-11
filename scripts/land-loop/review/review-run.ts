@@ -5,6 +5,7 @@
  * it; the result names that finding's review thread instead.
  */
 
+import { DELTA_READ } from "../merge-bot/decide.ts";
 import type { SessionAnswer } from "../ports/review.ts";
 import type { EarlierThread } from "./findings.ts";
 import { earlierIdOf, promptOf } from "./review-prompt.ts";
@@ -47,5 +48,8 @@ export async function reviewRunOf(
   const reported = resultOf(request, code, runUrl).kind === "reported";
   const security = request.security && reported ? await session(securityPromptOf(request, guides, threads)) : null;
 
-  return withEarlierThreads(mergedResultOf(request, code, security, runUrl), request.round === 1 ? [] : threads);
+  // Round 1 and the Delta read list no earlier finding: an id they name is none.
+  const shown = request.round === 1 || request.round === DELTA_READ ? [] : threads;
+
+  return withEarlierThreads(mergedResultOf(request, code, security, runUrl), shown);
 }

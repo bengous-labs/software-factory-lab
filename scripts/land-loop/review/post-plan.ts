@@ -8,6 +8,7 @@
 import type { Schema } from "effect";
 
 import { codeSpan, escapeHtml, escapeInline } from "../../lib/markdown.ts";
+import { reviewNameOf } from "../merge-bot/decide.ts";
 import { markerOf, movedLineOf } from "./findings.ts";
 import type { ReviewThread } from "./findings.ts";
 import type { ReportedFinding, ReportedResult, ReviewRequest, Severity } from "./review-report.ts";
@@ -230,7 +231,7 @@ function bodyOf(plan: PostPlan, result: ReportedResult): string {
   const preExisting = plan.preExisting === 0 ? "" : ` ${plan.preExisting} pre-existing finding(s) not posted.`;
 
   return [
-    `Review round ${request.round} (${result.model ?? request.model}, /code-review ${request.effort}): ${found}${preExisting}`,
+    `${reviewNameOf(request.round)} (${result.model ?? request.model}, /code-review ${request.effort}): ${found}${preExisting}`,
     "",
     `Review run: ${result.runUrl}`,
     "",

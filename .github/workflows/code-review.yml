@@ -22,7 +22,7 @@ on:
         description: The patch identity the Merge bot keys the review on
         required: true
       round:
-        description: The review round, 1, 2 or 3
+        description: The review round, 1, 2 or 3, or 4 for the Delta read of a push after round 3
         required: true
       model:
         description: The model alias

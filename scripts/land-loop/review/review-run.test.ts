@@ -107,17 +107,17 @@ describe("reviewRunOf", () => {
     ]);
   });
 
-  test("a Review round 1 was shown no earlier finding: an id it names reads as none", async () => {
-    const request = { ...REQUEST, round: 1 as const };
+  test("a Review round 1 and a Delta read were shown no earlier finding: an id they name reads as none", async () => {
+    for (const round of [1, 4] as const) {
+      const result = await reviewRunOf(
+        { ...REQUEST, round },
+        INPUTS,
+        fakeSession([answered([{ ...FINDING, earlier: "E1" }])]).session,
+        RUN_URL,
+      );
 
-    const result = await reviewRunOf(
-      request,
-      INPUTS,
-      fakeSession([answered([{ ...FINDING, earlier: "E1" }])]).session,
-      RUN_URL,
-    );
-
-    expect(result.kind === "reported" && result.report.findings.map((finding) => finding.earlier)).toEqual([null]);
+      expect(result.kind === "reported" && result.report.findings.map((finding) => finding.earlier)).toEqual([null]);
+    }
   });
 
   test("a failed result has no finding to read back", () => {

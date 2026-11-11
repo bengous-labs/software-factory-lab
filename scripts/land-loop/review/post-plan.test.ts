@@ -385,6 +385,12 @@ describe("reviewOf", () => {
     );
     expect(firstLine(withPass())).toBe("Review round 1 (claude-opus-5-5, /code-review high): nothing to fix.");
   });
+
+  test("a Delta read's body names it so, never as a Review round 4", () => {
+    const read = { ...withPass(), request: { ...withPass().request, round: 4 as const } };
+
+    expect(firstLine(read)).toBe("Delta read (claude-opus-5-5, /code-review high): nothing to fix.");
+  });
 });
 
 const APP = "bengous-labs-agents";
