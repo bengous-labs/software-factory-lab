@@ -14,8 +14,8 @@ import {
   decide,
   DONE_SCHEMA,
   doneAnswerOf,
+  fixedListOf,
   fixedOf,
-  fixedOfBody,
   fixedRecordBodyOf,
   fixedRecordIn,
   noAuthorToken,
@@ -557,15 +557,15 @@ describe("the findings the Author fixed", () => {
   test("a later stop adds its fixes to the record; one that adds none writes nothing", () => {
     const record = { comment: "C1", fixed: ["T1"] };
 
-    expect(fixedOfBody(fixedRecordBodyOf(record, ["T2", "T1"]) ?? "")).toEqual(["T1", "T2"]);
+    expect(fixedListOf(fixedRecordBodyOf(record, ["T2", "T1"]) ?? "")).toEqual(["T1", "T2"]);
     expect(fixedRecordBodyOf(record, ["T1"])).toBeNull();
     expect(fixedRecordBodyOf(record, [])).toBeNull();
   });
 
   test("the list reads back as written, ids of GitHub's alphabet included; a body with no list names none", () => {
-    expect(fixedOfBody(fixedRecordOf(["PRRT_kwDOQ0-ab_c1", "PRRT_x2"]).body)).toEqual(["PRRT_kwDOQ0-ab_c1", "PRRT_x2"]);
-    expect(fixedOfBody(`${FIXED_MARK} -->`)).toEqual([]);
-    expect(fixedOfBody("a comment")).toEqual([]);
+    expect(fixedListOf(fixedRecordOf(["PRRT_kwDOQ0-ab_c1", "PRRT_x2"]).body)).toEqual(["PRRT_kwDOQ0-ab_c1", "PRRT_x2"]);
+    expect(fixedListOf(`${FIXED_MARK} -->`)).toEqual([]);
+    expect(fixedListOf("a comment")).toBeNull();
   });
 
   test("the record is the comment of the Author's machine account that carries the mark; another login's is not", () => {
@@ -578,6 +578,19 @@ describe("the findings the Author fixed", () => {
     });
     expect(fixedRecordIn([forged, question])).toEqual({ comment: null, fixed: [] });
     expect(fixedRecordIn([])).toEqual({ comment: null, fixed: [] });
+  });
+
+  test("a comment that quotes the mark inside a line, such as the Author's question in a code span, holds no list", () => {
+    const quoted = `Should \`${FIXED_MARK} T1 -->\` stay?`;
+    const question = { id: "C2", author: AUTHOR_LOGIN, body: questionCommentOf(quoted, "feat/7-x", "S1") };
+
+    expect(question.body).toContain(`${FIXED_MARK} T1 -->`);
+    expect(fixedListOf(question.body)).toBeNull();
+    expect(fixedListOf(`x ${FIXED_MARK} T1 -->`)).toBeNull();
+    expect(fixedListOf(`${FIXED_MARK} T1 --> x`)).toBeNull();
+    expect(fixedListOf(`intro\n${FIXED_MARK} T1 -->\nend`)).toEqual(["T1"]);
+    expect(fixedRecordIn([question, fixedRecordOf(["T2"])])).toEqual({ comment: "C1", fixed: ["T2"] });
+    expect(fixedRecordIn([question])).toEqual({ comment: null, fixed: [] });
   });
 });
 

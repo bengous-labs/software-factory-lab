@@ -21,7 +21,6 @@ import { Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { escapeHtml } from "../../lib/markdown.ts";
 import { tokensText } from "../../lib/tokens.ts";
-import { FIXED_MARK } from "../author-mark.ts";
 import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import { ask } from "../lib/ask.ts";
@@ -49,7 +48,7 @@ import { judgeFailed, ROUTING_JUDGE_MODEL, routingJudge } from "../routing/routi
 import type { RoutingVerdict } from "../routing/routing-judge.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
 import type { JudgeAsk } from "../routing/routing-rules.ts";
-import { fixedOfBody } from "../stop/decide.ts";
+import { fixedListOf } from "../stop/decide.ts";
 import {
   CI_CHECKS,
   ciOf,
@@ -59,24 +58,25 @@ import {
   LAND_APPROVAL_LABEL,
   LAND_GATE,
   landApprovalCounts,
-  ledgerOf,
   MERGE_BOT_STATE_MARKER,
   patchDeltaStart,
   postedFindingsOf,
   recordOfComment,
   REVIEW_CHECK,
-  stateCommentOf,
+  stateWriteOf,
   storedLandRouteOf,
 } from "./decide.ts";
 import type {
   CheckState,
   LandRoute,
+  LedgerInputs,
   ReviewDepth,
   ReviewJob,
   ReviewRound,
   ReviewState,
   RoutingAnswer,
   Snapshot,
+  StateRead,
   StateRecord,
   Step,
 } from "./decide.ts";
@@ -341,13 +341,10 @@ async function pullOf(env: Env, number: number): Promise<Pull> {
 }
 
 /**
- * What the PR's conversation holds for the Merge bot: its state comment, null before it posts one, the
- * record it holds, and the threads the Author says it fixed, from the Stop hook's comment.
+ * What the PR's conversation holds for the Merge bot: its state comment as a decision reads it, and the
+ * threads the Author says it fixed, from the Stop hook's comment.
  */
-interface StateComment {
-  readonly id: number | null;
-  readonly body: string | null;
-  readonly record: StateRecord;
+interface StateComment extends StateRead {
   readonly fixed: ReadonlySet<string>;
 }
 
@@ -360,43 +357,70 @@ export function stateCommentIn(
     (comment) => comment.user?.login === appLogin && comment.body.includes(MERGE_BOT_STATE_MARKER),
   );
 
-  const authors = comments.find((comment) => comment.user?.login === authorLogin && comment.body.includes(FIXED_MARK));
+  const fixed = comments.flatMap((comment) => {
+    const listed = comment.user?.login === authorLogin ? fixedListOf(comment.body) : null;
+
+    return listed === null ? [] : [listed];
+  })[0];
 
   return {
     id: mine?.id ?? null,
     body: mine?.body ?? null,
     record: mine === undefined ? EMPTY_RECORD : recordOfComment(mine.body),
-    fixed: new Set(authors === undefined ? [] : fixedOfBody(authors.body)),
+    fixed: new Set(fixed),
   };
 }
 
+/** Every page of the PR's conversation comments: the Stop hook's record of the fixed findings may come past the first hundred. */
+export function conversationReader(
+  runner: Run,
+): (where: Pick<Env, "repo" | "cwd">, pr: number) => Promise<typeof IssueComments.Type> {
+  return async (where, pr) => {
+    const path = `repos/${where.repo}/issues/${pr}/comments?per_page=100`;
+    const out = await checked(runner, ["gh", "api", "-X", "GET", "--paginate", "--slurp", path], { cwd: where.cwd });
+
+    return decodeJson(Schema.Array(IssueComments), `gh api ${path}`, out).flat();
+  };
+}
+
+const conversationOf = conversationReader(run);
+
 async function stateOf(env: Env, pr: number): Promise<StateComment> {
-  return stateCommentIn(await api(env, IssueComments, `repos/${env.repo}/issues/${pr}/comments?per_page=100`), env);
+  return stateCommentIn(await conversationOf(env, pr), env);
 }
 
 /**
- * Writes `body`, the state comment of `record` and the ledger, over `state`, the comment as the decision
- * read it: when the record changed, or when the comment shows another ledger, whether the record changed
- * or not. A PR with no comment gets one with its first record.
+ * Writes over the state comment `read` the record `record` and its ledger from `inputs`, when the comment
+ * does not hold them already (`stateWriteOf`): a new comment when the PR has none, else an edit.
  */
-async function refreshState(
-  env: Env,
+export function stateSaver(
+  runner: Run,
+): (
+  where: Pick<Env, "repo" | "cwd">,
   pr: number,
-  state: StateComment,
-  { record, body }: { readonly record: StateRecord; readonly body: string },
-): Promise<void> {
-  if (record !== state.record || (state.id !== null && state.body !== body)) {
-    await writeState(env, pr, state.id, body);
-  }
+  read: StateRead,
+  change: { readonly record: StateRecord; readonly inputs: LedgerInputs },
+) => Promise<void> {
+  return async (where, pr, read, { record, inputs }) => {
+    const body = stateWriteOf(read, record, inputs);
+
+    if (body === null) {
+      return;
+    }
+
+    const [method, path] =
+      read.id === null
+        ? ["POST", `repos/${where.repo}/issues/${pr}/comments`]
+        : ["PATCH", `repos/${where.repo}/issues/comments/${read.id}`];
+
+    await checked(runner, ["gh", "api", "-X", method, path, "--input", "-"], {
+      cwd: where.cwd,
+      stdin: JSON.stringify({ body }),
+    });
+  };
 }
 
-async function writeState(env: Env, pr: number, id: number | null, body: string): Promise<void> {
-  if (id === null) {
-    await send(env, "POST", `repos/${env.repo}/issues/${pr}/comments`, { body });
-  } else {
-    await send(env, "PATCH", `repos/${env.repo}/issues/comments/${id}`, { body });
-  }
-}
+const saveState = stateSaver(run);
 
 interface Range {
   readonly base: string;
@@ -1069,6 +1093,27 @@ async function perform(
   }
 }
 
+/**
+ * The ledger's inputs once `step` is done. Resolving threads changes what the ledger shows, and no later
+ * decision may come to show it, as when the Owner's Land approval closes the open Importants and the PR
+ * lands: the threads are read again and the ledger written now.
+ */
+async function ledgerAfter(
+  env: Env,
+  pr: number,
+  step: Step,
+  { record, inputs }: { readonly record: StateRecord; readonly inputs: LedgerInputs },
+): Promise<LedgerInputs> {
+  if (step.kind !== "resolve-threads") {
+    return inputs;
+  }
+
+  const next = { ...inputs, findings: ledgerFindingsOf(threadLoginsOf(env), await threadsOf(env, pr)) };
+  await saveState(env, pr, await stateOf(env, pr), { record, inputs: next });
+
+  return next;
+}
+
 async function advance(
   env: Env,
   number: number,
@@ -1105,21 +1150,24 @@ async function advance(
     log(`#${number} steps: ${decision.steps.map((step) => step.kind).join(", ")}`);
     let current: StateRecord | null = record;
     let decideAgain = false;
-    const findings = ledgerFindingsOf(threadLoginsOf(env), threads);
+    let inputs: LedgerInputs = { findings: ledgerFindingsOf(threadLoginsOf(env), threads), fixed: state.fixed };
 
-    const bodyOf = (next: StateRecord): string =>
-      stateCommentOf(next, ledgerOf(findings, state.fixed, next.reviewRounds));
-
-    await refreshState(env, number, state, { record, body: bodyOf(record) });
+    await saveState(env, number, state, { record, inputs });
 
     for (const step of decision.steps) {
-      const { id } = await stateOf(env, number);
-      const write = (next: StateRecord): Promise<void> => writeState(env, number, id, bodyOf(next));
+      const read = await stateOf(env, number);
+      const ledger = inputs;
+
+      const write = (next: StateRecord): Promise<void> =>
+        saveState(env, number, read, { record: next, inputs: ledger });
+
       current = await perform(env, pr, range, write, current, step, log);
 
       if (current === null) {
         return;
       }
+
+      inputs = await ledgerAfter(env, number, step, { record: current, inputs });
 
       if (step.kind === "route" || step.kind === "post-review") {
         decideAgain = true;

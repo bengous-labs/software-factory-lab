@@ -84,6 +84,7 @@ describe("promptOf", () => {
         id: "T",
         isResolved: true,
         isOutdated: false,
+        resolvedBy: null,
         path: "a.ts",
         line: 3,
         comments: {

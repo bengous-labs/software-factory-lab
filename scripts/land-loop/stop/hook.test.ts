@@ -7,13 +7,13 @@ import { Schema } from "effect";
 import * as fc from "fast-check";
 
 import { decodeJson } from "../../lib/json.ts";
-import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
+import { AUTHOR_MARK, FIXED_MARK, REJECT_MARK } from "../author-mark.ts";
 import { pushArgs } from "../lib/author.ts";
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
 import type { RelayStart } from "../ports/relay.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
 import { conversationArgsOf } from "../relay/wakes.ts";
-import { DONE_SCHEMA, fixedOfBody, fixedRecordBodyOf, FORK_MARKER, questionCommentOf } from "./decide.ts";
+import { DONE_SCHEMA, fixedListOf, fixedRecordBodyOf, FORK_MARKER, questionCommentOf } from "./decide.ts";
 import { BODY_REQUEST, doneQuestionOf } from "./done-prompt.ts";
 import {
   FORK_FLAG,
@@ -83,6 +83,7 @@ function thread(id: string, severity: "important" | "nit" | "pre_existing", reso
     id,
     isResolved: resolved,
     isOutdated: false,
+    resolvedBy: null,
     path: "app/src/cli.ts",
     line: 7,
     comments: {
@@ -1161,7 +1162,7 @@ describe("the findings the Author fixed", () => {
       "resolve T2",
       "resolve T4",
     ]);
-    expect(fixedOfBody(recordWritten(found) ?? "")).toEqual(["T2", "T3"]);
+    expect(fixedListOf(recordWritten(found) ?? "")).toEqual(["T2", "T3"]);
     expect(recordWritten(found)).toContain(AUTHOR_MARK);
     expect(found.records).toContainEqual({ step: "fixed", threads: ["T2", "T3"] });
   });
@@ -1185,7 +1186,7 @@ describe("the findings the Author fixed", () => {
       "resolve T2",
       "resolve T4",
     ]);
-    expect(fixedOfBody(recordWritten(found) ?? "")).toEqual(["T0", "T2"]);
+    expect(fixedListOf(recordWritten(found) ?? "")).toEqual(["T0", "T2"]);
   });
 
   test("a stop that adds no fix writes no record; a forged record of another login is not edited", async () => {
@@ -1217,6 +1218,22 @@ describe("the findings the Author fixed", () => {
     expect(writes(other.calls)[0]).toBe("pr comment");
   });
 
+  test("the Author's question that quotes the fixed mark in a code span is never edited over: the record is a comment of its own", async () => {
+    const question = questionCommentOf(`Keep \`${FIXED_MARK} T9 -->\`?`, "feat/7-x", "S1");
+
+    const found = world({
+      done: [{ ...FINISHED, fixed: ["T2"] }],
+      listed: draftPr(),
+      threads: THREADS,
+      conversation: `${conversationLine("900", AUTHOR_LOGIN, question)}${conversationLine("901", OWNER_LOGIN, "Keep it.")}`,
+    });
+
+    await stopIn(found);
+
+    expect(writes(found.calls)[0]).toBe("pr comment");
+    expect(fixedListOf(recordWritten(found) ?? "")).toEqual(["T2"]);
+  });
+
   test("a record that cannot be written is logged, and the PR is published", async () => {
     const found = world({
       done: [{ ...FINISHED, fixed: ["T2"] }],
@@ -1239,7 +1256,7 @@ describe("the findings the Author fixed", () => {
 
     await stopIn(asking);
 
-    expect(fixedOfBody(recordWritten(asking) ?? "")).toEqual([]);
+    expect(fixedListOf(recordWritten(asking) ?? "")).toBeNull();
     expect(asking.records.some((record) => record.step === "fixed")).toBe(false);
   });
 });

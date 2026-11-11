@@ -8,6 +8,9 @@
               "id": "PRRT_kwDOVkHqEM62KOjX",
               "isResolved": true,
               "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
               "path": "scripts/land-loop/stop/decide.ts",
               "line": null,
               "comments": {
@@ -29,6 +32,9 @@
               "id": "PRRT_kwDOVkHqEM62KOjh",
               "isResolved": true,
               "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
               "path": "scripts/land-loop/relay/wakes.ts",
               "line": null,
               "comments": {
@@ -50,6 +56,9 @@
               "id": "PRRT_kwDOVkHqEM62KOjr",
               "isResolved": true,
               "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
               "path": "scripts/land-loop/relay/wakes.ts",
               "line": null,
               "comments": {
@@ -71,6 +80,9 @@
               "id": "PRRT_kwDOVkHqEM62KOj2",
               "isResolved": true,
               "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
               "path": "scripts/land-loop/review/run-review.ts",
               "line": null,
               "comments": {
@@ -92,6 +104,9 @@
               "id": "PRRT_kwDOVkHqEM62KOj8",
               "isResolved": true,
               "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
               "path": "scripts/land-loop/review/run-review.ts",
               "line": null,
               "comments": {
@@ -123,6 +138,9 @@
               "id": "PRRT_kwDOVkHqEM62KOkD",
               "isResolved": true,
               "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous"
+              },
               "path": "scripts/land-loop/stop/decide.ts",
               "line": null,
               "comments": {
@@ -154,6 +172,9 @@
               "id": "PRRT_kwDOVkHqEM62KOkH",
               "isResolved": true,
               "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
               "path": "AGENTS.md",
               "line": 10,
               "comments": {
@@ -185,6 +206,9 @@
               "id": "PRRT_kwDOVkHqEM62KOkQ",
               "isResolved": true,
               "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous"
+              },
               "path": "scripts/land-loop/stop/hook.ts",
               "line": null,
               "comments": {
@@ -206,6 +230,9 @@
               "id": "PRRT_kwDOVkHqEM62KOkV",
               "isResolved": true,
               "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
               "path": "scripts/land-loop/review/review-prompt.ts",
               "line": 30,
               "comments": {
@@ -237,6 +264,9 @@
               "id": "PRRT_kwDOVkHqEM62LMG3",
               "isResolved": true,
               "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
               "path": "scripts/land-loop/relay/wakes.ts",
               "line": 86,
               "comments": {
@@ -268,6 +298,9 @@
               "id": "PRRT_kwDOVkHqEM62LMG-",
               "isResolved": true,
               "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
               "path": "scripts/land-loop/relay/wakes.ts",
               "line": 148,
               "comments": {
@@ -299,6 +332,9 @@
               "id": "PRRT_kwDOVkHqEM62LMHC",
               "isResolved": true,
               "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
               "path": "scripts/land-loop/stop/hook.ts",
               "line": 650,
               "comments": {
@@ -320,6 +356,9 @@
               "id": "PRRT_kwDOVkHqEM62LMHD",
               "isResolved": true,
               "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
               "path": "scripts/land-loop/stop/hook.ts",
               "line": 631,
               "comments": {

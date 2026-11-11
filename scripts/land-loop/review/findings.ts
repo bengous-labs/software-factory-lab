@@ -36,6 +36,8 @@ const ReviewThread = Schema.Struct({
   isResolved: Schema.Boolean,
   /** GitHub marks the thread outdated once the lines it is anchored on changed. */
   isOutdated: Schema.Boolean,
+  /** Who resolved the thread, the App with REST's `[bot]` suffix; null while it is open. */
+  resolvedBy: Schema.NullOr(Login),
   path: Schema.String,
   line: Schema.NullOr(Schema.Finite),
   comments: Schema.Struct({
@@ -65,7 +67,7 @@ export const ReviewThreads = Schema.Struct({
 
 /** The GraphQL query of the review threads of PR `pr`, over the variables `owner` and `name`. */
 export function threadsQueryOf(pr: number): string {
-  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:20){nodes{author{login} body url pullRequestReview{body}}}}}}}}`;
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved isOutdated resolvedBy{login} path line comments(first:20){nodes{author{login} body url pullRequestReview{body}}}}}}}}`;
 }
 
 /** The App's login as GraphQL prints it, without REST's `[bot]` suffix. */
@@ -276,7 +278,8 @@ const SECURITY_LABEL = /^\*\*[^*]+ \(security\)\*\*: /u;
 /**
  * The App's Important and Nit findings of a review that names its round, each as the ledger reads its
  * thread: where its comment is, its severity and pass, its first line without the label, its round, the
- * thread's state, the Author's rejection reply when the thread is resolved with it as its latest answer,
+ * thread's state and whether the App resolved it, the Author's rejection reply when the thread is
+ * resolved with it as its latest answer,
  * the Owner's reply when it is the latest answer, written by hand, and the later rounds that report it
  * again there. `logins.app` is the App's login as GraphQL prints it.
  */
@@ -311,6 +314,8 @@ export function ledgerFindingsOf(logins: ThreadLogins, threads: readonly ReviewT
         summary: first.replace(SEVERITY_LABEL, ""),
         round: posted.round,
         resolved: thread.isResolved,
+        closedByApp:
+          thread.isResolved && thread.resolvedBy !== null && graphqlLogin(thread.resolvedBy.login) === logins.app,
         outdated: thread.isOutdated,
         rejection: rejectedOf(logins, thread) ? (latest?.url ?? null) : null,
         ownerAnswer: ownerWords ? latest.url : null,

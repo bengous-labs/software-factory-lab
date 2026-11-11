@@ -1051,6 +1051,8 @@ export interface LedgerFinding extends Counted {
   /** The Review round that posted it. */
   readonly round: number;
   readonly resolved: boolean;
+  /** The App resolved its thread: a later round left it out, or the Owner's Land approval closed it. */
+  readonly closedByApp: boolean;
   /** GitHub marks its thread outdated: the lines it is anchored on changed since. */
   readonly outdated: boolean;
   /** The Author's rejection reply, the resolved thread's latest answer; null when the Author did not reject it. */
@@ -1075,7 +1077,7 @@ export type Standing =
   | { readonly kind: "no-answer"; readonly outdated: boolean }
   /** Its thread is open; `again` is the last round that reports it again, null when none did. */
   | { readonly kind: "open"; readonly again: number | null }
-  /** An Important closed before a later round read it: by the Owner's Land approval, or by hand. */
+  /** An Important closed with no later round's reading: by the Owner's Land approval, or by hand. */
   | { readonly kind: "unread" };
 
 /**
@@ -1108,7 +1110,8 @@ export function standingOf(finding: LedgerFinding, fixed: ReadonlySet<string>, r
     return { kind: "open", again: finding.again.length === 0 ? null : last };
   }
 
-  return last < rounds ? { kind: "confirmed", round: last + 1 } : { kind: "unread" };
+  // A thread closed by hand was read by no round, though a round ran after: only the App's closing confirms.
+  return finding.closedByApp && last < rounds ? { kind: "confirmed", round: last + 1 } : { kind: "unread" };
 }
 
 const linesOf = (outdated: boolean): string => (outdated ? "its lines changed since" : "its lines unchanged");
@@ -1141,7 +1144,7 @@ function standingTextOf(standing: Standing): string {
     }
 
     case "unread": {
-      return "Closed before a later round read it.";
+      return "Closed with no later round confirming it.";
     }
   }
 }
@@ -1154,7 +1157,7 @@ const TOTALS: ReadonlyArray<readonly [Standing["kind"], string]> = [
   ["author-fixed", "fixed by the Author's word"],
   ["no-answer", "with no answer"],
   ["open", "open"],
-  ["unread", "closed unread"],
+  ["unread", "closed unconfirmed"],
 ];
 
 /** The most characters of a summary the ledger shows: it links the finding for the rest. */
@@ -1206,4 +1209,33 @@ export function ledgerOf(findings: readonly LedgerFinding[], fixed: ReadonlySet<
   });
 
   return [`**Review findings**: ${totals.length === 0 ? "none" : totals.join(", ")}.`, ...sections].join("\n\n");
+}
+
+/** What the ledger is written from: the App's findings, and the threads the Author says it fixed. */
+export interface LedgerInputs {
+  readonly findings: readonly LedgerFinding[];
+  readonly fixed: ReadonlySet<string>;
+}
+
+/** The state comment as a decision read it: its id and body, null before the Merge bot posts one, and its record. */
+export interface StateRead {
+  readonly id: number | null;
+  readonly body: string | null;
+  readonly record: StateRecord;
+}
+
+/** The body of the state comment that holds `record`, its ledger written from `inputs` after the rounds `record` counts. */
+export function stateBodyOf(record: StateRecord, inputs: LedgerInputs): string {
+  return stateCommentOf(record, ledgerOf(inputs.findings, inputs.fixed, record.reviewRounds));
+}
+
+/**
+ * The body to write over the state comment `read` so that it holds `record` and its ledger, or null when
+ * it holds them already: the ledger is rewritten whether the record changed or not. A PR with no comment
+ * gets one only with a record that is not the one read, so a PR is never given an empty one.
+ */
+export function stateWriteOf(read: StateRead, record: StateRecord, inputs: LedgerInputs): string | null {
+  const body = stateBodyOf(record, inputs);
+
+  return body !== read.body && (read.id !== null || record !== read.record) ? body : null;
 }

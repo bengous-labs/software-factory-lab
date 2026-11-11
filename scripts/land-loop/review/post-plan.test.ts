@@ -418,6 +418,7 @@ const threadOf = (id: string, ...comments: ReadonlyArray<readonly [string, strin
   id,
   isResolved: false,
   isOutdated: false,
+  resolvedBy: null,
   path: "b.ts",
   line: 1,
   comments: {

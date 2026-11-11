@@ -26,16 +26,20 @@ import {
   risen,
   roundNameOf,
   standingOf,
+  stateBodyOf,
   stateCommentOf,
+  stateWriteOf,
   storedOfRecord,
 } from "./decide.ts";
 import type {
   CheckState,
   LedgerFinding,
+  LedgerInputs,
   ReviewJob,
   ReviewState,
   RoutingAnswer,
   Snapshot,
+  StateRead,
   StateRecord,
   Step,
   StoredRecord,
@@ -2116,7 +2120,10 @@ describe("what a round posted", () => {
   });
 });
 
-/** A finding of the App as the ledger reads it: an open Important of round 1 on `app/src/cli.ts:7`, unless `over` says otherwise. */
+/**
+ * A finding of the App as the ledger reads it: an open Important of round 1 on `app/src/cli.ts:7`, unless
+ * `over` says otherwise; a resolved one the App closed, as it closes them.
+ */
 const ledgerFinding = (thread: string, over: Partial<LedgerFinding> = {}): LedgerFinding => ({
   thread,
   url: `https://github.com/o/r/pull/9#discussion_${thread}`,
@@ -2126,6 +2133,7 @@ const ledgerFinding = (thread: string, over: Partial<LedgerFinding> = {}): Ledge
   summary: `${thread} is wrong`,
   round: 1,
   resolved: false,
+  closedByApp: over.resolved === true,
   outdated: false,
   rejection: null,
   ownerAnswer: null,
@@ -2148,6 +2156,13 @@ describe("where a finding stands", () => {
     expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), fixed, 2)).toEqual({ kind: "unread" });
     expect(standingOf(ledgerFinding("I"), fixed, 3)).toEqual({ kind: "open", again: null });
     expect(standingOf(ledgerFinding("I", { again: [2, 3] }), none, 3)).toEqual({ kind: "open", again: 3 });
+  });
+
+  test("an Important whose thread was closed by hand is confirmed by no round, though later rounds ran", () => {
+    const byHand = { resolved: true, closedByApp: false } as const;
+
+    expect(standingOf(ledgerFinding("I", byHand), none, 2)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I", { ...byHand, again: [2] }), none, 3)).toEqual({ kind: "unread" });
   });
 
   test("a rejection stands whatever else the finding holds", () => {
@@ -2236,7 +2251,7 @@ describe("the ledger", () => {
 
     expect(ledgerOf(findings, new Set(["N1", "N4", "I5"]), 3)).toBe(
       [
-        "**Review findings**: 2 fixed and confirmed, 1 rejected, 2 answered by the Owner, 2 fixed by the Author's word, 1 with no answer, 3 open, 1 closed unread.",
+        "**Review findings**: 2 fixed and confirmed, 1 rejected, 2 answered by the Owner, 2 fixed by the Author's word, 1 with no answer, 3 open, 1 closed unconfirmed.",
         "",
         "**Round 1**: 3 Important (1 security), 2 Nit (1 security).",
         `- **Fixed, confirmed by round 2.** Important ${at(cli, "I1")}: I1 is wrong`,
@@ -2254,7 +2269,7 @@ describe("the ledger", () => {
         "**Round 3**: 2 Important, 1 Nit.",
         `- **Open.** Important ${at("app/src/store/file.ts", "I5")}: I5 is wrong`,
         `- **Fixed, by the Author's word; its lines unchanged.** Nit ${at(cli, "N4")}: N4 is wrong`,
-        `- **Closed before a later round read it.** Important ${at(cli, "I6")}: I6 is wrong`,
+        `- **Closed with no later round confirming it.** Important ${at(cli, "I6")}: I6 is wrong`,
       ].join("\n"),
     );
   });
@@ -2287,10 +2302,10 @@ describe("the ledger", () => {
     ];
 
     expect(ledgerOf(findings, new Set(), 3).split("\n\n").slice(-2)).toEqual([
-      `**Round 3**: 1 Important.\n- **Closed before a later round read it.** Important ${at("app/src/cli.ts:7", "I3")}: I3 is wrong`,
+      `**Round 3**: 1 Important.\n- **Closed with no later round confirming it.** Important ${at("app/src/cli.ts:7", "I3")}: I3 is wrong`,
       [
         "**Delta read**: 2 Important (1 security).",
-        `- **Closed before a later round read it.** Important ${at("app/src/cli.ts:7", "D1")}: D1 is wrong`,
+        `- **Closed with no later round confirming it.** Important ${at("app/src/cli.ts:7", "D1")}: D1 is wrong`,
         `- **Open.** Important (security) ${at("app/src/cli.ts:7", "D2")}: D2 is wrong`,
       ].join("\n"),
     ]);
@@ -2303,5 +2318,54 @@ describe("the ledger", () => {
     expect(shownSummaryOf(` ${"d".repeat(100)}\n`)).toBe("d".repeat(100));
     expect(shownSummaryOf(`${"a".repeat(98)} ${"b".repeat(10)}`)).toBe(`${"a".repeat(98)}…`);
     expect(shownSummaryOf(`x${" ".repeat(200)}y`)).toBe("x y");
+  });
+});
+
+describe("writing the state comment", () => {
+  const record: StateRecord = { ...EMPTY_RECORD, reviewedPatch: P1, reviewRounds: 2, importantByRound: [1, 0] };
+
+  const open: LedgerInputs = {
+    findings: [ledgerFinding("I1"), ledgerFinding("N1", { severity: "nit" })],
+    fixed: new Set(),
+  };
+
+  const closed: LedgerInputs = {
+    ...open,
+    findings: [ledgerFinding("I1", { resolved: true }), ...open.findings.slice(1)],
+  };
+
+  test("the body holds the record and the ledger after the rounds the record counts, the Author's fixes included", () => {
+    const fixed = { ...closed, fixed: new Set(["N1"]) };
+
+    expect(stateBodyOf(record, fixed)).toBe(stateCommentOf(record, ledgerOf(fixed.findings, fixed.fixed, 2)));
+    expect(stateBodyOf(record, fixed)).toContain("**Fixed, confirmed by round 2.** Important");
+    expect(stateBodyOf(record, fixed)).toContain("**Fixed, by the Author's word; its lines unchanged.** Nit");
+    expect(stateBodyOf({ ...record, reviewRounds: 1 }, closed)).toContain(
+      "**Closed with no later round confirming it.**",
+    );
+  });
+
+  test("the comment is written again when only its ledger changed, and not when it holds the record and the ledger already", () => {
+    const read: StateRead = { id: 7, body: stateBodyOf(record, open), record };
+
+    expect(stateWriteOf(read, record, closed)).toBe(stateBodyOf(record, closed));
+    expect(stateWriteOf(read, record, open)).toBeNull();
+    expect(stateWriteOf(read, { ...record }, open)).toBeNull();
+  });
+
+  test("a changed record is written, the ledger with it, over the comment or as the PR's first", () => {
+    const routed = { ...record, triage: { [P1]: LIGHT } };
+
+    expect(stateWriteOf({ id: 7, body: stateBodyOf(record, open), record }, routed, open)).toBe(
+      stateBodyOf(routed, open),
+    );
+    expect(stateWriteOf({ id: null, body: null, record: EMPTY_RECORD }, routed, open)).toBe(stateBodyOf(routed, open));
+  });
+
+  test("a PR with no comment is given none for the record it has, whatever the ledger shows", () => {
+    const none: StateRead = { id: null, body: null, record: EMPTY_RECORD };
+
+    expect(stateWriteOf(none, EMPTY_RECORD, { findings: [], fixed: new Set() })).toBeNull();
+    expect(stateWriteOf(none, EMPTY_RECORD, open)).toBeNull();
   });
 });

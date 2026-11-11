@@ -423,11 +423,17 @@ export interface FixedRecord {
   readonly fixed: readonly string[];
 }
 
-const FIXED_LIST = new RegExp(`${FIXED_MARK}((?: [^\\s>]+)*) -->`, "u");
+/**
+ * The fixed list: a line of its own, as the record writes it. A comment that quotes the mark, such as
+ * the Author's question in a code span, holds it inside a line, never as one.
+ */
+const FIXED_LIST = new RegExp(`(?<=^|\\n)${FIXED_MARK}((?: [^\\s>]+)*) -->(?=\\n|$)`, "u");
 
-/** The threads the fixed list of `body` names; none when it holds no such list. */
-export function fixedOfBody(body: string): readonly string[] {
-  return (FIXED_LIST.exec(body)?.[1] ?? "").split(" ").filter((thread) => thread !== "");
+/** The threads the fixed list of `body` names; null when `body` holds no such list on a line of its own. */
+export function fixedListOf(body: string): readonly string[] | null {
+  const listed = FIXED_LIST.exec(body)?.[1];
+
+  return listed === undefined ? null : listed.split(" ").filter((thread) => thread !== "");
 }
 
 /**
@@ -435,9 +441,15 @@ export function fixedOfBody(body: string): readonly string[] {
  * carries the fixed list. Any login can write the mark.
  */
 export function fixedRecordIn(comments: readonly ConversationComment[]): FixedRecord {
-  const record = comments.find((comment) => comment.author === AUTHOR_LOGIN && comment.body.includes(FIXED_MARK));
+  for (const comment of comments) {
+    const fixed = comment.author === AUTHOR_LOGIN ? fixedListOf(comment.body) : null;
 
-  return record === undefined ? { comment: null, fixed: [] } : { comment: record.id, fixed: fixedOfBody(record.body) };
+    if (fixed !== null) {
+      return { comment: comment.id, fixed };
+    }
+  }
+
+  return { comment: null, fixed: [] };
 }
 
 /**

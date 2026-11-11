@@ -50,6 +50,7 @@ const thread = (
   id: "T",
   isResolved,
   isOutdated: false,
+  resolvedBy: null,
   path: "a.ts",
   line,
   comments: {
@@ -84,7 +85,9 @@ describe("the review threads", () => {
   test("the query names the PR and takes the repository as variables", () => {
     expect(threadsQueryOf(12)).toContain("query($owner:String!,$name:String!){repository(owner:$owner,name:$name)");
     expect(threadsQueryOf(12)).toContain("pullRequest(number:12)");
-    expect(threadsQueryOf(12)).toContain("nodes{id isResolved isOutdated path line comments(first:20)");
+    expect(threadsQueryOf(12)).toContain(
+      "nodes{id isResolved isOutdated resolvedBy{login} path line comments(first:20)",
+    );
     expect(threadsQueryOf(12)).toContain("comments(first:20){nodes{author{login} body url pullRequestReview{body}}}");
   });
 
@@ -464,6 +467,16 @@ const fixtureThreads = (name: string): readonly ReviewThread[] =>
   decodeJson(ReviewThreads, name, readFileSync(join(import.meta.dir, "fixtures", name), "utf8")).data.repository
     .pullRequest.reviewThreads.nodes;
 
+/** Whether the ledger reads an Important of Review round 2, resolved or not, as closed by the App when `resolvedBy` resolved it. */
+const closedBy = (resolvedBy: string | null, isResolved = true): boolean | undefined =>
+  ledgerFindingsOf(LOGINS, [
+    postedIn(
+      { ...thread(IMPORTANT, [], { isResolved }), resolvedBy: resolvedBy === null ? null : { login: resolvedBy } },
+      ROUND_2,
+      "a.ts",
+    ),
+  ])[0]?.closedByApp;
+
 /** The Owner's answer the ledger reads in `found`, a thread of Review round 2. */
 const ownerAnswerIn = (found: ReviewThread): string | null | undefined =>
   ledgerFindingsOf(LOGINS, [postedIn(found, ROUND_2, "a.ts")])[0]?.ownerAnswer;
@@ -487,6 +500,7 @@ describe("ledgerFindingsOf", () => {
         summary: "off by <one",
         round: 2,
         resolved: false,
+        closedByApp: false,
         outdated: true,
         rejection: null,
         ownerAnswer: null,
@@ -546,6 +560,15 @@ describe("ledgerFindingsOf", () => {
     ).toBeNull();
     expect(rejectionIn(thread(NIT, [["someone", REJECTED]], { isResolved: true }))).toBeNull();
     expect(rejectionIn(thread(NIT, [], { isResolved: true }))).toBeNull();
+  });
+
+  test("a thread the App resolved, as GitHub names it with REST's [bot] suffix, is closed by the App; one resolved by hand or open is not", () => {
+    expect(closedBy(`${APP}[bot]`)).toBe(true);
+    expect(closedBy(APP)).toBe(true);
+    expect(closedBy(AUTHOR)).toBe(false);
+    expect(closedBy("bengous")).toBe(false);
+    expect(closedBy(null)).toBe(false);
+    expect(closedBy(`${APP}[bot]`, false)).toBe(false);
   });
 
   test("the Owner's answer is the Owner's reply that is the thread's latest answer, written by hand, linked, open or resolved", () => {

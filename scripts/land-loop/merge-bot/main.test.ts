@@ -7,15 +7,16 @@ import { $ } from "bun";
 import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { FIXED_MARK } from "../author-mark.ts";
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
-import { fixedRecordBodyOf } from "../stop/decide.ts";
-import { EMPTY_RECORD, stateCommentOf } from "./decide.ts";
-import type { ReviewState } from "./decide.ts";
+import { fixedRecordBodyOf, questionCommentOf } from "../stop/decide.ts";
+import { EMPTY_RECORD, stateBodyOf, stateCommentOf } from "./decide.ts";
+import type { LedgerFinding, LedgerInputs, ReviewState, StateRead, StateRecord } from "./decide.ts";
 import {
   ActionsRun,
   againPoster,
@@ -27,6 +28,7 @@ import {
   ciOfRuns,
   ciRunsPathsOf,
   CommitPulls,
+  conversationReader,
   deletedPathsArgs,
   devRedOf,
   devRunsReader,
@@ -56,6 +58,7 @@ import {
   routingPolicyAt,
   startOf,
   stateCommentIn,
+  stateSaver,
   threadsResolver,
 } from "./main.ts";
 
@@ -258,6 +261,116 @@ describe("stateCommentIn", () => {
     expect(
       stateCommentIn(commentsOf([1, "someone", state], [2, "someone", fixed], [3, logins.appLogin, fixed]), logins),
     ).toEqual({ id: null, body: null, record: EMPTY_RECORD, fixed: new Set() });
+  });
+
+  test("the Author's question that quotes the fixed mark in a code span is no record; the record after it is read", () => {
+    const question = questionCommentOf(`Keep \`${FIXED_MARK} T9 -->\`?`, "feat/7-x", "S1");
+
+    expect(stateCommentIn(commentsOf([1, logins.authorLogin, question]), logins).fixed).toEqual(new Set());
+    expect(
+      stateCommentIn(commentsOf([1, logins.authorLogin, question], [2, logins.authorLogin, fixed]), logins).fixed,
+    ).toEqual(new Set(["T1", "T2"]));
+  });
+});
+
+/** `count` comments of the Owner, numbered from `from`. */
+const page = (from: number, count: number) =>
+  Array.from({ length: count }, (_, index) => ({ id: from + index, user: { login: "bengous" }, body: "hello" }));
+
+/** The calls `stateSaver` makes for `read` and the change, each its argv and the body it sends. */
+async function savedFor(
+  read: StateRead,
+  change: { readonly record: StateRecord; readonly inputs: LedgerInputs },
+): Promise<ReadonlyArray<{ argv: string[]; body: string }>> {
+  const calls: Array<{ argv: string[]; body: string }> = [];
+
+  const runner: Run = (argv, options) => {
+    calls.push({
+      argv: [...argv],
+      body: decodeJson(Schema.Struct({ body: Schema.String }), "a write", options.stdin ?? "").body,
+    });
+
+    return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+  };
+
+  await stateSaver(runner)(WHERE, 12, read, change);
+
+  return calls;
+}
+
+describe("conversationReader", () => {
+  test("reads every page of the PR's conversation, so the Author's record past the first 100 comments is found", async () => {
+    const record = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T1"]) ?? "";
+    const pages = [page(1, 100), [...page(101, 5), { id: 106, user: { login: "bengous-labs-author" }, body: record }]];
+    const calls: string[][] = [];
+
+    const runner: Run = (argv) => {
+      calls.push([...argv]);
+
+      return Promise.resolve({ code: 0, stdout: JSON.stringify(pages), stderr: "" });
+    };
+
+    const comments = await conversationReader(runner)(WHERE, 12);
+
+    expect(calls).toEqual([
+      ["gh", "api", "-X", "GET", "--paginate", "--slurp", "repos/o/r/issues/12/comments?per_page=100"],
+    ]);
+    expect(comments).toHaveLength(106);
+    expect(
+      stateCommentIn(comments, { appLogin: "bengous-labs-agents[bot]", authorLogin: "bengous-labs-author" }).fixed,
+    ).toEqual(new Set(["T1"]));
+  });
+});
+
+describe("stateSaver", () => {
+  const record: StateRecord = { ...EMPTY_RECORD, reviewRounds: 1 };
+
+  const finding: LedgerFinding = {
+    thread: "T1",
+    url: "https://github.com/o/r/pull/12#discussion_r1",
+    where: "a.ts:3",
+    severity: "important",
+    security: false,
+    summary: "off by one",
+    round: 1,
+    resolved: false,
+    closedByApp: false,
+    outdated: false,
+    rejection: null,
+    ownerAnswer: null,
+    again: [],
+  };
+
+  const open: LedgerInputs = { findings: [finding], fixed: new Set() };
+
+  test("edits the comment when only its ledger changed: the threads a decision resolved show in it", async () => {
+    const closed = { ...open, findings: [{ ...finding, resolved: true, closedByApp: true }] };
+    const calls = await savedFor({ id: 7, body: stateBodyOf(record, open), record }, { record, inputs: closed });
+
+    expect(calls.map((call) => call.argv)).toEqual([
+      ["gh", "api", "-X", "PATCH", "repos/o/r/issues/comments/7", "--input", "-"],
+    ]);
+    expect(calls[0]?.body).toBe(stateBodyOf(record, closed));
+    expect(calls[0]?.body).toContain("**Closed with no later round confirming it.** Important");
+  });
+
+  test("a step's new record is written with the ledger; a PR with no comment gets one, posted", async () => {
+    const routed = { ...record, reviewRounds: 2 };
+    const edited = await savedFor({ id: 7, body: stateBodyOf(record, open), record }, { record: routed, inputs: open });
+    const posted = await savedFor({ id: null, body: null, record: EMPTY_RECORD }, { record: routed, inputs: open });
+
+    expect(edited.map((call) => [call.argv[3], call.body])).toEqual([["PATCH", stateBodyOf(routed, open)]]);
+    expect(posted.map((call) => [call.argv[3], call.argv[4], call.body])).toEqual([
+      ["POST", "repos/o/r/issues/12/comments", stateBodyOf(routed, open)],
+    ]);
+    expect(posted[0]?.body).toContain("**Open.** Important");
+  });
+
+  test("writes nothing when the comment holds the record and its ledger, nor on a PR with no comment and no record", async () => {
+    expect(await savedFor({ id: 7, body: stateBodyOf(record, open), record }, { record, inputs: open })).toEqual([]);
+    expect(
+      await savedFor({ id: null, body: null, record: EMPTY_RECORD }, { record: EMPTY_RECORD, inputs: open }),
+    ).toEqual([]);
   });
 });
 
