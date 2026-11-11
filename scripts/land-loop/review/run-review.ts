@@ -19,6 +19,7 @@ import { resolverOf } from "../lib/resolve.ts";
 import { reviewSession } from "../lib/review-session.ts";
 import type { SessionAnswer } from "../ports/review.ts";
 import { EarlierThreads } from "./findings.ts";
+import { projectGuideOf } from "./review-prompt.ts";
 import { OUTPUT_SCHEMA, ReviewInputs, summaryOf } from "./review-report.ts";
 import { reviewRunOf } from "./review-run.ts";
 import { guardOf } from "./tool-guard.ts";
@@ -51,9 +52,16 @@ const request = Schema.decodeUnknownSync(ReviewInputs)({
 
 const root = realpathSync(join(workspace, "pr"));
 
+const RULES = ".claude/rules";
+
+const rules = [...new Bun.Glob("**/*.md").scanSync({ cwd: join(workspace, RULES) })].map((file) => ({
+  path: `${RULES}/${file}`,
+  text: readFileSync(join(workspace, RULES, file), "utf8"),
+}));
+
 const guides = {
   review: readFileSync(join(workspace, "REVIEW.md"), "utf8"),
-  project: readFileSync(join(workspace, "AGENTS.md"), "utf8"),
+  project: projectGuideOf(readFileSync(join(workspace, "AGENTS.md"), "utf8"), rules),
 };
 
 const threadsFile = join(workspace, "review-threads.json");
