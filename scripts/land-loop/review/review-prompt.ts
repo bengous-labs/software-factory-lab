@@ -36,10 +36,16 @@ export function earlierIdOf(index: number): string {
   return `E${index + 1}`;
 }
 
+/** The earlier thread at `index` on its line, under the id a finding's `earlier` names it by. */
+const lineOf = (thread: EarlierThread, index: number): string =>
+  `- [${earlierIdOf(index)}] ${thread.where}: ${thread.finding}`;
+
 /**
- * Round 1 has no round text; rounds 2 and 3 read the earlier threads, each under its id, and report
- * again every earlier Important that is still wrong: the Merge bot closes the open ones they leave out.
- * The Delta read reads the push after round 3 alone and reports only what blocks.
+ * Round 1 has no round text; rounds 2 and 3 read the earlier threads with their answers, each under its
+ * id, and report again every earlier Important that is still wrong: the Merge bot closes the open ones
+ * they leave out. The Delta read reads the push after round 3 alone and reports only what blocks; shown
+ * the open Importants without their answers, since a light read that closes one confirms its fix to the
+ * Owner, it reports again each one still wrong, and the Merge bot closes the others as fixed.
  */
 export function roundText(request: ReviewRequest, threads: readonly EarlierThread[]): readonly string[] {
   if (request.round === 1) {
@@ -47,9 +53,19 @@ export function roundText(request: ReviewRequest, threads: readonly EarlierThrea
   }
 
   if (request.round === DELTA_READ) {
+    const open =
+      threads.length === 0
+        ? []
+        : [
+            "Important findings still open:",
+            ...threads.map((thread, index) => lineOf(thread, index)),
+            "Report again each of them that is still wrong, with `earlier` set to the id in its brackets: one you do not report again is closed as fixed. Judge the code as it stands.",
+          ];
+
     return [
       "",
       `This is a read of a push after review round 3, the last round. ${request.base} is the head review round 3 read: read only what changed since, and the rest only to judge it.`,
+      ...open,
       "Report Important findings only: a Nit is not worth another turn now.",
     ];
   }
@@ -64,9 +80,7 @@ export function roundText(request: ReviewRequest, threads: readonly EarlierThrea
   return [
     "",
     ...opening,
-    ...threads.map(
-      (thread, index) => `- [${earlierIdOf(index)}] ${thread.where}: ${thread.finding} | Answers: ${thread.reply}`,
-    ),
+    ...threads.map((thread, index) => `${lineOf(thread, index)} | Answers: ${thread.reply}`),
     "Report only what is wrong now. Report again every earlier Important finding that is still wrong, whatever the state of its thread, with `earlier` set to the id in its brackets: an open Important you do not report again is closed as fixed. An answer says what its writer decided and proves no fix: judge the code as it stands. Never report again an earlier Nit, nor a finding the author rejected with a valid reason.",
   ];
 }

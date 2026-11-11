@@ -37,12 +37,14 @@ import {
   humanLabelByOf,
   IssueComments,
   IssueEvents,
+  issueOpener,
   judgeAt,
   judgeDiffArgs,
   judgeEnvOf,
   labelEventsReader,
   landApprovalByOwnerOf,
   landApprovalPutByOwnerOf,
+  latestReviewAtOf,
   linesOfNumstat,
   ListedPrs,
   notFound,
@@ -54,6 +56,7 @@ import {
   rangeRefspecsOf,
   readsPatchDelta,
   reviewJobReader,
+  reviewsReader,
   routingLineOf,
   routingPolicyAt,
   startOf,
@@ -77,6 +80,19 @@ const PULL = {
   base: { ref: "dev" },
   title: "feat: x",
 };
+
+/** The times a Land approval is weighed against: the head pushed at `headPushedAt`, and no review of the App. */
+const pushedAt = (headPushedAt: string | null) => ({ headPushedAt, reviewedAt: null });
+
+/** A Delta read's review of the PR by `login`, with its marker, posted at `submittedAt`, null while pending. */
+const reviewBy = (login: string, submittedAt: string | null) => ({
+  user: { login },
+  body: "Delta read: 1 Important.\n\n<!-- lab-review patch=p1 round=4 -->",
+  submitted_at: submittedAt,
+});
+
+/** A reply `login` posted in a thread at `submittedAt`, which GitHub lists as a review with an empty body. */
+const replyBy = (login: string, submittedAt: string) => ({ user: { login }, body: "", submitted_at: submittedAt });
 
 describe("the GitHub answers the Merge bot reads", () => {
   test("a PR whose mergeability GitHub has not computed, from a deleted fork, reads", () => {
@@ -139,8 +155,12 @@ describe("the GitHub answers the Merge bot reads", () => {
       ),
     ).toEqual({ workflow_run_id: 42_364_772_835 });
     expect(
-      decodeJson(PullReviews, "reviews", JSON.stringify([{ id: 1, user: null, body: "b", state: "COMMENTED" }])),
-    ).toEqual([{ user: null, body: "b" }]);
+      decodeJson(
+        PullReviews,
+        "reviews",
+        JSON.stringify([{ id: 1, user: null, body: "b", state: "COMMENTED", submitted_at: "2026-11-05T11:00:00Z" }]),
+      ),
+    ).toEqual([{ user: null, body: "b", submitted_at: "2026-11-05T11:00:00Z" }]);
   });
 
   test("GitHub's null user, actor and App read, and a deleted user's event leaves the Land approval as it was", () => {
@@ -154,9 +174,9 @@ describe("the GitHub answers the Merge bot reads", () => {
       ]),
     );
 
-    expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T10:00:00Z")).toBe(true);
-    expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T12:00:00Z")).toBe(false);
-    expect(landApprovalByOwnerOf(events, "someone", "2026-11-05T10:00:00Z")).toBe(false);
+    expect(landApprovalByOwnerOf(events, "owner", pushedAt("2026-11-05T10:00:00Z"))).toBe(true);
+    expect(landApprovalByOwnerOf(events, "owner", pushedAt("2026-11-05T12:00:00Z"))).toBe(false);
+    expect(landApprovalByOwnerOf(events, "someone", pushedAt("2026-11-05T10:00:00Z"))).toBe(false);
     expect(landApprovalPutByOwnerOf(events, "owner")).toBe(true);
     expect(landApprovalPutByOwnerOf(events, "someone")).toBe(false);
 
@@ -168,7 +188,7 @@ describe("the GitHub answers the Merge bot reads", () => {
       ]),
     );
 
-    expect(landApprovalByOwnerOf(byGhost, "owner", null)).toBe(false);
+    expect(landApprovalByOwnerOf(byGhost, "owner", pushedAt(null))).toBe(false);
 
     const runs = JSON.stringify({
       check_runs: [{ name: "validate", status: "completed", conclusion: "success", app: null, check_suite: { id: 1 } }],
@@ -200,11 +220,79 @@ describe("the GitHub answers the Merge bot reads", () => {
       [ActionsRun, { status: "completed" }],
       [Dispatched, { workflow_run_id: "42" }],
       [PullReviews, [{ user: { login: "a" } }]],
+      [PullReviews, [{ user: null, body: "b" }]],
     ];
 
     for (const [schema, answer] of refused) {
       expect(Result.isFailure(Schema.decodeUnknownResult(schema)(answer))).toBe(true);
     }
+  });
+});
+
+describe("a Land approval and the App's reviews", () => {
+  const APP = "bengous-labs-agents[bot]";
+
+  const events = decodeJson(
+    IssueEvents,
+    "events",
+    JSON.stringify([
+      { event: "labeled", label: { name: "land-ok" }, actor: { login: "owner" }, created_at: "2026-11-05T11:00:00Z" },
+    ]),
+  );
+
+  test("the App's latest review is its last submitted one, whatever the order GitHub lists them in; another login's or a pending one is none", () => {
+    expect(
+      latestReviewAtOf(
+        [
+          reviewBy(APP, "2026-11-05T11:30:00Z"),
+          reviewBy(APP, "2026-11-05T09:00:00Z"),
+          reviewBy("bengous", "2026-11-05T12:00:00Z"),
+          reviewBy(APP, null),
+        ],
+        APP,
+      ),
+    ).toBe("2026-11-05T11:30:00Z");
+    expect(latestReviewAtOf([reviewBy("bengous", "2026-11-05T12:00:00Z")], APP)).toBeNull();
+    expect(latestReviewAtOf([], APP)).toBeNull();
+  });
+
+  test("a reply the App posts in a thread, which GitHub lists as a review with no marker, is no new read: the landing's own replies void no approval", () => {
+    const reviews = [
+      reviewBy(APP, "2026-11-05T10:30:00Z"),
+      replyBy(APP, "2026-11-05T11:05:00Z"),
+      { ...reviewBy(APP, "2026-11-05T11:10:00Z"), body: "A human-looking review with no marker." },
+    ];
+
+    const reviewedAt = latestReviewAtOf(reviews, APP);
+
+    expect(reviewedAt).toBe("2026-11-05T10:30:00Z");
+    expect(landApprovalByOwnerOf(events, "owner", { headPushedAt: "2026-11-05T10:00:00Z", reviewedAt })).toBe(true);
+  });
+
+  test("a land-ok the Owner put before the App's latest review was posted does not count: the Owner could not read it", () => {
+    const headPushedAt = "2026-11-05T10:00:00Z";
+
+    expect(landApprovalByOwnerOf(events, "owner", { headPushedAt, reviewedAt: "2026-11-05T11:30:00Z" })).toBe(false);
+    expect(landApprovalByOwnerOf(events, "owner", { headPushedAt, reviewedAt: "2026-11-05T10:30:00Z" })).toBe(true);
+    expect(landApprovalPutByOwnerOf(events, "owner")).toBe(true);
+  });
+
+  test("every page of the PR's reviews is read, so the latest past the first hundred is found", async () => {
+    const pages = [[reviewBy(APP, "2026-11-05T09:00:00Z")], [reviewBy(APP, "2026-11-05T11:30:00Z")]];
+    const calls: string[][] = [];
+
+    const runner: Run = (argv) => {
+      calls.push([...argv]);
+
+      return Promise.resolve({ code: 0, stdout: JSON.stringify(pages), stderr: "" });
+    };
+
+    const reviews = await reviewsReader(runner)(WHERE, 12);
+
+    expect(calls).toEqual([
+      ["gh", "api", "-X", "GET", "--paginate", "--slurp", "repos/o/r/pulls/12/reviews?per_page=100"],
+    ]);
+    expect(latestReviewAtOf(reviews, APP)).toBe("2026-11-05T11:30:00Z");
   });
 });
 
@@ -235,7 +323,7 @@ describe("the Owner and the Author", () => {
       ]),
     );
 
-    expect(landApprovalByOwnerOf(events, "bengous", "2026-11-05T10:00:00Z")).toBe(false);
+    expect(landApprovalByOwnerOf(events, "bengous", pushedAt("2026-11-05T10:00:00Z"))).toBe(false);
   });
 });
 
@@ -307,12 +395,14 @@ const OPEN_IMPORTANT: LedgerFinding = {
   thread: "T1",
   url: "https://github.com/o/r/pull/12#discussion_r1",
   where: "a.ts:3",
+  file: "a.ts",
   severity: "important",
   security: false,
   summary: "off by one",
   round: 1,
   resolved: false,
   closedByApp: false,
+  landedOpen: false,
   outdated: false,
   rejection: null,
   ownerAnswer: null,
@@ -335,8 +425,8 @@ interface StepsRun {
 
 /**
  * `steps` done over the state comment `read`, from `record` and `inputs`: a `record` step writes its
- * record, a `route` step a routed one, the step of kind `stopAt` stops the run, and any other changes
- * nothing. The findings read again are `reread`; a new comment gets id 99.
+ * record, a `route` step a routed one, a `follow-up` step one with issue 31, the step of kind `stopAt`
+ * stops the run, and any other changes nothing. The findings read again are `reread`; a new comment gets id 99.
  */
 async function stepsRun(
   steps: readonly Step[],
@@ -357,7 +447,9 @@ async function stepsRun(
           ? step.record
           : step.kind === "route"
             ? { ...record, triage: { [step.patch]: ROUTED } }
-            : record;
+            : step.kind === "follow-up"
+              ? { ...record, followUpIssue: 31 }
+              : record;
 
       if (next !== record) {
         await write(next);
@@ -391,24 +483,35 @@ const ROUTED = {
 describe("stepsDone", () => {
   const check = { kind: "success", summary: "ok" } as const;
 
-  test("the Owner's Land approval closes the open Importants and no decision follows: the findings are read again and the comment shows them closed", async () => {
+  test("the Owner's Land approval lands the open Importants open and no decision follows: the follow-up issue is recorded, the findings are read again and the comment shows them landed open", async () => {
     const steps: Step[] = [
       { kind: "labels", route: "owner", depth: "light" },
-      { kind: "resolve-threads", threads: ["T1"] },
+      { kind: "follow-up", threads: ["T1"] },
+      { kind: "land-open", threads: ["T1"] },
       { kind: "review-check", check },
       { kind: "land-gate", check },
       { kind: "auto-merge" },
     ];
 
+    const landed: LedgerInputs = {
+      findings: [{ ...OPEN_IMPORTANT, resolved: true, closedByApp: true, landedOpen: true }],
+      fixed: new Set(),
+    };
+
+    const followed: StateRecord = { ...ROUND_1, followUpIssue: 31 };
+
     const run = await stepsRun(
       steps,
       { read: { id: 7, body: stateBodyOf(ROUND_1, OPEN), record: ROUND_1 }, record: ROUND_1, inputs: OPEN },
-      { reread: CLOSED },
+      { reread: landed },
     );
 
     expect(run.reads).toBe(1);
-    expect(run.writes).toEqual([{ id: 7, body: stateBodyOf(ROUND_1, CLOSED) }]);
-    expect(run.writes[0]?.body).toContain("**Closed with no later round confirming it.** Important");
+    expect(run.writes).toEqual([
+      { id: 7, body: stateBodyOf(followed, OPEN) },
+      { id: 7, body: stateBodyOf(followed, landed) },
+    ]);
+    expect(run.writes[1]?.body).toContain("**Landed open by the Owner's Land approval.** Important");
     expect(run.decideAgain).toBe(false);
   });
 
@@ -656,6 +759,32 @@ describe("labelEventsReader", () => {
     expect(humanLabelByOf(events, ["land:human"], { appLogin: "agents[bot]", authorLogin: "author" })).toBe(
       "merge-bot",
     );
+  });
+});
+
+/** A runner every command of which succeeds with an empty JSON object. */
+const answersEmpty: Run = () => Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+
+describe("issueOpener", () => {
+  test("opens the issue on the repository with its title and body as they are, and answers its number", async () => {
+    const calls: Array<{ argv: string[]; stdin: string | undefined }> = [];
+
+    const runner: Run = (argv, options) => {
+      calls.push({ argv: [...argv], stdin: options.stdin });
+
+      return Promise.resolve({ code: 0, stdout: JSON.stringify({ number: 31, title: "t" }), stderr: "" });
+    };
+
+    const issue = { title: "Follow up #12: Important findings landed open", body: "- Important in `a.ts`" };
+
+    expect(await issueOpener(runner)(WHERE, issue)).toBe(31);
+    expect(calls).toEqual([
+      { argv: ["gh", "api", "-X", "POST", "repos/o/r/issues", "--input", "-"], stdin: JSON.stringify(issue) },
+    ]);
+  });
+
+  test("an answer with no issue number fails, naming the endpoint", () => {
+    expect(issueOpener(answersEmpty)(WHERE, { title: "t", body: "b" })).rejects.toThrow("gh api repos/o/r/issues");
   });
 });
 

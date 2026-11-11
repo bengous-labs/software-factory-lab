@@ -353,7 +353,7 @@ describe("the Merge bot's guarantees", () => {
     });
   });
 
-  test("a PR with an open Important merges only when it is held for the Owner, with the Owner's Land approval for its patch, and the merge resolves each open Important thread", () => {
+  test("a PR with an open Important merges only when it is held for the Owner, with the Owner's Land approval for its patch, and the merge lands each open Important thread open, with one follow-up issue", () => {
     holdsForSnapshots((snapshot) => {
       const { record } = snapshot;
 
@@ -363,12 +363,28 @@ describe("the Merge bot's guarantees", () => {
         record.triage[snapshot.patch]?.secondRound === true;
 
       if (merges(snapshot) && snapshot.openImportant.length > 0) {
+        const threads = snapshot.openImportant.map((found) => found.thread);
+        const steps = stepsOrNone(snapshot);
+
         expect(record.ownerHold !== undefined || pushAfterRound3).toBe(true);
         expectLandApproval(snapshot);
-        expect(stepsOrNone(snapshot)).toContainEqual({
-          kind: "resolve-threads",
-          threads: snapshot.openImportant.map((found) => found.thread),
-        });
+        expect(steps).toContainEqual({ kind: "land-open", threads });
+        expect(steps.filter((step) => step.kind === "follow-up")).toEqual(
+          record.followUpIssue === undefined ? [{ kind: "follow-up", threads }] : [],
+        );
+      }
+    });
+  });
+
+  test("a follow-up issue is opened only by the Owner's Land approval of a PR whose Important is open, before its threads land open", () => {
+    holdsForSnapshots((snapshot) => {
+      const kinds = stepsOrNone(snapshot).map((step) => step.kind);
+
+      if (kinds.includes("follow-up")) {
+        expectLandApproval(snapshot);
+        expect(snapshot.openImportant.length).toBeGreaterThan(0);
+        expect(snapshot.record.followUpIssue).toBeUndefined();
+        expect(kinds.indexOf("follow-up")).toBeLessThan(kinds.indexOf("land-open"));
       }
     });
   });

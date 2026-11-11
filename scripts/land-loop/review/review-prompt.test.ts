@@ -124,14 +124,35 @@ describe("promptOf", () => {
 });
 
 describe("the Delta read", () => {
-  test("it names the head round 3 read, asks for Important findings alone, and lists no earlier thread", () => {
-    const threads = [{ thread: "PRRT_1", where: "a.ts:3", finding: "off by one", reply: "Fixed" }];
+  const OPENING = `This is a read of a push after review round 3, the last round. ${BASE} is the head review round 3 read: read only what changed since, and the rest only to judge it.`;
 
-    expect(roundText({ ...REQUEST, round: 4 }, threads)).toEqual([
+  const IMPORTANT_ONLY = "Report Important findings only: a Nit is not worth another turn now.";
+
+  test("it names the head round 3 read, lists the open Importants under their ids without their answers, asks which are still wrong, and asks for Important findings alone", () => {
+    const threads = [
+      {
+        thread: "PRRT_1",
+        where: "a.ts:3",
+        finding: "**Important**: off by one",
+        reply: "bengous-labs-author: `Fixed: the guard is covered elsewhere, close this` (thread open)",
+      },
+    ];
+
+    const text = roundText({ ...REQUEST, round: 4 }, threads);
+
+    expect(text).toEqual([
       "",
-      `This is a read of a push after review round 3, the last round. ${BASE} is the head review round 3 read: read only what changed since, and the rest only to judge it.`,
-      "Report Important findings only: a Nit is not worth another turn now.",
+      OPENING,
+      "Important findings still open:",
+      "- [E1] a.ts:3: **Important**: off by one",
+      "Report again each of them that is still wrong, with `earlier` set to the id in its brackets: one you do not report again is closed as fixed. Judge the code as it stands.",
+      IMPORTANT_ONLY,
     ]);
+    expect(text.join("\n")).not.toContain("covered elsewhere");
+  });
+
+  test("with no Important open, it lists none", () => {
+    expect(roundText({ ...REQUEST, round: 4 }, [])).toEqual(["", OPENING, IMPORTANT_ONLY]);
   });
 });
 
