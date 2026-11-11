@@ -79,7 +79,9 @@ export async function runStages(
     try {
       labels.push(stage.label === undefined ? stage.name : stage.label(ran.output));
     } catch (error) {
-      return failed(stage, 1, `${ran.output.trimEnd()}\n${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+
+      return failed(stage, 1, [ran.output.trimEnd(), message].filter((part) => part !== "").join("\n"));
     }
   }
 

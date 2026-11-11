@@ -36,6 +36,16 @@ describe("runStages", () => {
     expect(verdict).toEqual({ kind: "red", exitCode: 1, report: "a\nb\nc\nfailed: mixed" });
   });
 
+  test("a silent passing stage whose label throws reports the error on the first line", async () => {
+    const verdict = await runStages([{ ...sh("tests", ""), label: testsLabel }], spawnStage);
+
+    expect(verdict).toEqual({
+      kind: "red",
+      exitCode: 1,
+      report: "bun test printed no `Ran N tests` summary\nfailed: tests",
+    });
+  });
+
   test("a passing stage whose label throws fails as that stage, with the error and the output", async () => {
     const verdict = await runStages([{ ...sh("tests", "echo done"), label: testsLabel }, sh("never", "")], spawnStage);
 
