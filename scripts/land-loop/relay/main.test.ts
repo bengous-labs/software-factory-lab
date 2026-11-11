@@ -130,6 +130,38 @@ describe("turn", () => {
     expect(sent).toHaveLength(2);
   });
 
+  test("a PR held with the App's two checks red starts no turn: its Author has nothing to act on", async () => {
+    const checks = [
+      { name: "agent-review", bucket: "fail", link: "https://ci/2" },
+      { name: "land-gate", bucket: "fail", link: "https://ci/3" },
+    ];
+
+    const held = relay({ ...OPEN, checks });
+
+    expect(await turn(7, new Set(), held.io)).toEqual({ delivered: [], via: null, pending: 0, ends: false });
+    expect(held.sent).toEqual([]);
+  });
+
+  test("a conflict with dev starts one turn that names the rebase, and no finding", async () => {
+    const checks = [{ name: "land-gate", bucket: "fail", link: "https://ci/3" }];
+    const conflicting = relay({ ...OPEN, conflicting: true, checks });
+    const seen = new Set<string>();
+
+    for (const key of (await turn(7, seen, conflicting.io)).delivered) {
+      seen.add(key);
+    }
+
+    await turn(7, seen, conflicting.io);
+
+    expect(conflicting.sent).toEqual([
+      {
+        session: "S1",
+        text: "The Land loop, about your pull request #7:\nPR #7 conflicts with dev: rebase onto origin/dev.\nFix it with a commit, then stop.",
+        ownerWords: false,
+      },
+    ]);
+  });
+
   test("a landed or closed PR ends the relay and starts no turn, whatever the PR still carries", async () => {
     for (const state of ["MERGED", "CLOSED"] as const) {
       const ended = relay({ ...OPEN, state, draft: true, threads: [NIT] });
