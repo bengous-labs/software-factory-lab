@@ -5,6 +5,19 @@
  */
 export const AUTHOR_VARIABLE = "LAB_AUTHOR";
 
-export function isAuthor(env: Readonly<Record<string, string | undefined>>): boolean {
+type Env = Readonly<Record<string, string | undefined>>;
+
+export function isAuthor(env: Env): boolean {
   return env[AUTHOR_VARIABLE] === "1";
+}
+
+/** The variable the Worker bench (`scripts/lab/bench.ts`) sets to `worker` on the sessions it launches. */
+export const ROLE_VARIABLE = "LAB_ROLE";
+
+/**
+ * Whether a session plays a Worker: an Author, or a session of the Worker bench, which reads the
+ * Worker's instructions and is held by its guards but is no Author, so the Stop hook publishes nothing.
+ */
+export function isWorker(env: Env): boolean {
+  return isAuthor(env) || env[ROLE_VARIABLE] === "worker";
 }

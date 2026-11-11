@@ -138,6 +138,16 @@ describe("the hook", () => {
     expect(await hook("git commit -m x", { LAB_AUTHOR: "1" })).toBe("");
   });
 
+  test("in a bench session, which holds LAB_ROLE=worker, git push is refused too", async () => {
+    expect(JSON.parse(await hook("git push /main/checkout HEAD:dev", { LAB_ROLE: "worker" }))).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: refusalFor("git push"),
+      },
+    });
+  });
+
   test("in a session without the marker they are not", async () => {
     for (const command of ["git push", "gh pr create --fill", "gh pr ready 12"]) {
       expect(await hook(command, {})).toBe("");

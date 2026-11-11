@@ -2,8 +2,8 @@
 
 /**
  * The SessionStart hook that gives a session the instructions of its role, from a file under
- * `.claude/roles/` a person edits: `worker.md` to an Author, a session whose environment holds
- * `LAB_AUTHOR=1`, and `owner.md` to any other. It prints the file as the session's `additionalContext`.
+ * `.claude/roles/` a person edits: `worker.md` to a Worker (`isWorker`: an Author, or a session of the
+ * Worker bench), and `owner.md` to any other. It prints the file as the session's `additionalContext`.
  * On a resume or a fork it prints nothing: the transcript already holds the text, and the relay resumes a
  * Worker at each Wake, so printing it again would pile it up. The Stop hook's forks start as a fork. A clear
  * or a compaction drops the text, so it prints it again.
@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 import { Schema } from "effect";
 
-import { isAuthor } from "../lib/author-session.ts";
+import { isWorker } from "../lib/author-session.ts";
 import { decodeJson } from "../lib/json.ts";
 
 const ROLES = join(import.meta.dir, "..", "..", ".claude", "roles");
@@ -32,7 +32,7 @@ export function roleFileOf(stdin: string, env: Readonly<Record<string, string | 
     return null;
   }
 
-  return isAuthor(env) ? "worker.md" : "owner.md";
+  return isWorker(env) ? "worker.md" : "owner.md";
 }
 
 if (import.meta.main) {
