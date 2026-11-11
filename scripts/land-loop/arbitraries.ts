@@ -91,6 +91,8 @@ export const recordOf = (patch: fc.Arbitrary<string>): fc.Arbitrary<StateRecord>
       importantByRound: fc.array(fc.option(fc.nat({ max: 2 }), { nil: null }), { maxLength: 3 }),
       ownerHold: fc.string(),
       ownerAskedPatch: patch,
+      deltaReadPatch: patch,
+      followUpIssue: fc.nat(),
     },
     {
       requiredKeys: ["reviewedPatch", "reviewedHead", "reviewRounds", "triage", "landOkPatch", "dequeued"],

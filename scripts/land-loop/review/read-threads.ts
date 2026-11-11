@@ -1,10 +1,10 @@
 /**
  * The review job's thread step, run on every Review round, with the job's read-only token. It reads the
- * pull request's review threads and writes the App's earlier findings, with the author's answers, to
- * `review-threads.json` at the root checkout, outside `pr/`, for `run-review.ts` to put in the prompt.
- * The review session itself never gets a GitHub token.
+ * pull request's review threads and writes the App's earlier findings the review is shown, with the
+ * author's answers (`shownThreadsOf`), to `review-threads.json` at the root checkout, outside `pr/`, for
+ * `run-review.ts` to put in the prompt. The review session itself never gets a GitHub token.
  *
- * Reads GITHUB_REPOSITORY, REVIEW_PR and APP_LOGIN; calls gh with GH_TOKEN.
+ * Reads GITHUB_REPOSITORY, REVIEW_PR, REVIEW_ROUND and APP_LOGIN; calls gh with GH_TOKEN.
  */
 
 import { writeFileSync } from "node:fs";
@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { decodeJson } from "../../lib/json.ts";
 import { checked, run } from "../lib/run.ts";
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
-import { earlierThreadsOf, graphqlLogin, ReviewThreads, threadsQueryOf } from "./findings.ts";
+import { graphqlLogin, ReviewThreads, shownThreadsOf, threadsQueryOf } from "./findings.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -42,8 +42,9 @@ const answer = await checked(
 const threads = decodeJson(ReviewThreads, "the review threads query", answer).data.repository.pullRequest.reviewThreads
   .nodes;
 
-const earlier = earlierThreadsOf(
+const earlier = shownThreadsOf(
   { app: graphqlLogin(required("APP_LOGIN")), author: AUTHOR_LOGIN, owner: OWNER_LOGIN },
+  Number(required("REVIEW_ROUND")),
   threads,
 );
 

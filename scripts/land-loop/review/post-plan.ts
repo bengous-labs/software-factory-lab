@@ -8,7 +8,7 @@
 import type { Schema } from "effect";
 
 import { codeSpan, escapeHtml, escapeInline } from "../../lib/markdown.ts";
-import { postedCountOf, roundNameOf } from "../merge-bot/decide.ts";
+import { DELTA_READ, postedCountOf, reviewNameOf, roundNameOf } from "../merge-bot/decide.ts";
 import { markerOf, movedLineOf } from "./findings.ts";
 import type { ReviewThread } from "./findings.ts";
 import type { ReportedFinding, ReportedResult, ReviewRequest, Severity } from "./review-report.ts";
@@ -204,7 +204,7 @@ export function againRepliesOf(
     ]);
 
     const body = [
-      `Review round ${request.round} still holds this finding.`,
+      `${request.round === DELTA_READ ? "The Delta read" : reviewNameOf(request.round)} still holds this finding.`,
       "",
       ...reports,
       markerOf("important"),

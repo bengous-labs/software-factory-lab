@@ -458,6 +458,23 @@ describe("againRepliesOf", () => {
     ]);
   });
 
+  test("a Delta read that reports an open thread again names itself so in its reply, never as a Review round 4", () => {
+    const result = resultOf(again("T1"));
+    const read = { ...result, request: { ...result.request, round: 4 as const } };
+    const [reply] = againRepliesOf(read, ["T1"], [threadOf("T1", FIRST)], APP);
+
+    expect(reply?.body.split("\n")[0]).toBe("The Delta read still holds this finding.");
+    expect(reply?.body.endsWith("<!-- lab-review patch=p1 round=4 -->")).toBe(true);
+    expect(
+      againRepliesOf(
+        { ...result, request: { ...result.request, round: 3 } },
+        ["T1"],
+        [threadOf("T1", FIRST)],
+        APP,
+      )[0]?.body.split("\n")[0],
+    ).toBe("Review round 3 still holds this finding.");
+  });
+
   test("a thread takes one reply per review, with every finding that names it: the Code review's, then the security pass's under its label", () => {
     const leak: ReportedFinding = {
       ...again("T1", "Reads review-<head>.json"),

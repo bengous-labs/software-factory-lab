@@ -6,7 +6,7 @@ import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
-import { ledgerOf, standingOf } from "../merge-bot/decide.ts";
+import { landedOpenNoteOf, ledgerOf, standingOf } from "../merge-bot/decide.ts";
 import {
   EarlierThreads,
   earlierThreadsOf,
@@ -22,7 +22,9 @@ import {
   reviewOfBody,
   ReviewThreads,
   severityOfBody,
+  shownThreadsOf,
   threadsQueryOf,
+  unnotedOf,
 } from "./findings.ts";
 import type { ReviewThread } from "./findings.ts";
 import { reviewMarkerOf } from "./post-plan.ts";
@@ -444,6 +446,20 @@ describe("earlierThreadsOf", () => {
     ).toEqual([]);
   });
 
+  test("the Delta read is shown the App's open Importants alone; a Review round every finding of the App", () => {
+    const threads = [
+      { ...thread(IMPORTANT), id: "open" },
+      { ...thread(IMPORTANT, [], { isResolved: true }), id: "resolved" },
+      { ...thread(NIT), id: "nit" },
+      { ...thread(IMPORTANT, [], { by: AUTHOR }), id: "author" },
+    ];
+
+    expect(shownThreadsOf(LOGINS, 4, threads).map((shown) => shown.thread)).toEqual(["open"]);
+    expect(shownThreadsOf(LOGINS, 4, threads)).toEqual(earlierThreadsOf(LOGINS, threads.slice(0, 1)));
+    expect(shownThreadsOf(LOGINS, 2, threads)).toEqual(earlierThreadsOf(LOGINS, threads));
+    expect(shownThreadsOf(LOGINS, 3, threads).map((shown) => shown.thread)).toEqual(["open", "resolved", "nit"]);
+  });
+
   test("the threads file reads back as the earlier findings, and a file outside its schema is refused", () => {
     const earlier = earlierThreadsOf(LOGINS, [thread(IMPORTANT)]);
 
@@ -481,6 +497,11 @@ const closedBy = (resolvedBy: string | null, isResolved = true): boolean | undef
 const ownerAnswerIn = (found: ReviewThread): string | null | undefined =>
   ledgerFindingsOf(LOGINS, [postedIn(found, ROUND_2, "a.ts")])[0]?.ownerAnswer;
 
+/** Whether the ledger reads a resolved Important of Review round 2, whose replies are `replies`, as landed open. */
+const landedIn = (replies: ReadonlyArray<readonly [string, string]>): boolean | undefined =>
+  ledgerFindingsOf(LOGINS, [postedIn(thread(IMPORTANT, replies, { isResolved: true }), ROUND_2, "a.ts")])[0]
+    ?.landedOpen;
+
 /** The rejection the ledger reads in `found`, a thread of Review round 2. */
 const rejectionIn = (found: ReviewThread): string | null | undefined =>
   ledgerFindingsOf(LOGINS, [postedIn(found, ROUND_2, "a.ts")])[0]?.rejection;
@@ -495,12 +516,14 @@ describe("ledgerFindingsOf", () => {
         thread: "T",
         url: "https://github.com/o/r/pull/7#discussion_r1",
         where: "app/a.ts:3",
+        file: "app/a.ts",
         severity: "important",
         security: true,
         summary: "off by <one",
         round: 2,
         resolved: false,
         closedByApp: false,
+        landedOpen: false,
         outdated: true,
         rejection: null,
         ownerAnswer: null,
@@ -539,6 +562,22 @@ describe("ledgerFindingsOf", () => {
     expect(
       ledgerFindingsOf(LOGINS, [postedIn(thread(IMPORTANT, replies), { patch: "p1", round: 1 }, "a.ts")]),
     ).toMatchObject([{ round: 1, again: [2, 3] }]);
+  });
+
+  test("a finding anchored away from its own file is about the file its moved line names, without a line", () => {
+    const moved = `**Important**: off by one\n${movedLineOf("app/b.ts:9")}\n\nwhy\n\n${markerOf("important")}`;
+
+    expect(ledgerFindingsOf(LOGINS, [postedIn(thread(moved), ROUND_2, "app/a.ts")])).toMatchObject([
+      { where: "app/a.ts:3", file: "app/b.ts" },
+    ]);
+  });
+
+  test("an Important lands open when the App's reply in its thread carries the landing's marker, no other login's", () => {
+    expect(landedIn([[APP, landedOpenNoteOf(12)]])).toBe(true);
+    expect(landedIn([[APP, landedOpenNoteOf()]])).toBe(true);
+    expect(landedIn([[AUTHOR, landedOpenNoteOf(12)]])).toBe(false);
+    expect(landedIn([[APP, "a reply of the App with no marker"]])).toBe(false);
+    expect(landedIn([])).toBe(false);
   });
 
   test("a rejection is the Author's reply that closes a resolved thread with the reject mark, linked", () => {
@@ -595,6 +634,17 @@ describe("ledgerFindingsOf", () => {
     expect(ownerAnswerIn(thread(NIT, [["bengous", `${answer}\n\n${AUTHOR_MARK}`]], { isResolved: true }))).toBeNull();
     expect(ownerAnswerIn(thread(NIT, [["someone", answer]], { isResolved: true }))).toBeNull();
     expect(ownerAnswerIn(thread(NIT, [], { isResolved: true }))).toBeNull();
+  });
+
+  test("a thread the App already noted as landed open is not noted again; another login's marker notes nothing", () => {
+    const threads = [
+      { ...thread(IMPORTANT, [[APP, landedOpenNoteOf(12)]]), id: "noted" },
+      { ...thread(IMPORTANT, [[AUTHOR, landedOpenNoteOf(12)]]), id: "forged" },
+      { ...thread(IMPORTANT), id: "bare" },
+    ];
+
+    expect(unnotedOf(APP, ["noted", "forged", "bare", "gone"], threads)).toEqual(["forged", "bare", "gone"]);
+    expect(unnotedOf(APP, [], threads)).toEqual([]);
   });
 
   test("PR #158's Important the Owner answered, which round 2 then left out, stands as answered by the Owner, never fixed", () => {

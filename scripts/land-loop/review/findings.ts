@@ -2,13 +2,15 @@
  * The App's findings as GitHub holds them. Each posted finding carries a marker that names its
  * severity, read back to count the open Important threads and by the relay of the Author's PR. A pull
  * request's review threads come from one GraphQL query: the Merge bot counts them and keeps their
- * ledger, and the review job gives Review rounds 2 and 3 the earlier findings with the author's answers.
+ * ledger, and the review job gives Review rounds 2 and 3 the earlier findings with the author's answers,
+ * and the Delta read the open Importants.
  */
 
 import { Option, Schema } from "effect";
 
 import { codeSpan, unescapeHtml } from "../../lib/markdown.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
+import { DELTA_READ, LANDED_OPEN_MARKER } from "../merge-bot/decide.ts";
 import type { ImportantThread, LedgerFinding } from "../merge-bot/decide.ts";
 import { Severity } from "./review-report.ts";
 
@@ -273,15 +275,48 @@ export function earlierThreadsOf(logins: ThreadLogins, threads: readonly ReviewT
   });
 }
 
+/**
+ * The earlier findings the review of `round` is shown, as `earlierThreadsOf` writes them: on the Delta
+ * read, the App's open Importants alone, whose fix it confirms, since it posts no Nit; on a Review round,
+ * every finding of the App.
+ */
+export function shownThreadsOf(logins: ThreadLogins, round: number, threads: readonly ReviewThread[]): EarlierThread[] {
+  if (round !== DELTA_READ) {
+    return earlierThreadsOf(logins, threads);
+  }
+
+  const open = new Set(openImportantOf(logins.app, threads).map((found) => found.thread));
+
+  return earlierThreadsOf(
+    logins,
+    threads.filter((thread) => open.has(thread.id)),
+  );
+}
+
+/** Whether the App replied in `thread` that the Owner's Land approval lands its finding open. */
+const landedOpenIn = (appLogin: string, thread: ReviewThread): boolean =>
+  thread.comments.nodes
+    .slice(1)
+    .some((reply) => reply.author?.login === appLogin && reply.body.includes(LANDED_OPEN_MARKER));
+
+/**
+ * The threads of `ids` in which the App has not yet replied that the Owner's Land approval lands their
+ * finding open, so a run that retries the landing replies once. `appLogin` is the App's login as GraphQL
+ * prints it, since any login can write the marker.
+ */
+export function unnotedOf(appLogin: string, ids: readonly string[], threads: readonly ReviewThread[]): string[] {
+  return ids.filter((id) => !threads.some((thread) => thread.id === id && landedOpenIn(appLogin, thread)));
+}
+
 const SECURITY_LABEL = /^\*\*[^*]+ \(security\)\*\*: /u;
 
 /**
  * The App's Important and Nit findings of a review that names its round, each as the ledger reads its
- * thread: where its comment is, its severity and pass, its first line without the label, its round, the
- * thread's state and whether the App resolved it, the Author's rejection reply when the thread is
- * resolved with it as its latest answer,
- * the Owner's reply when it is the latest answer, written by hand, and the later rounds that report it
- * again there. `logins.app` is the App's login as GraphQL prints it.
+ * thread: where its comment is and the file it is about, its severity and pass, its first line without
+ * the label, its round, the thread's state, whether the App resolved it and whether it replied there that
+ * the Owner's Land approval lands it open, the Author's rejection reply when the thread is resolved with
+ * it as its latest answer, the Owner's reply when it is the latest answer, written by hand, and the later
+ * reads that report it again there. `logins.app` is the App's login as GraphQL prints it.
  */
 export function ledgerFindingsOf(logins: ThreadLogins, threads: readonly ReviewThread[]): LedgerFinding[] {
   return threads.flatMap((thread) => {
@@ -309,6 +344,7 @@ export function ledgerFindingsOf(logins: ThreadLogins, threads: readonly ReviewT
         thread: thread.id,
         url: finding.url,
         where: thread.line === null ? thread.path : `${thread.path}:${thread.line}`,
+        file: findingFileOf(thread.path, finding.body),
         severity,
         security: SECURITY_LABEL.test(first),
         summary: first.replace(SEVERITY_LABEL, ""),
@@ -316,6 +352,7 @@ export function ledgerFindingsOf(logins: ThreadLogins, threads: readonly ReviewT
         resolved: thread.isResolved,
         closedByApp:
           thread.isResolved && thread.resolvedBy !== null && graphqlLogin(thread.resolvedBy.login) === logins.app,
+        landedOpen: landedOpenIn(logins.app, thread),
         outdated: thread.isOutdated,
         rejection: rejectedOf(logins, thread) ? (latest?.url ?? null) : null,
         ownerAnswer: ownerWords ? latest.url : null,

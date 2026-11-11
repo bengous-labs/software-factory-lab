@@ -37,6 +37,7 @@ import {
   humanLabelByOf,
   IssueComments,
   IssueEvents,
+  issueOpener,
   judgeAt,
   judgeDiffArgs,
   judgeEnvOf,
@@ -307,12 +308,14 @@ const OPEN_IMPORTANT: LedgerFinding = {
   thread: "T1",
   url: "https://github.com/o/r/pull/12#discussion_r1",
   where: "a.ts:3",
+  file: "a.ts",
   severity: "important",
   security: false,
   summary: "off by one",
   round: 1,
   resolved: false,
   closedByApp: false,
+  landedOpen: false,
   outdated: false,
   rejection: null,
   ownerAnswer: null,
@@ -335,8 +338,8 @@ interface StepsRun {
 
 /**
  * `steps` done over the state comment `read`, from `record` and `inputs`: a `record` step writes its
- * record, a `route` step a routed one, the step of kind `stopAt` stops the run, and any other changes
- * nothing. The findings read again are `reread`; a new comment gets id 99.
+ * record, a `route` step a routed one, a `follow-up` step one with issue 31, the step of kind `stopAt`
+ * stops the run, and any other changes nothing. The findings read again are `reread`; a new comment gets id 99.
  */
 async function stepsRun(
   steps: readonly Step[],
@@ -357,7 +360,9 @@ async function stepsRun(
           ? step.record
           : step.kind === "route"
             ? { ...record, triage: { [step.patch]: ROUTED } }
-            : record;
+            : step.kind === "follow-up"
+              ? { ...record, followUpIssue: 31 }
+              : record;
 
       if (next !== record) {
         await write(next);
@@ -391,24 +396,35 @@ const ROUTED = {
 describe("stepsDone", () => {
   const check = { kind: "success", summary: "ok" } as const;
 
-  test("the Owner's Land approval closes the open Importants and no decision follows: the findings are read again and the comment shows them closed", async () => {
+  test("the Owner's Land approval lands the open Importants open and no decision follows: the follow-up issue is recorded, the findings are read again and the comment shows them landed open", async () => {
     const steps: Step[] = [
       { kind: "labels", route: "owner", depth: "light" },
-      { kind: "resolve-threads", threads: ["T1"] },
+      { kind: "follow-up", threads: ["T1"] },
+      { kind: "land-open", threads: ["T1"] },
       { kind: "review-check", check },
       { kind: "land-gate", check },
       { kind: "auto-merge" },
     ];
 
+    const landed: LedgerInputs = {
+      findings: [{ ...OPEN_IMPORTANT, resolved: true, closedByApp: true, landedOpen: true }],
+      fixed: new Set(),
+    };
+
+    const followed: StateRecord = { ...ROUND_1, followUpIssue: 31 };
+
     const run = await stepsRun(
       steps,
       { read: { id: 7, body: stateBodyOf(ROUND_1, OPEN), record: ROUND_1 }, record: ROUND_1, inputs: OPEN },
-      { reread: CLOSED },
+      { reread: landed },
     );
 
     expect(run.reads).toBe(1);
-    expect(run.writes).toEqual([{ id: 7, body: stateBodyOf(ROUND_1, CLOSED) }]);
-    expect(run.writes[0]?.body).toContain("**Closed with no later round confirming it.** Important");
+    expect(run.writes).toEqual([
+      { id: 7, body: stateBodyOf(followed, OPEN) },
+      { id: 7, body: stateBodyOf(followed, landed) },
+    ]);
+    expect(run.writes[1]?.body).toContain("**Landed open by the Owner's Land approval.** Important");
     expect(run.decideAgain).toBe(false);
   });
 
@@ -656,6 +672,32 @@ describe("labelEventsReader", () => {
     expect(humanLabelByOf(events, ["land:human"], { appLogin: "agents[bot]", authorLogin: "author" })).toBe(
       "merge-bot",
     );
+  });
+});
+
+/** A runner every command of which succeeds with an empty JSON object. */
+const answersEmpty: Run = () => Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+
+describe("issueOpener", () => {
+  test("opens the issue on the repository with its title and body as they are, and answers its number", async () => {
+    const calls: Array<{ argv: string[]; stdin: string | undefined }> = [];
+
+    const runner: Run = (argv, options) => {
+      calls.push({ argv: [...argv], stdin: options.stdin });
+
+      return Promise.resolve({ code: 0, stdout: JSON.stringify({ number: 31, title: "t" }), stderr: "" });
+    };
+
+    const issue = { title: "Follow up #12: Important findings landed open", body: "- Important in `a.ts`" };
+
+    expect(await issueOpener(runner)(WHERE, issue)).toBe(31);
+    expect(calls).toEqual([
+      { argv: ["gh", "api", "-X", "POST", "repos/o/r/issues", "--input", "-"], stdin: JSON.stringify(issue) },
+    ]);
+  });
+
+  test("an answer with no issue number fails, naming the endpoint", () => {
+    expect(issueOpener(answersEmpty)(WHERE, { title: "t", body: "b" })).rejects.toThrow("gh api repos/o/r/issues");
   });
 });
 

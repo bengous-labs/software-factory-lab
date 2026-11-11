@@ -5,7 +5,8 @@
  * App's token. Each start makes one Merge bot run for the PR the event names, or, on a Sweep, one for
  * every open PR. A Merge bot run reads a snapshot of its PR, asks `decide.ts`, performs the steps, and
  * decides again after a model step, until no model step is left. Each decision rewrites the ledger of
- * the review's findings in the comment that holds the state record, when what it shows changed.
+ * the review's findings in the comment that holds the state record, when what it shows changed. When the
+ * Owner's Land approval lands Important findings open, it opens their follow-up issue.
  *
  * Reads GITHUB_REPOSITORY, OWNER (the only GitHub login whose PRs are served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
  * RUN_HEAD_SHA, RUN_EVENT, EJECTION_REASON; calls gh and git, and the models through the Agent SDK. The Code review runs
@@ -37,6 +38,7 @@ import {
   rejectedImportantOf,
   ReviewThreads,
   threadsQueryOf,
+  unnotedOf,
 } from "../review/findings.ts";
 import type { ReviewThread, ThreadLogins } from "../review/findings.ts";
 import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
@@ -55,9 +57,11 @@ import {
   conflictingOf,
   decide,
   EMPTY_RECORD,
+  followUpIssueOf,
   LAND_APPROVAL_LABEL,
   LAND_GATE,
   landApprovalCounts,
+  landedOpenNoteOf,
   MERGE_BOT_STATE_MARKER,
   patchDeltaStart,
   postedFindingsOf,
@@ -68,6 +72,7 @@ import {
 } from "./decide.ts";
 import type {
   CheckState,
+  Issue,
   LandRoute,
   LedgerFinding,
   LedgerInputs,
@@ -289,6 +294,25 @@ export function ownerCommenter(
 
 const postOwnerComment = ownerCommenter(run);
 
+/** The answer of `POST repos/<repo>/issues`, as far as the Merge bot reads it. */
+const OpenedIssue = Schema.Struct({ number: Schema.Int });
+
+/** Opens `issue` on the repository, as the App; returns its number. */
+export function issueOpener(runner: Run): (where: Pick<Env, "repo" | "cwd">, issue: Issue) => Promise<number> {
+  return async (where, issue) => {
+    const path = `repos/${where.repo}/issues`;
+
+    const out = await checked(runner, ["gh", "api", "-X", "POST", path, "--input", "-"], {
+      cwd: where.cwd,
+      stdin: JSON.stringify({ title: issue.title, body: issue.body }),
+    });
+
+    return decodeJson(OpenedIssue, `gh api ${path}`, out).number;
+  };
+}
+
+const openIssue = issueOpener(run);
+
 /** `repos/<repo>/commits/<sha>/check-suites`, as far as the Merge bot reads it. */
 export const CheckSuites = Schema.Struct({
   check_suites: Schema.Array(
@@ -466,7 +490,7 @@ export async function stepsDone(
       return false;
     }
 
-    if (step.kind === "resolve-threads") {
+    if (step.kind === "resolve-threads" || step.kind === "land-open") {
       inputs = { ...inputs, findings: await io.findings() };
     }
 
@@ -1087,6 +1111,39 @@ async function perform(
     case "resolve-threads": {
       await resolveThreads(env, step.threads);
       log(`#${pr.number} resolved ${step.threads.length} Important thread(s)`);
+
+      return record;
+    }
+
+    case "follow-up": {
+      const findings = ledgerFindingsOf(threadLoginsOf(env), await threadsOf(env, pr.number));
+      const issue = followUpIssueOf(pr.number, step.threads, findings);
+
+      if (issue === null) {
+        log(`#${pr.number} follow-up: none of ${step.threads.length} thread(s) holds a finding that reads`);
+
+        return record;
+      }
+
+      const number = await openIssue(env, issue);
+      log(`#${pr.number} opened the follow-up issue #${number}`);
+      // Written at once: a run that stops before the record opens a second issue.
+      const next: StateRecord = { ...record, followUpIssue: number };
+      await write(next);
+
+      return next;
+    }
+
+    case "land-open": {
+      const unnoted = unnotedOf(graphqlLogin(env.appLogin), step.threads, await threadsOf(env, pr.number));
+      const note = landedOpenNoteOf(record.followUpIssue);
+
+      await postAgain(
+        env,
+        unnoted.map((thread) => ({ thread, body: note })),
+      );
+      await resolveThreads(env, step.threads);
+      log(`#${pr.number} landed ${step.threads.length} Important thread(s) open`);
 
       return record;
     }
