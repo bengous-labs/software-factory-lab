@@ -13,7 +13,7 @@ const input = (source: string): string => JSON.stringify({ hook_event_name: "Ses
 
 /** The context the hook gives a session that starts with `env`, or null when it prints nothing. */
 async function contextOf(env: Readonly<Record<string, string>>, source = "startup"): Promise<string | null> {
-  const { LAB_AUTHOR: _author, ...inherited } = process.env;
+  const { LAB_AUTHOR: _author, LAB_ROLE: _role, ...inherited } = process.env;
 
   const ran = await $`bun ${SCRIPT} < ${Buffer.from(input(source))}`.env({ ...inherited, ...env }).quiet();
 
@@ -36,6 +36,11 @@ describe("roleFileOf", () => {
     expect(roleFileOf(input("startup"), { LAB_AUTHOR: "1" })).toBe("worker.md");
     expect(roleFileOf(input("startup"), {})).toBe("owner.md");
     expect(roleFileOf(input("startup"), { LAB_AUTHOR: "0" })).toBe("owner.md");
+  });
+
+  test("names the Worker's file for a bench session, which holds LAB_ROLE=worker and is no Author", () => {
+    expect(roleFileOf(input("startup"), { LAB_ROLE: "worker" })).toBe("worker.md");
+    expect(roleFileOf(input("startup"), { LAB_ROLE: "owner" })).toBe("owner.md");
   });
 
   test("names it again after a clear or a compaction, which drop it from the context", () => {

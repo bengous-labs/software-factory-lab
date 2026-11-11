@@ -60,6 +60,28 @@ test("each run launches a session on the issue in its own clone, and the report 
   expect(report).not.toContain("after the Wake");
 });
 
+test("a run that fails is reported failed, and the other runs keep their reports", async () => {
+  const { io } = fakeIo();
+
+  const failing = {
+    ...io,
+    claude: (argv: readonly string[], cwd: string) =>
+      cwd.endsWith("2") ? Promise.reject(new Error(`claude in ${cwd} exited 1`)) : io.claude(argv, cwd),
+  };
+
+  const report = await runBench(failing, {
+    issue: "i.md",
+    issueText: "x",
+    runs: 3,
+    model: undefined,
+    wakeText: undefined,
+  });
+
+  expect(report).toContain("committed in /b/run-1");
+  expect(report).toContain("## Run 2 failed\nclaude in /b/run-2 exited 1");
+  expect(report).toContain("committed in /b/run-3");
+});
+
 test("a wake resumes each session once with the wake's text", async () => {
   const { io, launches } = fakeIo();
 

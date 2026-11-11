@@ -5,16 +5,24 @@
 
 import { parseArgs } from "node:util";
 
-import { Predicate, Schema } from "effect";
+import { Result, Schema } from "effect";
 
+import { ROLE_VARIABLE } from "../lib/author-session.ts";
 import { decodeJson } from "../lib/json.ts";
+import { objectAt, parseJson } from "../lib/plain-json.ts";
+import type { Json } from "../lib/plain-json.ts";
 
 export const HELP = `usage: bun scripts/lab/bench.ts --issue <file> --runs <n> [--model <model>] [--wake <file>]
 
 Launches <n> headless Worker sessions, each in a throwaway clone of the current commit, on a fake issue,
 then prints per session its closing message, the rules under .claude/rules/ it loaded, and whether its
-transcript holds an output style reminder other than the Worker's. The sessions run with the Worker's
-settings minus LAB_AUTHOR: the Stop hook stays a bystander, and nothing is published.
+transcript holds an output style reminder other than the Worker's.
+
+The sessions run with the Worker's settings, but LAB_ROLE=worker in place of LAB_AUTHOR=1: they read
+the Worker's role and the guard refuses their git push, but they are no Author, so the Stop hook
+publishes nothing. Their environment keeps only what claude needs, with no token, and gh reads an
+empty config. They edit files and run git and bun with no prompt, outside any sandbox: a session that
+means to can still reach what the Owner's files hold. Run a bench only on a change you have read.
 
   --issue <file>   the fake issue, in Markdown
   --runs <n>       how many sessions
@@ -71,12 +79,35 @@ export function argsOf(argv: readonly string[]): Parsed {
 
 const WORKER_STYLE = "Proactive";
 
-/** The settings of a Worker (`.claude/rules/identities.md`) but its `env`: no `LAB_AUTHOR`, so no Author, and no token. */
-export const WORKER_SETTINGS = { outputStyle: WORKER_STYLE } as const;
+/**
+ * The settings of a Worker (`.claude/rules/identities.md`), but its `env` holds `LAB_ROLE=worker` in place
+ * of `LAB_AUTHOR=1` and `GH_TOKEN`: the Worker's role and guards, no Author, no token.
+ */
+export function workerSettings(ownerClaudeMd: string) {
+  return {
+    env: { [ROLE_VARIABLE]: "worker" },
+    outputStyle: WORKER_STYLE,
+    claudeMdExcludes: [ownerClaudeMd],
+  };
+}
+
+/** The variables of the launcher's environment a bench session keeps: what claude and the tools need, no secret. */
+const KEPT = ["HOME", "PATH", "USER", "SHELL", "LANG", "TERM", "TMPDIR", "XDG_RUNTIME_DIR", "CLAUDE_CONFIG_DIR"];
+
+/** A bench session's whole environment, from the launcher's: `KEPT`, and gh pointed at the empty `ghConfigDir`. */
+export function benchEnvOf(env: Readonly<Record<string, string | undefined>>, ghConfigDir: string) {
+  const kept = KEPT.flatMap((name) => {
+    const value = env[name];
+
+    return value === undefined ? [] : [[name, value] as const];
+  });
+
+  return Object.fromEntries([...kept, ["GH_CONFIG_DIR", ghConfigDir] as const]);
+}
 
 export function workerPrompt(issue: string): string {
   return [
-    "Implement the issue below. Read AGENTS.md first and follow its 'Your task' section.",
+    "Implement the issue below.",
     "The issue's 'Done when' section says which boxes are yours: reach them, and nothing beyond the issue.",
     "Work test-first. When your boxes are held and bun check passes, commit and end your turn.",
     "",
@@ -128,19 +159,61 @@ export function closingOf(stdout: string): Closing {
   return { session: result.session_id, message: result.result };
 }
 
-const TranscriptLine = Schema.Struct({
-  type: Schema.optionalKey(Schema.String),
-  attachment: Schema.optionalKey(
-    Schema.Struct({
-      type: Schema.String,
-      path: Schema.optionalKey(Schema.String),
-      files: Schema.optionalKey(Schema.Array(Schema.Struct({ path: Schema.String }))),
-      style: Schema.optionalKey(Schema.Union([Schema.String, Schema.Struct({ name: Schema.String })])),
-    }),
-  ),
-});
+/** What one attachment loaded: instruction files by path, and output styles by name. */
+interface Loaded {
+  readonly paths: readonly string[];
+  readonly styles: readonly string[];
+}
 
-type Attachment = NonNullable<(typeof TranscriptLine)["Type"]["attachment"]>;
+const NOTHING: Loaded = { paths: [], styles: [] };
+
+const TranscriptLine = Schema.Struct({ attachment: Schema.optionalKey(Schema.Struct({ type: Schema.String })) });
+
+const Instructions = Schema.Struct({ files: Schema.Array(Schema.Struct({ path: Schema.String })) });
+
+const NestedMemory = Schema.Struct({ path: Schema.String });
+
+const OutputStyle = Schema.Struct({ style: Schema.String });
+
+const OutputStyleInstructions = Schema.Struct({ style: Schema.Struct({ name: Schema.String }) });
+
+function decoded<S extends Schema.ConstraintDecoder<unknown>>(schema: S, source: string, value: Json): S["Type"] {
+  const result = Schema.decodeUnknownResult(schema)(value);
+
+  if (Result.isFailure(result)) {
+    throw new Error(`${source}: ${result.failure.message}`, { cause: result.failure });
+  }
+
+  return result.success;
+}
+
+/** What the attachment of one transcript line loaded; an attachment of a type the bench does not read loaded nothing. */
+function loadedBy(text: string, source: string): Loaded {
+  const type = decodeJson(TranscriptLine, source, text).attachment?.type ?? "";
+  const attachment = (): Json => objectAt(source, parseJson(source, text))["attachment"] ?? null;
+
+  switch (type) {
+    case "instructions": {
+      return { paths: decoded(Instructions, source, attachment()).files.map((file) => file.path), styles: [] };
+    }
+
+    case "nested_memory": {
+      return { paths: [decoded(NestedMemory, source, attachment()).path], styles: [] };
+    }
+
+    case "output_style": {
+      return { paths: [], styles: [decoded(OutputStyle, source, attachment()).style] };
+    }
+
+    case "output_style_instructions": {
+      return { paths: [], styles: [decoded(OutputStyleInstructions, source, attachment()).style.name] };
+    }
+
+    default: {
+      return NOTHING;
+    }
+  }
+}
 
 export interface Reading {
   readonly rules: readonly string[];
@@ -149,22 +222,6 @@ export interface Reading {
 
 const RULES = ".claude/rules/";
 
-function loadedPaths(attachment: Attachment): string[] {
-  if (attachment.type === "instructions") {
-    return (attachment.files ?? []).map((file) => file.path);
-  }
-
-  return attachment.type === "nested_memory" && attachment.path !== undefined ? [attachment.path] : [];
-}
-
-function styleOf(attachment: Attachment): string | undefined {
-  if (attachment.type !== "output_style" && attachment.type !== "output_style_instructions") {
-    return undefined;
-  }
-
-  return Predicate.isString(attachment.style) ? attachment.style : attachment.style?.name;
-}
-
 const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].toSorted();
 
 /**
@@ -172,16 +229,17 @@ const sortedUnique = (values: readonly string[]): string[] => [...new Set(values
  * transcript starts with the session's first message, and reading it would count that message again.
  */
 export function readingOf(transcript: string): Reading {
-  const attachments = transcript
+  const loaded = transcript
     .split("\n")
-    .filter((text) => text.trim() !== "")
-    .flatMap((text, index) => decodeJson(TranscriptLine, `transcript line ${index + 1}`, text).attachment ?? []);
+    .map((text, index) => ({ text, source: `transcript line ${index + 1}` }))
+    .filter(({ text }) => text.trim() !== "")
+    .map(({ text, source }) => loadedBy(text, source));
 
-  const rules = attachments
-    .flatMap((attachment) => loadedPaths(attachment))
+  const rules = loaded
+    .flatMap((each) => each.paths)
     .flatMap((path) => (path.includes(`/${RULES}`) ? [path.slice(path.indexOf(RULES))] : []));
 
-  const styles = attachments.flatMap((attachment) => styleOf(attachment) ?? []);
+  const styles = loaded.flatMap((each) => each.styles);
 
   return {
     rules: sortedUnique(rules),
@@ -189,13 +247,16 @@ export function readingOf(transcript: string): Reading {
   };
 }
 
-export interface SessionReport {
-  readonly run: number;
-  readonly dir: string;
-  /** The closing message of the launch, then of the Wake when there is one. */
-  readonly closings: readonly Closing[];
-  readonly reading: Reading;
-}
+export type SessionReport =
+  | {
+      readonly kind: "done";
+      readonly run: number;
+      readonly dir: string;
+      /** The closing message of the launch, then of the Wake when there is one. */
+      readonly closings: readonly Closing[];
+      readonly reading: Reading;
+    }
+  | { readonly kind: "failed"; readonly run: number; readonly error: string };
 
 export interface BenchHeader {
   readonly issue: string;
@@ -204,7 +265,12 @@ export interface BenchHeader {
   readonly root: string;
 }
 
-function sessionLines({ run, dir, closings, reading }: SessionReport): string[] {
+function sessionLines(session: SessionReport): string[] {
+  if (session.kind === "failed") {
+    return [`## Run ${session.run} failed`, session.error, ""];
+  }
+
+  const { run, dir, closings, reading } = session;
   const [launch, wake] = closings;
   const styles = reading.foreignStyles;
 

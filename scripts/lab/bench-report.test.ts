@@ -1,15 +1,17 @@
 import { describe, expect, test } from "bun:test";
 
+import { isAuthor, isWorker } from "../lib/author-session.ts";
 import type { Json } from "../lib/plain-json.ts";
 import {
   argsOf,
+  benchEnvOf,
   claudeArgv,
   closingOf,
   HELP,
   readingOf,
   reportOf,
-  WORKER_SETTINGS,
   workerPrompt,
+  workerSettings,
 } from "./bench-report.ts";
 
 const line = (value: Json): string => JSON.stringify(value);
@@ -55,15 +57,43 @@ test("the help says how to write a fake issue file", () => {
   expect(HELP).toContain("Done when");
 });
 
-test("the Worker settings hold the Worker's output style and no LAB_AUTHOR", () => {
-  expect(WORKER_SETTINGS).toEqual({ outputStyle: "Proactive" });
-  expect(JSON.stringify(WORKER_SETTINGS)).not.toContain("LAB_AUTHOR");
+test("the Worker settings give the Worker's role, output style and CLAUDE.md exclude, and no LAB_AUTHOR", () => {
+  const settings = workerSettings("/home/o/.claude/CLAUDE.md");
+
+  expect(settings).toEqual({
+    env: { LAB_ROLE: "worker" },
+    outputStyle: "Proactive",
+    claudeMdExcludes: ["/home/o/.claude/CLAUDE.md"],
+  });
+  expect(isWorker(settings.env)).toBe(true);
+  expect(isAuthor(settings.env)).toBe(false);
 });
 
-test("the prompt sends the Worker to AGENTS.md and holds the issue", () => {
+test("a session's environment keeps only what claude needs, and gives gh an empty config", () => {
+  const env = benchEnvOf(
+    {
+      HOME: "/home/o",
+      PATH: "/bin",
+      LANG: "C",
+      LAB_AUTHOR: "1",
+      LAB_AUTHOR_TOKEN_FILE: "/t",
+      GH_TOKEN: "ghp_x",
+      ANTHROPIC_API_KEY: "sk",
+      CLAUDECODE: "1",
+      SSH_AUTH_SOCK: "/s",
+      TERM: undefined,
+    },
+    "/b/gh",
+  );
+
+  expect(env).toEqual({ HOME: "/home/o", PATH: "/bin", LANG: "C", GH_CONFIG_DIR: "/b/gh" });
+});
+
+test("the prompt holds the issue, and names no section the role's text moved away", () => {
   const prompt = workerPrompt("## Problem\n\nX.");
 
-  expect(prompt).toContain("AGENTS.md");
+  expect(prompt).not.toContain("AGENTS.md");
+  expect(prompt).toContain("Done when");
   expect(prompt.endsWith("## Problem\n\nX.")).toBe(true);
 });
 
@@ -153,6 +183,19 @@ describe("readingOf", () => {
     expect(readingOf(transcript).foreignStyles).toEqual(["Explanatory"]);
   });
 
+  test("an attachment of a type the bench does not read is skipped, whatever its other fields hold", () => {
+    const transcript = [
+      attachment({ type: "file", path: 3, files: [{ name: "x" }], style: [1] }),
+      attachment({ type: "nested_memory", path: "/b/run-1/.claude/rules/hooks.md" }),
+    ].join("\n");
+
+    expect(readingOf(transcript)).toEqual({ rules: [".claude/rules/hooks.md"], foreignStyles: [] });
+  });
+
+  test("an attachment of a type the bench reads, in a shape it does not know, throws", () => {
+    expect(() => readingOf(attachment({ type: "nested_memory", path: 3 }))).toThrow("transcript line 1");
+  });
+
   test("a transcript with no attachment reads no rule and no foreign style, and blank lines are skipped", () => {
     expect(readingOf(`${line({ type: "user" })}\n\n`)).toEqual({ rules: [], foreignStyles: [] });
   });
@@ -161,12 +204,14 @@ describe("readingOf", () => {
 test("the report gives each session its closing messages, its rules and its output styles", () => {
   const report = reportOf({ issue: "i.md", runs: 2, model: "haiku", root: "/b" }, [
     {
+      kind: "done",
       run: 1,
       dir: "/b/run-1",
       closings: [{ session: "s1", message: "Committed the fix." }],
       reading: { rules: [".claude/rules/land-loop/code.md"], foreignStyles: [] },
     },
     {
+      kind: "done",
       run: 2,
       dir: "/b/run-2",
       closings: [
@@ -197,6 +242,14 @@ test("the report gives each session its closing messages, its rules and its outp
       "",
     ].join("\n"),
   );
+});
+
+test("a failed run is reported with its error, beside the others", () => {
+  const report = reportOf({ issue: "i.md", runs: 1, model: undefined, root: "/b" }, [
+    { kind: "failed", run: 1, error: "claude in /b/run-1 exited 1: boom" },
+  ]);
+
+  expect(report).toEndWith("## Run 1 failed\nclaude in /b/run-1 exited 1: boom\n");
 });
 
 test("the report names the default model when none is given", () => {

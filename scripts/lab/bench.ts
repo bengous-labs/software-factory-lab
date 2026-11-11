@@ -5,7 +5,7 @@
  * and prints what they say. `bun scripts/lab/bench.ts --help` says how.
  */
 
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,13 +13,14 @@ import { $ } from "bun";
 
 import {
   argsOf,
+  benchEnvOf,
   claudeArgv,
   closingOf,
   HELP,
   readingOf,
   reportOf,
-  WORKER_SETTINGS,
   workerPrompt,
+  workerSettings,
 } from "./bench-report.ts";
 import type { BenchArgs, Closing, SessionReport } from "./bench-report.ts";
 
@@ -56,31 +57,37 @@ async function runSession(io: BenchIo, bench: BenchRun, run: number): Promise<Se
   const sessions = [...new Set(closings.map((closing) => closing.session))];
   const transcripts = await Promise.all(sessions.map((session) => io.transcript(session)));
 
-  return { run, dir, closings, reading: readingOf(transcripts.join("\n")) };
+  return { kind: "done", run, dir, closings, reading: readingOf(transcripts.join("\n")) };
+}
+
+/** The report of run `run`, or its failure: one run that fails leaves the others' reports. */
+async function settledSession(io: BenchIo, bench: BenchRun, run: number): Promise<SessionReport> {
+  try {
+    return await runSession(io, bench, run);
+  } catch (error) {
+    return { kind: "failed", run, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /** Runs the bench's sessions side by side and returns the report. */
 export async function runBench(io: BenchIo, bench: BenchRun): Promise<string> {
   const runs = Array.from({ length: bench.runs }, (_, index) => index + 1);
-  const sessions = await Promise.all(runs.map((run) => runSession(io, bench, run)));
+  const sessions = await Promise.all(runs.map((run) => settledSession(io, bench, run)));
 
   return reportOf({ ...bench, root: io.root }, sessions);
-}
-
-/** Session environments drop `LAB_AUTHOR`: a bench launched from an Author's session launches no Author. */
-function sessionEnv(): Record<string, string | undefined> {
-  const { LAB_AUTHOR: _author, ...env } = process.env;
-
-  return env;
 }
 
 async function realIo(): Promise<BenchIo> {
   const root = await mkdtemp(join(tmpdir(), "worker-bench-"));
   const settings = join(root, "worker-settings.json");
+  const ghConfig = join(root, "gh");
   const checkout = (await $`git rev-parse --show-toplevel`.text()).trim();
   const head = (await $`git rev-parse HEAD`.text()).trim();
-  const projects = join(process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"), "projects");
-  await writeFile(settings, `${JSON.stringify(WORKER_SETTINGS)}\n`);
+  const config = process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude");
+  const projects = join(config, "projects");
+  const sessionEnv = benchEnvOf(process.env, ghConfig);
+  await mkdir(ghConfig);
+  await writeFile(settings, `${JSON.stringify(workerSettings(join(config, "CLAUDE.md")))}\n`);
 
   return {
     root,
@@ -89,13 +96,13 @@ async function realIo(): Promise<BenchIo> {
       const dir = join(root, `run-${run}`);
       await $`git clone --quiet ${checkout} ${dir}`;
       await $`git -C ${dir} switch --quiet -c bench/run-${run} ${head}`;
-      // The clone's origin is the checkout it came from: a push from a session must reach nothing.
+      // The clone's origin is the checkout it came from: a plain `git push` must reach nothing.
       await $`git -C ${dir} remote set-url --push origin no-push`;
 
       return dir;
     },
     claude: async (argv, cwd) => {
-      const child = Bun.spawn([...argv], { cwd, env: sessionEnv(), stdout: "pipe", stderr: "inherit" });
+      const child = Bun.spawn([...argv], { cwd, env: sessionEnv, stdout: "pipe", stderr: "inherit" });
       const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
 
       if (code !== 0) {
