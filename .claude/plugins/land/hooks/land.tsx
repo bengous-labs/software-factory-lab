@@ -112,10 +112,49 @@ const isLabelWrite = (command: string): boolean => {
     /\bgh\s+api\b/u.test(command) &&
     ((method !== undefined && method.toUpperCase() !== "GET") ||
       /(?:^|\s)(?:-[fF]|--field\b|--raw-field\b|--input\b)/u.test(command));
-  const isLabelCommand = /\bgh\s+label\b/u.test(command);
+  const isLabelCommand = /\bgh\s+label\b(?!\s+list\b)/u.test(command);
 
   return command.includes(LABEL) && (isLabelEdit || isApiWrite || isLabelCommand);
 };
+
+const LABEL_KEY = /label/iu;
+
+const parsed = (text: string): unknown => {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+const putsLabel = (key: string, value: unknown): boolean => {
+  if (typeof value === "string") {
+    if (!value.includes(LABEL)) {
+      return false;
+    }
+
+    const inner = parsed(value);
+
+    return (
+      LABEL_KEY.test(key) ||
+      isLabelWrite(value) ||
+      (typeof inner === "object" && inner !== null && putsLabel(key, inner))
+    );
+  }
+
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  if (LABEL_KEY.test(key) && JSON.stringify(value).includes(LABEL)) {
+    return true;
+  }
+
+  return Object.entries(value).some(([entry, held]) => putsLabel(Array.isArray(value) ? key : entry, held));
+};
+
+const isMcpLabelWrite = (tool: string, input: object): boolean =>
+  JSON.stringify(input).includes(LABEL) && (LABEL_KEY.test(tool) || putsLabel("", input));
 
 const drop = ($: EngineInterface, band: Band, n: string, line?: string): void => {
   band.rows.delete(n);
@@ -281,6 +320,6 @@ export const register: Register = (on) => {
   );
 
   on("tool.call", (_, e, next) =>
-    e.tool.startsWith("mcp__") && JSON.stringify(e).includes(LABEL) ? { deny: DENY } : next(e),
+    e.tool.startsWith("mcp__") && isMcpLabelWrite(e.tool, e) ? { deny: DENY } : next(e),
   );
 };

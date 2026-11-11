@@ -467,6 +467,8 @@ const REFUSED = [
   'echo \'{"labels":["land-ok"]}\' | gh api repos/o/r/issues/120/labels --input -',
   "gh label create land-ok",
   "cd /repo && gh pr edit 120 --add-label 'land-ok'",
+  "gh label edit bug --name land-ok",
+  "gh label list && gh label create land-ok",
 ];
 
 for (const command of REFUSED) {
@@ -488,6 +490,8 @@ const PASSED = [
   "gh pr edit 120 --add-label bug",
   "gh api -X POST repos/o/r/issues/120/labels -f 'labels[]=bug'",
   "grep -rn land-ok scripts/",
+  "grep -n land-ok .claude/plugins/land/hooks/land.tsx && gh label list --repo o/r",
+  "gh label list | grep land-ok",
 ];
 
 for (const command of PASSED) {
@@ -501,17 +505,40 @@ for (const command of PASSED) {
   });
 }
 
-test("the guard refuses an MCP call whose input holds land-ok", async ($, on) => {
+const MCP_REFUSED = [
+  { tool: "mcp__github__issue_write", issue_number: 120, labels: ["land-ok"] },
+  { tool: "mcp__github__issue_write", issue_number: 120, label: "land-ok" },
+  { tool: "mcp__github__update_pull_request", pull: { number: 120, labels: [{ name: "land-ok" }] } },
+  { tool: "mcp__github__create_label", name: "land-ok" },
+  { tool: "mcp__shell__run", command: "gh pr edit 120 --add-label land-ok" },
+  { tool: "mcp__github__api", path: "repos/o/r/issues/120/labels", body: '{"labels":["land-ok"]}' },
+];
+
+for (const call of MCP_REFUSED) {
+  test(`the guard refuses the MCP call ${JSON.stringify(call)}`, async ($, on) => {
+    const seen = stubEngine(on, gitHub({}));
+
+    const result = await $.tool.call(call);
+
+    expect(result).toEqual({ deny: DENY });
+    expect(seen.passed).toEqual([]);
+  });
+}
+
+test("the guard lets an MCP call that names land-ok in its text through", async ($, on) => {
   const seen = stubEngine(on, gitHub({}));
 
-  const result = await $.tool.call({
-    tool: "mcp__github__issue_write",
+  await $.tool.call({
+    tool: "mcp__claude_desktop__recap",
+    text: "#126 waits for the land-ok label, which only the Owner puts.",
+  });
+  await $.tool.call({
+    tool: "mcp__github__add_issue_comment",
     issue_number: 120,
-    labels: ["land-ok"],
+    body: "This change waits for land-ok.",
   });
 
-  expect(result).toEqual({ deny: DENY });
-  expect(seen.passed).toEqual([]);
+  expect(seen.passed).toEqual(["mcp__claude_desktop__recap", "mcp__github__add_issue_comment"]);
 });
 
 test("the guard refuses a land-ok write through Monitor, and lets its other commands through", async ($, on) => {
