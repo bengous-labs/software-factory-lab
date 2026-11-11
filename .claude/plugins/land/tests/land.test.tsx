@@ -525,6 +525,25 @@ const MCP_REFUSED = [
   },
   { tool: "mcp__github__add_issue_comment", issue_number: 120, body: "gh pr edit 120 --add-label land-ok" },
   { tool: "mcp__github__add_issue_comment", issue_number: 120, body: "land-ok" },
+  { tool: "mcp__github__add_issue_comment", issue_number: 120, body: "This change waits for land-ok." },
+  { tool: "mcp__x__set", body: "land-ok\n" },
+  {
+    tool: "mcp__claude-in-chrome__javascript_tool",
+    action: "javascript_exec",
+    tabId: 1,
+    text: "document.querySelector('[data-label=\"land-ok\"]').click(); done()",
+  },
+  { tool: "mcp__claude-in-chrome__computer", action: "type", text: "land-ok\n" },
+  {
+    tool: "mcp__tmux__send_text",
+    text: "curl -X POST -d '[\"land-ok\"]' https://api.github.com/repos/o/r/issues/120/labels",
+  },
+  { tool: "mcp__term__send", content: '"gh" pr edit 120 --add-label land-ok' },
+  {
+    tool: "mcp__gql__run",
+    body: 'mutation { createLabel(input: {repositoryId: "R", name: "land-ok"}) { label { id } } }',
+  },
+  { tool: "mcp__ccd_turn__wrap_up", recap: "Done.", actions: [{ label: "Approve", message: "/land 120 land-ok" }] },
 ];
 
 for (const call of MCP_REFUSED) {
@@ -551,20 +570,21 @@ test("the guard refuses a land-ok write nested as deep as the engine takes", asy
   expect(seen.passed).toEqual([]);
 });
 
-test("the guard lets an MCP call that names land-ok in its text through", async ($, on) => {
+test("the guard lets the desktop app's recap and plan name land-ok in their text", async ($, on) => {
   const seen = stubEngine(on, gitHub({}));
 
   await $.tool.call({
-    tool: "mcp__claude_desktop__recap",
-    text: "#126 waits for the land-ok label, which only the Owner puts.",
+    tool: "mcp__ccd_turn__wrap_up",
+    recap: "#126 waits for the land-ok label, which only the Owner puts.",
+    ask: "Do you put land-ok on #126?",
+    actions: [{ label: "Yes" }],
   });
   await $.tool.call({
-    tool: "mcp__github__add_issue_comment",
-    issue_number: 120,
-    body: "This change waits for land-ok.",
+    tool: "mcp__ccd_turn__update_plan",
+    items: [{ content: "Wait for land-ok on #126", status: "pending" }],
   });
 
-  expect(seen.passed).toEqual(["mcp__claude_desktop__recap", "mcp__github__add_issue_comment"]);
+  expect(seen.passed).toEqual(["mcp__ccd_turn__wrap_up", "mcp__ccd_turn__update_plan"]);
 });
 
 test("the guard refuses a land-ok write through Monitor, and lets its other commands through", async ($, on) => {

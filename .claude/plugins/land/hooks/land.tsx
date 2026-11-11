@@ -117,43 +117,16 @@ const isLabelWrite = (command: string): boolean => {
   return command.includes(LABEL) && (isLabelEdit || isApiWrite || isLabelCommand);
 };
 
-const LABEL_TOOL = /label/iu;
-
-const PROSE_KEYS: ReadonlySet<string> = new Set([
-  "text",
-  "body",
-  "message",
-  "content",
-  "comment",
-  "title",
-  "description",
-  "summary",
-  "note",
+const DISPLAY_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["mcp__ccd_turn__wrap_up", new Set(["recap", "ask"])],
+  ["mcp__ccd_turn__update_plan", new Set(["items"])],
 ]);
 
-const REQUEST_KEY = /^(?:path|url|endpoint|method|query|command|cmd|args|argv|script)$/iu;
-
-const isJson = (text: string): boolean => {
-  try {
-    JSON.parse(text);
-
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const isProse = (key: string, value: unknown): boolean =>
-  PROSE_KEYS.has(key) && typeof value === "string" && /\s/u.test(value) && !isJson(value) && !isLabelWrite(value);
-
 const isMcpLabelWrite = (tool: string, input: object): boolean => {
-  const naming = Object.entries(input).filter(([, value]) => JSON.stringify(value)?.includes(LABEL) ?? false);
+  const shown = DISPLAY_FIELDS.get(tool);
 
-  return (
-    naming.length > 0 &&
-    (LABEL_TOOL.test(tool) ||
-      Object.keys(input).some((key) => REQUEST_KEY.test(key)) ||
-      !naming.every(([key, value]) => isProse(key, value)))
+  return Object.entries(input).some(
+    ([key, value]) => shown?.has(key) !== true && (JSON.stringify(value)?.includes(LABEL) ?? false),
   );
 };
 
