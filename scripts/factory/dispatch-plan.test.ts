@@ -146,11 +146,19 @@ describe("launchEnvOf", () => {
 });
 
 describe("sessionIdOf", () => {
-  test("is the last line `claude --bg` prints", () => {
-    expect(sessionIdOf("Started in the background.\nab12cd34\n")).toBe("ab12cd34");
+  test("is the id in the `claude stop <id>` hint `claude --bg` prints last", () => {
+    expect(sessionIdOf("claude stop 393c369e      stop this session\n")).toBe("393c369e");
   });
 
-  test("refuses an empty output", () => {
-    expect(() => sessionIdOf("\n")).toThrow("printed no session id");
+  test("finds the hint among the other lines `claude --bg` prints", () => {
+    expect(
+      sessionIdOf(
+        "Started w-issue-171 in the background.\n  claude attach 393c369e    attach\n  claude stop 393c369e      stop this session\n",
+      ),
+    ).toBe("393c369e");
+  });
+
+  test("refuses an output with no `claude stop` hint", () => {
+    expect(() => sessionIdOf("Started.\n393c369e\n")).toThrow("printed no session id");
   });
 });

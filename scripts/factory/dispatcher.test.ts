@@ -21,7 +21,7 @@ function world(answers: Partial<Record<string, Ran>> = {}) {
     ["git for-each-ref", { code: 0, stdout: "dev\norigin/dev\n", stderr: "" }],
     ["git worktree list", { code: 0, stdout: "worktree /repo\n", stderr: "" }],
     ["git worktree add", { code: 0, stdout: "", stderr: "" }],
-    ["claude --bg", { code: 0, stdout: "s-123\n", stderr: "" }],
+    ["claude --bg", { code: 0, stdout: "claude stop s-123      stop this session\n", stderr: "" }],
   ];
 
   const run = (argv: readonly string[], options: RunOptions): Promise<Ran> => {

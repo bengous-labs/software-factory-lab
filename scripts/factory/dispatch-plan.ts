@@ -120,12 +120,12 @@ export function launchEnvOf(env: Readonly<Record<string, string | undefined>>): 
   return Object.fromEntries(KEPT.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
 }
 
-/** The id of the session `claude --bg` started, the last line it prints. */
+/** The id of the session `claude --bg` started, read from the `claude stop <id>` hint it prints. */
 export function sessionIdOf(stdout: string): string {
-  const id = stdout.trim().split("\n").at(-1)?.trim() ?? "";
+  const id = /^\s*claude stop (\S+)/mu.exec(stdout)?.[1];
 
-  if (id === "") {
-    throw new Error("claude --bg printed no session id");
+  if (id === undefined) {
+    throw new Error(`claude --bg printed no session id: ${stdout.trim()}`);
   }
 
   return id;
