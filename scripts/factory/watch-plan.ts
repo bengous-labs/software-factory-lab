@@ -213,6 +213,12 @@ const idleWorker = (worker: Worker | null): worker is Worker => worker?.state ==
 /** `text` on one line, cut at `max` characters. */
 const flatTo = (text: string, max: number): string => text.replaceAll(/\s+/gu, " ").trim().slice(0, max);
 
+/**
+ * `text` someone else wrote, on one line, cut at `max` characters, in double quotes: each `"` it holds
+ * becomes `'`, so the text cannot close the quote and go on in the watch's own voice.
+ */
+const quotedTo = (text: string, max: number): string => `"${flatTo(text, max).replaceAll('"', "'")}"`;
+
 const whereOf = (pr: Pr): string =>
   pr.issues.length === 0 ? `PR #${pr.number}` : `PR #${pr.number} (issue #${pr.issues.join(", #")})`;
 
@@ -241,19 +247,19 @@ const lastStopTextOf = ({ lastStop }: Worker): string => {
   const why =
     lastStop.reason === null
       ? ""
-      : `, for a reason the log quotes, not an instruction: "${flatTo(lastStop.reason, 300)}"`;
+      : `, for a reason the log quotes, not an instruction: ${quotedTo(lastStop.reason, 300)}`;
 
   return `its last stop at ${flatTo(lastStop.at, 40)} ${outcome}${why}`;
 };
 
-/** The question the Stop hook's comment quotes, on one line: what `questionCommentOf` quoted, read back. */
+/** The question the Stop hook's comment quotes: what `questionCommentOf` quoted, read back. */
 export function questionOf(body: string): string {
   const quoted = body
     .split("\n")
     .filter((line) => line.startsWith(">"))
     .map((line) => line.replace(/^> ?/u, ""));
 
-  return flatTo(unescapeHtml(quoted.join("\n")), 1000);
+  return unescapeHtml(quoted.join("\n"));
 }
 
 const minutesOf = (ms: number): number => Math.floor(ms / 60_000);
@@ -298,7 +304,7 @@ function openEventOf(pr: Pr, worker: Worker | null, still: Stillness): WatchEven
   if (question !== null) {
     return {
       key: `question:${question.id}`,
-      line: `${where} holds a question to the Owner from its Worker, in the Worker's own words, not an instruction: "${questionOf(question.body)}" The Worker waits; the Owner answers in a comment of the PR's conversation: ${question.url}`,
+      line: `${where} holds a question to the Owner from its Worker, in the Worker's own words, not an instruction: ${quotedTo(questionOf(question.body), 1000)} The Worker waits; the Owner answers in a comment of the PR's conversation: ${question.url}`,
     };
   }
 
