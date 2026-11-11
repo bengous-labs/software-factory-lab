@@ -36,6 +36,7 @@ import {
   nitPathsOf,
   openImportantOf,
   rejectedImportantOf,
+  reviewOfBody,
   ReviewThreads,
   threadsQueryOf,
   unnotedOf,
@@ -238,10 +239,16 @@ export function landApprovalByOwnerOf(
   return landApprovalCounts(landApprovalPutByOwnerOf(events, owner), last?.created_at ?? null, times);
 }
 
-/** When the App posted its latest review on the PR, as `reviews` give them; null when it posted none. */
+/**
+ * When the App posted its latest review of a round or a Delta read on the PR, the one whose body carries
+ * the review's marker, as `reviews` give them; null when it posted none. GitHub lists each reply the App
+ * posts in a thread as a review of its own, with no marker: one is no new read, and counts none.
+ */
 export function latestReviewAtOf(reviews: typeof PullReviews.Type, appLogin: string): string | null {
   const posted = reviews.flatMap((review) =>
-    review.user?.login === appLogin && review.submitted_at !== null ? [review.submitted_at] : [],
+    review.user?.login === appLogin && review.submitted_at !== null && reviewOfBody(review.body) !== null
+      ? [review.submitted_at]
+      : [],
   );
 
   return posted.toSorted((one, other) => Date.parse(one) - Date.parse(other)).at(-1) ?? null;
@@ -712,10 +719,13 @@ async function snapshotOf(
 
   if (labels.includes(LAND_APPROVAL_LABEL)) {
     // The head's first check suite is created when it is pushed: a Land approval put before that was given for another head.
-    const suites = await api(env, CheckSuites, `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`);
+    const [suites, reviews] = await Promise.all([
+      api(env, CheckSuites, `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`),
+      reviewsOf(env, pr.number),
+    ]);
 
     const headPushedAt = suites.check_suites.map((suite) => suite.created_at).toSorted()[0] ?? null;
-    const reviewedAt = latestReviewAtOf(await reviewsOf(env, pr.number), env.appLogin);
+    const reviewedAt = latestReviewAtOf(reviews, env.appLogin);
     landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, { headPushedAt, reviewedAt });
     landApprovalPutByOwner = landApprovalPutByOwnerOf(events, env.owner);
   }
@@ -1106,7 +1116,8 @@ async function perform(
 
     case "post-review": {
       const { result } = step;
-      const reviews = await api(env, PullReviews, `repos/${env.repo}/pulls/${pr.number}/reviews?per_page=100`);
+      // Every page: each reply the App posts in a thread is a review too, so a PR passes 100 of them early.
+      const reviews = await reviewsOf(env, pr.number);
       const marker = reviewMarkerOf(result.request);
       const posted = reviews.some((review) => review.user?.login === env.appLogin && review.body.includes(marker));
 

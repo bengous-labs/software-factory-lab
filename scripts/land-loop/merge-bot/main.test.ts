@@ -84,12 +84,15 @@ const PULL = {
 /** The times a Land approval is weighed against: the head pushed at `headPushedAt`, and no review of the App. */
 const pushedAt = (headPushedAt: string | null) => ({ headPushedAt, reviewedAt: null });
 
-/** A review of the PR by `login`, posted at `submittedAt`, null while pending. */
+/** A Delta read's review of the PR by `login`, with its marker, posted at `submittedAt`, null while pending. */
 const reviewBy = (login: string, submittedAt: string | null) => ({
   user: { login },
-  body: "Delta read: 1 Important.",
+  body: "Delta read: 1 Important.\n\n<!-- lab-review patch=p1 round=4 -->",
   submitted_at: submittedAt,
 });
+
+/** A reply `login` posted in a thread at `submittedAt`, which GitHub lists as a review with an empty body. */
+const replyBy = (login: string, submittedAt: string) => ({ user: { login }, body: "", submitted_at: submittedAt });
 
 describe("the GitHub answers the Merge bot reads", () => {
   test("a PR whose mergeability GitHub has not computed, from a deleted fork, reads", () => {
@@ -251,6 +254,19 @@ describe("a Land approval and the App's reviews", () => {
     ).toBe("2026-11-05T11:30:00Z");
     expect(latestReviewAtOf([reviewBy("bengous", "2026-11-05T12:00:00Z")], APP)).toBeNull();
     expect(latestReviewAtOf([], APP)).toBeNull();
+  });
+
+  test("a reply the App posts in a thread, which GitHub lists as a review with no marker, is no new read: the landing's own replies void no approval", () => {
+    const reviews = [
+      reviewBy(APP, "2026-11-05T10:30:00Z"),
+      replyBy(APP, "2026-11-05T11:05:00Z"),
+      { ...reviewBy(APP, "2026-11-05T11:10:00Z"), body: "A human-looking review with no marker." },
+    ];
+
+    const reviewedAt = latestReviewAtOf(reviews, APP);
+
+    expect(reviewedAt).toBe("2026-11-05T10:30:00Z");
+    expect(landApprovalByOwnerOf(events, "owner", { headPushedAt: "2026-11-05T10:00:00Z", reviewedAt })).toBe(true);
   });
 
   test("a land-ok the Owner put before the App's latest review was posted does not count: the Owner could not read it", () => {
