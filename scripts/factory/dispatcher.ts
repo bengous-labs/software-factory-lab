@@ -6,6 +6,7 @@
 
 import { Schema } from "effect";
 
+import { OWNER_LOGIN } from "../land-loop/logins.ts";
 import type { Run, RunOptions } from "../land-loop/ports/run.ts";
 import { decodeJson } from "../lib/json.ts";
 import {
@@ -13,13 +14,22 @@ import {
   issueBranchesIn,
   launchArgvOf,
   launchEnvOf,
+  printableOf,
   promptOf,
   repoOfIssueUrl,
   sessionIdOf,
   workerSettingsOf,
+  workerSettingsProblemOf,
   worktreeListed,
   worktreeOf,
 } from "./dispatch-plan.ts";
+
+export interface DispatchPorts {
+  readonly run: Run;
+  /** Runs the Worker's launch with `options.env` as its whole environment. */
+  readonly launch: Run;
+  readonly readText: (path: string) => Promise<string>;
+}
 
 export interface DispatchRequest {
   readonly issue: number;
@@ -31,13 +41,18 @@ export interface DispatchRequest {
 
 export interface Dispatched {
   readonly issue: number;
+  /** The issue's title, without its control characters. */
   readonly title: string;
   readonly worktree: string;
   readonly branch: string;
   readonly session: string;
 }
 
-const IssueView = Schema.Struct({ title: Schema.String, url: Schema.String });
+const IssueView = Schema.Struct({
+  title: Schema.String,
+  url: Schema.String,
+  author: Schema.Struct({ login: Schema.String }),
+});
 
 async function out(run: Run, argv: readonly string[], options: RunOptions): Promise<string> {
   const ran = await run(argv, options);
@@ -49,18 +64,51 @@ async function out(run: Run, argv: readonly string[], options: RunOptions): Prom
   return ran.stdout;
 }
 
-export async function dispatch(run: Run, { issue, model, checkout, env }: DispatchRequest): Promise<Dispatched> {
-  const home = env["HOME"];
+/** Throws unless `path` makes the Worker an Author with the machine account's token. */
+async function checkWorkerSettings(readText: DispatchPorts["readText"], path: string): Promise<void> {
+  let text: string;
 
-  if (home === undefined) {
-    throw new Error("HOME is not set: the Worker settings file lives under it");
+  try {
+    text = await readText(path);
+  } catch (error) {
+    throw new Error(
+      `the Worker settings file ${path} cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 
-  const at = { cwd: checkout };
-  const view = await out(run, ["gh", "issue", "view", String(issue), "--json", "title,url"], at);
-  const { title, url } = decodeJson(IssueView, `gh issue view ${issue}`, view);
+  const problem = workerSettingsProblemOf(text);
 
-  await out(run, ["git", "fetch", "origin", "dev"], at);
+  if (problem !== null) {
+    throw new Error(`the Worker settings file ${path}: ${problem}`);
+  }
+}
+
+/**
+ * The issue's title and repository. A Worker holds the Author's token and does what the issue says;
+ * the lab is public, so only an issue the Owner wrote, which only the Owner and the repository's
+ * writers can edit, is handed to one.
+ */
+async function ownersIssue(run: Run, issue: number, at: RunOptions): Promise<{ title: string; repo: string }> {
+  const view = await out(run, ["gh", "issue", "view", String(issue), "--json", "title,url,author"], at);
+  const { title, url, author } = decodeJson(IssueView, `gh issue view ${issue}`, view);
+
+  if (author.login !== OWNER_LOGIN) {
+    throw new Error(
+      `issue #${issue} was written by ${author.login}, not by the Owner ${OWNER_LOGIN}: a Worker holds the Author's token, so it implements only the Owner's issues`,
+    );
+  }
+
+  return { title: printableOf(title), repo: repoOfIssueUrl(url) };
+}
+
+/** Throws, naming what to remove, when the issue already has a worktree or a branch. */
+async function checkFree(run: Run, issue: number, worktree: string, at: RunOptions): Promise<void> {
+  if (worktreeListed(await out(run, ["git", "worktree", "list", "--porcelain"], at), worktree)) {
+    throw new Error(
+      `issue #${issue} already has a worktree: ${worktree}. Remove it first (git worktree remove ${worktree})`,
+    );
+  }
 
   const refs = await out(
     run,
@@ -75,21 +123,42 @@ export async function dispatch(run: Run, { issue, model, checkout, env }: Dispat
       `issue #${issue} already has a branch: ${branches.join(", ")}. Remove it first (git branch -D <branch>, git push origin --delete <branch>)`,
     );
   }
+}
+
+export async function dispatch(
+  { run, launch, readText }: DispatchPorts,
+  { issue, model, checkout, env }: DispatchRequest,
+): Promise<Dispatched> {
+  const home = env["HOME"];
+
+  if (home === undefined) {
+    throw new Error("HOME is not set: the Worker settings file lives under it");
+  }
+
+  const settings = workerSettingsOf(home);
+  await checkWorkerSettings(readText, settings);
+
+  const at = { cwd: checkout };
+  const { title, repo } = await ownersIssue(run, issue, at);
+
+  await out(run, ["git", "fetch", "--prune", "origin"], at);
 
   const worktree = worktreeOf(checkout, issue);
-
-  if (worktreeListed(await out(run, ["git", "worktree", "list", "--porcelain"], at), worktree)) {
-    throw new Error(
-      `issue #${issue} already has a worktree: ${worktree}. Remove it first (git worktree remove ${worktree})`,
-    );
-  }
+  await checkFree(run, issue, worktree, at);
 
   const branch = branchOf(issue, title);
   await out(run, ["git", "worktree", "add", "-b", branch, worktree, "origin/dev"], at);
 
-  const prompt = promptOf({ issue, repo: repoOfIssueUrl(url), worktree, branch });
-  const argv = launchArgvOf({ issue, model, settings: workerSettingsOf(home), prompt });
-  const launched = await out(run, argv, { cwd: checkout, env: launchEnvOf(env) });
+  const argv = launchArgvOf({ issue, model, settings, prompt: promptOf({ issue, repo, worktree, branch }) });
 
-  return { issue, title, worktree, branch, session: sessionIdOf(launched) };
+  const launched = await launch(argv, { cwd: checkout, env: launchEnvOf(env) });
+
+  if (launched.code !== 0) {
+    await out(run, ["git", "worktree", "remove", worktree], at);
+    await out(run, ["git", "branch", "-D", branch], at);
+
+    throw new Error(`claude --bg exited ${launched.code}: ${(launched.stderr || launched.stdout).trim()}`);
+  }
+
+  return { issue, title, worktree, branch, session: sessionIdOf(launched.stdout) };
 }

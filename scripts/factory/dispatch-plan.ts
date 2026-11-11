@@ -3,6 +3,8 @@
  * one launch prompt, and the `claude --bg` command that starts the Worker in the main checkout.
  */
 
+import { Result, Schema } from "effect";
+
 export interface DispatchArgs {
   readonly issue: number;
   readonly model: string;
@@ -34,12 +36,8 @@ const SLUG_MAX = 40;
 export function slugOf(title: string): string {
   const words = title.toLowerCase().match(/[a-z0-9]+/gu) ?? [];
 
-  const kept = words.reduce<string[]>((slug, word) => {
-    const joined = [...slug, word].join("-");
-
-    return joined.length <= SLUG_MAX ? [...slug, word] : slug;
-  }, []);
-
+  const overflow = words.findIndex((_, index) => words.slice(0, index + 1).join("-").length > SLUG_MAX);
+  const kept = overflow === -1 ? words : words.slice(0, overflow);
   const slug = kept.length === 0 ? (words[0]?.slice(0, SLUG_MAX) ?? "") : kept.join("-");
 
   return slug === "" ? "issue" : slug;
@@ -57,6 +55,35 @@ export function worktreeOf(checkout: string, issue: number): string {
 /** The Worker settings file `.claude/rules/identities.md` describes, which the Owner provisions. */
 export function workerSettingsOf(home: string): string {
   return `${home}/.config/software-factory-lab/worker-settings.json`;
+}
+
+/**
+ * Why the Worker settings file would not make the Worker an Author with the machine account's token,
+ * or null when it does. The file holds the token: no problem quotes it.
+ */
+export function workerSettingsProblemOf(text: string): string | null {
+  const decoded = Schema.decodeResult(Schema.fromJsonString(WorkerSettings))(text);
+
+  if (Result.isFailure(decoded)) {
+    return "is not JSON with an env of strings";
+  }
+
+  const { LAB_AUTHOR, GH_TOKEN } = decoded.success.env;
+
+  if (LAB_AUTHOR !== "1") {
+    return 'env.LAB_AUTHOR is not "1"';
+  }
+
+  return GH_TOKEN === undefined || GH_TOKEN === "" ? "env.GH_TOKEN is not set" : null;
+}
+
+const WorkerSettings = Schema.Struct({
+  env: Schema.Struct({ LAB_AUTHOR: Schema.optional(Schema.String), GH_TOKEN: Schema.optional(Schema.String) }),
+});
+
+/** `text` without its control characters: an issue title is written by its author, and printed to a terminal. */
+export function printableOf(text: string): string {
+  return text.replaceAll(/\p{Cc}/gu, "");
 }
 
 /** `owner/name` of the repository of the issue at `url`. */

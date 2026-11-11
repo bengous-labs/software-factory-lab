@@ -7,9 +7,10 @@
  *   bun scripts/factory/dispatch.ts <issue> [--model <model>]
  */
 
+import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { run } from "../land-loop/lib/run.ts";
+import { run, runIsolated } from "../land-loop/lib/run.ts";
 import { dispatchArgsOf } from "./dispatch-plan.ts";
 import { dispatch } from "./dispatcher.ts";
 
@@ -25,7 +26,9 @@ if (commonDir.exitCode !== 0) {
   throw new Error("git rev-parse --git-common-dir failed: dispatch runs from a checkout of the repository");
 }
 
-const dispatched = await dispatch(run, {
+const ports = { run, launch: runIsolated, readText: (path: string) => readFile(path, "utf8") };
+
+const dispatched = await dispatch(ports, {
   issue,
   model,
   checkout: dirname(commonDir.stdout.toString().trim()),

@@ -6,11 +6,13 @@ import {
   issueBranchesIn,
   launchArgvOf,
   launchEnvOf,
+  printableOf,
   promptOf,
   repoOfIssueUrl,
   sessionIdOf,
   slugOf,
   workerSettingsOf,
+  workerSettingsProblemOf,
   worktreeListed,
   worktreeOf,
 } from "./dispatch-plan.ts";
@@ -42,6 +44,14 @@ describe("slugOf", () => {
 
   test("cuts at a word under 40 characters", () => {
     expect(slugOf(`${"a".repeat(30)} ${"b".repeat(30)}`)).toBe("a".repeat(30));
+  });
+
+  test("stops at the first word that overflows, never keeping a later short one", () => {
+    expect(slugOf(`${"a".repeat(30)} ${"b".repeat(30)} fix`)).toBe("a".repeat(30));
+  });
+
+  test("cuts a single long word at 40 characters, even when short words follow", () => {
+    expect(slugOf(`${"x".repeat(50)} fix`)).toBe("x".repeat(40));
   });
 
   test("cuts a single long word at 40 characters", () => {
@@ -160,5 +170,33 @@ describe("sessionIdOf", () => {
 
   test("refuses an output with no `claude stop` hint", () => {
     expect(() => sessionIdOf("Started.\n393c369e\n")).toThrow("printed no session id");
+  });
+});
+
+describe("workerSettingsProblemOf", () => {
+  test("accepts settings that make an Author with a token", () => {
+    expect(workerSettingsProblemOf('{"env":{"LAB_AUTHOR":"1","GH_TOKEN":"t"},"outputStyle":"Proactive"}')).toBeNull();
+  });
+
+  test.each([
+    ["{", "is not JSON with an env of strings"],
+    ["[]", "is not JSON with an env of strings"],
+    ['{"env":{"LAB_AUTHOR":1,"GH_TOKEN":"t"}}', "is not JSON with an env of strings"],
+    ['{"env":{"GH_TOKEN":"t"}}', 'env.LAB_AUTHOR is not "1"'],
+    ['{"env":{"LAB_AUTHOR":"1"}}', "env.GH_TOKEN is not set"],
+    ['{"env":{"LAB_AUTHOR":"1","GH_TOKEN":""}}', "env.GH_TOKEN is not set"],
+  ])("refuses %s: %s", (text, problem) => {
+    expect(workerSettingsProblemOf(text)).toBe(problem);
+  });
+
+  test("never quotes the file, which holds the token", () => {
+    expect(workerSettingsProblemOf('{"env":{"LAB_AUTHOR":"0","GH_TOKEN":"ghp_secret"}}')).not.toContain("ghp_secret");
+    expect(workerSettingsProblemOf('{"env":{"GH_TOKEN":"ghp_secret"')).not.toContain("ghp_secret");
+  });
+});
+
+describe("printableOf", () => {
+  test("drops the control characters an issue title may carry, escape sequences included", () => {
+    expect(printableOf("Add\u001B[2J a\u0007 flag\u009B\n")).toBe("Add[2J a flag");
   });
 });
