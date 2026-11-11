@@ -28,10 +28,11 @@ The factory is young and its design moves: a rule serves the goal, it is not the
 - `bun test <file>` runs one test file; add `-t <name>` to run the tests whose name matches.
 - `bun scripts/ci/mutation.ts run` is CI's `mutation` job: Stryker on each module `stryker.config.ts` lists that your branch changes, through its lines or its test file. `bun check` does not run it; run it before you stop when your change reaches one of those modules.
 - `bun app/src/cli.ts <command>` runs the CLI on `todo.json`, or on the file `TODO_FILE` names.
+- `bun scripts/factory/dispatch.ts <issue> [--model <model>]`, or `/dispatch <issue>` in the Owner's session, hands an issue to a Worker: its worktree from `origin/dev`, and a background session launched with the one versioned prompt.
 
 ## Architecture
 
-The repository holds two packages, the app (`app/`) and the Land loop (`scripts/land-loop/`), the tooling that checks them (`scripts/gates/`, `scripts/lint/`, `scripts/ci/`, `scripts/hooks/`), and pure helpers both import (`scripts/lib/`).
+The repository holds three packages, the app (`app/`), the Land loop (`scripts/land-loop/`) and Dispatch (`scripts/factory/`), the tooling that checks them (`scripts/gates/`, `scripts/lint/`, `scripts/ci/`, `scripts/hooks/`), and pure helpers both import (`scripts/lib/`).
 
 ### The Land loop
 

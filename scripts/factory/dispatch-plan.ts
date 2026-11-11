@@ -1,0 +1,132 @@
+/**
+ * What Dispatch decides when it hands an issue to a Worker: the branch and the worktree it creates, the
+ * one launch prompt, and the `claude --bg` command that starts the Worker in the main checkout.
+ */
+
+export interface DispatchArgs {
+  readonly issue: number;
+  readonly model: string;
+}
+
+const USAGE = "usage: bun scripts/factory/dispatch.ts <issue> [--model <model>]";
+
+/** The issue and the model `argv` names; throws the usage on anything else. */
+export function dispatchArgsOf(argv: readonly string[]): DispatchArgs {
+  const flag = argv.indexOf("--model");
+  const model = flag === -1 ? "opus" : argv[flag + 1];
+  const rest = flag === -1 ? argv : argv.filter((_, index) => index !== flag && index !== flag + 1);
+  const [issue] = rest;
+
+  if (model === undefined || model.startsWith("--") || rest.length !== 1 || issue === undefined) {
+    throw new Error(USAGE);
+  }
+
+  if (!/^[1-9]\d*$/u.test(issue)) {
+    throw new Error(USAGE);
+  }
+
+  return { issue: Number(issue), model };
+}
+
+const SLUG_MAX = 40;
+
+/** The title's words in lower case joined by dashes, cut at a word to at most 40 characters. */
+export function slugOf(title: string): string {
+  const words = title.toLowerCase().match(/[a-z0-9]+/gu) ?? [];
+
+  const kept = words.reduce<string[]>((slug, word) => {
+    const joined = [...slug, word].join("-");
+
+    return joined.length <= SLUG_MAX ? [...slug, word] : slug;
+  }, []);
+
+  const slug = kept.length === 0 ? (words[0]?.slice(0, SLUG_MAX) ?? "") : kept.join("-");
+
+  return slug === "" ? "issue" : slug;
+}
+
+/** `issue/<n>-<slug>`: the Stop hook reads a branch `<type>/<n>-…` as made for issue n, and closes it. */
+export function branchOf(issue: number, title: string): string {
+  return `issue/${issue}-${slugOf(title)}`;
+}
+
+export function worktreeOf(checkout: string, issue: number): string {
+  return `${checkout}/.claude/worktrees/issue-${issue}`;
+}
+
+/** The Worker settings file `.claude/rules/identities.md` describes, which the Owner provisions. */
+export function workerSettingsOf(home: string): string {
+  return `${home}/.config/software-factory-lab/worker-settings.json`;
+}
+
+/** `owner/name` of the repository of the issue at `url`. */
+export function repoOfIssueUrl(url: string): string {
+  const repo = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/\d+$/u.exec(url)?.[1];
+
+  if (repo === undefined) {
+    throw new Error(`not an issue URL: ${url}`);
+  }
+
+  return repo;
+}
+
+/** The branches among `refs`, one short ref name a line, that were made for `issue`. */
+export function issueBranchesIn(refs: string, issue: number): string[] {
+  const made = new RegExp(`^(?:origin/)?[a-z]+/${issue}-`, "u");
+
+  return refs.split("\n").filter((ref) => made.test(ref));
+}
+
+/** Whether `git worktree list --porcelain` printed `path` among its worktrees. */
+export function worktreeListed(listing: string, path: string): boolean {
+  return listing.split("\n").includes(`worktree ${path}`);
+}
+
+export interface Assignment {
+  readonly issue: number;
+  readonly repo: string;
+  readonly worktree: string;
+  readonly branch: string;
+}
+
+/**
+ * The one launch prompt. It names the issue and the worktree; what a Worker does comes from its own
+ * instructions, `AGENTS.md`, never from here.
+ */
+export function promptOf({ issue, repo, worktree, branch }: Assignment): string {
+  return `Implement GitHub issue #${issue} of ${repo} (read it with: gh issue view ${issue} --repo ${repo}). Your worktree exists: first call EnterWorktree with the path ${worktree} and work there; its branch ${branch} starts at origin/dev.`;
+}
+
+export interface Launch {
+  readonly issue: number;
+  readonly model: string;
+  /** The Worker settings file, passed by its path: its token never reaches the command line. */
+  readonly settings: string;
+  readonly prompt: string;
+}
+
+export function launchArgvOf({ issue, model, settings, prompt }: Launch): string[] {
+  return ["claude", "--bg", "--model", model, "--settings", settings, "--name", `w-issue-${issue}`, prompt];
+}
+
+/**
+ * The variables the launch keeps of the caller's environment. A launch that starts Claude Code's
+ * background service gives its environment to every session started after it, so the caller's token,
+ * Author marker or session variables never reach it.
+ */
+const KEPT = ["HOME", "PATH", "USER", "SHELL", "LANG", "TERM", "XDG_RUNTIME_DIR", "CLAUDE_CONFIG_DIR"];
+
+export function launchEnvOf(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  return Object.fromEntries(KEPT.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
+}
+
+/** The id of the session `claude --bg` started, the last line it prints. */
+export function sessionIdOf(stdout: string): string {
+  const id = stdout.trim().split("\n").at(-1)?.trim() ?? "";
+
+  if (id === "") {
+    throw new Error("claude --bg printed no session id");
+  }
+
+  return id;
+}
