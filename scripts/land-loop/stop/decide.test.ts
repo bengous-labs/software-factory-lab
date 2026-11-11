@@ -314,8 +314,19 @@ describe("decide", () => {
     const reason = "the Author's last message leaves a question to its user: Leave the doc, or update it in this PR?";
     const question = "Leave the doc, or update it in this PR?";
 
-    expect(decide(null, asking, false)).toEqual({ kind: "ask", question, reason, pr: null, toDraft: false });
-    expect(decide(draft, asking, false)).toEqual({ kind: "ask", question, reason, pr: 7, toDraft: false });
+    expect(decide(null, asking, false)).toEqual({
+      kind: "ask",
+      question,
+      reason,
+      pr: null,
+      toDraft: false,
+      post: true,
+    });
+    expect(decide(draft, asking, false)).toEqual({ kind: "ask", question, reason, pr: 7, toDraft: false, post: true });
+  });
+
+  test("a question while one the Owner has not answered is open posts nothing more", () => {
+    expect(decide(draft, { ...FINISHED, question: "And now?" }, true)).toMatchObject({ kind: "ask", post: false });
   });
 
   test("a question on a ready PR sends it back to draft: nothing lands while it is open", () => {
@@ -357,13 +368,14 @@ describe("decide", () => {
     });
   });
 
-  test("a finished change does not ready a draft whose question the Owner has not answered: it lands around nobody", () => {
-    expect(decide(draft, FINISHED, true)).toEqual({
-      kind: "none",
-      reason: "#7 holds a question to the Owner with no answer: it stays in draft",
-    });
-    expect(decide(ready, FINISHED, true)).toEqual({ kind: "push", pr: 7, ready: false });
-    expect(decide(draft, { ...FINISHED, question: "And now?" }, true)).toMatchObject({ kind: "ask", pr: 7 });
+  test("a finished change neither readies nor pushes a PR whose question the Owner has not answered, and holds it for the answer", () => {
+    for (const pr of [draft, ready]) {
+      expect(decide(pr, FINISHED, true)).toEqual({
+        kind: "hold",
+        pr: 7,
+        reason: "#7 holds a question to the Owner with no answer: nothing is pushed or readied",
+      });
+    }
   });
 
   test("a question of blanks alone is no question", () => {

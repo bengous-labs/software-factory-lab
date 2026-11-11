@@ -550,7 +550,6 @@ async function askOwner(
   stopping: AuthorStop,
   author: Credential,
   action: Extract<Action, { kind: "ask" }>,
-  asked: boolean,
 ): Promise<Stopped> {
   const { deps, input, log, branch } = stopping;
 
@@ -561,7 +560,7 @@ async function askOwner(
   await push(stopping, author);
 
   const pr = action.pr ?? (await openPr(stopping, author.gh, true));
-  const posted = !asked;
+  const posted = action.post;
 
   if (posted) {
     await checked(deps.run, ["gh", "pr", "comment", String(pr), "--body-file", "-"], {
@@ -589,7 +588,13 @@ async function publish(stopping: AuthorStop, author: Credential, judged: Judged)
   }
 
   if (action.kind === "ask") {
-    return askOwner(stopping, author, action, judged.asked);
+    return askOwner(stopping, author, action);
+  }
+
+  if (action.kind === "hold") {
+    leaveRelay(stopping, action.pr);
+
+    return notPublished(action.reason);
   }
 
   const rejections = rejectionsOf(

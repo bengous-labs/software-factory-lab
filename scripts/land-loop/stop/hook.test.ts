@@ -858,8 +858,9 @@ describe("the Done judge", () => {
     expect(writes(found.calls)).toEqual([]);
     expect(found.outcomes[0]?.line).toMatchObject({
       outcome: "not-published",
-      reason: "#12 holds a question to the Owner with no answer: it stays in draft",
+      reason: "#12 holds a question to the Owner with no answer: nothing is pushed or readied",
     });
+    expect(found.relays).toEqual([{ pr: 12, session: "S1", checkout: found.checkout }]);
 
     const answered = world({
       listed: draftPr("e".repeat(40)),

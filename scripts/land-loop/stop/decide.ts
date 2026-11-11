@@ -157,7 +157,8 @@ export type Action =
   | { readonly kind: "push"; readonly pr: number; readonly ready: boolean }
   /**
    * The Author's question goes to the Owner on a draft PR: the one opened for it when `pr` is null, else
-   * `pr`, sent back to draft first when `toDraft`. `question` is quoted, `reason` says why nothing lands.
+   * `pr`, sent back to draft first when `toDraft`. `question` is posted when `post`, which is false while
+   * an earlier question waits for its answer; `reason` says why nothing lands.
    */
   | {
       readonly kind: "ask";
@@ -165,7 +166,10 @@ export type Action =
       readonly reason: string;
       readonly pr: number | null;
       readonly toDraft: boolean;
-    };
+      readonly post: boolean;
+    }
+  /** PR `pr` waits for the Owner's answer: nothing is pushed or readied, and its relay is left to bring the answer. */
+  | { readonly kind: "hold"; readonly pr: number; readonly reason: string };
 
 const none = (reason: string): Extract<Refusal, { kind: "none" }> => ({ kind: "none", reason });
 
@@ -312,7 +316,7 @@ export function quotedQuestionOf(question: string): string {
 
 /**
  * What the Done judge's answer does to the branch's PR `pr`. `asked`: the PR's conversation holds a
- * question the hook put to the Owner, still unanswered; a draft that holds one is never readied.
+ * question the hook put to the Owner, still unanswered; a PR that holds one is never pushed or readied.
  */
 export function decide(pr: PullRequest | null, answer: DoneAnswer, asked: boolean): Action {
   const question = quotedQuestionOf(answer.question);
@@ -327,6 +331,7 @@ export function decide(pr: PullRequest | null, answer: DoneAnswer, asked: boolea
       reason: answer.finished ? asking : `${asking}; ${unfinished}`,
       pr: pr?.number ?? null,
       toDraft: pr !== null && !pr.draft,
+      post: !asked,
     };
   }
 
@@ -334,8 +339,12 @@ export function decide(pr: PullRequest | null, answer: DoneAnswer, asked: boolea
     return none(unfinished);
   }
 
-  if (pr?.draft === true && asked) {
-    return none(`#${pr.number} holds a question to the Owner with no answer: it stays in draft`);
+  if (pr !== null && asked) {
+    return {
+      kind: "hold",
+      pr: pr.number,
+      reason: `#${pr.number} holds a question to the Owner with no answer: nothing is pushed or readied`,
+    };
   }
 
   return pr === null ? { kind: "open" } : { kind: "push", pr: pr.number, ready: pr.draft };
