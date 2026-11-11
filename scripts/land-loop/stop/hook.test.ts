@@ -850,6 +850,25 @@ describe("the Done judge", () => {
     });
   });
 
+  test("a stop held on a question, or asking one, posts no rejection and logs each as dropped", async () => {
+    const asked = conversationLine("1", AUTHOR_LOGIN, questionCommentOf("Which wording?", "agent/x", "S1"));
+    const rejecting = { ...FINISHED, rejections: [{ thread: "T1", reason: "by design" }] };
+
+    for (const answer of [rejecting, { ...rejecting, question: "And now?" }]) {
+      const found = world({
+        done: [answer],
+        listed: draftPr("e".repeat(40)),
+        conversation: asked,
+        threads: [thread("T1", "nit")],
+      });
+
+      await stopIn(found);
+
+      expect(writes(found.calls).filter((write) => write.includes("T1"))).toEqual([]);
+      expect(found.records).toContainEqual({ step: "rejection-dropped", thread: "T1", reason: "by design" });
+    }
+  });
+
   test("a finished stop on a draft whose question the Owner has not answered readies nothing and pushes nothing", async () => {
     const asked = conversationLine("1", AUTHOR_LOGIN, questionCommentOf("Which wording?", "agent/x", "S1"));
     const found = world({ listed: draftPr("e".repeat(40)), conversation: asked });

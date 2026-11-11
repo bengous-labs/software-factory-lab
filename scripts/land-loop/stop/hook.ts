@@ -62,6 +62,7 @@ import type {
   Outcome,
   PullRequest,
   Refusal,
+  Rejection,
   Snapshot,
   StopChecks,
   StopFacts,
@@ -587,6 +588,16 @@ async function publish(stopping: AuthorStop, author: Credential, judged: Judged)
     return notPublished(action.reason);
   }
 
+  const logDropped = (dropped: readonly Rejection[]): void => {
+    for (const rejection of dropped) {
+      log({ step: "rejection-dropped", thread: rejection.thread, reason: rejection.reason.slice(0, 300) });
+    }
+  };
+
+  if (action.kind === "ask" || action.kind === "hold") {
+    logDropped(judged.answer.rejections);
+  }
+
   if (action.kind === "ask") {
     return askOwner(stopping, author, action);
   }
@@ -602,13 +613,7 @@ async function publish(stopping: AuthorStop, author: Credential, judged: Judged)
     judged.findings.map((finding) => finding.thread),
   );
 
-  for (const dropped of rejections.dropped) {
-    log({
-      step: "rejection-dropped",
-      thread: dropped.thread,
-      reason: dropped.reason.slice(0, 300),
-    });
-  }
+  logDropped(rejections.dropped);
 
   for (const rejection of rejections.posted) {
     await replyInThread(deps.run, author.gh, rejection.thread, rejectionReplyOf(rejection.reason));
