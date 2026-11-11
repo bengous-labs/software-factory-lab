@@ -3,7 +3,7 @@
  * owns it.
  */
 
-export type Package = "app" | "land-loop" | "tooling" | "shared";
+export type Package = "app" | "land-loop" | "factory" | "tooling" | "shared";
 
 export type Layer = "domain" | "ports" | "application" | "infra" | "entry" | "tooling" | "test";
 
@@ -18,6 +18,7 @@ const at = (pkg: Package, layer: Layer): Place => ({ package: pkg, layer });
 export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["app/test/**/*.test.ts", at("app", "test")],
   ["scripts/land-loop/**/*.test.ts", at("land-loop", "test")],
+  ["scripts/factory/*.test.ts", at("factory", "test")],
   ["scripts/land-loop/arbitraries.ts", at("land-loop", "test")],
   ["scripts/lib/*.test.ts", at("shared", "test")],
   ["scripts/*/**/*.test.ts", at("tooling", "test")],
@@ -48,6 +49,10 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["scripts/land-loop/relay/wakes.ts", at("land-loop", "application")],
   ["scripts/land-loop/lib/*.ts", at("land-loop", "infra")],
 
+  ["scripts/factory/dispatch.ts", at("factory", "entry")],
+  ["scripts/factory/dispatch-plan.ts", at("factory", "domain")],
+  ["scripts/factory/dispatcher.ts", at("factory", "application")],
+
   // Pure helpers both the Land loop and the tooling import.
   ["scripts/lib/*.ts", at("shared", "domain")],
 
@@ -64,6 +69,7 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
 export const PACKAGE_IMPORTS: Readonly<Record<Package, readonly Package[]>> = {
   app: ["app"],
   "land-loop": ["land-loop", "shared"],
+  factory: ["factory", "land-loop", "shared"],
   tooling: ["tooling", "shared"],
   shared: ["shared"],
 };
