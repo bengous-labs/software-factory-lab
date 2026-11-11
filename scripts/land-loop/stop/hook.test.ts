@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { Schema } from "effect";
+import * as fc from "fast-check";
 
 import { decodeJson } from "../../lib/json.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
@@ -115,6 +116,8 @@ interface Fake {
   readonly env: Readonly<Record<string, string | undefined>>;
   /** The main checkout of an earlier world, to stop again where its state files are; null for a new one. */
   readonly checkout: string | null;
+  /** The commit HEAD names. */
+  readonly head: string;
 }
 
 interface World {
@@ -153,6 +156,7 @@ function world(fake: Partial<Fake> = {}): World {
     threads = [],
     failing = [],
     env = AUTHOR_ENV,
+    head = HEAD,
   } = fake;
 
   const checkout = fake.checkout ?? mkdtempSync(join(tmpdir(), "stop-"));
@@ -167,7 +171,7 @@ function world(fake: Partial<Fake> = {}): World {
     ["git rev-parse --show-toplevel", `${root}\n`],
     ["git rev-parse --absolute-git-dir", mainCheckout ? `${checkout}/.git\n` : `${checkout}/.git/worktrees/x\n`],
     ["git rev-parse --path-format=absolute --git-common-dir", `${checkout}/.git\n`],
-    ["git rev-parse HEAD", `${HEAD}\n`],
+    ["git rev-parse HEAD", `${head}\n`],
     ["git status --porcelain", dirty ? " M app/src/cli.ts\n" : ""],
   ]);
 
@@ -718,6 +722,85 @@ describe("the stop of an Author", () => {
     for (const { calls } of [first, second]) {
       expect(calls.some((call) => call.argv[0] === "claude" || call.argv.includes("push"))).toBe(false);
     }
+  });
+});
+
+/** What one stop of a session finds: its tree, the Author token, the Stop checks, and whether the Done judge answers. */
+interface StopState {
+  readonly dirty: boolean;
+  readonly token: boolean;
+  readonly checksRed: boolean;
+  readonly doneAnswers: boolean;
+}
+
+const STOP_STATE: fc.Arbitrary<StopState> = fc.record({
+  dirty: fc.boolean(),
+  token: fc.boolean(),
+  checksRed: fc.boolean(),
+  doneAnswers: fc.boolean(),
+});
+
+const COMMIT_ASKED = "Commit your changes, then stop.";
+
+const NO_TOKEN_ENV = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: join(tmpdir(), "no-author-token-here") };
+
+/** A clean stop the hook reports a failure on: no Author token, red Stop checks, or a Done judge with no answer. */
+const failsOn = (state: StopState): boolean => !state.dirty && (!state.token || state.checksRed || !state.doneAnswers);
+
+/** The fake of the `index`th stop of a session whose main checkout is `checkout`. */
+const stopWorld = (checkout: string, index: number, state: StopState): World =>
+  world({
+    checkout,
+    // The hook keeps green Stop checks per head: each stop comes after a commit of its own.
+    head: String(index).repeat(40),
+    dirty: state.dirty,
+    env: state.token ? AUTHOR_ENV : NO_TOKEN_ENV,
+    failing: state.checksRed ? ["bun check"] : [],
+    done: state.doneAnswers ? [FINISHED] : [undefined],
+  });
+
+/** Where a session stands in its chain: the blocks so far, and whether one of them reported a failure. */
+interface ChainSoFar {
+  readonly blocks: number;
+  readonly reported: boolean;
+}
+
+const NEW_CHAIN: ChainSoFar = { blocks: 0, reported: false };
+
+/** The rule of a chain of stops, on one stop of `state` the hook answered `answer`. */
+function expectChainRule(chain: ChainSoFar, state: StopState, answer: Answer): void {
+  const reason = answer.kind === "block" ? answer.reason : "";
+
+  if (state.dirty) {
+    expect(reason).toBe(chain.blocks === 0 ? COMMIT_ASKED : "");
+  }
+
+  if (failsOn(state) && !chain.reported) {
+    expect(reason).not.toBeOneOf(["", COMMIT_ASKED]);
+  }
+}
+
+/** The chain after a stop answered `answer`: an allowed stop ends it. */
+const chainAfter = (chain: ChainSoFar, answer: Answer): ChainSoFar =>
+  answer.kind === "allow"
+    ? NEW_CHAIN
+    : { blocks: chain.blocks + 1, reported: chain.reported || answer.reason !== COMMIT_ASKED };
+
+describe("a chain of stops", () => {
+  test("each failure is reported once before the session ends, a dirty tree asks for the commit alone once per chain, and a chain blocks at most twice", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.array(STOP_STATE, { minLength: 1, maxLength: 6 }), async (states) => {
+        const checkout = mkdtempSync(join(tmpdir(), "chain-"));
+        let chain = NEW_CHAIN;
+
+        for (const [index, state] of states.entries()) {
+          const answer = await stopIn(stopWorld(checkout, index, state), chain.blocks > 0);
+          expectChainRule(chain, state, answer);
+          chain = chainAfter(chain, answer);
+          expect(chain.blocks).toBeLessThanOrEqual(2);
+        }
+      }),
+    );
   });
 });
 
