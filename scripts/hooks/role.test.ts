@@ -13,7 +13,7 @@ const input = (source: string): string => JSON.stringify({ hook_event_name: "Ses
 
 /** The context the hook gives a session that starts with `env`, or null when it prints nothing. */
 async function contextOf(env: Readonly<Record<string, string>>, source = "startup"): Promise<string | null> {
-  const { LAB_AUTHOR: _ignored, ...inherited } = process.env;
+  const { LAB_AUTHOR: _author, LAB_STOP_FORK: _fork, ...inherited } = process.env;
 
   const ran = await $`bun ${SCRIPT} < ${Buffer.from(input(source))}`.env({ ...inherited, ...env }).quiet();
 
@@ -46,6 +46,11 @@ describe("roleFileOf", () => {
   test("names none on a resume, whose transcript already holds it", () => {
     expect(roleFileOf(input("resume"), { LAB_AUTHOR: "1" })).toBeNull();
     expect(roleFileOf(input("resume"), {})).toBeNull();
+  });
+
+  test("names none in a fork the Stop hook launched, which judges the session rather than acting in it", () => {
+    expect(roleFileOf(input("startup"), { LAB_AUTHOR: "1", LAB_STOP_FORK: "1" })).toBeNull();
+    expect(roleFileOf(input("startup"), { LAB_STOP_FORK: "1" })).toBeNull();
   });
 
   test("refuses an input with no source", () => {

@@ -20,6 +20,6 @@ Each rule keeps a change small enough to review and land fast, and the code read
 - Edit the source of a generated file, then regenerate it.
 - A new version replaces the old one in the same change: no parallel versions.
 - Strict types, clear names, typed states and data shapes, visible error paths.
-- Validate at system boundaries only, and fail fast there: propagate an error with its context. Write no fallback or compatibility code for an old format unless the issue names data to preserve.
-- Write no comment by default. A comment survives only for a why the code cannot say: a workaround, an external constraint, a public API contract, a TODO. History belongs in the commit message.
+- Validate at system boundaries only, and fail fast there: propagate an error with its context. Write no fallback or compatibility code for an old format unless the issue or this repository names data to preserve, as `AGENTS.md` does for the task file's two format versions.
+- Each module and each export gets a doc comment saying what it is, as its neighbours have. Inside a body, a comment survives only for a why the code cannot say: a workaround, an external constraint, a TODO. History belongs in the commit message.
 - Code, comments, commit messages and docs are in English. Docs state the current design: no date, commit SHA or time word (`currently`, `no longer`).
