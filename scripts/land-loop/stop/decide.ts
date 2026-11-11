@@ -406,9 +406,9 @@ export function openQuestionOf<C extends PrComment>(comments: readonly C[]): C |
     (comment) => comment.author === AUTHOR_LOGIN && comment.body.includes(QUESTION_MARK),
   );
 
-  return asked === -1 || comments.slice(asked + 1).some((comment) => byOwner(comment))
-    ? null
-    : (comments[asked] ?? null);
+  const question = comments[asked];
+
+  return question === undefined || comments.slice(asked + 1).some((comment) => byOwner(comment)) ? null : question;
 }
 
 /** Whether the PR's conversation `comments`, in their order, hold a question of the Author the Owner has not answered. */
