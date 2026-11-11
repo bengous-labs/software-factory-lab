@@ -2018,6 +2018,13 @@ describe("the Delta read after Review round 3", () => {
     expect(kinds({ ...READY, record: held })).not.toContain("request-review");
   });
 
+  test("a push routed for a Delta read at review:none still gets its light read: it never lands unread", () => {
+    const unread = { ...READY, record: afterRound3({ ...ANSWERED, review: "none" }) };
+
+    expect(stepsOf(unread)).toContainEqual({ kind: "request-review", depth: "light", reviewRound: 4, security: false });
+    expect(kinds(unread)).not.toContain("auto-merge");
+  });
+
   test("only a record of three Review rounds gets a Delta read: one whose count reads past 3 gets no review", () => {
     expect(kinds({ ...READY, record: afterRound3(ANSWERED, { reviewRounds: 4 }) })).not.toContain("request-review");
   });

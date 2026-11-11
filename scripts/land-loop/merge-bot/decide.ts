@@ -65,17 +65,20 @@ export interface RoutingAnswer {
 }
 
 /**
- * The review job's number for the Delta read: the job, its artifact and its posted review are keyed by
- * a number, but the record never counts it among the three Review rounds.
+ * The review job's number for the Delta read of a push after Review round 3: the job, its artifact and
+ * its posted marker are keyed by a number, but the Delta read is no round, and the state record never
+ * counts it among the three.
  */
-const DELTA_READ = 4;
+export const DELTA_READ = 4;
 
 /** Review rounds 1 to 3, and the Delta read. */
 const Round = Schema.Literals([1, 2, 3, DELTA_READ]);
 
 export type ReviewRound = typeof Round.Type;
 
-const reviewNameOf = (round: ReviewRound): string => (round === DELTA_READ ? "Delta read" : `Review round ${round}`);
+/** What a review calls itself where a human reads it: its Review round, or the Delta read. */
+export const reviewNameOf = (round: ReviewRound): string =>
+  round === DELTA_READ ? "Delta read" : `Review round ${round}`;
 
 /** The review asked of the review job for one patch and round, and its run; `failed` once it gave no report. */
 const ReviewState = Schema.Union([
@@ -805,10 +808,21 @@ interface RoundNeed {
  * The Review round this patch needs; null when none. A later patch is read again when its Patch delta
  * needs a read, and always when the last round posted an Important, or its count is unknown, whatever
  * the Routing answer says of the delta. Review round 3 is the last; after it, a patch routed for a Delta
- * read on a PR no one holds for the Owner gets one, light, once.
+ * read on a PR no one holds for the Owner gets one, light, once, whatever its depth: it holds no PR for
+ * the Owner, so a depth of none must not leave it unread.
  */
 function roundNeedOf(record: StateRecord, routing: RoutingAnswer, depth: ReviewDepth, patch: string): RoundNeed | null {
-  if (depth === "none" || record.reviewedPatch === patch) {
+  if (record.reviewedPatch === patch) {
+    return null;
+  }
+
+  if (record.reviewRounds === 3) {
+    const deltaRead = routing.deltaRead === true && record.ownerHold === undefined && record.deltaReadPatch !== patch;
+
+    return deltaRead ? { depth: "light", round: DELTA_READ } : null;
+  }
+
+  if (depth === "none") {
     return null;
   }
 
@@ -817,13 +831,7 @@ function roundNeedOf(record: StateRecord, routing: RoutingAnswer, depth: ReviewD
   }
 
   if (record.reviewRounds !== 1 && record.reviewRounds !== 2) {
-    const deltaRead =
-      record.reviewRounds === 3 &&
-      routing.deltaRead === true &&
-      record.ownerHold === undefined &&
-      record.deltaReadPatch !== patch;
-
-    return deltaRead ? { depth: "light", round: DELTA_READ } : null;
+    return null;
   }
 
   const lastImportant = record.importantByRound?.[record.reviewRounds - 1] ?? null;

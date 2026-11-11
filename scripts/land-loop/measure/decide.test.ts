@@ -191,6 +191,16 @@ describe("Rounds and Important found", () => {
     expect(importantFoundOf(reviews)).toBe(3);
   });
 
+  test("a Delta read is no round: it is not counted among them", () => {
+    const read = {
+      user: { login: "bengous-labs-agents[bot]" },
+      body: "Delta read (m, /code-review medium): 1 important, 0 nit.",
+      submitted_at: "2026-11-07T21:40:00Z",
+    };
+
+    expect(roundsOf([read])).toBe(0);
+  });
+
   test("a round with a security pass counts the Importants of both passes", () => {
     const app = { login: "bengous-labs-agents[bot]" };
 
