@@ -112,9 +112,22 @@ const isLabelWrite = (command: string): boolean => {
     /\bgh\s+api\b/u.test(command) &&
     ((method !== undefined && method.toUpperCase() !== "GET") ||
       /(?:^|\s)(?:-[fF]|--field\b|--raw-field\b|--input\b)/u.test(command));
-  const isLabelCommand = /\bgh\s+label\b/u.test(command);
+  const isLabelCommand = /\bgh\s+label\b(?!\s+list\b)/u.test(command);
 
   return command.includes(LABEL) && (isLabelEdit || isApiWrite || isLabelCommand);
+};
+
+const DISPLAY_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["mcp__ccd_turn__wrap_up", new Set(["recap", "ask"])],
+  ["mcp__ccd_turn__update_plan", new Set(["items"])],
+]);
+
+const isMcpLabelWrite = (tool: string, input: object): boolean => {
+  const shown = DISPLAY_FIELDS.get(tool);
+
+  return Object.entries(input).some(
+    ([key, value]) => shown?.has(key) !== true && (JSON.stringify(value)?.includes(LABEL) ?? false),
+  );
 };
 
 const drop = ($: EngineInterface, band: Band, n: string, line?: string): void => {
@@ -281,6 +294,6 @@ export const register: Register = (on) => {
   );
 
   on("tool.call", (_, e, next) =>
-    e.tool.startsWith("mcp__") && JSON.stringify(e).includes(LABEL) ? { deny: DENY } : next(e),
+    e.tool.startsWith("mcp__") && isMcpLabelWrite(e.tool, e) ? { deny: DENY } : next(e),
   );
 };

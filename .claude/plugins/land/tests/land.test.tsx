@@ -467,6 +467,8 @@ const REFUSED = [
   'echo \'{"labels":["land-ok"]}\' | gh api repos/o/r/issues/120/labels --input -',
   "gh label create land-ok",
   "cd /repo && gh pr edit 120 --add-label 'land-ok'",
+  "gh label edit bug --name land-ok",
+  "gh label list && gh label create land-ok",
 ];
 
 for (const command of REFUSED) {
@@ -488,6 +490,8 @@ const PASSED = [
   "gh pr edit 120 --add-label bug",
   "gh api -X POST repos/o/r/issues/120/labels -f 'labels[]=bug'",
   "grep -rn land-ok scripts/",
+  "grep -n land-ok .claude/plugins/land/hooks/land.tsx && gh label list --repo o/r",
+  "gh label list | grep land-ok",
 ];
 
 for (const command of PASSED) {
@@ -501,17 +505,86 @@ for (const command of PASSED) {
   });
 }
 
-test("the guard refuses an MCP call whose input holds land-ok", async ($, on) => {
-  const seen = stubEngine(on, gitHub({}));
+const MCP_REFUSED = [
+  { tool: "mcp__github__issue_write", issue_number: 120, labels: ["land-ok"] },
+  { tool: "mcp__github__issue_write", issue_number: 120, label: "land-ok" },
+  { tool: "mcp__github__update_pull_request", pull: { number: 120, labels: [{ name: "land-ok" }] } },
+  { tool: "mcp__github__create_label", name: "land-ok" },
+  { tool: "mcp__shell__run", command: "gh pr edit 120 --add-label land-ok" },
+  { tool: "mcp__github__api", path: "repos/o/r/issues/120/labels", body: '{"labels":["land-ok"]}' },
+  { tool: "mcp__shell__exec", command: "gh", args: ["gh", "pr", "edit", "120", "--add-label", "land-ok"] },
+  { tool: "mcp__shell__exec", argv: ["gh", "pr", "edit", "120", "--add-label", "land-ok"] },
+  { tool: "mcp__x__gh", args: ["api", "-X", "POST", "repos/o/r/issues/120/labels", "-f", "labels[]=land-ok"] },
+  { tool: "mcp__github__api", method: "POST", path: "repos/o/r/issues/120/labels", body: '["land-ok"]' },
+  { tool: "mcp__github__api", method: "POST", path: "repos/o/r/issues/120/labels", body: '"[\\"land-ok\\"]"' },
+  { tool: "mcp__github__api", method: "PATCH", path: "repos/o/r/labels/bug", body: { new_name: "land-ok" } },
+  { tool: "mcp__github__graphql", query: 'mutation{updateLabel(input:{id:"LA_x",name:"land-ok"}){label{id}}}' },
+  {
+    tool: "mcp__shell__run",
+    command: "curl -X POST -d '[\"land-ok\"]' https://api.github.com/repos/o/r/issues/120/labels",
+  },
+  { tool: "mcp__github__add_issue_comment", issue_number: 120, body: "gh pr edit 120 --add-label land-ok" },
+  { tool: "mcp__github__add_issue_comment", issue_number: 120, body: "land-ok" },
+  { tool: "mcp__github__add_issue_comment", issue_number: 120, body: "This change waits for land-ok." },
+  { tool: "mcp__x__set", body: "land-ok\n" },
+  {
+    tool: "mcp__claude-in-chrome__javascript_tool",
+    action: "javascript_exec",
+    tabId: 1,
+    text: "document.querySelector('[data-label=\"land-ok\"]').click(); done()",
+  },
+  { tool: "mcp__claude-in-chrome__computer", action: "type", text: "land-ok\n" },
+  {
+    tool: "mcp__tmux__send_text",
+    text: "curl -X POST -d '[\"land-ok\"]' https://api.github.com/repos/o/r/issues/120/labels",
+  },
+  { tool: "mcp__term__send", content: '"gh" pr edit 120 --add-label land-ok' },
+  {
+    tool: "mcp__gql__run",
+    body: 'mutation { createLabel(input: {repositoryId: "R", name: "land-ok"}) { label { id } } }',
+  },
+  { tool: "mcp__ccd_turn__wrap_up", recap: "Done.", actions: [{ label: "Approve", message: "/land 120 land-ok" }] },
+];
 
-  const result = await $.tool.call({
-    tool: "mcp__github__issue_write",
-    issue_number: 120,
-    labels: ["land-ok"],
+for (const call of MCP_REFUSED) {
+  test(`the guard refuses the MCP call ${JSON.stringify(call)}`, async ($, on) => {
+    const seen = stubEngine(on, gitHub({}));
+
+    const result = await $.tool.call(call);
+
+    expect(result).toEqual({ deny: DENY });
+    expect(seen.passed).toEqual([]);
   });
+}
+
+test("the guard refuses a land-ok write nested as deep as the engine takes", async ($, on) => {
+  const seen = stubEngine(on, gitHub({}));
+  let deep: unknown = ["land-ok"];
+  for (let level = 0; level < 27_000; level += 1) {
+    deep = [deep];
+  }
+
+  const result = await $.tool.call({ tool: "mcp__shell__exec", argv: deep });
 
   expect(result).toEqual({ deny: DENY });
   expect(seen.passed).toEqual([]);
+});
+
+test("the guard lets the desktop app's recap and plan name land-ok in their text", async ($, on) => {
+  const seen = stubEngine(on, gitHub({}));
+
+  await $.tool.call({
+    tool: "mcp__ccd_turn__wrap_up",
+    recap: "#126 waits for the land-ok label, which only the Owner puts.",
+    ask: "Do you put land-ok on #126?",
+    actions: [{ label: "Yes" }],
+  });
+  await $.tool.call({
+    tool: "mcp__ccd_turn__update_plan",
+    items: [{ content: "Wait for land-ok on #126", status: "pending" }],
+  });
+
+  expect(seen.passed).toEqual(["mcp__ccd_turn__wrap_up", "mcp__ccd_turn__update_plan"]);
 });
 
 test("the guard refuses a land-ok write through Monitor, and lets its other commands through", async ($, on) => {
