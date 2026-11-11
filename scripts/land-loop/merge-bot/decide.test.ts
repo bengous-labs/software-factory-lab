@@ -698,15 +698,12 @@ describe("an Owner hold", () => {
       });
     });
 
-    test("while dev is red the approved PR waits, its threads closed", () => {
-      expect(kinds({ ...approved, devRed: true })).toEqual([
-        "labels",
-        "follow-up",
-        "land-open",
-        "review-check",
-        "land-gate",
+    test("while dev is red the approved PR waits: it does not land, so its threads stay open and no issue says they landed", () => {
+      expect(stepsOf({ ...approved, devRed: true })).toEqual([
+        { kind: "labels", route: "owner", depth: "light" },
+        { kind: "review-check", check: { kind: "failure", summary: "2 Important finding(s) open." } },
+        { kind: "land-gate", check: { kind: "pending", summary: "dev is red: landing is on hold." } },
       ]);
-      expect(gate({ ...approved, devRed: true })).toBe("pending");
     });
 
     test("with no Important open, every one fixed or rejected, the approved PR lands as any other: nothing to resolve, no issue", () => {
@@ -1923,12 +1920,19 @@ describe("the Merge bot's invariants", () => {
         if (post !== -1) {
           const after = steps.slice(post + 1).map((step) => step.kind);
 
-          expect(after.filter((kind) => kind !== "resolve-threads" && kind !== "to-draft")).toEqual([
-            "record",
-            "review-check",
-          ]);
-          expect(after.indexOf("to-draft")).toBeLessThan(after.indexOf("record"));
-          expect(after.indexOf("resolve-threads")).toBeLessThan(after.indexOf("record"));
+          const before: ReadonlyArray<Step["kind"]> = [
+            "resolve-threads",
+            "to-draft",
+            "remove-land-approval",
+            "owner-comment",
+          ];
+
+          expect(after.filter((kind) => !before.includes(kind))).toEqual(["record", "review-check"]);
+
+          for (const kind of before) {
+            expect(after.indexOf(kind)).toBeLessThan(after.indexOf("record"));
+          }
+
           expect(steps.some((step) => step.kind === "land-gate")).toBe(false);
         }
       }),
@@ -2099,7 +2103,7 @@ describe("the Delta read after Review round 3", () => {
       }
     });
 
-    test("an Important the Delta read no longer reports is closed as fixed; one it reports again stays open, with its reply, and the PR goes back to its Author, still held", () => {
+    test("an Important the Delta read no longer reports is closed as fixed; one it reports again stays open, with its reply, and the held PR stays ready, so the Owner is asked next", () => {
       const result = read(again("T1"), finding("nit"));
       const asking = answering(LIGHT, { review: asked });
 
@@ -2111,11 +2115,100 @@ describe("the Delta read after Review round 3", () => {
       expect(stepsOf({ ...asking, reviewJob: completed(result) })).toEqual([
         { kind: "post-review", result: read(again("T1")), heldOpen: ["T1"] },
         { kind: "resolve-threads", threads: ["T2"] },
-        { kind: "to-draft" },
         { kind: "record", record },
         red(1),
       ]);
       expect(earlierImportantsOf(read(again("T1")), ROUND_3)).toEqual({ kept: ["T1"], closed: ["T2"], left: 0 });
+      expect(kinds({ ...READY, openImportant: ROUND_3.slice(0, 1), record })).toEqual([
+        "labels",
+        "review-check",
+        "owner-comment",
+        "record",
+        "land-gate",
+      ]);
+    });
+
+    test("a Delta read sends a held PR back to draft for no finding, new or reported again; on a PR it does not hold, its Important does", () => {
+      const asking = answering(LIGHT, { review: asked });
+      const { ownerHold: _hold, ...unheld } = asking.record;
+
+      for (const result of [read(again("T1")), read(finding("important"))]) {
+        expect(kinds({ ...asking, reviewJob: completed(result) })).not.toContain("to-draft");
+        expect(kinds({ ...asking, record: unheld, reviewJob: completed(result) })).toContain("to-draft");
+      }
+    });
+
+    test("a Land approval given before the Delta read posted a new Important goes, with a comment that says why; one before a read that only reports open ones again stays", () => {
+      const approvedBefore = {
+        ...answering(LIGHT, { review: asked }),
+        labels: [LAND_APPROVAL_LABEL],
+        landApprovalByOwner: true,
+      };
+
+      const fresh = read(finding("important"), again("T1"));
+      const steps = stepsOf({ ...approvedBefore, reviewJob: completed(fresh) });
+
+      expect(steps.map((step) => step.kind)).toEqual([
+        "record",
+        "post-review",
+        "resolve-threads",
+        "remove-land-approval",
+        "owner-comment",
+        "record",
+        "review-check",
+      ]);
+      expect(steps).toContainEqual({
+        kind: "owner-comment",
+        body: "A review posted 1 new Important finding(s) after the Land approval (land-ok) was given, so the Merge bot removed it: it covers only the findings the Owner could read. Read them, then add land-ok again to land the PR.",
+      });
+      expect(steps.at(-2)).toMatchObject({ kind: "record", record: { landOkPatch: null, deltaReadPatch: P1 } });
+
+      const reportedAgain = stepsOf({ ...approvedBefore, reviewJob: completed(read(again("T1"))) });
+
+      expect(reportedAgain.map((step) => step.kind)).not.toContain("remove-land-approval");
+      expect(reportedAgain.at(-2)).toMatchObject({ kind: "record", record: { landOkPatch: P1 } });
+    });
+
+    test("a Land approval given while round 3 ran goes once round 3 posts a new Important: it never lands one the Owner could not read", () => {
+      const round3: ReviewState = { kind: "requested", patch: P1, round: 3, runId: 44, at: asked.at };
+
+      const result: ReportedResult = {
+        ...read(finding("important")),
+        request: { ...read().request, round: 3 },
+      };
+
+      const snapshot: Snapshot = {
+        ...READY,
+        labels: [LAND_APPROVAL_LABEL],
+        landApprovalByOwner: true,
+        record: {
+          ...READY.record,
+          reviewedPatch: "patch-0",
+          reviewRounds: 2,
+          importantByRound: [1, 1],
+          triage: { [P1]: { ...LIGHT, land: "owner" } },
+          review: round3,
+        },
+        reviewJob: completed(result),
+      };
+
+      expect(kinds(snapshot)).toContain("remove-land-approval");
+      expect(stepsOf(snapshot).at(-2)).toMatchObject({ kind: "record", record: { landOkPatch: null } });
+
+      const nit: ReportedResult = { ...result, report: { ...result.report, findings: [finding("nit")] } };
+      const nitOnly = { ...snapshot, reviewJob: completed(nit) };
+
+      expect(kinds(nitOnly)).not.toContain("remove-land-approval");
+      expect(stepsOf(nitOnly).at(-2)).toMatchObject({ kind: "record", record: { landOkPatch: P1 } });
+    });
+
+    test("on a PR no one holds for the Owner, an open Important owes no Delta read: only a push routed for one gets it", () => {
+      const { ownerHold: _hold, ...unheld } = answering().record;
+
+      expect(kinds({ ...answering(), record: unheld })).not.toContain("request-review");
+      expect(
+        stepsOf({ ...answering(), record: { ...unheld, triage: { [P1]: { ...RISKY, deltaRead: true } } } }),
+      ).toContainEqual({ kind: "request-review", depth: "light", reviewRound: 4, security: false });
     });
 
     test("a Delta read that confirms every fix closes each thread, keeps the PR ready, and only then is the Owner asked, the hold kept", () => {
@@ -2316,20 +2409,36 @@ describe("where a finding stands", () => {
     expect(standingOf(ledgerFinding("I", { again: [2, 3] }), none, 3)).toEqual({ kind: "open", again: 3 });
   });
 
-  test("past round 3, an Important the App closed with no landing's reply is fixed, confirmed by a Delta read", () => {
-    expect(standingOf(ledgerFinding("I", { resolved: true, again: [3, 2] }), none, 3)).toEqual({
+  test("past round 3, an Important the App closed with no landing's reply is fixed, confirmed by a Delta read, once one ran", () => {
+    expect(standingOf(ledgerFinding("I", { resolved: true, again: [3, 2] }), none, 3, true)).toEqual({
       kind: "confirmed",
       round: 4,
     });
-    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), none, 3)).toEqual({
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), none, 3, true)).toEqual({
       kind: "confirmed",
       round: 4,
     });
-    expect(standingOf(ledgerFinding("I", { resolved: true, round: 4, again: [4] }), none, 3)).toEqual({
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 4, again: [4] }), none, 3, true)).toEqual({
       kind: "confirmed",
       round: 4,
     });
-    expect(standingOf(ledgerFinding("I", { round: 3, again: [4] }), none, 3)).toEqual({ kind: "open", again: 4 });
+    expect(standingOf(ledgerFinding("I", { round: 3, again: [4] }), none, 3, true)).toEqual({
+      kind: "open",
+      again: 4,
+    });
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), none, 3, true)).toEqual({
+      kind: "confirmed",
+      round: 3,
+    });
+  });
+
+  test("past round 3, with no Delta read run, an Important the App closed with no landing's reply is confirmed by none", () => {
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), none, 3)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), none, 3, false)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), none, 3)).toEqual({
+      kind: "confirmed",
+      round: 3,
+    });
   });
 
   test("an Important the Owner's Land approval closed, its thread saying so, landed open, whatever round posted it", () => {
@@ -2412,7 +2521,7 @@ const at = (where: string, thread: string): string => `[\`${where}\`](${urlOf(th
 
 /** The summary the ledger's line shows of an open Important of round 1 whose summary is `summary`. */
 const shownSummaryOf = (summary: string): string | undefined =>
-  ledgerOf([ledgerFinding("I", { summary })], new Set(), 1)
+  ledgerOf([ledgerFinding("I", { summary })], new Set(), 1, false)
     .split("\n")
     .at(-1)
     ?.replace(`- **Open.** Important ${at("app/src/cli.ts:7", "I")}: `, "");
@@ -2438,7 +2547,7 @@ describe("the ledger", () => {
 
     const cli = "app/src/cli.ts:7";
 
-    expect(ledgerOf(findings, new Set(["N1", "N4", "I5"]), 3)).toBe(
+    expect(ledgerOf(findings, new Set(["N1", "N4", "I5"]), 3, true)).toBe(
       [
         "**Review findings**: 3 fixed and confirmed, 1 rejected, 2 answered by the Owner, 2 fixed by the Author's word, 1 with no answer, 3 open, 1 landed open, 1 closed unconfirmed.",
         "",
@@ -2466,14 +2575,14 @@ describe("the ledger", () => {
   });
 
   test("before any round there is no ledger; a round that posted nothing says so", () => {
-    expect(ledgerOf([], new Set(), 0)).toBe("");
-    expect(ledgerOf([], new Set(), 2)).toBe(
+    expect(ledgerOf([], new Set(), 0, false)).toBe("");
+    expect(ledgerOf([], new Set(), 2, false)).toBe(
       "**Review findings**: none.\n\n**Round 1**: no new finding.\n\n**Round 2**: no new finding.",
     );
   });
 
   test("a round posted before the record counts it is shown", () => {
-    expect(ledgerOf([ledgerFinding("I", { round: 2 })], new Set(), 1)).toBe(
+    expect(ledgerOf([ledgerFinding("I", { round: 2 })], new Set(), 1, false)).toBe(
       [
         "**Review findings**: 1 open.",
         "",
@@ -2496,7 +2605,7 @@ describe("the ledger", () => {
 
     const cli = "app/src/cli.ts:7";
 
-    expect(ledgerOf(findings, new Set(), 3).split("\n\n").slice(-2)).toEqual([
+    expect(ledgerOf(findings, new Set(), 3, true).split("\n\n").slice(-2)).toEqual([
       [
         "**Round 3**: 2 Important.",
         `- **Fixed, confirmed by a Delta read.** Important ${at(cli, "I3")}: I3 is wrong`,
@@ -2590,12 +2699,22 @@ describe("writing the state comment", () => {
   test("the body holds the record and the ledger after the rounds the record counts, the Author's fixes included", () => {
     const fixed = { ...closed, fixed: new Set(["N1"]) };
 
-    expect(stateBodyOf(record, fixed)).toBe(stateCommentOf(record, ledgerOf(fixed.findings, fixed.fixed, 2)));
+    expect(stateBodyOf(record, fixed)).toBe(stateCommentOf(record, ledgerOf(fixed.findings, fixed.fixed, 2, false)));
     expect(stateBodyOf(record, fixed)).toContain("**Fixed, confirmed by round 2.** Important");
     expect(stateBodyOf(record, fixed)).toContain("**Fixed, by the Author's word; its lines unchanged.** Nit");
     expect(stateBodyOf({ ...record, reviewRounds: 1 }, closed)).toContain(
       "**Closed with no later round confirming it.**",
     );
+  });
+
+  test("past round 3, the ledger confirms by a Delta read only when the record names one", () => {
+    const round3 = { ...closed, findings: [ledgerFinding("I1", { round: 3, resolved: true })] };
+    const after3: StateRecord = { ...record, reviewRounds: 3, importantByRound: [1, 0, 1] };
+
+    expect(stateBodyOf({ ...after3, deltaReadPatch: P1 }, round3)).toContain(
+      "**Fixed, confirmed by a Delta read.** Important",
+    );
+    expect(stateBodyOf(after3, round3)).toContain("**Closed with no later round confirming it.** Important");
   });
 
   test("the comment is written again when only its ledger changed, and not when it holds the record and the ledger already", () => {

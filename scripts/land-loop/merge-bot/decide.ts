@@ -737,21 +737,48 @@ export function postedFindingsOf(
 /**
  * Whether the review of `result` sends the PR back to draft, for its Author's turn: an Important does,
  * whoever opened the PR; a Nit does on a PR the Author's machine account opened, which then cannot land
- * before that Author's next stop. A PR the Owner opened stays ready after Nits alone.
+ * before that Author's next stop. A PR the Owner opened stays ready after Nits alone. A read on a PR
+ * `record` holds for the Owner sends nothing back: the Owner, the last reader, is asked after each read,
+ * and a draft would keep the Owner out while the Author pushes again.
  */
-function sendsBack(snapshot: Snapshot, result: ReportedResult): boolean {
+function sendsBack(snapshot: Snapshot, record: StateRecord, result: ReportedResult): boolean {
   const reports = (severity: "important" | "nit"): boolean =>
     result.report.findings.some((finding) => finding.severity === severity);
 
-  return !snapshot.draft && (reports("important") || (reports("nit") && snapshot.openedByAuthor));
+  // Only a Delta read runs on a PR held for the Owner: no Review round follows round 3.
+  return (
+    !snapshot.draft &&
+    record.ownerHold === undefined &&
+    (reports("important") || (reports("nit") && snapshot.openedByAuthor))
+  );
+}
+
+/**
+ * The comment that says why a Land approval went when a review posted a new Important after it: an
+ * approval covers only the findings the Owner could read when giving it.
+ */
+const unseenCommentOf = (fresh: number): string =>
+  `A review posted ${fresh} new Important finding(s) after the Land approval (${LAND_APPROVAL_LABEL}) was given, so the Merge bot removed it: it covers only the findings the Owner could read. Read them, then add ${LAND_APPROVAL_LABEL} again to land the PR.`;
+
+/**
+ * The steps that remove a Land approval `record` holds for this patch when the review of `result` posts a
+ * new Important, one that reports no open thread again: else the approval, given before the review was
+ * posted, would land that Important open unread.
+ */
+function unseenSteps(record: StateRecord, result: ReportedResult, kept: readonly string[]): readonly Step[] {
+  const fresh = postedFindingsOf(result, kept).filter((finding) => finding.severity === "important").length;
+
+  return fresh > 0 && record.landOkPatch !== null
+    ? [{ kind: "remove-land-approval" }, { kind: "owner-comment", body: unseenCommentOf(fresh) }]
+    : [];
 }
 
 /**
  * The review is posted, the earlier Importants it no longer holds are resolved, the PR goes back to
- * draft when the round asks its Author for something, and only then is the round recorded: a run that
- * stops before the record does all of it again. The Review check counts the Important findings open
- * once the review is posted. A Delta read posts its Importants alone: a Nit after Review round 3 is not
- * worth another turn.
+ * draft when the round asks its Author for something, a Land approval given before a new Important goes,
+ * and only then is the round recorded: a run that stops before the record does all of it again. The
+ * Review check counts the Important findings open once the review is posted. A Delta read posts its
+ * Importants alone: a Nit after Review round 3 is not worth another turn.
  */
 function postedSteps(snapshot: Snapshot, record: StateRecord, reported: ReportedResult): readonly Step[] {
   const result: ReportedResult =
@@ -766,12 +793,14 @@ function postedSteps(snapshot: Snapshot, record: StateRecord, reported: Reported
       : reported;
 
   const earlier = earlierImportantsOf(result, snapshot.openImportant);
+  const unseen = unseenSteps(record, result, earlier.kept);
 
   return [
     { kind: "post-review", result, heldOpen: earlier.kept },
     ...(earlier.closed.length === 0 ? [] : [{ kind: "resolve-threads", threads: earlier.closed } as const]),
-    ...(sendsBack(snapshot, result) ? [{ kind: "to-draft" } as const] : []),
-    { kind: "record", record: afterReview(record, result) },
+    ...(sendsBack(snapshot, record, result) ? [{ kind: "to-draft" } as const] : []),
+    ...unseen,
+    { kind: "record", record: afterReview(unseen.length === 0 ? record : { ...record, landOkPatch: null }, result) },
     {
       kind: "review-check",
       check: importantCheckOf(importantOf(result) + earlier.left, snapshot.rejectedImportant),
@@ -865,9 +894,10 @@ interface RoundNeed {
  * The Review round this patch needs; null when none. A later patch is read again when its Patch delta
  * needs a read, and always when the last round posted an Important, or its count is unknown, whatever
  * the Routing answer says of the delta. Review round 3 is the last; after it, a patch gets one Delta
- * read, light, once, whatever its depth: on a PR with an open Important, `open` of them, so that a read
- * says which are fixed before the Owner is asked; and on a PR no one holds for the Owner, when it is routed
- * for one, since such a read holds no PR for the Owner and a depth of none must not leave it unread.
+ * read, light, once, whatever its depth: on a PR held for the Owner with an open Important, `open` of
+ * them, so that a read says which are fixed before the Owner is asked, the PR held whatever it finds; and
+ * on a PR no one holds for the Owner, when it is routed for one, since such a read holds no PR for the
+ * Owner and a depth of none must not leave it unread.
  */
 function roundNeedOf(
   record: StateRecord,
@@ -880,8 +910,8 @@ function roundNeedOf(
   }
 
   if (record.reviewRounds === 3) {
-    const routed = routing.deltaRead === true && record.ownerHold === undefined;
-    const deltaRead = record.deltaReadPatch !== patch && (open > 0 || routed);
+    const owed = record.ownerHold === undefined ? routing.deltaRead === true : open > 0;
+    const deltaRead = record.deltaReadPatch !== patch && owed;
 
     return deltaRead ? { depth: "light", round: DELTA_READ } : null;
   }
@@ -906,14 +936,14 @@ function roundNeedOf(
 
 /**
  * After Review round 3 the Owner is the last reader: an Important still open on a PR held for the Owner
- * lands open with the Owner's Land approval for this patch, `landApproved`, whatever threads are open. The
- * follow-up issue goes first and is recorded, so a run that stops before the threads close opens none
- * again. No step when no Important is open or no Land approval counts.
+ * lands open with the Owner's Land approval for this patch, whatever threads are open, once it lands,
+ * `landing`. The follow-up issue goes first and is recorded, so a run that stops before the threads close
+ * opens none again. No step when no Important is open or the PR does not land.
  */
-function landedOpenSteps(snapshot: Snapshot, record: StateRecord, landApproved: boolean): readonly Step[] {
+function landedOpenSteps(snapshot: Snapshot, record: StateRecord, landing: boolean): readonly Step[] {
   const threads = snapshot.openImportant.map((found) => found.thread);
 
-  if (threads.length === 0 || !landApproved) {
+  if (threads.length === 0 || !landing) {
     return [];
   }
 
@@ -1034,7 +1064,8 @@ export function decide(snapshot: Snapshot): Decision {
     return finish(pending("Not landable: Important findings are open."));
   }
 
-  const landedOpen = landedOpenSteps(snapshot, next, landApproved);
+  // While dev is red the PR does not land: its threads stay open, and no issue says they landed.
+  const landedOpen = landedOpenSteps(snapshot, next, landApproved && !snapshot.devRed);
 
   steps.push(...landedOpen, {
     kind: "review-check",
@@ -1140,15 +1171,20 @@ export type Standing =
   | { readonly kind: "unread" };
 
 /**
- * Where `finding` stands, after `rounds` Review rounds, given the threads the Author says it fixed. A
- * finding the Owner answered last stands as answered, whatever its severity and whoever closed its
- * thread: a round that read the Owner's answer and left the finding out fixed nothing. An Important is
- * fixed only on a later read, never on its Author's word: the App closes it when a later round, or after
- * round 3 a Delta read, no longer reports it, and when the Owner's Land approval lands it open, with a
- * reply that says so. A Nit is fixed on the Author's word, since no later round reads a Nit again;
- * GitHub's outdated mark shows beside it.
+ * Where `finding` stands, after `rounds` Review rounds, and `deltaRead` when a Delta read ran after
+ * them, given the threads the Author says it fixed. A finding the Owner answered last stands as answered,
+ * whatever its severity and whoever closed its thread: a round that read the Owner's answer and left the
+ * finding out fixed nothing. An Important is fixed only on a later read, never on its Author's word: the
+ * App closes it when a later round, or after round 3 a Delta read, no longer reports it, and when the
+ * Owner's Land approval lands it open, with a reply that says so. A Nit is fixed on the Author's word,
+ * since no later round reads a Nit again; GitHub's outdated mark shows beside it.
  */
-export function standingOf(finding: LedgerFinding, fixed: ReadonlySet<string>, rounds: number): Standing {
+export function standingOf(
+  finding: LedgerFinding,
+  fixed: ReadonlySet<string>,
+  rounds: number,
+  deltaRead = false,
+): Standing {
   if (finding.rejection !== null) {
     return { kind: "rejected", reply: finding.rejection };
   }
@@ -1184,7 +1220,7 @@ export function standingOf(finding: LedgerFinding, fixed: ReadonlySet<string>, r
     return { kind: "confirmed", round: last + 1 };
   }
 
-  return rounds === 3 ? { kind: "confirmed", round: DELTA_READ } : { kind: "unread" };
+  return deltaRead ? { kind: "confirmed", round: DELTA_READ } : { kind: "unread" };
 }
 
 const linesOf = (outdated: boolean): string => (outdated ? "its lines changed since" : "its lines unchanged");
@@ -1263,9 +1299,14 @@ function ledgerLineOf(finding: LedgerFinding, standing: Standing): string {
  * The ledger of a PR's review, for a person to read: how many findings stand where, then each round,
  * and the Delta read once it posted a finding, what it posted and where each of its findings stands now.
  * Empty before any round. `findings` are the App's, `fixed` the threads the Author says it fixed,
- * `rounds` the Review rounds posted.
+ * `rounds` the Review rounds posted, `deltaRead` whether a Delta read ran after them.
  */
-export function ledgerOf(findings: readonly LedgerFinding[], fixed: ReadonlySet<string>, rounds: number): string {
+export function ledgerOf(
+  findings: readonly LedgerFinding[],
+  fixed: ReadonlySet<string>,
+  rounds: number,
+  deltaRead: boolean,
+): string {
   // The Delta read is numbered after round 3, the last round.
   const last = Math.max(rounds, ...findings.map((finding) => finding.round));
 
@@ -1273,7 +1314,10 @@ export function ledgerOf(findings: readonly LedgerFinding[], fixed: ReadonlySet<
     return "";
   }
 
-  const standings = findings.map((finding) => ({ finding, standing: standingOf(finding, fixed, rounds) }));
+  const standings = findings.map((finding) => ({
+    finding,
+    standing: standingOf(finding, fixed, rounds, deltaRead),
+  }));
 
   const totals = TOTALS.flatMap(([kind, words]) => {
     const count = standings.filter(({ standing }) => standing.kind === kind).length;
@@ -1364,9 +1408,12 @@ export interface StateRead {
   readonly record: StateRecord;
 }
 
-/** The body of the state comment that holds `record`, its ledger written from `inputs` after the rounds `record` counts. */
+/** The body of the state comment that holds `record`, its ledger written from `inputs` after the rounds `record` counts and the Delta read it names. */
 export function stateBodyOf(record: StateRecord, inputs: LedgerInputs): string {
-  return stateCommentOf(record, ledgerOf(inputs.findings, inputs.fixed, record.reviewRounds));
+  return stateCommentOf(
+    record,
+    ledgerOf(inputs.findings, inputs.fixed, record.reviewRounds, record.deltaReadPatch !== undefined),
+  );
 }
 
 /**

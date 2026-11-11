@@ -664,7 +664,7 @@ describe("ledgerFindingsOf", () => {
       reply: "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537739764",
       open: false,
     });
-    expect(ledgerOf(findings, new Set(), 2).split("\n")[0]).toBe(
+    expect(ledgerOf(findings, new Set(), 2, false).split("\n")[0]).toBe(
       "**Review findings**: 4 fixed and confirmed, 7 answered by the Owner, 2 with no answer.",
     );
   });
@@ -687,7 +687,7 @@ describe("ledgerFindingsOf", () => {
       { "important confirmed": 1, "important rejected": 1, "nit no-answer": 5 },
       { "important open": 2, "nit no-answer": 3, "nit rejected": 2 },
     ]);
-    expect(ledgerOf(findings, new Set(), 3).split("\n")[0]).toBe(
+    expect(ledgerOf(findings, new Set(), 3, false).split("\n")[0]).toBe(
       "**Review findings**: 7 fixed and confirmed, 5 rejected, 12 with no answer, 2 open.",
     );
     expect(findings.find((finding) => finding.again.length > 0)).toMatchObject({
