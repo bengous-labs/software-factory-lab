@@ -1055,6 +1055,8 @@ export interface LedgerFinding extends Counted {
   readonly outdated: boolean;
   /** The Author's rejection reply, the resolved thread's latest answer; null when the Author did not reject it. */
   readonly rejection: string | null;
+  /** The Owner's reply, the thread's latest answer, written by hand; null when the latest answer is none of the Owner's. */
+  readonly ownerAnswer: string | null;
   /** The later Review rounds that report it again in its thread. */
   readonly again: readonly number[];
 }
@@ -1065,6 +1067,8 @@ export type Standing =
   | { readonly kind: "confirmed"; readonly round: number }
   /** The Author rejected it: `reply` holds the reason. */
   | { readonly kind: "rejected"; readonly reply: string }
+  /** The Owner answered it last: `reply` holds the answer; `open`, its thread is still open. */
+  | { readonly kind: "owner"; readonly reply: string; readonly open: boolean }
   /** A Nit the Author says it fixed. `outdated`: the lines its thread is anchored on changed since. */
   | { readonly kind: "author-fixed"; readonly outdated: boolean }
   /** A Nit closed with no answer of the Author. */
@@ -1075,13 +1079,19 @@ export type Standing =
   | { readonly kind: "unread" };
 
 /**
- * Where `finding` stands, after `rounds` Review rounds, given the threads the Author says it fixed. An
- * Important is fixed only on a later round's reading, never on its Author's word. A Nit is fixed on the
- * Author's word, since no later round reads a Nit again; GitHub's outdated mark shows beside it.
+ * Where `finding` stands, after `rounds` Review rounds, given the threads the Author says it fixed. A
+ * finding the Owner answered last stands as answered, whatever its severity and whoever closed its
+ * thread: a round that read the Owner's answer and left the finding out fixed nothing. An Important is
+ * fixed only on a later round's reading, never on its Author's word. A Nit is fixed on the Author's
+ * word, since no later round reads a Nit again; GitHub's outdated mark shows beside it.
  */
 export function standingOf(finding: LedgerFinding, fixed: ReadonlySet<string>, rounds: number): Standing {
   if (finding.rejection !== null) {
     return { kind: "rejected", reply: finding.rejection };
+  }
+
+  if (finding.ownerAnswer !== null) {
+    return { kind: "owner", reply: finding.ownerAnswer, open: !finding.resolved };
   }
 
   if (finding.severity === "nit") {
@@ -1114,6 +1124,10 @@ function standingTextOf(standing: Standing): string {
       return `[Rejected](${standing.reply}) by the Author.`;
     }
 
+    case "owner": {
+      return `[Answered](${standing.reply}) by the Owner${standing.open ? "; its thread is open" : ""}.`;
+    }
+
     case "author-fixed": {
       return `Fixed, by the Author's word; ${linesOf(standing.outdated)}.`;
     }
@@ -1136,6 +1150,7 @@ function standingTextOf(standing: Standing): string {
 const TOTALS: ReadonlyArray<readonly [Standing["kind"], string]> = [
   ["confirmed", "fixed and confirmed"],
   ["rejected", "rejected"],
+  ["owner", "answered by the Owner"],
   ["author-fixed", "fixed by the Author's word"],
   ["no-answer", "with no answer"],
   ["open", "open"],

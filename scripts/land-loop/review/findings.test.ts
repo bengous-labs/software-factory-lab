@@ -459,6 +459,15 @@ const againIn = (round: 2 | 3): readonly [string, string] => [
   `Review round ${round} still holds this finding.\n\n${markerOf("important")}\n${reviewMarkerOf({ ...REQUEST, patch: `p${round}`, round })}`,
 ];
 
+/** The review threads of a fixture under `fixtures/`, as the threads query answered them. */
+const fixtureThreads = (name: string): readonly ReviewThread[] =>
+  decodeJson(ReviewThreads, name, readFileSync(join(import.meta.dir, "fixtures", name), "utf8")).data.repository
+    .pullRequest.reviewThreads.nodes;
+
+/** The Owner's answer the ledger reads in `found`, a thread of Review round 2. */
+const ownerAnswerIn = (found: ReviewThread): string | null | undefined =>
+  ledgerFindingsOf(LOGINS, [postedIn(found, ROUND_2, "a.ts")])[0]?.ownerAnswer;
+
 /** The rejection the ledger reads in `found`, a thread of Review round 2. */
 const rejectionIn = (found: ReviewThread): string | null | undefined =>
   ledgerFindingsOf(LOGINS, [postedIn(found, ROUND_2, "a.ts")])[0]?.rejection;
@@ -480,6 +489,7 @@ describe("ledgerFindingsOf", () => {
         resolved: false,
         outdated: true,
         rejection: null,
+        ownerAnswer: null,
         again: [],
       },
     ]);
@@ -538,14 +548,56 @@ describe("ledgerFindingsOf", () => {
     expect(rejectionIn(thread(NIT, [], { isResolved: true }))).toBeNull();
   });
 
-  test("PR #173's findings read as its review left them: by round, Importants fixed and confirmed, rejected, Nits closed with no answer, and Importants open", () => {
-    const threads = decodeJson(
-      ReviewThreads,
-      "PR #173's review threads",
-      readFileSync(join(import.meta.dir, "fixtures", "pr-173-threads.json"), "utf8"),
-    ).data.repository.pullRequest.reviewThreads.nodes;
+  test("the Owner's answer is the Owner's reply that is the thread's latest answer, written by hand, linked, open or resolved", () => {
+    const answer = "Rejected for this pull request: the Owner sets that route.";
 
-    const findings = ledgerFindingsOf(LOGINS, threads);
+    expect(ownerAnswerIn(thread(NIT, [["bengous", answer]], { isResolved: true }))).toBe(
+      "https://github.com/o/r/pull/7#discussion_r2",
+    );
+    expect(ownerAnswerIn(thread(IMPORTANT, [["bengous", answer], againIn(2)]))).toBe(
+      "https://github.com/o/r/pull/7#discussion_r2",
+    );
+    expect(
+      ownerAnswerIn(
+        thread(
+          NIT,
+          [
+            ["bengous", answer],
+            [AUTHOR, REJECTED],
+          ],
+          { isResolved: true },
+        ),
+      ),
+    ).toBeNull();
+    expect(ownerAnswerIn(thread(NIT, [["bengous", `${answer}\n\n${AUTHOR_MARK}`]], { isResolved: true }))).toBeNull();
+    expect(ownerAnswerIn(thread(NIT, [["someone", answer]], { isResolved: true }))).toBeNull();
+    expect(ownerAnswerIn(thread(NIT, [], { isResolved: true }))).toBeNull();
+  });
+
+  test("PR #158's Important the Owner answered, which round 2 then left out, stands as answered by the Owner, never fixed", () => {
+    const findings = ledgerFindingsOf(LOGINS, fixtureThreads("pr-158-threads.json"));
+    const important = findings.find((finding) => finding.summary.startsWith("Every rule under `.claude/rules/`"));
+
+    expect(important).toMatchObject({
+      severity: "important",
+      security: true,
+      round: 1,
+      resolved: true,
+      rejection: null,
+      ownerAnswer: "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537739764",
+    });
+    expect(important === undefined ? null : standingOf(important, new Set(), 2)).toEqual({
+      kind: "owner",
+      reply: "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537739764",
+      open: false,
+    });
+    expect(ledgerOf(findings, new Set(), 2).split("\n")[0]).toBe(
+      "**Review findings**: 4 fixed and confirmed, 7 answered by the Owner, 2 with no answer.",
+    );
+  });
+
+  test("PR #173's findings read as its review left them: by round, Importants fixed and confirmed, rejected, Nits closed with no answer, and Importants open", () => {
+    const findings = ledgerFindingsOf(LOGINS, fixtureThreads("pr-173-threads.json"));
 
     const table = [1, 2, 3].map((round) => {
       const standings = findings

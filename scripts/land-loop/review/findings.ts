@@ -277,7 +277,8 @@ const SECURITY_LABEL = /^\*\*[^*]+ \(security\)\*\*: /u;
  * The App's Important and Nit findings of a review that names its round, each as the ledger reads its
  * thread: where its comment is, its severity and pass, its first line without the label, its round, the
  * thread's state, the Author's rejection reply when the thread is resolved with it as its latest answer,
- * and the later rounds that report it again there. `logins.app` is the App's login as GraphQL prints it.
+ * the Owner's reply when it is the latest answer, written by hand, and the later rounds that report it
+ * again there. `logins.app` is the App's login as GraphQL prints it.
  */
 export function ledgerFindingsOf(logins: ThreadLogins, threads: readonly ReviewThread[]): LedgerFinding[] {
   return threads.flatMap((thread) => {
@@ -297,6 +298,9 @@ export function ledgerFindingsOf(logins: ThreadLogins, threads: readonly ReviewT
       return review === null ? [] : [review.round];
     });
 
+    const latest = answersOf(logins, thread).at(-1);
+    const ownerWords = latest?.author?.login === logins.owner && !latest.body.includes(AUTHOR_MARK);
+
     return [
       {
         thread: thread.id,
@@ -308,7 +312,8 @@ export function ledgerFindingsOf(logins: ThreadLogins, threads: readonly ReviewT
         round: posted.round,
         resolved: thread.isResolved,
         outdated: thread.isOutdated,
-        rejection: rejectedOf(logins, thread) ? (answersOf(logins, thread).at(-1)?.url ?? null) : null,
+        rejection: rejectedOf(logins, thread) ? (latest?.url ?? null) : null,
+        ownerAnswer: ownerWords ? latest.url : null,
         again,
       },
     ];

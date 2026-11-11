@@ -2128,6 +2128,7 @@ const ledgerFinding = (thread: string, over: Partial<LedgerFinding> = {}): Ledge
   resolved: false,
   outdated: false,
   rejection: null,
+  ownerAnswer: null,
   again: [],
   ...over,
 });
@@ -2156,6 +2157,28 @@ describe("where a finding stands", () => {
     expect(standingOf(ledgerFinding("N", { ...rejected, severity: "nit" }), new Set(["N"]), 1)).toEqual({
       kind: "rejected",
       reply: "https://r",
+    });
+  });
+
+  test("a finding the Owner answered last stands as answered, whatever its severity and whoever closed its thread", () => {
+    const answered = { ownerAnswer: "https://o" } as const;
+
+    expect(standingOf(ledgerFinding("I", { ...answered, resolved: true }), none, 2)).toEqual({
+      kind: "owner",
+      reply: "https://o",
+      open: false,
+    });
+    expect(standingOf(ledgerFinding("N", { ...answered, severity: "nit", resolved: true }), new Set(["N"]), 1)).toEqual(
+      {
+        kind: "owner",
+        reply: "https://o",
+        open: false,
+      },
+    );
+    expect(standingOf(ledgerFinding("N", { ...answered, severity: "nit" }), none, 1)).toEqual({
+      kind: "owner",
+      reply: "https://o",
+      open: true,
     });
   });
 
@@ -2202,6 +2225,8 @@ describe("the ledger", () => {
       ledgerFinding("N2", { severity: "nit", security: true, resolved: true }),
       ledgerFinding("I4", { round: 2, again: [3] }),
       ledgerFinding("N3", { severity: "nit", round: 2 }),
+      ledgerFinding("O1", { round: 2, resolved: true, ownerAnswer: "https://github.com/o/r/pull/9#discussion_o1" }),
+      ledgerFinding("O2", { severity: "nit", round: 2, ownerAnswer: "https://github.com/o/r/pull/9#discussion_o2" }),
       ledgerFinding("I5", { round: 3, where: "app/src/store/file.ts" }),
       ledgerFinding("N4", { severity: "nit", round: 3, resolved: true }),
       ledgerFinding("I6", { round: 3, resolved: true }),
@@ -2211,7 +2236,7 @@ describe("the ledger", () => {
 
     expect(ledgerOf(findings, new Set(["N1", "N4", "I5"]), 3)).toBe(
       [
-        "**Review findings**: 2 fixed and confirmed, 1 rejected, 2 fixed by the Author's word, 1 with no answer, 3 open, 1 closed unread.",
+        "**Review findings**: 2 fixed and confirmed, 1 rejected, 2 answered by the Owner, 2 fixed by the Author's word, 1 with no answer, 3 open, 1 closed unread.",
         "",
         "**Round 1**: 3 Important (1 security), 2 Nit (1 security).",
         `- **Fixed, confirmed by round 2.** Important ${at(cli, "I1")}: I1 is wrong`,
@@ -2220,9 +2245,11 @@ describe("the ledger", () => {
         `- **Fixed, by the Author's word; its lines changed since.** Nit ${at(cli, "N1")}: N1 is wrong`,
         `- **No answer; its lines unchanged.** Nit (security) ${at(cli, "N2")}: N2 is wrong`,
         "",
-        "**Round 2**: 1 Important, 1 Nit.",
+        "**Round 2**: 2 Important, 2 Nit.",
         `- **Open: round 3 reports it again.** Important ${at(cli, "I4")}: I4 is wrong`,
         `- **Open.** Nit ${at(cli, "N3")}: N3 is wrong`,
+        `- **[Answered](https://github.com/o/r/pull/9#discussion_o1) by the Owner.** Important ${at(cli, "O1")}: O1 is wrong`,
+        `- **[Answered](https://github.com/o/r/pull/9#discussion_o2) by the Owner; its thread is open.** Nit ${at(cli, "O2")}: O2 is wrong`,
         "",
         "**Round 3**: 2 Important, 1 Nit.",
         `- **Open.** Important ${at("app/src/store/file.ts", "I5")}: I5 is wrong`,
