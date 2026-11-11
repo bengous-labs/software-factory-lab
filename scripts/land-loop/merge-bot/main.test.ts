@@ -12,8 +12,8 @@ import type { RoutingPolicy } from "../factory-config.ts";
 import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
-import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
-import type { ReviewState } from "./decide.ts";
+import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
+import type { ReviewState, RoutingAnswer } from "./decide.ts";
 import {
   ActionsRun,
   againPoster,
@@ -30,6 +30,8 @@ import {
   devRunsReader,
   Dispatched,
   draftConverter,
+  fileLinesArgs,
+  fileLinesOfNumstat,
   humanLabelByOf,
   IssueComments,
   IssueEvents,
@@ -836,6 +838,68 @@ describe("the routing inputs", () => {
     expect(routingOf(await deltaOf(small, large), await deltaOf(small, large), null).secondRound).toBe(true);
     expect(linesOfNumstat("-\t-\timage.png\n3\t1\ta.ts\n")).toBe(4);
     expect(linesOfNumstat("")).toBe(0);
+  });
+
+  test("the lines a Patch delta adds to and removes from each file, from git's numstat with renames split, reach the Nit-answer rule", async () => {
+    const { repo, git } = await fixtureRepo("file-lines-");
+
+    const commit = async (files: Readonly<Record<string, string>>): Promise<string> => {
+      for (const [path, text] of Object.entries(files)) {
+        writeFileSync(join(repo, path), text);
+      }
+
+      await git(["add", "-A"]);
+      await git(["commit", "-q", "-m", "c"]);
+
+      return (await git(["rev-parse", "HEAD"])).text().trim();
+    };
+
+    const fileLinesOn = async (from: string, to: string) =>
+      fileLinesOfNumstat((await git(fileLinesArgs(from, to))).text());
+
+    const READ: RoutingAnswer = { land: "auto", review: "deep", secondRound: true, model: null, reason: "read" };
+
+    const answerOn = async (from: string, to: string) =>
+      withNitAnswers(
+        { ownerPaths: [], factoryPaths: [], deepReviewPaths: [], lineCap: 400 },
+        READ,
+        {
+          paths: ["a.ts", "a.test.ts"],
+          lines: 2,
+          fileLines: await fileLinesOn(from, to),
+          deletedPaths: [],
+          messages: [],
+        },
+        { record: { reviewRounds: 1, importantByRound: [0], reviewedHead: from }, deltaFrom: from, nitPaths: ["a.ts"] },
+      ).secondRound;
+
+    expect(fileLinesArgs("b", "h")).toEqual(["diff", "--numstat", "--no-renames", "-z", "b..h"]);
+
+    const reviewed = await commit({ "a.ts": "1\n", "a.test.ts": "t\n" });
+    const added = await commit({ "a.ts": "2\n", "a.test.ts": "t\nu\n" });
+
+    expect(await fileLinesOn(reviewed, added)).toEqual([
+      { path: "a.test.ts", added: 1, removed: 0 },
+      { path: "a.ts", added: 1, removed: 1 },
+    ]);
+    expect(await answerOn(reviewed, added)).toBe(false);
+
+    const changed = await commit({ "a.ts": "3\n", "a.test.ts": "t\nv\n" });
+
+    expect(await answerOn(added, changed)).toBe(true);
+
+    await git(["mv", "a.ts", "b.ts"]);
+    const moved = await commit({});
+
+    expect(await fileLinesOn(changed, moved)).toEqual([
+      { path: "a.ts", added: 0, removed: 1 },
+      { path: "b.ts", added: 1, removed: 0 },
+    ]);
+    expect(fileLinesOfNumstat("-\t-\timage.png\u{0}3\t0\tsp ace\tt.ts\0")).toEqual([
+      { path: "image.png", added: null, removed: null },
+      { path: "sp ace\tt.ts", added: 3, removed: 0 },
+    ]);
+    expect(fileLinesOfNumstat("")).toEqual([]);
   });
 
   test("Review rounds 2 and 3 read the Patch delta from the head the last round read; round 1 the whole PR", () => {

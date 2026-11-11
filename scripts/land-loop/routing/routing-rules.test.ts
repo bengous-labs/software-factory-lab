@@ -15,7 +15,7 @@ import {
   routingRulesOf,
   withNitAnswers,
 } from "./routing-rules.ts";
-import type { NitAnswerInput, RoutingInput, RulesVerdict } from "./routing-rules.ts";
+import type { NitAnswerInput, PatchDeltaInput, RoutingInput, RulesVerdict } from "./routing-rules.ts";
 
 const lab = (input: RoutingInput): RulesVerdict => routingRulesOf(LAB, input);
 
@@ -543,9 +543,16 @@ describe("under the lab's policy", () => {
   });
 });
 
-const delta = (paths: readonly string[], lines: number): RoutingInput => ({
+const ADDS_ONLY = { added: 1, removed: 0 } as const;
+
+const delta = (
+  paths: readonly string[],
+  lines: number,
+  fileLines: PatchDeltaInput["fileLines"] = paths.map((path) => ({ path, ...ADDS_ONLY })),
+): PatchDeltaInput => ({
   paths,
   lines,
+  fileLines,
   deletedPaths: [],
   messages: [],
 });
@@ -596,7 +603,42 @@ describe("withNitAnswers", () => {
     expect(withNitAnswers(LAB, READ, delta(["app/src/store/format.ts"], 10), AFTER_CLEAN_ROUND_3)).toBe(READ);
   });
 
-  test("a delta on a Nit file and the test file beside it needs no read; a test file whose source got no Nit keeps its answer", () => {
+  test("a delta that changes or removes a line of the test file beside a Nit file, or of a binary one, keeps its answer", () => {
+    const input = nitsOn(["scripts/c.ts"]);
+    const paths = ["scripts/c.ts", "scripts/c.test.ts"];
+    const source = { path: "scripts/c.ts", added: 3, removed: 3 };
+
+    for (const testLines of [
+      { path: "scripts/c.test.ts", added: 4, removed: 1 },
+      { path: "scripts/c.test.ts", added: 0, removed: 2 },
+      { path: "scripts/c.test.ts", added: null, removed: null },
+    ]) {
+      expect(withNitAnswers(LAB, READ, delta(paths, 10, [source, testLines]), input)).toBe(READ);
+    }
+
+    expect(withNitAnswers(LAB, READ, delta(paths, 10, [source]), input)).toBe(READ);
+    expect(
+      withNitAnswers(LAB, READ, delta(paths, 10, [source, { path: "scripts/c.test.ts", added: 7, removed: 0 }]), input),
+    ).toMatchObject({ secondRound: false });
+  });
+
+  test("a delta that changes lines of a test file the round posted a Nit on needs no read", () => {
+    const paths = ["scripts/a.ts", "scripts/a.test.ts"];
+
+    expect(
+      withNitAnswers(
+        LAB,
+        READ,
+        delta(paths, 10, [
+          { path: "scripts/a.ts", added: 2, removed: 2 },
+          { path: "scripts/a.test.ts", added: 3, removed: 3 },
+        ]),
+        AFTER_CLEAN_ROUND_3,
+      ),
+    ).toMatchObject({ secondRound: false });
+  });
+
+  test("a delta on a Nit file and the test file beside it, which it only adds lines to, needs no read; a test file whose source got no Nit keeps its answer", () => {
     const input = nitsOn(["scripts/c.ts", "app/src/v.tsx"]);
 
     for (const paths of [

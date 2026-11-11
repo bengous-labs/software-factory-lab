@@ -45,7 +45,7 @@ import { readGuardOf } from "../review/tool-guard.ts";
 import { judgeFailed, ROUTING_JUDGE_MODEL, routingJudge } from "../routing/routing-judge.ts";
 import type { RoutingVerdict } from "../routing/routing-judge.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
-import type { JudgeAsk } from "../routing/routing-rules.ts";
+import type { FileLines, JudgeAsk } from "../routing/routing-rules.ts";
 import {
   CI_CHECKS,
   ciOf,
@@ -714,6 +714,28 @@ export const linesOfNumstat = (numstat: string): number =>
 const linesChanged = async (env: Env, from: string, to: string): Promise<number> =>
   linesOfNumstat(await git(env, numstatArgs(from, to)));
 
+/** The arguments of the `git diff --numstat` that counts each file's lines, renames split as in `changedPathsArgs`. */
+export const fileLinesArgs = (from: string, to: string): readonly string[] => [
+  "diff",
+  "--numstat",
+  "--no-renames",
+  "-z",
+  `${from}..${to}`,
+];
+
+const countOf = (n: string): number | null => (n === "-" ? null : Number(n));
+
+/** The lines each file of a `fileLinesArgs` output adds and removes; a binary file's `-` counts null. */
+export const fileLinesOfNumstat = (numstat: string): readonly FileLines[] =>
+  numstat
+    .split("\0")
+    .filter((row) => row !== "")
+    .map((row) => {
+      const [added = "", removed = "", ...path] = row.split("\t");
+
+      return { path: path.join("\t"), added: countOf(added), removed: countOf(removed) };
+    });
+
 /** Whether a Review round reads the Patch delta, from the head the last round read: every round after the first. */
 export const readsPatchDelta = (round: ReviewRound): boolean => round >= 2;
 
@@ -840,6 +862,7 @@ async function route(
     ? {
         paths: await pathsListed(env, changedPathsArgs(from, range.head)),
         lines: await linesChanged(env, from, range.head),
+        fileLines: fileLinesOfNumstat(await git(env, fileLinesArgs(from, range.head))),
         deletedPaths: await pathsListed(env, deletedPathsArgs(from, range.head)),
         messages: [],
       }

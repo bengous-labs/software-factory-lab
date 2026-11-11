@@ -18,12 +18,24 @@ const BREAKING = /^\w+(\([^)]*\))?!:|BREAKING CHANGE/mu;
 /** Markdown and text files, wherever they are: every other file counts as code or configuration. */
 export const NON_EXECUTABLE = /\.(md|mdx|txt)$/u;
 
+/** The lines a change adds to and removes from one file: null for a binary file. */
+export interface FileLines {
+  readonly path: string;
+  readonly added: number | null;
+  readonly removed: number | null;
+}
+
 export interface RoutingInput {
   readonly paths: readonly string[];
   readonly lines: number;
   /** The paths of `paths` the change deletes. */
   readonly deletedPaths: readonly string[];
   readonly messages: readonly string[];
+}
+
+/** The routing input of a Patch delta, with the lines it adds to and removes from each file, renames split. */
+export interface PatchDeltaInput extends RoutingInput {
+  readonly fileLines: readonly FileLines[];
 }
 
 /** What the Routing rules make of a change: `ruled`, their answer stands; `judged`, the Routing judge answers. */
@@ -172,24 +184,28 @@ export interface NitAnswerInput {
 /**
  * The Routing answer of a Patch delta that only answers the Nits of the last Review round, whichever it was, when it
  * posted no Important: the delta starts at the head that round read, touches only files it posted a Nit on, or the
- * test file beside one (`x.test.ts` for `x.ts`, `x.test.tsx` for `x.tsx`), and no `deepReviewPaths` path, in at most
- * NIT_ANSWER_LINE_CAP lines. It needs no read, so it starts no round, holds nothing for the Owner and the change keeps
- * its Land route. Any other answer stands.
+ * test file beside one (`x.test.ts` for `x.ts`, `x.test.tsx` for `x.tsx`) that it only adds lines to, and no
+ * `deepReviewPaths` path, in at most NIT_ANSWER_LINE_CAP lines. It needs no read, so it starts no round, holds nothing
+ * for the Owner and the change keeps its Land route. Any other answer stands.
  */
 export function withNitAnswers(
   policy: RoutingPolicy,
   answer: RoutingAnswer,
-  delta: RoutingInput,
+  delta: PatchDeltaInput,
   { record, deltaFrom, nitPaths }: NitAnswerInput,
 ): RoutingAnswer {
-  const nits = new Set(nitPaths.flatMap((path) => [path, path.replace(/\.(tsx?)$/u, ".test.$1")]));
+  const nits = new Set(nitPaths);
+  const pairedTests = new Set(nitPaths.map((path) => path.replace(/\.(tsx?)$/u, ".test.$1")));
+  const addsOnly = new Set(delta.fileLines.filter((file) => file.removed === 0).map((file) => file.path));
+  // A test the answer only adds to still pins the behaviour the round read; one it changes no longer does.
+  const admitted = (path: string): boolean => nits.has(path) || (pairedTests.has(path) && addsOnly.has(path));
 
   const answersNits =
     answer.secondRound &&
     record.importantByRound?.[record.reviewRounds - 1] === 0 &&
     record.reviewedHead === deltaFrom &&
     delta.lines <= NIT_ANSWER_LINE_CAP &&
-    delta.paths.every((path) => nits.has(path)) &&
+    delta.paths.every(admitted) &&
     matching(policy.deepReviewPaths, delta.paths).length === 0;
 
   if (!answersNits) {
