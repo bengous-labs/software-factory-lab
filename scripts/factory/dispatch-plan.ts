@@ -97,11 +97,14 @@ export function repoOfIssueUrl(url: string): string {
   return repo;
 }
 
+/** Whether `ref`, a branch or its `origin/` copy, was made for `issue`: `<type>/<issue>-…`. */
+export function branchMadeFor(ref: string, issue: number): boolean {
+  return new RegExp(`^(?:origin/)?[a-z]+/${issue}-`, "u").test(ref);
+}
+
 /** The branches among `refs`, one short ref name a line, that were made for `issue`. */
 export function issueBranchesIn(refs: string, issue: number): string[] {
-  const made = new RegExp(`^(?:origin/)?[a-z]+/${issue}-`, "u");
-
-  return refs.split("\n").filter((ref) => made.test(ref));
+  return refs.split("\n").filter((ref) => branchMadeFor(ref, issue));
 }
 
 /** Whether `git worktree list --porcelain` printed `path` among its worktrees. */

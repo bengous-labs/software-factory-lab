@@ -25,10 +25,11 @@ The factory is young and its design moves: a rule serves the goal, it is not the
 - `bun scripts/ci/mutation.ts run` is CI's `mutation` job: Stryker on each module `stryker.config.ts` lists that your branch changes, through its lines or its test file. `bun check` does not run it; run it before you stop when your change reaches one of those modules.
 - `bun app/src/cli.ts <command>` runs the CLI on `todo.json`, or on the file `TODO_FILE` names.
 - `bun scripts/factory/dispatch.ts <issue> [--model <model>]`, or `/dispatch <issue>` in the Owner's session, hands an issue to a Worker: its worktree from `origin/dev`, and a background session launched with the one versioned prompt.
+- `bun scripts/factory/watch.ts [--standing] [<issue>...]`, or `/watch` in the Owner's session, follows the Workers of those issues until every one is closed, or the open PRs until it is stopped: one line per event, and with `--standing` first what an earlier run told that still holds.
 
 ## Architecture
 
-The repository holds three packages, the app (`app/`), the Land loop (`scripts/land-loop/`) and Dispatch (`scripts/factory/`), the tooling that checks them (`scripts/gates/`, `scripts/lint/`, `scripts/ci/`, `scripts/hooks/`), and pure helpers both import (`scripts/lib/`).
+The repository holds three packages, the app (`app/`), the Land loop (`scripts/land-loop/`) and the factory's Dispatch and watch (`scripts/factory/`), the tooling that checks them (`scripts/gates/`, `scripts/lint/`, `scripts/ci/`, `scripts/hooks/`), and pure helpers both import (`scripts/lib/`).
 
 ### The Land loop
 
