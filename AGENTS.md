@@ -9,8 +9,17 @@ The factory is built one subsystem at a time, and its design keeps moving. The L
 - Each behaviour you add or change gets a test.
 - Commit your work, then stop.
 - Do only the issue you were given.
-- Your last message is a checkpoint, not a report: what you committed, in a sentence or two. It asks nothing: a question left in it keeps your work from being published.
+- Your last message is a checkpoint, not a report: what you committed, in a sentence or two. A question left in it keeps your work from being published: leave one only for a choice that is the Owner's.
 - The Land loop starts a turn in your session when your pull request needs you: a failing check, a review finding, a comment of the Owner, a conflict with `dev`, the pull request back in draft. Fix what you accept with a commit, name in your last message each finding you reject and why, then stop. You arm no watch and answer nothing on GitHub.
+
+## How to decide
+
+The factory is young and its design moves: a rule serves the goal, it is not the goal.
+
+- What we protect, in this order: no secret leaves the machine and no change lands around the Land gate; `dev` stays green; the change lands fast; the code stays tidy. Guards enforce the first: a gap in a guard is the defect to report.
+- A choice a revert undoes is yours: take it, and give its reason in the commit message.
+- A choice that changes how the factory works beyond your issue (a new step, a new actor, a door to the Owner that moves) is the Owner's: put it as a question in your last message. Nothing is published until the Owner answers.
+- A rule gives its reason. Where the reason does not hold for your case, say so in the commit message. Where a rule is wrong, change it in the same pull request.
 
 ## Commands
 
