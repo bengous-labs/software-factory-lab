@@ -10,8 +10,24 @@ import type { ReviewRequest } from "./review-report.ts";
 export interface Guides {
   /** `REVIEW.md` from `dev`. */
   readonly review: string;
-  /** `AGENTS.md` from `dev`. */
+  /** `AGENTS.md` and the rules under `.claude/rules/` from `dev`, as `projectGuideOf` joins them. */
   readonly project: string;
+}
+
+/** A rule file under `.claude/rules/`: its path from the repository root, and its text with its `paths` header. */
+export interface Rule {
+  readonly path: string;
+  readonly text: string;
+}
+
+/**
+ * The project guide of a review: `AGENTS.md`, then every rule under its path, in the order of the paths.
+ * The review session loads no project file by itself, so that a pull request never changes its reviewer's guide.
+ */
+export function projectGuideOf(agents: string, rules: readonly Rule[]): string {
+  const ordered = rules.toSorted((one, other) => one.path.localeCompare(other.path));
+
+  return [agents.trim(), ...ordered.map((rule) => `${rule.path}:\n${rule.text.trim()}`)].join("\n\n");
 }
 
 /** The id a round's prompt gives the earlier finding at `index` of its list, which a finding's `earlier` names. */
@@ -54,7 +70,7 @@ export function promptOf(request: ReviewRequest, guides: Guides, threads: readon
     "Review guide (REVIEW.md, from dev):",
     guides.review.trim(),
     "",
-    "Project guide (AGENTS.md, from dev):",
+    "Project guide (AGENTS.md and .claude/rules/, from dev):",
     guides.project.trim(),
     "",
     'Report every finding in the final structured answer. Set `severity` to "important", "nit" or "pre_existing", as the review guide defines them. Set `file` and `line` to the changed line of this pull request that causes the defect. When the defect shows in another place, set `breaks` to that place: { "file": ..., "line": ... }; otherwise set it to null. Set `earlier` to null, unless this prompt lists earlier findings and you report one of them again.',

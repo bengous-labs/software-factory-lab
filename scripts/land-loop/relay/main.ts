@@ -42,7 +42,12 @@ const POLL_MS = 30_000;
 
 /** Reads the PR's state with `gh`, under `options`. */
 export async function readPr(runner: Run, options: RunOptions, pr: number): Promise<PrState> {
-  const view = await checked(runner, ["gh", "pr", "view", String(pr), "--json", "state,isDraft,headRefOid"], options);
+  const view = await checked(
+    runner,
+    ["gh", "pr", "view", String(pr), "--json", "state,isDraft,headRefOid,mergeable"],
+    options,
+  );
+
   const checks = await runner(["gh", "pr", "checks", String(pr), "--json", "name,bucket,link"], options);
 
   const conversation = await checked(
@@ -89,8 +94,7 @@ export interface Turn {
 
 /**
  * One turn of the relay for PR `pr`: reads it, and delivers the Wakes `seen` lacks as one text. Wakes
- * that did not go through are delivered by a later turn; the end line is tried once, and the relay ends
- * either way.
+ * that did not go through are delivered by a later turn; a landed or closed PR has none, and ends the relay.
  */
 export async function turn(pr: number, seen: ReadonlySet<string>, io: RelayIo): Promise<Turn> {
   const reading: Reading = readingOf(pr, await io.read(), seen);

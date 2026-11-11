@@ -94,8 +94,30 @@ export interface Snapshot {
   readonly pr: PullRequest | null;
 }
 
+/**
+ * Where a stop stands in a chain of stops: Claude Code marks each stop that follows a block of the hook,
+ * and the hook keeps whether that block only asked for the commit.
+ */
+export interface Chain {
+  /** A block came before this stop: a dirty tree is not asked about again. */
+  readonly blocked: boolean;
+  /** A block that reported a failure came before: the Author token, the Stop checks and the Done judge block no more. */
+  readonly reported: boolean;
+}
+
+/**
+ * The chain of a stop Claude Code marks `stopHookActive`, when the block before it asked for the commit
+ * (`commitAsked`) or not. Asking for the commit reports no failure, so it leaves the token, the Stop
+ * checks and the Done judge their one block: a chain blocks at most twice.
+ */
+export function chainOf(stopHookActive: boolean, commitAsked: boolean): Chain {
+  return { blocked: stopHookActive, reported: stopHookActive && !commitAsked };
+}
+
 export type Admission =
   | { readonly kind: "none"; readonly reason: string }
+  /** Blocked once: `reason` is what the Author reads, `outcome` why nothing is published. */
+  | { readonly kind: "block"; readonly reason: string; readonly outcome: string }
   /** The stop could open a PR: `afterClosed` decides, once the branch's closed PRs are read. */
   | { readonly kind: "read-closed" }
   /** The PR is ready at this head: nothing to publish; the Nit threads a stop closes are closed. */
@@ -134,13 +156,21 @@ export type Action =
 
 const none = (reason: string): Extract<Refusal, { kind: "none" }> => ({ kind: "none", reason });
 
-export function admit(snapshot: Snapshot): Admission {
-  if (snapshot.ahead === 0) {
-    return none(`${snapshot.branch} has no commit that dev lacks`);
+const UNCOMMITTED = "the tree has uncommitted changes";
+
+/**
+ * Uncommitted changes block the first stop of a chain, asking for the commit alone; a later stop on a
+ * tree still dirty (`blocked`) lets the session end.
+ */
+export function admit(snapshot: Snapshot, blocked: boolean): Admission {
+  if (!snapshot.treeClean) {
+    return blocked
+      ? none(UNCOMMITTED)
+      : { kind: "block", reason: "Commit your changes, then stop.", outcome: UNCOMMITTED };
   }
 
-  if (!snapshot.treeClean) {
-    return none("the tree has uncommitted changes");
+  if (snapshot.ahead === 0) {
+    return none(`${snapshot.branch} has no commit that dev lacks`);
   }
 
   const { pr } = snapshot;
@@ -168,25 +198,31 @@ export function afterClosed(
     : none(`#${closedHere.number} was closed without landing at ${head}: a stop at the head it had publishes nothing`);
 }
 
-/** No Author token blocks once, naming where it was looked for; a second stop without it lets the session end. */
-export function noAuthorToken(path: string, stopHookActive: boolean): Refusal {
-  if (stopHookActive) {
+/**
+ * No Author token blocks once, naming where it was looked for; a stop without it after a block that
+ * reported a failure (`Chain.reported`) lets the session end.
+ */
+export function noAuthorToken(path: string, reported: boolean): Refusal {
+  if (reported) {
     return none("no Author token after a block: nothing is published");
   }
 
   return {
     kind: "block",
-    reason: `The Stop hook found no Author token at ${path}, so nothing was published. The Owner provisions it (AGENTS.md, Identities). Stop, and ask no question.`,
+    reason: `The Stop hook found no Author token at ${path}, so nothing was published. The Owner provisions it (.claude/rules/identities.md). Stop, and ask no question.`,
   };
 }
 
-/** Red Stop checks block once, with their report; a second stop on the same failure lets the session end. */
-export function afterStopChecks(stopChecks: StopChecks, stopHookActive: boolean): Next {
+/**
+ * Red Stop checks block once, with their report; red again after a block that reported a failure
+ * (`Chain.reported`), they let the session end.
+ */
+export function afterStopChecks(stopChecks: StopChecks, reported: boolean): Next {
   if (stopChecks.kind === "green") {
     return { kind: "ask-done-judge" };
   }
 
-  if (stopHookActive) {
+  if (reported) {
     return none("the Stop checks are still red after a block: nothing is published");
   }
 
@@ -242,11 +278,11 @@ export function doneAnswerOf(fork: ForkAnswer): DoneAnswer | null {
 
 /**
  * A Done judge that gave no answer, its fork failed or its output fits no schema, is not a "not
- * finished": the first such stop blocks so the Author stops again and the hook asks again; a second one
- * lets the session end.
+ * finished": the first such stop blocks so the Author stops again and the hook asks again; one after a
+ * block that reported a failure (`Chain.reported`) lets the session end.
  */
-export function noDoneAnswer(code: number, stopHookActive: boolean): Refusal {
-  if (stopHookActive) {
+export function noDoneAnswer(code: number, reported: boolean): Refusal {
+  if (reported) {
     return none("the Done judge gave no answer after a block: nothing is published");
   }
 

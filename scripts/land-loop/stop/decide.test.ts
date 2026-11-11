@@ -6,6 +6,7 @@ import {
   afterClosed,
   afterStopChecks,
   bystanderOf,
+  chainOf,
   checkoutOf,
   closingLineOf,
   decide,
@@ -18,7 +19,7 @@ import {
   rejectionReplyOf,
   rejectionsOf,
 } from "./decide.ts";
-import type { DoneAnswer, Snapshot } from "./decide.ts";
+import type { Admission, DoneAnswer, Snapshot } from "./decide.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -85,26 +86,60 @@ describe("checkoutOf", () => {
   });
 });
 
-describe("admit", () => {
-  test("a clean branch with commits dev lacks and no open PR asks for the branch's closed PRs", () => {
-    expect(admit(SNAPSHOT)).toEqual({ kind: "read-closed" });
-    expect(admit({ ...SNAPSHOT, ahead: 1 })).toEqual({ kind: "read-closed" });
+describe("chainOf", () => {
+  test("a first stop follows no block", () => {
+    expect(chainOf(false, false)).toEqual({ blocked: false, reported: false });
   });
 
-  test("nothing is published from a dirty tree, or with no new commit, and no closed PR is asked for", () => {
-    expect(admit({ ...SNAPSHOT, ahead: 0 })).toEqual({
-      kind: "none",
-      reason: "agent/clear-command has no commit that dev lacks",
-    });
-    expect(admit({ ...SNAPSHOT, treeClean: false })).toEqual({
-      kind: "none",
-      reason: "the tree has uncommitted changes",
-    });
-    expect(admit({ ...SNAPSHOT, ahead: 0, treeClean: false }).kind).toBe("none");
+  test("a stop after the block that asked for the commit leaves the failures their one block", () => {
+    expect(chainOf(true, true)).toEqual({ blocked: true, reported: false });
+  });
+
+  test("a stop after any other block is after a reported failure", () => {
+    expect(chainOf(true, false)).toEqual({ blocked: true, reported: true });
+  });
+
+  test("a commit asked for in a chain that ended counts for nothing in the next one", () => {
+    expect(chainOf(false, true)).toEqual({ blocked: false, reported: false });
+  });
+});
+
+describe("admit", () => {
+  test("a clean branch with commits dev lacks and no open PR asks for the branch's closed PRs", () => {
+    expect(admit(SNAPSHOT, false)).toEqual({ kind: "read-closed" });
+    expect(admit({ ...SNAPSHOT, ahead: 1 }, true)).toEqual({ kind: "read-closed" });
+  });
+
+  test("a dirty tree blocks once with a message that only asks to commit, whatever the branch holds", () => {
+    const block: Admission = {
+      kind: "block",
+      reason: "Commit your changes, then stop.",
+      outcome: "the tree has uncommitted changes",
+    };
+
+    const ready = { number: 7, draft: false, headSha: HEAD };
+
+    expect(admit({ ...SNAPSHOT, treeClean: false }, false)).toEqual(block);
+    expect(admit({ ...SNAPSHOT, treeClean: false, ahead: 0 }, false)).toEqual(block);
+    expect(admit({ ...SNAPSHOT, treeClean: false, pr: ready }, false)).toEqual(block);
+  });
+
+  test("a later stop of the chain on a tree still dirty lets the session end, and publishes nothing", () => {
+    const none: Admission = { kind: "none", reason: "the tree has uncommitted changes" };
+
+    expect(admit({ ...SNAPSHOT, treeClean: false }, true)).toEqual(none);
+    expect(admit({ ...SNAPSHOT, treeClean: false, ahead: 0 }, true)).toEqual(none);
+  });
+
+  test("nothing is published with no new commit, on the first stop as after a block", () => {
+    const none: Admission = { kind: "none", reason: "agent/clear-command has no commit that dev lacks" };
+
+    expect(admit({ ...SNAPSHOT, ahead: 0 }, false)).toEqual(none);
+    expect(admit({ ...SNAPSHOT, ahead: 0 }, true)).toEqual(none);
   });
 
   test("a PR ready at this head publishes nothing", () => {
-    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: HEAD } })).toEqual({
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: HEAD } }, false)).toEqual({
       kind: "ready",
       pr: 7,
       reason: `#7 is ready at ${HEAD} already`,
@@ -112,8 +147,10 @@ describe("admit", () => {
   });
 
   test("a draft PR, or a ready one behind this head, runs the Stop checks again", () => {
-    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } })).toEqual({ kind: "stop-checks" });
-    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40) } })).toEqual({
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: true, headSha: HEAD } }, false)).toEqual({
+      kind: "stop-checks",
+    });
+    expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: "b".repeat(40) } }, false)).toEqual({
       kind: "stop-checks",
     });
   });
@@ -143,7 +180,7 @@ describe("noAuthorToken", () => {
     expect(noAuthorToken("/h/author-token", false)).toEqual({
       kind: "block",
       reason:
-        "The Stop hook found no Author token at /h/author-token, so nothing was published. The Owner provisions it (AGENTS.md, Identities). Stop, and ask no question.",
+        "The Stop hook found no Author token at /h/author-token, so nothing was published. The Owner provisions it (.claude/rules/identities.md). Stop, and ask no question.",
     });
     expect(noAuthorToken("/h/author-token", true)).toEqual({
       kind: "none",

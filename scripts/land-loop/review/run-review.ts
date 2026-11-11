@@ -15,10 +15,12 @@ import { join } from "node:path";
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { readGuide, readRules } from "../lib/guide.ts";
 import { resolverOf } from "../lib/resolve.ts";
 import { reviewSession } from "../lib/review-session.ts";
 import type { SessionAnswer } from "../ports/review.ts";
 import { EarlierThreads } from "./findings.ts";
+import { projectGuideOf } from "./review-prompt.ts";
 import { OUTPUT_SCHEMA, ReviewInputs, summaryOf } from "./review-report.ts";
 import { reviewRunOf } from "./review-run.ts";
 import { guardOf } from "./tool-guard.ts";
@@ -52,8 +54,8 @@ const request = Schema.decodeUnknownSync(ReviewInputs)({
 const root = realpathSync(join(workspace, "pr"));
 
 const guides = {
-  review: readFileSync(join(workspace, "REVIEW.md"), "utf8"),
-  project: readFileSync(join(workspace, "AGENTS.md"), "utf8"),
+  review: readGuide(workspace, "REVIEW.md"),
+  project: projectGuideOf(readGuide(workspace, "AGENTS.md"), readRules(workspace)),
 };
 
 const threadsFile = join(workspace, "review-threads.json");

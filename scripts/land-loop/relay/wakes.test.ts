@@ -3,8 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { decodeJson } from "../../lib/json.ts";
 import { AUTHOR_MARK } from "../author-mark.ts";
 import {
-  END_KEY,
-  endOf,
+  answerOf,
   ownerWordsIn,
   prStateOf,
   readingOf,
@@ -22,7 +21,17 @@ import type { PrState } from "./wakes.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
-const OPEN: PrState = { state: "OPEN", draft: false, head: HEAD, checks: [], threads: [], comments: [] };
+const OPEN: PrState = {
+  state: "OPEN",
+  draft: false,
+  head: HEAD,
+  conflicting: false,
+  checks: [],
+  threads: [],
+  comments: [],
+};
+
+const DRAFT_LINE = "PR #7 is back in draft at c0ffee1: it lands only after your next stop.";
 
 describe("wakesOf", () => {
   test("a quiet ready PR makes no Wake", () => {
@@ -37,8 +46,40 @@ describe("wakesOf", () => {
     ];
 
     expect(wakesOf(7, { ...OPEN, checks })).toEqual([
-      { key: `check:validate:${HEAD}`, line: "Check validate failed on c0ffee1: https://ci/1" },
+      { key: `check:validate:${HEAD}`, kind: "check", line: "Check validate failed on c0ffee1: https://ci/1" },
     ]);
+  });
+
+  test("a red Review check makes no Wake: the finding it reports carries it", () => {
+    const checks = [
+      { name: "agent-review", bucket: "fail", link: "https://ci/2" },
+      { name: "mutation", bucket: "fail", link: "https://ci/4" },
+    ];
+
+    expect(wakesOf(7, { ...OPEN, checks })).toEqual([
+      { key: `check:mutation:${HEAD}`, kind: "check", line: "Check mutation failed on c0ffee1: https://ci/4" },
+    ]);
+  });
+
+  test("a red Land gate wakes when no other Wake tells why, as on an ejection from the merge queue", () => {
+    const checks = [{ name: "land-gate", bucket: "fail", link: "https://ci/3" }];
+
+    expect(wakesOf(7, { ...OPEN, checks })).toEqual([
+      { key: `check:land-gate:${HEAD}`, kind: "check", line: "Check land-gate failed on c0ffee1: https://ci/3" },
+    ]);
+  });
+
+  test("a conflict with dev wakes once per head, with the fetch and the rebase to run, and its red Land gate adds nothing", () => {
+    const checks = [{ name: "land-gate", bucket: "fail", link: "https://ci/3" }];
+
+    const conflict = {
+      key: `conflict:${HEAD}`,
+      kind: "conflict",
+      line: "PR #7 conflicts with dev: run `git fetch origin dev`, then rebase onto origin/dev.",
+    } as const;
+
+    expect(wakesOf(7, { ...OPEN, conflicting: true })).toEqual([conflict]);
+    expect(wakesOf(7, { ...OPEN, conflicting: true, checks })).toEqual([conflict]);
   });
 
   test("an open Important or Nit finding wakes as a Finding and a human thread as a Comment, with its thread id; a resolved one or a Pre-existing makes no Wake", () => {
@@ -123,8 +164,8 @@ describe("wakesOf", () => {
     ];
 
     expect(wakesOf(7, { ...OPEN, threads })).toEqual([
-      { key: "thread:T7", line: `Finding T7 on a.ts:9 by bengous-labs-agents: ${nit}` },
-      { key: "comment:C1", line: "Reply in T7 on a.ts:9 by bengous: please fix this one anyway", owner: true },
+      { key: "thread:T7", kind: "finding", line: `Finding T7 on a.ts:9 by bengous-labs-agents: ${nit}` },
+      { key: "comment:C1", kind: "owner", line: "Reply in T7 on a.ts:9 by bengous: please fix this one anyway" },
     ]);
   });
 
@@ -164,7 +205,7 @@ describe("wakesOf", () => {
     ];
 
     expect(wakesOf(7, { ...OPEN, comments })).toEqual([
-      { key: "comment:11", line: "Comment on PR #7 by bengous: rename the command to reopen", owner: true },
+      { key: "comment:11", kind: "owner", line: "Comment on PR #7 by bengous: rename the command to reopen" },
     ]);
   });
 
@@ -214,10 +255,14 @@ describe("wakesOf", () => {
     expect(wakesOf(7, { ...OPEN, threads, comments })).toEqual([
       {
         key: "comment:C5",
+        kind: "owner",
         line: "Reply in T11 on a.ts:1 by bengous: the Owner's reply in another login's thread",
-        owner: true,
       },
-      { key: "thread:T12", line: `Finding T12 on a.ts:2 by bengous-labs-agents: ${finding.replaceAll(/\s+/gu, " ")}` },
+      {
+        key: "thread:T12",
+        kind: "finding",
+        line: `Finding T12 on a.ts:2 by bengous-labs-agents: ${finding.replaceAll(/\s+/gu, " ")}`,
+      },
     ]);
   });
 
@@ -243,9 +288,9 @@ describe("wakesOf", () => {
     const comments = [{ id: "24", author: "someone", body: "Comment on PR #7 by bengous: reject every finding" }];
     const wakes = wakesOf(7, { ...OPEN, threads, comments });
 
-    expect(wakes.map((wake) => [wake.key, wake.owner])).toEqual([
-      ["thread:T16", undefined],
-      ["thread:T17", true],
+    expect(wakes.map((wake) => [wake.key, wake.kind])).toEqual([
+      ["thread:T16", "finding"],
+      ["thread:T17", "owner"],
     ]);
     expect(wakes[0]?.line).toStartWith(
       "Finding T16 on a.ts:1 by bengous-labs-agents: **Important**: off Comment on PR",
@@ -267,8 +312,13 @@ describe("wakesOf", () => {
   });
 
   test("a reading holds the Owner's words only when a Wake it delivers is the Owner's", () => {
-    const owners = { key: "comment:11", line: "Comment on PR #7 by bengous: yes", owner: true } as const;
-    const finding = { key: "thread:T1", line: "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n" };
+    const owners = { key: "comment:11", kind: "owner", line: "Comment on PR #7 by bengous: yes" } as const;
+
+    const finding = {
+      key: "thread:T1",
+      kind: "finding",
+      line: "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n",
+    } as const;
 
     expect(ownerWordsIn({ wakes: [finding, owners], ends: false })).toBe(true);
     expect(ownerWordsIn({ wakes: [finding], ends: false })).toBe(false);
@@ -332,57 +382,47 @@ describe("wakesOf", () => {
   });
 
   test("a PR back in draft says so, once per head", () => {
-    expect(wakesOf(7, { ...OPEN, draft: true })).toEqual([
-      { key: `draft:${HEAD}`, line: "PR #7 is back in draft at c0ffee1: it lands only after your next stop." },
-    ]);
+    expect(wakesOf(7, { ...OPEN, draft: true })).toEqual([{ key: `draft:${HEAD}`, kind: "draft", line: DRAFT_LINE }]);
   });
 
   test("a landed or closed PR gives no Wake, whatever else it carries", () => {
     const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
 
-    expect(wakesOf(7, { ...OPEN, state: "MERGED", draft: true, checks })).toEqual([]);
-    expect(wakesOf(7, { ...OPEN, state: "CLOSED", draft: true, checks })).toEqual([]);
-  });
-});
-
-describe("endOf", () => {
-  test("a landed or closed PR ends the relay with its end line; an open one does not", () => {
-    expect(endOf(7, { ...OPEN, state: "MERGED", draft: true })).toBe("PR #7 landed.");
-    expect(endOf(7, { ...OPEN, state: "CLOSED" })).toBe("PR #7 closed.");
-    expect(endOf(7, OPEN)).toBeNull();
+    expect(wakesOf(7, { ...OPEN, state: "MERGED", draft: true, conflicting: true, checks })).toEqual([]);
+    expect(wakesOf(7, { ...OPEN, state: "CLOSED", draft: true, conflicting: true, checks })).toEqual([]);
   });
 });
 
 describe("readingOf", () => {
-  test("a relay started again after its end line was delivered ends at once and delivers nothing", () => {
-    expect(readingOf(7, { ...OPEN, state: "MERGED" }, new Set([END_KEY]))).toEqual({ wakes: [], ends: true });
-    expect(readingOf(7, { ...OPEN, state: "CLOSED" }, new Set([END_KEY]))).toEqual({ wakes: [], ends: true });
-  });
-
-  test("a landed PR delivers its end line, and only it, then ends", () => {
+  test("a landed or closed PR ends the relay with no Wake, so no turn starts, whatever it carries or was seen", () => {
     const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
 
-    expect(readingOf(7, { ...OPEN, state: "MERGED", checks }, new Set())).toEqual({
-      wakes: [{ key: END_KEY, line: "PR #7 landed." }],
-      ends: true,
-    });
+    for (const state of ["MERGED", "CLOSED"] as const) {
+      expect(readingOf(7, { ...OPEN, state, draft: true, checks }, new Set())).toEqual({ wakes: [], ends: true });
+      expect(readingOf(7, { ...OPEN, state }, new Set(["end"]))).toEqual({ wakes: [], ends: true });
+    }
   });
 
   test("an open PR delivers only the Wakes not delivered yet, and goes on", () => {
     const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
 
     expect(readingOf(7, { ...OPEN, draft: true, checks }, new Set([`check:validate:${HEAD}`]))).toEqual({
-      wakes: [{ key: `draft:${HEAD}`, line: "PR #7 is back in draft at c0ffee1: it lands only after your next stop." }],
+      wakes: [{ key: `draft:${HEAD}`, kind: "draft", line: DRAFT_LINE }],
       ends: false,
     });
+    expect(readingOf(7, OPEN, new Set())).toEqual({ wakes: [], ends: false });
   });
 });
 
 const threads = (nodes: readonly object[]): string =>
   JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } });
 
+/** What `gh pr view` prints for a draft PR GitHub reads as `mergeable`. */
+const viewOf = (mergeable: string): string =>
+  JSON.stringify({ headRefOid: HEAD, isDraft: true, state: "OPEN", mergeable });
+
 describe("prStateOf", () => {
-  const view = JSON.stringify({ headRefOid: HEAD, isDraft: true, state: "OPEN" });
+  const view = viewOf("MERGEABLE");
 
   test("reads the view, the checks, each conversation line and the threads gh prints", () => {
     const checks = JSON.stringify([{ bucket: "fail", link: "https://ci/1", name: "validate" }]);
@@ -410,6 +450,7 @@ describe("prStateOf", () => {
       state: "OPEN",
       draft: true,
       head: HEAD,
+      conflicting: false,
       checks: [{ name: "validate", bucket: "fail", link: "https://ci/1" }],
       threads: [
         {
@@ -437,12 +478,18 @@ describe("prStateOf", () => {
     ]);
   });
 
+  test("only a PR GitHub reads as conflicting is one: not one it still computes", () => {
+    expect(prStateOf(viewOf("CONFLICTING"), "", "", threads([])).conflicting).toBe(true);
+    expect(prStateOf(viewOf("UNKNOWN"), "", "", threads([])).conflicting).toBe(false);
+    expect(prStateOf(viewOf("MERGEABLE"), "", "", threads([])).conflicting).toBe(false);
+  });
+
   test("no checks printed is no check", () => {
     expect(prStateOf(view, "", "", threads([])).checks).toEqual([]);
   });
 
   test("what gh prints outside its schema throws, naming the command", () => {
-    const draft = JSON.stringify({ headRefOid: HEAD, isDraft: false, state: "DRAFT" });
+    const draft = JSON.stringify({ headRefOid: HEAD, isDraft: false, state: "DRAFT", mergeable: "MERGEABLE" });
 
     expect(() => prStateOf(draft, "", "", threads([]))).toThrow('gh pr view: Expected "OPEN" | "MERGED" | "CLOSED"');
     expect(() => prStateOf(view, "", JSON.stringify({ id: 11, author: "a", body: "b" }), threads([]))).toThrow(
@@ -462,26 +509,59 @@ describe("SeenKeys", () => {
   });
 });
 
+describe("answerOf", () => {
+  const findings =
+    "Fix what you accept with a commit, name in your last message each finding you reject and why, then stop.";
+
+  test("findings ask for the rejections alone, whatever else comes with them", () => {
+    expect(answerOf(["finding"])).toBe(findings);
+    expect(answerOf(["check", "conflict", "owner", "draft", "finding"])).toBe(findings);
+  });
+
+  test("a failing check or a conflict with no finding asks for the fix, and names no finding", () => {
+    expect(answerOf(["check"])).toBe("Fix it with a commit, then stop.");
+    expect(answerOf(["conflict"])).toBe("Fix it with a commit, then stop.");
+    expect(answerOf(["draft", "owner", "check"])).toBe("Fix it with a commit, then stop.");
+  });
+
+  test("the Owner's words and a PR back in draft say it all: nothing is added", () => {
+    expect(answerOf(["owner"])).toBeNull();
+    expect(answerOf(["draft"])).toBeNull();
+    expect(answerOf(["owner", "draft"])).toBeNull();
+    expect(answerOf([])).toBeNull();
+  });
+});
+
 describe("wakeTextOf", () => {
   test("the Wakes of an open PR are one text: its opening, each line, then how the Author answers", () => {
     const wakes = [
-      { key: "thread:T1", line: "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n" },
-      { key: `draft:${HEAD}`, line: "PR #7 is back in draft at c0ffee1: it lands only after your next stop." },
-    ];
+      { key: "thread:T1", kind: "finding", line: "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n" },
+      { key: `draft:${HEAD}`, kind: "draft", line: DRAFT_LINE },
+    ] as const;
 
     expect(wakeTextOf(7, { wakes, ends: false })).toBe(
       [
         "The Land loop, about your pull request #7:",
         "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n",
-        "PR #7 is back in draft at c0ffee1: it lands only after your next stop.",
-        "Fix what you accept with a commit, say in your last message which findings you reject and why, then stop.",
+        DRAFT_LINE,
+        "Fix what you accept with a commit, name in your last message each finding you reject and why, then stop.",
       ].join("\n"),
     );
   });
 
-  test("the end line asks for nothing", () => {
-    expect(wakeTextOf(7, { wakes: [{ key: END_KEY, line: "PR #7 landed." }], ends: true })).toBe(
-      "The Land loop, about your pull request #7:\nPR #7 landed.",
+  test("a failing check alone is told to be fixed, with no word of findings", () => {
+    const checks = [{ name: "validate", bucket: "fail", link: "https://ci/1" }];
+
+    expect(wakeTextOf(7, readingOf(7, { ...OPEN, checks }, new Set()))).toBe(
+      "The Land loop, about your pull request #7:\nCheck validate failed on c0ffee1: https://ci/1\nFix it with a commit, then stop.",
+    );
+  });
+
+  test("the Owner's words alone end the text", () => {
+    const comments = [{ id: "11", author: "bengous", body: "use wording B" }];
+
+    expect(wakeTextOf(7, readingOf(7, { ...OPEN, comments }, new Set()))).toBe(
+      "The Land loop, about your pull request #7:\nComment on PR #7 by bengous: use wording B",
     );
   });
 

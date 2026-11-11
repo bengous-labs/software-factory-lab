@@ -9,7 +9,7 @@ The Code review reads this guide in its prompt. Review each change against what 
 - `scripts/hooks/`, `.claude/`: a guard fails open and lets through what it exists to refuse, refuses valid work, or keeps a session blocked with no way out.
 - `.github/`: text or code from the pull request runs, or is obeyed, next to the job's secrets; a secret or token reaches a log, a comment or a model's prompt; a trigger or a permission widens.
 - `scripts/gates/`, `scripts/lint/` and the gate configs: a gate stops failing on what it was built to catch.
-- Agent docs (`AGENTS.md`, `REVIEW.md`, skills): a line that contradicts the code. For a doc, failure is that it lies.
+- Agent docs (`AGENTS.md`, the rules under `.claude/rules/`, `REVIEW.md`, skills): a line that contradicts the code. For a doc, failure is that it lies.
 
 ## Severity
 

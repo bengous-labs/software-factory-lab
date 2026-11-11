@@ -8,7 +8,15 @@ import type { PrState } from "./wakes.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
-const OPEN: PrState = { state: "OPEN", draft: false, head: HEAD, checks: [], threads: [], comments: [] };
+const OPEN: PrState = {
+  state: "OPEN",
+  draft: false,
+  head: HEAD,
+  conflicting: false,
+  checks: [],
+  threads: [],
+  comments: [],
+};
 
 const NIT = {
   id: "T1",
@@ -74,7 +82,7 @@ describe("turn", () => {
           "The Land loop, about your pull request #7:",
           "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n <!-- lab-finding severity=nit -->",
           "PR #7 is back in draft at c0ffee1: it lands only after your next stop.",
-          "Fix what you accept with a commit, say in your last message which findings you reject and why, then stop.",
+          "Fix what you accept with a commit, name in your last message each finding you reject and why, then stop.",
         ].join("\n"),
         ownerWords: false,
       },
@@ -122,23 +130,50 @@ describe("turn", () => {
     expect(sent).toHaveLength(2);
   });
 
-  test("a landed or closed PR delivers its end line and ends the relay, whether the line went through or not", async () => {
-    const landed = relay({ ...OPEN, state: "MERGED" });
+  test("a red Review check alone starts no turn: its findings start theirs", async () => {
+    const held = relay({ ...OPEN, checks: [{ name: "agent-review", bucket: "fail", link: "https://ci/2" }] });
 
-    expect(await turn(7, new Set(), landed.io)).toEqual({ delivered: ["end"], via: "socket", pending: 1, ends: true });
-    expect(landed.sent).toEqual([
-      { session: "S1", text: "The Land loop, about your pull request #7:\nPR #7 landed.", ownerWords: false },
+    expect(await turn(7, new Set(), held.io)).toEqual({ delivered: [], via: null, pending: 0, ends: false });
+    expect(held.sent).toEqual([]);
+  });
+
+  test("a red Land gate on a PR with no conflict starts a turn: nothing else tells an ejection", async () => {
+    const ejected = relay({ ...OPEN, checks: [{ name: "land-gate", bucket: "fail", link: "https://ci/3" }] });
+
+    await turn(7, new Set(), ejected.io);
+
+    expect(ejected.sent.map((found) => found.text)).toEqual([
+      "The Land loop, about your pull request #7:\nCheck land-gate failed on c0ffee1: https://ci/3\nFix it with a commit, then stop.",
     ]);
+  });
 
-    const closed = relay({ ...OPEN, state: "CLOSED" }, null);
+  test("a conflict with dev starts one turn that names the rebase, and no finding", async () => {
+    const checks = [{ name: "land-gate", bucket: "fail", link: "https://ci/3" }];
+    const conflicting = relay({ ...OPEN, conflicting: true, checks });
+    const seen = new Set<string>();
 
-    expect(await turn(7, new Set(), closed.io)).toEqual({ delivered: [], via: null, pending: 1, ends: true });
-    expect(await turn(7, new Set(["end"]), relay({ ...OPEN, state: "MERGED" }).io)).toEqual({
-      delivered: [],
-      via: null,
-      pending: 0,
-      ends: true,
-    });
+    for (const key of (await turn(7, seen, conflicting.io)).delivered) {
+      seen.add(key);
+    }
+
+    await turn(7, seen, conflicting.io);
+
+    expect(conflicting.sent).toEqual([
+      {
+        session: "S1",
+        text: "The Land loop, about your pull request #7:\nPR #7 conflicts with dev: run `git fetch origin dev`, then rebase onto origin/dev.\nFix it with a commit, then stop.",
+        ownerWords: false,
+      },
+    ]);
+  });
+
+  test("a landed or closed PR ends the relay and starts no turn, whatever the PR still carries", async () => {
+    for (const state of ["MERGED", "CLOSED"] as const) {
+      const ended = relay({ ...OPEN, state, draft: true, threads: [NIT] });
+
+      expect(await turn(7, new Set(), ended.io)).toEqual({ delivered: [], via: null, pending: 0, ends: true });
+      expect(ended.sent).toEqual([]);
+    }
   });
 });
 
@@ -151,10 +186,10 @@ describe("readPr", () => {
       calls.push(`${argv.slice(0, 3).join(" ")} ${JSON.stringify(options.env)}`);
       const line = argv.join(" ");
 
-      if (line.startsWith("gh pr view")) {
+      if (line === "gh pr view 7 --json state,isDraft,headRefOid,mergeable") {
         return Promise.resolve({
           code: 0,
-          stdout: JSON.stringify({ state: "OPEN", isDraft: true, headRefOid: HEAD }),
+          stdout: JSON.stringify({ state: "OPEN", isDraft: true, headRefOid: HEAD, mergeable: "CONFLICTING" }),
           stderr: "",
         });
       }
@@ -174,6 +209,7 @@ describe("readPr", () => {
       state: "OPEN",
       draft: true,
       head: HEAD,
+      conflicting: true,
       checks: [{ name: "validate", bucket: "fail", link: "https://ci/1" }],
       threads: [],
       comments: [],

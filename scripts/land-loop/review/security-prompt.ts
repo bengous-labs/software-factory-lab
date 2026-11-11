@@ -22,7 +22,7 @@ export function securityPromptOf(request: ReviewRequest, guides: Guides, threads
     "Review guide (REVIEW.md, from dev):",
     guides.review.trim(),
     "",
-    "Project guide (AGENTS.md, from dev):",
+    "Project guide (AGENTS.md and .claude/rules/, from dev):",
     guides.project.trim(),
     "",
     'Report every finding in the final structured answer. Set `severity` to "important" for a security defect this change introduces, "pre_existing" for one it did not introduce, and "nit" for a hardening worth saying. Set `file` and `line` to the changed line of this pull request that causes the defect. When the defect shows in another place, set `breaks` to that place: { "file": ..., "line": ... }; otherwise set it to null. Set `earlier` to null, unless this prompt lists earlier findings and you report one of them again.',

@@ -43,7 +43,7 @@ export function requiredAuthorToken(env: Env): string {
 
   if (author.kind === "missing") {
     throw new Error(
-      `no Author token at ${author.path}: the Owner provisions it (AGENTS.md, Identities); nothing was posted`,
+      `no Author token at ${author.path}: the Owner provisions it (.claude/rules/identities.md); nothing was posted`,
     );
   }
 
