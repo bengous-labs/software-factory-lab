@@ -816,14 +816,14 @@ function roundNeedOf(record: StateRecord, routing: RoutingAnswer, depth: ReviewD
     return { depth, round: 1 };
   }
 
-  if (record.reviewRounds === 3) {
-    const owed = routing.deltaRead === true && record.ownerHold === undefined && record.deltaReadPatch !== patch;
-
-    return owed ? { depth: "light", round: DELTA_READ } : null;
-  }
-
   if (record.reviewRounds !== 1 && record.reviewRounds !== 2) {
-    return null;
+    const deltaRead =
+      record.reviewRounds === 3 &&
+      routing.deltaRead === true &&
+      record.ownerHold === undefined &&
+      record.deltaReadPatch !== patch;
+
+    return deltaRead ? { depth: "light", round: DELTA_READ } : null;
   }
 
   const lastImportant = record.importantByRound?.[record.reviewRounds - 1] ?? null;

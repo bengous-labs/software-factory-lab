@@ -679,6 +679,12 @@ describe("withNitAnswers", () => {
       expect(withNitAnswers(LAB, READ, delta(["scripts/a.ts", "scripts/b.test.ts"], 10), ROUND_3_NITS)).toBe(READ);
       expect(withNitAnswers(LAB, READ, delta(["scripts/a.test.ts", "scripts/c.ts"], 10), ROUND_3_NITS)).toBe(READ);
       expect(withNitAnswers(LAB, READ, delta(["scripts/a.test.tsx"], 10), ROUND_3_NITS)).toBe(READ);
+      expect(
+        withNitAnswers(LAB, READ, delta(["scripts/a.test.ts.snap"], 10), {
+          ...ROUND_3_NITS,
+          nitPaths: ["scripts/a.ts.snap"],
+        }),
+      ).toBe(READ);
       expect(tested({ ...ROUND_3_NITS, deltaFrom: "merge-base" })).toBe(READ);
     });
 
