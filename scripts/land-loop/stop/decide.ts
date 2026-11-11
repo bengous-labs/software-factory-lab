@@ -424,9 +424,10 @@ export interface FixedRecord {
 }
 
 /**
- * The fixed list: a line of its own, as the record writes it. The only other comments of the Author's
- * machine account, its questions to the Owner, quote each line after `> `, so a mark they quote, in a
- * code span or a fenced block, is never a line of its own.
+ * The fixed list: a line of its own, as the record writes it. The hook's questions to the Owner quote
+ * each line after `> `, so a mark they quote, in a code span or a fenced block, is never a line of its
+ * own. A comment the Worker posts itself with the Author's token, the mark on a line of its own, is
+ * taken for the record: its list is the Author's word too, which only the ledger shows.
  */
 const FIXED_LIST = new RegExp(`(?<=^|\\n)${FIXED_MARK}((?: [^\\s>]+)*) -->(?=\\n|$)`, "u");
 

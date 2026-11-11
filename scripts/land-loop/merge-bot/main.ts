@@ -431,25 +431,19 @@ export interface StepsIo {
   readonly write: (id: number | null, body: string) => Promise<number>;
 }
 
-/** Where the steps of a decision leave the PR: its record, null when a step stopped the run, and whether to decide again. */
-export interface StepsDone {
-  readonly record: StateRecord | null;
-  readonly decideAgain: boolean;
-}
-
 /**
  * Performs the steps of a decision over the state comment `read`, which holds the record the decision
- * starts from, `record`, and the ledger from `inputs`. The comment is written when what it shows changed,
- * and the comment as last written is kept, so no step reads it again. A step that resolves threads has
- * the findings read again, and the comment is written last with the final record: the ledger shows
- * those threads closed even when no decision follows, as when the Owner's Land approval closes the open
- * Importants and the PR lands.
+ * starts from, `record`, and the ledger from `inputs`; answers whether to decide again, never after a
+ * step that stopped the run. The comment is written when what it shows changed, and the comment as last
+ * written is kept, so no step reads it again. A step that resolves threads has the findings read again,
+ * and the comment is written last with the final record: the ledger shows those threads closed even
+ * when no decision follows, as when the Owner's Land approval closes the open Importants and the PR lands.
  */
 export async function stepsDone(
   steps: readonly Step[],
   start: { readonly read: StateRead; readonly record: StateRecord; readonly inputs: LedgerInputs },
   io: StepsIo,
-): Promise<StepsDone> {
+): Promise<boolean> {
   let { read, inputs } = start;
 
   const save = async (record: StateRecord): Promise<void> => {
@@ -469,7 +463,7 @@ export async function stepsDone(
     current = await io.perform(step, current, save);
 
     if (current === null) {
-      return { record: null, decideAgain: false };
+      return false;
     }
 
     if (step.kind === "resolve-threads") {
@@ -481,7 +475,7 @@ export async function stepsDone(
 
   await save(current);
 
-  return { record: current, decideAgain };
+  return decideAgain;
 }
 
 interface Range {
@@ -1191,7 +1185,7 @@ async function advance(
     log(`#${number} steps: ${decision.steps.map((step) => step.kind).join(", ")}`);
     const logins = threadLoginsOf(env);
 
-    const done = await stepsDone(
+    const decideAgain = await stepsDone(
       decision.steps,
       { read: state, record, inputs: { findings: ledgerFindingsOf(logins, threads), fixed: state.fixed } },
       {
@@ -1201,7 +1195,7 @@ async function advance(
       },
     );
 
-    if (!done.decideAgain) {
+    if (!decideAgain) {
       return;
     }
   }

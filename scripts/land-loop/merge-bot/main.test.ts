@@ -62,7 +62,6 @@ import {
   stepsDone,
   threadsResolver,
 } from "./main.ts";
-import type { StepsDone } from "./main.ts";
 
 const PULL = {
   number: 12,
@@ -327,9 +326,9 @@ const CLOSED: LedgerInputs = { findings: [{ ...OPEN_IMPORTANT, resolved: true, c
 
 const ROUND_1: StateRecord = { ...EMPTY_RECORD, reviewedPatch: "p1", reviewRounds: 1, importantByRound: [1] };
 
-/** What a run of `stepsDone` over fakes did: its answer, each write with the id it named, and how often it read the findings. */
+/** What a run of `stepsDone` over fakes did: whether to decide again, each write with the id it named, and how often it read the findings. */
 interface StepsRun {
-  readonly done: StepsDone;
+  readonly decideAgain: boolean;
   readonly writes: ReadonlyArray<{ readonly id: number | null; readonly body: string }>;
   readonly reads: number;
 }
@@ -347,7 +346,7 @@ async function stepsRun(
   const writes: Array<{ id: number | null; body: string }> = [];
   let reads = 0;
 
-  const done = await stepsDone(steps, start, {
+  const decideAgain = await stepsDone(steps, start, {
     perform: async (step, record, write) => {
       if (step.kind === stopAt) {
         return null;
@@ -378,7 +377,7 @@ async function stepsRun(
     },
   });
 
-  return { done, writes, reads };
+  return { decideAgain, writes, reads };
 }
 
 const ROUTED = {
@@ -410,7 +409,7 @@ describe("stepsDone", () => {
     expect(run.reads).toBe(1);
     expect(run.writes).toEqual([{ id: 7, body: stateBodyOf(ROUND_1, CLOSED) }]);
     expect(run.writes[0]?.body).toContain("**Closed with no later round confirming it.** Important");
-    expect(run.done).toEqual({ record: ROUND_1, decideAgain: false });
+    expect(run.decideAgain).toBe(false);
   });
 
   test("a round's record is written once, with the ledger of the rounds it counts and the threads the round resolved", async () => {
@@ -431,7 +430,7 @@ describe("stepsDone", () => {
 
     expect(run.writes).toEqual([{ id: 7, body: stateBodyOf(round2, CLOSED) }]);
     expect(run.writes[0]?.body).toContain("**Fixed, confirmed by round 2.** Important");
-    expect(run.done).toEqual({ record: round2, decideAgain: false });
+    expect(run.decideAgain).toBe(false);
   });
 
   test("a PR with no comment gets one from the first step that writes a record, and the steps after it edit that comment", async () => {
@@ -449,18 +448,28 @@ describe("stepsDone", () => {
     expect(run.writes.map((write) => write.id)).toEqual([null, 99]);
     expect(run.writes.at(-1)?.body).toBe(stateBodyOf(recorded, OPEN));
     expect(run.reads).toBe(0);
-    expect(run.done).toEqual({ record: recorded, decideAgain: true });
+    expect(run.decideAgain).toBe(true);
   });
 
-  test("the ledger is written before the steps when only what it shows changed, and a step that stops the run writes nothing after it", async () => {
+  test("the ledger is written before the steps when only what it shows changed; a step that stops the run writes nothing after it, and no decision follows", async () => {
+    const routed: StateRecord = { ...ROUND_1, triage: { p1: ROUTED } };
+
     const run = await stepsRun(
-      [{ kind: "resolve-threads", threads: ["T1"] }, { kind: "to-draft" }, { kind: "auto-merge" }],
+      [
+        { kind: "route", patch: "p1", patchDelta: false },
+        { kind: "resolve-threads", threads: ["T1"] },
+        { kind: "to-draft" },
+        { kind: "auto-merge" },
+      ],
       { read: { id: 7, body: stateBodyOf(ROUND_1, OPEN), record: ROUND_1 }, record: ROUND_1, inputs: CLOSED },
       { reread: OPEN, stopAt: "to-draft" },
     );
 
-    expect(run.writes).toEqual([{ id: 7, body: stateBodyOf(ROUND_1, CLOSED) }]);
-    expect(run.done).toEqual({ record: null, decideAgain: false });
+    expect(run.writes).toEqual([
+      { id: 7, body: stateBodyOf(ROUND_1, CLOSED) },
+      { id: 7, body: stateBodyOf(routed, CLOSED) },
+    ]);
+    expect(run.decideAgain).toBe(false);
   });
 
   test("nothing is written when the comment holds the record and the ledger already", async () => {
