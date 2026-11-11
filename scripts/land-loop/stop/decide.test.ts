@@ -16,6 +16,7 @@ import {
   doneAnswerOf,
   noAuthorToken,
   noDoneAnswer,
+  openQuestionOf,
   outcomeLineOf,
   questionCommentOf,
   questionOpen,
@@ -436,6 +437,15 @@ describe("the Owner's question", () => {
     expect(questionOpen([answer, asked])).toBe(true);
     expect(questionOpen([asked, answer])).toBe(false);
     expect(questionOpen([asked, answer, asked])).toBe(true);
+  });
+
+  test("the open question is the hook's last marked comment, the one no comment of the Owner follows", () => {
+    const later = { ...asked, body: questionCommentOf("Which file?", "feat/7-x", "S1") };
+
+    expect(openQuestionOf([])).toBeNull();
+    expect(openQuestionOf([asked, later])).toBe(later);
+    expect(openQuestionOf([asked, answer, later])).toBe(later);
+    expect(openQuestionOf([later, answer])).toBeNull();
   });
 
   test("only the machine account's marked comment asks, and only the Owner's own words answer", () => {

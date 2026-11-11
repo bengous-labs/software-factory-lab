@@ -11,6 +11,7 @@ import {
   decide,
   earlierImportantsOf,
   EMPTY_RECORD,
+  gateWaitOf,
   LAND_APPROVAL_LABEL,
   landApprovalCounts,
   patchDeltaStart,
@@ -1619,6 +1620,16 @@ describe("why a PR is held, where the Owner looks", () => {
     );
   });
 
+  test("gateWaitOf reads a held PR's Land gate as the Owner's wait, a running Review round's as the review's, any other as neither", () => {
+    expect(gateWaitOf(gateSummary({ ...READY, record: reviewed(OWNER_PATH) }) ?? "")).toBe("owner");
+    expect(gateWaitOf(gateSummary(READY) ?? "")).toBe("review");
+    expect(gateWaitOf("Review round 3 running.")).toBe("review");
+    expect(gateWaitOf("Delta read running.")).toBe("review");
+    expect(gateWaitOf("Review round 4 running.")).toBeNull();
+    expect(gateWaitOf(gateSummary({ ...READY, ci: null }) ?? "")).toBeNull();
+    expect(gateWaitOf("Landable, land:auto.")).toBeNull();
+  });
+
   test("a push not routed yet says its labels are the previous push's, while CI runs and once it is red", () => {
     const unrouted = { ...READY, record: { ...EMPTY_RECORD, triage: { "patch-0": LIGHT } } };
 
@@ -1791,6 +1802,7 @@ describe("the Merge bot's invariants", () => {
           !snapshot.devRed;
 
         expect(OWNER_WAIT.test(summary)).toBe(waitsForOwner);
+        expect(gateWaitOf(summary) === "owner").toBe(waitsForOwner);
 
         if (steps.some((step) => step.kind === "owner-comment" && step.body.startsWith("This PR waits"))) {
           expect(waitsForOwner).toBe(true);

@@ -52,6 +52,9 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["scripts/factory/dispatch.ts", at("factory", "entry")],
   ["scripts/factory/dispatch-plan.ts", at("factory", "domain")],
   ["scripts/factory/dispatcher.ts", at("factory", "application")],
+  ["scripts/factory/watch.ts", at("factory", "entry")],
+  ["scripts/factory/watch-plan.ts", at("factory", "domain")],
+  ["scripts/factory/watcher.ts", at("factory", "application")],
 
   // Pure helpers both the Land loop and the tooling import.
   ["scripts/lib/*.ts", at("shared", "domain")],

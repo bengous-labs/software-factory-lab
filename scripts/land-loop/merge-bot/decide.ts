@@ -432,6 +432,24 @@ const REMOVAL_COMMENTS: Readonly<Record<NonNullable<LandApproval["removed"]>, st
 
 const OWNER_WAIT = `Waiting for the Owner's Land approval (label ${LAND_APPROVAL_LABEL}).`;
 
+/** How the Land gate's summary opens while the PR waits for the Owner's Land approval. */
+const OWNER_HELD = "Held for the Owner:";
+
+/** The Land gate's and the Review check's summary while the review of `round` runs. */
+const reviewRunningOf = (round: ReviewRound): string => `${reviewNameOf(round)} running.`;
+
+/**
+ * What a pending Land gate's summary says the PR waits for: the Owner's Land approval, a review that
+ * runs (a Review round or the Delta read), or neither (null). The watch of an orchestrating session reads it.
+ */
+export function gateWaitOf(summary: string): "owner" | "review" | null {
+  if (summary.startsWith(OWNER_HELD)) {
+    return "owner";
+  }
+
+  return Round.literals.some((round) => summary === reviewRunningOf(round)) ? "review" : null;
+}
+
 /**
  * Why a PR that waits for the Owner's Land approval waits, the first reason that applies: the Owner
  * hold, a `land:human` no agent set, then the Routing rules. `asked` is the reason the
@@ -445,17 +463,17 @@ interface OwnerWait {
 function ownerWaitOf(ownerHold: string | undefined, humanLabelBy: Snapshot["humanLabelBy"], reason: string): OwnerWait {
   if (ownerHold !== undefined) {
     return {
-      summary: `Held for the Owner: ${ownerHold} ${OWNER_WAIT}`,
+      summary: `${OWNER_HELD} ${ownerHold} ${OWNER_WAIT}`,
       asked: ownerHold.endsWith(".") ? ownerHold.slice(0, -1) : ownerHold,
     };
   }
 
   if (humanLabelBy === "other") {
-    return { summary: `Held for the Owner: a land:human the Merge bot did not set. ${OWNER_WAIT}`, asked: null };
+    return { summary: `${OWNER_HELD} a land:human the Merge bot did not set. ${OWNER_WAIT}`, asked: null };
   }
 
   return {
-    summary: `Held for the Owner: ${reason}. ${OWNER_WAIT} To keep it held whatever later pushes change, remove land:human and add it back.`,
+    summary: `${OWNER_HELD} ${reason}. ${OWNER_WAIT} To keep it held whatever later pushes change, remove land:human and add it back.`,
     asked: reason,
   };
 }
@@ -600,7 +618,7 @@ function outcomeOf(snapshot: Snapshot, review: ReviewState): JobOutcome {
 }
 
 const runningSteps = (round: ReviewRound): readonly Step[] => {
-  const check = pending(`${reviewNameOf(round)} running.`);
+  const check = pending(reviewRunningOf(round));
 
   return [
     { kind: "review-check", check },

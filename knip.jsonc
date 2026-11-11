@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   // knip reads the scripts the workflows run; these others are run by path and never imported: the CLI,
-  // the measure script, Dispatch and the Worker bench by hand, the relay by the Stop hook, the hooks from .claude/settings.json, the ratchet's
+  // the measure script, Dispatch, the watch and the Worker bench by hand, the relay by the Stop hook, the hooks from .claude/settings.json, the ratchet's
   // config by check-exception-ratchet.ts.
   "entry": [
     "app/src/cli.ts",
@@ -11,6 +11,7 @@
     "scripts/land-loop/stop/hook.ts",
     "scripts/land-loop/stop/fork-guard.ts",
     "scripts/factory/dispatch.ts",
+    "scripts/factory/watch.ts",
     "scripts/hooks/fix-edited.ts",
     "scripts/lint/exception-ratchet.oxlint.config.ts",
   ],

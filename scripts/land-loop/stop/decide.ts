@@ -397,16 +397,22 @@ export const byOwner = (comment: PrComment): boolean =>
   comment.author === OWNER_LOGIN && !comment.body.includes(AUTHOR_MARK);
 
 /**
- * Whether the PR's conversation `comments`, in their order, hold a question of the Author the Owner has
- * not answered: a comment the hook posted with the question mark, and no comment of the Owner after it.
+ * The question of the Author the Owner has not answered among the PR's conversation `comments`, in
+ * their order: the last comment the hook posted with the question mark, when no comment of the Owner
+ * follows it; else null.
  */
-export function questionOpen(comments: readonly PrComment[]): boolean {
+export function openQuestionOf<C extends PrComment>(comments: readonly C[]): C | null {
   const asked = comments.findLastIndex(
     (comment) => comment.author === AUTHOR_LOGIN && comment.body.includes(QUESTION_MARK),
   );
 
-  return asked !== -1 && !comments.slice(asked + 1).some((comment) => byOwner(comment));
+  return asked === -1 || comments.slice(asked + 1).some((comment) => byOwner(comment))
+    ? null
+    : (comments[asked] ?? null);
 }
+
+/** Whether the PR's conversation `comments`, in their order, hold a question of the Author the Owner has not answered. */
+export const questionOpen = (comments: readonly PrComment[]): boolean => openQuestionOf(comments) !== null;
 
 /** The comment that puts the Author's quoted `question` to the Owner, from `branch` and `session`. */
 export function questionCommentOf(question: string, branch: string, session: string): string {

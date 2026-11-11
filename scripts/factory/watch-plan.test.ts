@@ -1,0 +1,483 @@
+import { describe, expect, test } from "bun:test";
+
+import { AUTHOR_LOGIN, OWNER_LOGIN } from "../land-loop/logins.ts";
+import { questionCommentOf } from "../land-loop/stop/decide.ts";
+import {
+  EMPTY_MEMORY,
+  githubOf,
+  IDLE_MS,
+  markOf,
+  memoryFileOf,
+  questionOf,
+  sessionsOf,
+  STALL_MS,
+  stepOf,
+  stopsOf,
+  watchArgsOf,
+  watchQueryOf,
+} from "./watch-plan.ts";
+import type { Check, Comment, Memory, Pr, Reading, Session, Stop, WatchStep } from "./watch-plan.ts";
+
+const NOW = "2026-11-11T16:00:00.000Z";
+
+/** The ISO timestamp `ms` before NOW. */
+const before = (ms: number): string => new Date(Date.parse(NOW) - ms).toISOString();
+
+const URL = "https://github.com/o/r/pull/9";
+
+const VALIDATE: Check = { name: "validate", status: "COMPLETED", conclusion: "SUCCESS", title: null };
+
+const GREEN: readonly Check[] = [VALIDATE, { ...VALIDATE, name: "mutation" }];
+
+const gate = (status: string, title: string, conclusion: string | null = null): Check => ({
+  name: "land-gate",
+  status,
+  conclusion,
+  title,
+});
+
+const WAITING_CI = gate("IN_PROGRESS", "Waiting for validate and mutation.");
+
+const OWNER_GATE = gate(
+  "IN_PROGRESS",
+  "Held for the Owner: touches a path the Owner lands: .github/workflows/ci.yml. Waiting for the Owner's Land approval (label land-ok).",
+);
+
+const PR: Pr = {
+  number: 9,
+  url: URL,
+  state: "OPEN",
+  draft: false,
+  branch: "issue/7-add-a-flag",
+  head: "h1",
+  conflicting: false,
+  issues: [7],
+  labels: [],
+  comments: [],
+  openThreads: 0,
+  checks: [...GREEN, WAITING_CI],
+};
+
+const STOP: Stop = {
+  at: before(30 * 60_000),
+  session: "s-worker",
+  branch: PR.branch,
+  outcome: "published",
+  reason: null,
+};
+
+const IDLE: Session = { id: "s-worker", running: true, status: "idle" };
+
+const READING: Reading = { prs: [PR], issues: [], sessions: [IDLE], stops: [STOP] };
+
+/** A memory in which PR `pr`, as it is, has been still for `ms`. */
+const stillFor = (pr: Pr, ms: number, printed: readonly string[] = []): Memory => ({
+  printed,
+  still: { [String(pr.number)]: { mark: markOf(pr), since: before(ms) } },
+});
+
+/** The lines the watch of the open PRs prints for `pr`, still for `ms`, with `rest` of the reading. */
+const linesOf = (pr: Pr, ms: number, rest: Partial<Reading> = {}): readonly string[] =>
+  stepOf([], { ...READING, prs: [pr], ...rest }, stillFor(pr, ms), NOW).lines;
+
+const question = (id: string, text: string): Comment => ({
+  id,
+  url: `${URL}#issuecomment-${id}`,
+  author: AUTHOR_LOGIN,
+  body: questionCommentOf(text, PR.branch, "s-worker"),
+});
+
+const answer: Comment = { id: "c-answer", url: `${URL}#a`, author: OWNER_LOGIN, body: "The first one." };
+
+describe("watchArgsOf", () => {
+  test("takes the issues, in order and once each, and none for the open PRs", () => {
+    expect(watchArgsOf([])).toEqual([]);
+    expect(watchArgsOf(["177", "159", "177"])).toEqual([159, 177]);
+  });
+
+  test.each([[["0"]], [["#12"]], [["12a"]], [["--all"]]])("refuses %j with the usage", (argv) => {
+    expect(() => watchArgsOf(argv)).toThrow("usage: bun scripts/factory/watch.ts [<issue>...]");
+  });
+});
+
+describe("memoryFileOf", () => {
+  test("keeps one memory per set of watched issues, and one for the open PRs, under .lab/state", () => {
+    expect(memoryFileOf("/repo", [159, 177])).toBe("/repo/.lab/state/factory-watch-159-177.json");
+    expect(memoryFileOf("/repo", [])).toBe("/repo/.lab/state/factory-watch-open.json");
+  });
+});
+
+describe("a Worker's question to the Owner", () => {
+  test("a PR that holds an open question prints it once, with where the Owner answers", () => {
+    const asking = { ...PR, draft: true, comments: [question("c1", "Keep <b>?\nOr drop it?")] };
+    const step = stepOf([], { ...READING, prs: [asking] }, EMPTY_MEMORY, NOW);
+
+    expect(step.lines).toEqual([
+      `PR #9 (issue #7) holds its Worker's question to the Owner: "Keep <b>? Or drop it?" The Worker waits; the Owner answers in a comment of the PR's conversation: ${URL}#issuecomment-c1`,
+    ]);
+    expect(stepOf([], { ...READING, prs: [asking] }, step.memory, NOW).lines).toEqual([]);
+  });
+
+  test("a later question prints again; an answered one does not", () => {
+    const asked = { ...PR, draft: true, comments: [question("c1", "Which wording?")] };
+    const first = stepOf([], { ...READING, prs: [asked] }, EMPTY_MEMORY, NOW);
+    const again = { ...asked, comments: [...asked.comments, answer, question("c2", "Which file?")] };
+
+    expect(stepOf([], { ...READING, prs: [again] }, first.memory, NOW).lines).toEqual([
+      expect.stringContaining('"Which file?"'),
+    ]);
+    expect(linesOf({ ...asked, comments: [...asked.comments, answer] }, 0).join("\n")).not.toContain("question");
+  });
+
+  test("a draft that holds an open question is no idle Worker's: its Worker waits for the Owner", () => {
+    const asking = { ...PR, draft: true, comments: [question("c1", "Which wording?")] };
+
+    expect(linesOf(asking, STALL_MS)).toEqual([expect.stringContaining("holds its Worker's question")]);
+  });
+
+  test("questionOf reads back the question questionCommentOf quoted, on one line", () => {
+    expect(questionOf(questionCommentOf("Keep <b>?\n\nOr `drop` it?", "feat/7-x", "S1"))).toBe(
+      "Keep <b>? Or `drop` it?",
+    );
+  });
+});
+
+describe("a PR that waits for the Owner", () => {
+  test("prints its Land gate once per head", () => {
+    const held = { ...PR, checks: [...GREEN, OWNER_GATE] };
+    const step = stepOf([], { ...READING, prs: [held] }, EMPTY_MEMORY, NOW);
+
+    expect(step.lines).toEqual([`PR #9 (issue #7), its Land gate: ${OWNER_GATE.title} ${URL}`]);
+    expect(stepOf([], { ...READING, prs: [held] }, step.memory, NOW).lines).toEqual([]);
+    expect(stepOf([], { ...READING, prs: [{ ...held, head: "h2" }] }, step.memory, NOW).lines).toHaveLength(1);
+  });
+
+  test("a completed Land gate that names the Owner is no wait", () => {
+    expect(linesOf({ ...PR, checks: [gate("COMPLETED", OWNER_GATE.title ?? "", "SUCCESS")] }, 0)).toEqual([]);
+  });
+});
+
+describe("a PR that has not moved", () => {
+  // GitHub returned #163's mutation with a conclusion and a status still in progress.
+  const stuck: Pr = {
+    ...PR,
+    checks: [VALIDATE, { name: "mutation", status: "IN_PROGRESS", conclusion: "SUCCESS", title: null }, WAITING_CI],
+  };
+
+  test(`prints once it has been still for ${STALL_MS / 60_000} min, naming its gate, its checks and its Worker`, () => {
+    expect(linesOf(stuck, STALL_MS - 1)).toEqual([]);
+    expect(linesOf(stuck, STALL_MS + 60_000)).toEqual([
+      `PR #9 (issue #7) has not moved for 21 min, and nothing says why: land-gate pending (Waiting for validate and mutation.); mutation not completed; its Worker (session s-worker) is idle. A check may be stuck on GitHub, or the relay dead: ${URL}/checks`,
+    ]);
+  });
+
+  test("prints once per still spell: a move starts a new one", () => {
+    const step = stepOf([], { ...READING, prs: [stuck] }, stillFor(stuck, STALL_MS), NOW);
+    const moved = { ...stuck, comments: [answer] };
+
+    expect(step.lines).toHaveLength(1);
+    expect(stepOf([], { ...READING, prs: [stuck] }, step.memory, NOW).lines).toEqual([]);
+    expect(stepOf([], { ...READING, prs: [moved] }, step.memory, NOW).memory.still["9"]?.since).toBe(NOW);
+  });
+
+  test("a PR that waits for the Owner, for a running review or for its busy Worker prints no such line", () => {
+    const owner = { ...PR, checks: [...GREEN, OWNER_GATE] };
+    const review = { ...PR, checks: [...GREEN, gate("IN_PROGRESS", "Review round 2 running.")] };
+
+    expect(linesOf(owner, STALL_MS * 3)).toEqual([expect.stringContaining("its Land gate: Held for the Owner")]);
+    expect(linesOf(review, STALL_MS * 3)).toEqual([]);
+    expect(linesOf(stuck, STALL_MS * 3, { sessions: [{ ...IDLE, status: "busy" }] })).toEqual([]);
+  });
+
+  test("names a Worker that is not running, one no stop names, and a head with no Land gate", () => {
+    const red = { ...PR, conflicting: true, checks: [gate("COMPLETED", "This PR conflicts with dev.", "FAILURE")] };
+
+    expect(linesOf(red, STALL_MS, { sessions: [] })).toEqual([
+      expect.stringContaining(
+        "land-gate failure (This PR conflicts with dev.); its Worker (session s-worker) is not running.",
+      ),
+    ]);
+    expect(linesOf({ ...PR, checks: [] }, STALL_MS, { stops: [] })).toEqual([
+      expect.stringContaining("no land-gate on its head; no stop of a Worker is logged for its branch."),
+    ]);
+  });
+
+  test("a check re-posted with the same result is no move; a new result is", () => {
+    const reposted = { ...PR, checks: [...PR.checks] };
+
+    expect(markOf(reposted)).toBe(markOf(PR));
+    expect(markOf({ ...PR, checks: [...GREEN, gate("IN_PROGRESS", "Review round 1 running.")] })).not.toBe(markOf(PR));
+    expect(markOf({ ...PR, labels: ["land-ok"] })).not.toBe(markOf(PR));
+  });
+});
+
+describe("a Worker idle on the Author's turn", () => {
+  const draft = { ...PR, draft: true, checks: [...GREEN, gate("IN_PROGRESS", "Draft: the author's turn.")] };
+
+  const unfinished: Stop = {
+    ...STOP,
+    outcome: "not-published",
+    reason: "the Done judge says the change is not finished",
+  };
+
+  test(`a draft whose Worker is idle prints once it has been still for ${IDLE_MS / 60_000} min, with the Worker's last stop`, () => {
+    expect(linesOf(draft, IDLE_MS - 1)).toEqual([]);
+    expect(linesOf(draft, IDLE_MS, { stops: [STOP, unfinished] })).toEqual([
+      `PR #9 (issue #7) is in draft, the Author's turn, and its Worker (session s-worker) is idle; its last stop at ${STOP.at} published nothing: the Done judge says the change is not finished. Give the Worker its turn, or look at the PR: ${URL}`,
+    ]);
+  });
+
+  test("a new stop of the Worker on the same draft prints again", () => {
+    const step = stepOf([], { ...READING, prs: [draft] }, stillFor(draft, IDLE_MS), NOW);
+    const later = { ...unfinished, at: before(60_000) };
+
+    expect(step.lines).toHaveLength(1);
+    expect(stepOf([], { ...READING, prs: [draft] }, step.memory, NOW).lines).toEqual([]);
+    expect(stepOf([], { ...READING, prs: [draft], stops: [STOP, later] }, step.memory, NOW).lines).toHaveLength(1);
+  });
+
+  test("a busy Worker's draft prints nothing, a Worker that is not running is named so", () => {
+    expect(linesOf(draft, STALL_MS, { sessions: [{ ...IDLE, status: "busy" }] })).toEqual([]);
+    expect(linesOf(draft, IDLE_MS, { sessions: [{ id: "s-worker", running: false, status: null }] })).toEqual([
+      expect.stringContaining("its Worker (session s-worker) is not running; its last stop"),
+    ]);
+  });
+
+  test("an issue with no open PR whose Worker stopped without publishing prints once per stop", () => {
+    const stop: Stop = { ...unfinished, branch: "issue/7-add-a-flag" };
+
+    const reading: Reading = {
+      prs: [],
+      issues: [{ number: 7, state: "OPEN", prs: [] }],
+      sessions: [IDLE],
+      stops: [stop],
+    };
+
+    const step = stepOf([7], reading, EMPTY_MEMORY, NOW);
+
+    expect(step.lines).toEqual([
+      `Issue #7 has no open PR, and its Worker (session s-worker) is idle; its last stop at ${STOP.at} published nothing: the Done judge says the change is not finished. Give the Worker its turn, or look at its worktree.`,
+    ]);
+    expect(stepOf([7], reading, step.memory, NOW).lines).toEqual([]);
+    expect(stepOf([7], { ...reading, stops: [{ ...stop, outcome: "published" }] }, EMPTY_MEMORY, NOW).lines).toEqual(
+      [],
+    );
+    expect(stepOf([7], { ...reading, sessions: [{ ...IDLE, status: "busy" }] }, EMPTY_MEMORY, NOW).lines).toEqual([]);
+    expect(stepOf([7], { ...reading, prs: [PR] }, EMPTY_MEMORY, NOW).lines).toEqual([]);
+    expect(
+      stepOf([7], { ...reading, stops: [{ ...stop, branch: "issue/70-other" }] }, EMPTY_MEMORY, NOW).lines,
+    ).toEqual([]);
+  });
+});
+
+describe("a PR that landed or closed, an issue closed", () => {
+  test("a PR an earlier reading saw open prints that it landed, or closed without landing", () => {
+    const seen = stillFor(PR, 0);
+
+    expect(stepOf([], { ...READING, prs: [{ ...PR, state: "MERGED" }] }, seen, NOW).lines).toEqual([
+      `PR #9 (issue #7) landed: ${URL}`,
+    ]);
+    expect(stepOf([], { ...READING, prs: [{ ...PR, state: "CLOSED" }] }, seen, NOW).lines).toEqual([
+      `PR #9 (issue #7) was closed without landing: ${URL}`,
+    ]);
+  });
+
+  test("a PR no reading saw open prints nothing, and leaves the memory", () => {
+    const step = stepOf([7], { ...READING, prs: [{ ...PR, state: "MERGED" }] }, EMPTY_MEMORY, NOW);
+
+    expect(step.lines).toEqual([]);
+    expect(step.memory.still).toEqual({});
+  });
+
+  test("a closed issue prints once, and the watch ends when every watched issue is closed", () => {
+    const closed = { number: 7, state: "CLOSED" as const, prs: [9] };
+    const open = { number: 8, state: "OPEN" as const, prs: [] };
+    const step = stepOf([7, 8], { ...READING, prs: [], issues: [closed, open] }, EMPTY_MEMORY, NOW);
+
+    expect(step.lines).toEqual(["Issue #7 is closed."]);
+    expect(step.ends).toBe(false);
+    expect(
+      stepOf([7, 8], { ...READING, prs: [], issues: [closed, { ...open, state: "CLOSED" }] }, step.memory, NOW),
+    ).toEqual({
+      lines: ["Issue #8 is closed."],
+      memory: { printed: ["closed:7", "closed:8"], still: {} },
+      ends: true,
+    } satisfies WatchStep);
+  });
+
+  test("the watch of the open PRs ends when no PR it watches is open", () => {
+    expect(stepOf([], READING, EMPTY_MEMORY, NOW).ends).toBe(false);
+    expect(stepOf([], { ...READING, prs: [{ ...PR, state: "MERGED" }] }, EMPTY_MEMORY, NOW).ends).toBe(true);
+  });
+});
+
+describe("the memory", () => {
+  test("holds each open PR's mark and keeps its first sighting while the mark holds", () => {
+    const first = stepOf([], READING, EMPTY_MEMORY, before(60_000));
+
+    expect(first.memory.still).toEqual({ "9": { mark: markOf(PR), since: before(60_000) } });
+    expect(stepOf([], READING, first.memory, NOW).memory.still["9"]?.since).toBe(before(60_000));
+  });
+});
+
+const checkRun = (name: string, status: string, startedAt: string, title: string | null = null) => ({
+  kind: "CheckRun",
+  name,
+  status,
+  conclusion: status === "COMPLETED" ? "SUCCESS" : null,
+  title,
+  startedAt,
+});
+
+/** What a test changes of a PR as GitHub answers it. */
+interface NodeChange {
+  readonly state?: string;
+  readonly mergeable?: string;
+  readonly commits?: object;
+}
+
+const prNode = (number: number, rest: NodeChange = {}) => ({
+  number,
+  url: `https://github.com/o/r/pull/${number}`,
+  state: "OPEN",
+  isDraft: false,
+  headRefName: `issue/${number}-x`,
+  headRefOid: `head-${number}`,
+  mergeable: "MERGEABLE",
+  closingIssuesReferences: { nodes: [{ number: 7 }] },
+  labels: { nodes: [{ name: "land:auto" }] },
+  comments: { nodes: [{ id: "c1", url: "u1", author: null, body: "hi" }] },
+  reviewThreads: { nodes: [{ isResolved: true }, { isResolved: false }] },
+  commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+  ...rest,
+});
+
+describe("githubOf", () => {
+  test("reads the open PRs, the issues with their PRs and the PRs asked by number, each PR once", () => {
+    const answerText = JSON.stringify({
+      data: {
+        repository: {
+          open: { nodes: [prNode(9)] },
+          i7: {
+            number: 7,
+            state: "OPEN",
+            closedByPullRequestsReferences: { nodes: [prNode(9), prNode(5, { state: "CLOSED" })] },
+          },
+          p3: prNode(3, { state: "MERGED", mergeable: "CONFLICTING" }),
+        },
+      },
+    });
+
+    const { prs, issues } = githubOf(answerText);
+
+    expect(prs.map((pr) => [pr.number, pr.state])).toEqual([
+      [9, "OPEN"],
+      [5, "CLOSED"],
+      [3, "MERGED"],
+    ]);
+    expect(issues).toEqual([{ number: 7, state: "OPEN", prs: [9, 5] }]);
+    expect(prs[0]).toEqual({
+      number: 9,
+      url: "https://github.com/o/r/pull/9",
+      state: "OPEN",
+      draft: false,
+      branch: "issue/9-x",
+      head: "head-9",
+      conflicting: false,
+      issues: [7],
+      labels: ["land:auto"],
+      comments: [{ id: "c1", url: "u1", author: "unknown", body: "hi" }],
+      openThreads: 1,
+      checks: [],
+    });
+    expect(prs[2]?.conflicting).toBe(true);
+  });
+
+  test("keeps the latest run of each check the Land loop moves by, and drops the Merge bot's job and commit statuses", () => {
+    const contexts = [
+      checkRun("land-gate", "IN_PROGRESS", "2026-11-11T15:00:00Z", "Review round 1 running."),
+      checkRun("land-gate", "COMPLETED", "2026-11-11T15:30:00Z", "Landable, land:auto."),
+      checkRun("merge-bot", "COMPLETED", "2026-11-11T15:31:00Z"),
+      checkRun("mutation", "IN_PROGRESS", "2026-11-11T15:10:00Z"),
+      { kind: "StatusContext" },
+    ];
+
+    const answerText = JSON.stringify({
+      data: {
+        repository: {
+          open: {
+            nodes: [
+              prNode(9, { commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: contexts } } } }] } }),
+            ],
+          },
+        },
+      },
+    });
+
+    expect(githubOf(answerText).prs[0]?.checks).toEqual([
+      { name: "mutation", status: "IN_PROGRESS", conclusion: null, title: null },
+      { name: "land-gate", status: "COMPLETED", conclusion: "SUCCESS", title: "Landable, land:auto." },
+    ]);
+  });
+
+  test("an answer that does not read throws, naming the query", () => {
+    expect(() => githubOf('{"data":{"repository":{"p1":{"number":"x"}}}}')).toThrow("the watch query");
+  });
+});
+
+describe("watchQueryOf", () => {
+  test("asks the open PRs when no issue is watched, and each PR asked by number", () => {
+    const query = watchQueryOf([], [3]);
+
+    expect(query).toContain("open:pullRequests(states:OPEN,first:100){nodes{...P}}");
+    expect(query).toContain("p3:pullRequest(number:3){...P}");
+    expect(query).not.toContain("issue(");
+  });
+
+  test("asks each watched issue with the PRs that close it, open or not, and no open PR list", () => {
+    const query = watchQueryOf([7, 8], []);
+
+    expect(query).toContain(
+      "i7:issue(number:7){number state closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{...P}}}",
+    );
+    expect(query).toContain("i8:issue(number:8)");
+    expect(query).not.toContain("open:");
+    expect(query).toMatch(/fragment P on PullRequest\{number url state isDraft /u);
+  });
+});
+
+describe("sessionsOf", () => {
+  test("reads each listed session, running when it has a pid", () => {
+    const agents = JSON.stringify([
+      { sessionId: "a", pid: 12, status: "busy", state: "working" },
+      { sessionId: "b", state: "blocked" },
+      { cwd: "/x" },
+    ]);
+
+    expect(sessionsOf(agents)).toEqual([
+      { id: "a", running: true, status: "busy" },
+      { id: "b", running: false, status: null },
+    ]);
+  });
+});
+
+describe("stopsOf", () => {
+  test("reads the stops of .lab/outcomes.log in order, and skips the relay's lines", () => {
+    const log = [
+      '{"at":"t1","session":"s1","worktree":"/w","branch":"issue/7-x","head":"h","outcome":"published","pr":9}',
+      '{"at":"t2","relay":"started","pr":9}',
+      '{"at":"t3","session":"s1","worktree":"/w","branch":null,"head":null,"outcome":"not-published","reason":"why"}',
+      "",
+    ].join("\n");
+
+    expect(stopsOf(log)).toEqual([
+      { at: "t1", session: "s1", branch: "issue/7-x", outcome: "published", reason: null },
+      { at: "t3", session: "s1", branch: null, outcome: "not-published", reason: "why" },
+    ]);
+    expect(stopsOf("")).toEqual([]);
+  });
+
+  test("a line that is neither a stop nor the relay's throws, naming the log", () => {
+    expect(() => stopsOf('{"at":"t1"}')).toThrow(".lab/outcomes.log");
+  });
+});
