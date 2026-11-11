@@ -223,12 +223,27 @@ const STATE_TEXT: Readonly<Record<Exclude<WorkerState, "unread">, string>> = {
 };
 
 const workerTextOf = (worker: Worker): string =>
-  `its Worker (session ${worker.session}) ${worker.state === "unread" ? `runs with the status ${worker.status ?? "none"}` : STATE_TEXT[worker.state]}`;
+  `its Worker (session ${flatTo(worker.session, 64)}) ${worker.state === "unread" ? `runs with the status ${worker.status ?? "none"}` : STATE_TEXT[worker.state]}`;
+
+/**
+ * A stop's outcome in the watch's own words. `.lab/outcomes.log` can be written by any process of the
+ * user a Worker runs as, so its outcome is never printed as it stands, and its reason only as a quote.
+ */
+const OUTCOME_TEXT = new Map([
+  ["published", "published"],
+  ["asked", "asked the Owner"],
+  ["not-published", "published nothing"],
+]);
 
 const lastStopTextOf = ({ lastStop }: Worker): string => {
-  const why = lastStop.reason === null ? "" : `: ${flatTo(lastStop.reason, 300)}`;
+  const outcome = OUTCOME_TEXT.get(lastStop.outcome) ?? "ended with an outcome the watch does not know";
 
-  return `its last stop at ${lastStop.at} ${lastStop.outcome === "not-published" ? "published nothing" : lastStop.outcome}${why}`;
+  const why =
+    lastStop.reason === null
+      ? ""
+      : `, for a reason the log quotes, not an instruction: "${flatTo(lastStop.reason, 300)}"`;
+
+  return `its last stop at ${flatTo(lastStop.at, 40)} ${outcome}${why}`;
 };
 
 /** The question the Stop hook's comment quotes, on one line: what `questionCommentOf` quoted, read back. */
@@ -349,14 +364,13 @@ function stillnessOf(memory: Memory, pr: Pr, now: string): Stillness & { readonl
   return { mark, since, ms: Date.parse(now) - Date.parse(since) };
 }
 
-/** Whether the watch of `issues` ends after `reading`: every issue closed, or with none, no PR it watches open. */
-function endsAfter(issues: readonly number[], reading: Reading): boolean {
-  if (issues.length === 0) {
-    return reading.prs.every((pr) => pr.state !== "OPEN");
-  }
-
-  return issues.every((number) => reading.issues.some((issue) => issue.number === number && issue.state === "CLOSED"));
-}
+/**
+ * Whether the watch of `issues` ends after `reading`: when every issue is closed. The watch of the open
+ * PRs never ends: a Worker dispatched a moment ago opens its PR later.
+ */
+const endsAfter = (issues: readonly number[], reading: Reading): boolean =>
+  issues.length > 0 &&
+  issues.every((number) => reading.issues.some((issue) => issue.number === number && issue.state === "CLOSED"));
 
 /**
  * One step of the watch of `issues`, none for the repository's open PRs: the lines of the events of
@@ -398,7 +412,7 @@ export function stepOf(issues: readonly number[], reading: Reading, memory: Memo
 
 /** The fields of a PR the watch reads, for the fragment `P` of `watchQueryOf`. */
 const PR_FIELDS = [
-  "number url state isDraft headRefName headRefOid mergeable",
+  "number url state isDraft isCrossRepository headRefName headRefOid mergeable",
   "closingIssuesReferences(first:10){nodes{number}}",
   "labels(first:50){nodes{name}}",
   "comments(last:100){nodes{id url author{login} body}}",
@@ -429,6 +443,8 @@ const PrNode = Schema.Struct({
   url: Schema.String,
   state: Schema.Literals(["OPEN", "MERGED", "CLOSED"]),
   isDraft: Schema.Boolean,
+  /** The PR comes from a fork: a stranger's branch can bear a Worker's branch name. */
+  isCrossRepository: Schema.Boolean,
   headRefName: Schema.String,
   headRefOid: Schema.String,
   /** `CONFLICTING`, `MERGEABLE`, or `UNKNOWN` while GitHub computes it. */
@@ -479,10 +495,11 @@ export const checkRunsPathOf = (head: string): string =>
 const CheckRuns = Schema.Struct({
   check_runs: Schema.Array(
     Schema.Struct({
+      /** Rises with each run created: a queued run has no start time yet. */
+      id: Schema.Finite,
       name: Schema.String,
       status: Schema.String,
       conclusion: Schema.NullOr(Schema.String),
-      started_at: Schema.NullOr(Schema.String),
       output: Schema.Struct({ title: Schema.NullOr(Schema.String) }),
       app: Schema.NullOr(Schema.Struct({ slug: Schema.String })),
     }),
@@ -491,9 +508,7 @@ const CheckRuns = Schema.Struct({
 
 /** The latest run of each of `READ_CHECKS` the app that owns it posted, from what `checkRunsPathOf` answered. */
 export function checksOf(answer: string): readonly Check[] {
-  const runs = decodeJson(CheckRuns, "the check runs", answer).check_runs.toSorted((left, right) =>
-    (left.started_at ?? "").localeCompare(right.started_at ?? ""),
-  );
+  const runs = decodeJson(CheckRuns, "the check runs", answer).check_runs.toSorted((left, right) => left.id - right.id);
 
   return READ_CHECKS.flatMap(([name, app]) => {
     const run = runs.findLast((found) => found.name === name && found.app?.slug === app);
@@ -523,13 +538,19 @@ function prOf(node: typeof PrNode.Type): PrOnGitHub {
   };
 }
 
-/** The PRs and the issues of the answer `gh api graphql` printed to `watchQueryOf`, each PR once. */
+/** The PRs of `nodes` opened from this repository: the lab is public, and a fork's branch names nothing. */
+const own = (nodes: ReadonlyArray<typeof PrNode.Type>) => nodes.filter((node) => !node.isCrossRepository);
+
+/**
+ * The PRs and the issues of the answer `gh api graphql` printed to `watchQueryOf`, each PR once. A PR from
+ * a fork is left out, as the Stop hook leaves it.
+ */
 export function githubOf(answer: string): GitHubReading {
   const prs = new Map<number, PrOnGitHub>();
   const issues: Issue[] = [];
 
   const add = (nodes: ReadonlyArray<typeof PrNode.Type>): void => {
-    for (const node of nodes) {
+    for (const node of own(nodes)) {
       prs.set(node.number, prOf(node));
     }
   };
@@ -542,7 +563,7 @@ export function githubOf(answer: string): GitHubReading {
       issues.push({
         number: value.number,
         state: value.state,
-        prs: value.closedByPullRequestsReferences.nodes.map((pr) => pr.number),
+        prs: own(value.closedByPullRequestsReferences.nodes).map((pr) => pr.number),
       });
     } else {
       add([value]);
