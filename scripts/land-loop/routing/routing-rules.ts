@@ -171,8 +171,8 @@ export interface NitAnswerInput {
 
 /**
  * The Routing answer of a Patch delta that only answers the Nits of the last Review round, whichever it was, when it posted no
- * Important: the delta starts at the head that round read, touches only files it posted a Nit on and
- * no `deepReviewPaths` path, in at most NIT_ANSWER_LINE_CAP lines. It needs no read, so it starts no round, holds nothing
+ * Important: the delta starts at the head that round read, touches only files it posted a Nit on, or the test
+ * file beside one (`x.test.ts` for `x.ts`, `x.test.tsx` for `x.tsx`), and no `deepReviewPaths` path, in at most NIT_ANSWER_LINE_CAP lines. It needs no read, so it starts no round, holds nothing
  * for the Owner and the change keeps its Land route. Any other answer stands.
  */
 export function withNitAnswers(
@@ -181,7 +181,7 @@ export function withNitAnswers(
   delta: RoutingInput,
   { record, deltaFrom, nitPaths }: NitAnswerInput,
 ): RoutingAnswer {
-  const nits = new Set(nitPaths);
+  const nits = new Set(nitPaths.flatMap((path) => [path, path.replace(/\.(tsx?)$/u, ".test.$1")]));
 
   const answersNits =
     answer.secondRound &&

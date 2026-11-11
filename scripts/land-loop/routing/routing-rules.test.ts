@@ -564,6 +564,8 @@ describe("withNitAnswers", () => {
     record: { ...AFTER_CLEAN_ROUND_3.record, ...record },
   });
 
+  const nitsOn = (nitPaths: readonly string[]): NitAnswerInput => ({ ...AFTER_CLEAN_ROUND_3, nitPaths });
+
   const nitsOnly = (input: NitAnswerInput, answer = READ): RoutingAnswer =>
     withNitAnswers(LAB, answer, delta(["scripts/a.ts"], 10), input);
 
@@ -592,6 +594,41 @@ describe("withNitAnswers", () => {
     expect(withNitAnswers(LAB, READ, delta(["scripts/a.ts", "scripts/b.ts"], 10), AFTER_CLEAN_ROUND_3)).toBe(READ);
     expect(withNitAnswers(LAB, READ, delta(["scripts/a.ts"], NIT_ANSWER_LINE_CAP + 1), AFTER_CLEAN_ROUND_3)).toBe(READ);
     expect(withNitAnswers(LAB, READ, delta(["app/src/store/format.ts"], 10), AFTER_CLEAN_ROUND_3)).toBe(READ);
+  });
+
+  test("a delta on a Nit file and the test file beside it needs no read; a test file whose source got no Nit keeps its answer", () => {
+    const input = nitsOn(["scripts/c.ts", "app/src/v.tsx"]);
+
+    for (const paths of [
+      ["scripts/c.ts", "scripts/c.test.ts"],
+      ["scripts/c.test.ts"],
+      ["app/src/v.tsx", "app/src/v.test.tsx"],
+    ]) {
+      expect(withNitAnswers(LAB, READ, delta(paths, 10), input)).toEqual({
+        ...READ,
+        secondRound: false,
+        reason: `a push after Review round 3 that only answers its Nits: 10 lines in ${paths.join(", ")}`,
+      });
+    }
+
+    for (const paths of [
+      ["scripts/c.ts", "scripts/b.test.ts"],
+      ["scripts/c.ts", "scripts/sub/c.test.ts"],
+      ["scripts/c.ts", "scripts/c.spec.ts"],
+      ["app/src/v.tsx", "app/src/v.test.ts"],
+      ["scripts/c.ts", "xscripts/c.test.ts"],
+      ["scripts/c.ts", "scripts/c.test.tsx"],
+    ]) {
+      expect(withNitAnswers(LAB, READ, delta(paths, 10), input)).toBe(READ);
+    }
+
+    expect(
+      withNitAnswers(LAB, READ, delta(["scripts/c.ts", "scripts/c.test.ts"], NIT_ANSWER_LINE_CAP + 1), input),
+    ).toBe(READ);
+    expect(withNitAnswers(LAB, READ, delta(["docs/c.test.ts.md"], 10), nitsOn(["docs/c.ts.md"]))).toBe(READ);
+    expect(
+      withNitAnswers(LAB, READ, delta(["app/src/store/format.test.ts"], 10), nitsOn(["app/src/store/format.ts"])),
+    ).toBe(READ);
   });
 
   test("a delta that does not start at round 3's head, as after a rebase, keeps its answer", () => {
