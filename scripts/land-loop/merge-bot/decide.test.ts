@@ -2018,6 +2018,10 @@ describe("the Delta read after Review round 3", () => {
     expect(kinds({ ...READY, record: held })).not.toContain("request-review");
   });
 
+  test("only a record of three Review rounds gets a Delta read: one whose count reads past 3 gets no review", () => {
+    expect(kinds({ ...READY, record: afterRound3(ANSWERED, { reviewRounds: 4 }) })).not.toContain("request-review");
+  });
+
   test("a push after Review round 3 outside the bounds is held for the Owner, as before", () => {
     expect(stepsOf({ ...READY, record: afterRound3(RISKY) })[0]).toEqual({
       kind: "record",
