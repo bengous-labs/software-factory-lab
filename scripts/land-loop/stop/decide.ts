@@ -198,9 +198,12 @@ export function afterClosed(
     : none(`#${closedHere.number} was closed without landing at ${head}: a stop at the head it had publishes nothing`);
 }
 
-/** No Author token blocks once, naming where it was looked for; a second stop without it lets the session end. */
-export function noAuthorToken(path: string, stopHookActive: boolean): Refusal {
-  if (stopHookActive) {
+/**
+ * No Author token blocks once, naming where it was looked for; a stop without it after a block that
+ * reported a failure (`Chain.reported`) lets the session end.
+ */
+export function noAuthorToken(path: string, reported: boolean): Refusal {
+  if (reported) {
     return none("no Author token after a block: nothing is published");
   }
 
@@ -210,13 +213,16 @@ export function noAuthorToken(path: string, stopHookActive: boolean): Refusal {
   };
 }
 
-/** Red Stop checks block once, with their report; a second stop on the same failure lets the session end. */
-export function afterStopChecks(stopChecks: StopChecks, stopHookActive: boolean): Next {
+/**
+ * Red Stop checks block once, with their report; red again after a block that reported a failure
+ * (`Chain.reported`), they let the session end.
+ */
+export function afterStopChecks(stopChecks: StopChecks, reported: boolean): Next {
   if (stopChecks.kind === "green") {
     return { kind: "ask-done-judge" };
   }
 
-  if (stopHookActive) {
+  if (reported) {
     return none("the Stop checks are still red after a block: nothing is published");
   }
 
@@ -272,11 +278,11 @@ export function doneAnswerOf(fork: ForkAnswer): DoneAnswer | null {
 
 /**
  * A Done judge that gave no answer, its fork failed or its output fits no schema, is not a "not
- * finished": the first such stop blocks so the Author stops again and the hook asks again; a second one
- * lets the session end.
+ * finished": the first such stop blocks so the Author stops again and the hook asks again; one after a
+ * block that reported a failure (`Chain.reported`) lets the session end.
  */
-export function noDoneAnswer(code: number, stopHookActive: boolean): Refusal {
-  if (stopHookActive) {
+export function noDoneAnswer(code: number, reported: boolean): Refusal {
+  if (reported) {
     return none("the Done judge gave no answer after a block: nothing is published");
   }
 
