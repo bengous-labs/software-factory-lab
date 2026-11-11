@@ -1,10 +1,21 @@
 /**
- * The watch's reads: one reading of the factory from GitHub, the PRs then the checks on each open head,
- * the sessions and `.lab/outcomes.log` of the main checkout, then the step `watch-plan.ts` decides over it.
+ * The watch's reads: one reading of the factory from GitHub, the PRs then the checks on each open head
+ * and how far a conflicting one is behind its base, the sessions and `.lab/outcomes.log` of the main
+ * checkout, then the step `watch-plan.ts` decides over it.
  */
 
 import type { Run, RunOptions } from "../land-loop/ports/run.ts";
-import { checkRunsPathOf, checksOf, githubOf, sessionsOf, stepOf, stopsOf, watchQueryOf } from "./watch-plan.ts";
+import {
+  behindOf,
+  checkRunsPathOf,
+  checksOf,
+  comparePathOf,
+  githubOf,
+  sessionsOf,
+  stepOf,
+  stopsOf,
+  watchQueryOf,
+} from "./watch-plan.ts";
 import type { Memory, Reading, WatchStep } from "./watch-plan.ts";
 
 export interface WatchPorts {
@@ -21,6 +32,8 @@ export interface WatchTurn {
   readonly memory: Memory;
   /** When the turn reads, as an ISO timestamp. */
   readonly now: string;
+  /** The first turn of a session's watch: it tells again what an earlier run told and still holds. */
+  readonly retell: boolean;
 }
 
 async function out(run: Run, argv: readonly string[], options: RunOptions): Promise<string> {
@@ -58,12 +71,18 @@ async function readFactory(
   );
 
   const github = githubOf(answer);
+  const api = (path: string): Promise<string> => out(run, ["gh", "api", path], at);
 
   const read = await Promise.all(
-    github.prs.map(async (pr) => ({
-      ...pr,
-      checks: pr.state === "OPEN" ? checksOf(await out(run, ["gh", "api", checkRunsPathOf(pr.head)], at)) : [],
-    })),
+    github.prs.map(async (pr) => {
+      const open = pr.state === "OPEN";
+
+      return {
+        ...pr,
+        checks: open ? checksOf(await api(checkRunsPathOf(pr.head))) : [],
+        behind: open && pr.conflicting ? behindOf(await api(comparePathOf(pr.base, pr.head))) : null,
+      };
+    }),
   );
 
   const agents = await out(run, ["claude", "agents", "--json"], at);
@@ -72,9 +91,16 @@ async function readFactory(
   return { prs: read, issues: github.issues, sessions: sessionsOf(agents), stops: stopsOf(log) };
 }
 
-/** One turn of the watch: reads the factory, then decides what to print. */
-export async function watchTurn(ports: WatchPorts, { checkout, issues, memory, now }: WatchTurn): Promise<WatchStep> {
+/**
+ * One turn of the watch: reads the factory, then decides what to print. A turn that `retell`s prints
+ * first the standing events an earlier run printed and that still hold.
+ */
+export async function watchTurn(
+  ports: WatchPorts,
+  { checkout, issues, memory, now, retell }: WatchTurn,
+): Promise<WatchStep> {
   const reading = await readFactory(ports, checkout, issues, Object.keys(memory.still).map(Number));
+  const step = stepOf(issues, reading, memory, now);
 
-  return stepOf(issues, reading, memory, now);
+  return retell ? { ...step, lines: [...step.retold, ...step.lines] } : step;
 }

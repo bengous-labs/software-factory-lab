@@ -53,7 +53,9 @@ const PR: Pr = {
   draft: false,
   branch: "issue/7-add-a-flag",
   head: "h1",
+  base: "dev",
   conflicting: false,
+  behind: null,
   issues: [7],
   labels: [],
   comments: [],
@@ -94,12 +96,17 @@ const answer: Comment = { id: "c-answer", url: `${URL}#a`, author: OWNER_LOGIN, 
 
 describe("watchArgsOf", () => {
   test("takes the issues, in order and once each, and none for the open PRs", () => {
-    expect(watchArgsOf([])).toEqual([]);
-    expect(watchArgsOf(["177", "159", "177"])).toEqual([159, 177]);
+    expect(watchArgsOf([])).toEqual({ issues: [], standing: false });
+    expect(watchArgsOf(["177", "159", "177"])).toEqual({ issues: [159, 177], standing: false });
+  });
+
+  test("takes --standing, before or after the issues", () => {
+    expect(watchArgsOf(["--standing"])).toEqual({ issues: [], standing: true });
+    expect(watchArgsOf(["7", "--standing", "3"])).toEqual({ issues: [3, 7], standing: true });
   });
 
   test.each([[["0"]], [["#12"]], [["12a"]], [["--all"]]])("refuses %j with the usage", (argv) => {
-    expect(() => watchArgsOf(argv)).toThrow("usage: bun scripts/factory/watch.ts [<issue>...]");
+    expect(() => watchArgsOf(argv)).toThrow("usage: bun scripts/factory/watch.ts [--standing] [<issue>...]");
   });
 });
 
@@ -221,15 +228,15 @@ describe("a PR that has not moved", () => {
   });
 
   test("names a Worker that is not running, one that runs with an unread status, one no stop names, and a head with no Land gate", () => {
-    const red = { ...PR, conflicting: true, checks: [gate("completed", "This PR conflicts with dev.", "failure")] };
+    const red = { ...PR, checks: [gate("completed", "Nothing to land: this PR changes no file.", "failure")] };
 
-    expect(linesOf(red, STALL_MS, { sessions: [] })).toEqual([
-      expect.stringContaining(
-        "land-gate failure (This PR conflicts with dev.); its Worker (session s-worker) is not running.",
-      ),
+    expect(linesOf(stuck, STALL_MS, { sessions: [] })).toEqual([
+      expect.stringContaining("mutation not completed; its Worker (session s-worker) is not running."),
     ]);
     expect(linesOf(red, STALL_MS, { sessions: [{ ...IDLE, status: null }] })).toEqual([
-      expect.stringContaining("its Worker (session s-worker) runs with the status none."),
+      expect.stringContaining(
+        "land-gate failure (Nothing to land: this PR changes no file.); its Worker (session s-worker) runs with the status none.",
+      ),
     ]);
     expect(linesOf({ ...PR, checks: [] }, STALL_MS, { stops: [] })).toEqual([
       expect.stringContaining("no land-gate on its head; no stop of a Worker is logged for its branch."),
@@ -315,6 +322,65 @@ describe("a Worker idle on the Author's turn", () => {
     expect(linesOf(draft, STALL_MS - 1, { sessions: [{ ...IDLE, status: null }] })).toEqual([]);
   });
 
+  test(`a red Land gate with an idle Worker is the Author's turn too, told after ${IDLE_MS / 60_000} min`, () => {
+    const ejected = {
+      ...PR,
+      checks: [...GREEN, gate("completed", "Ejected from the merge queue: a test failed.", "failure")],
+    };
+
+    expect(linesOf(ejected, IDLE_MS - 1)).toEqual([]);
+    expect(linesOf(ejected, IDLE_MS)).toEqual([
+      `PR #9 (issue #7) has a red Land gate, the Author's turn: "Ejected from the merge queue: a test failed.", and its Worker (session s-worker) is idle; its last stop at ${STOP.at} published. Give the Worker its turn, or look at the PR: ${URL}`,
+    ]);
+  });
+
+  test("a red CI check with an idle Worker is the Author's turn too", () => {
+    const red = { ...PR, checks: [VALIDATE, { ...VALIDATE, name: "mutation", conclusion: "failure" }, WAITING_CI] };
+
+    expect(linesOf(red, IDLE_MS)).toEqual([
+      expect.stringContaining("PR #9 (issue #7) has mutation red, the Author's turn, and"),
+    ]);
+  });
+
+  test("a conflict whose head is behind its base is the Author's to rebase", () => {
+    const conflicting = {
+      ...PR,
+      conflicting: true,
+      behind: 2,
+      checks: [gate("completed", "This PR conflicts with dev: rebase it onto origin/dev, then stop.", "failure")],
+    };
+
+    expect(linesOf(conflicting, IDLE_MS)).toEqual([
+      `PR #9 (issue #7) conflicts with dev, its head 2 commit(s) behind: the Author's turn to rebase onto origin/dev, and its Worker (session s-worker) is idle; its last stop at ${STOP.at} published. Give the Worker its turn, or look at the PR: ${URL}`,
+    ]);
+  });
+
+  test("a conflict whose head holds the base's tip is a stale merge state, which a new push clears, not a rebase", () => {
+    const stale = {
+      ...PR,
+      conflicting: true,
+      behind: 0,
+      checks: [gate("completed", "This PR conflicts with dev: rebase it onto origin/dev, then stop.", "failure")],
+    };
+
+    expect(linesOf(stale, IDLE_MS)).toEqual([
+      `PR #9 (issue #7) reads as conflicting with dev on GitHub, but its head holds the tip of dev: a stale merge state, which no rebase changes, and its Worker (session s-worker) is idle; its last stop at ${STOP.at} published. A new push to its branch makes GitHub compute it again; look at the PR: ${URL}`,
+    ]);
+    expect(linesOf(stale, STALL_MS, { stops: [] })).toEqual([
+      `PR #9 (issue #7) has not moved for 20 min, and nothing says why: it reads as conflicting with dev on GitHub, but its head holds the tip of dev: a stale merge state, which no rebase changes; no stop of a Worker is logged for its branch. A new push to its branch makes GitHub compute it again; look at the PR: ${URL}/checks`,
+    ]);
+  });
+
+  test("a conflict whose base was not compared is told as GitHub reads it", () => {
+    expect(linesOf({ ...PR, conflicting: true }, IDLE_MS)).toEqual([
+      expect.stringContaining("PR #9 (issue #7) conflicts with dev: the Author's turn to rebase onto origin/dev, and"),
+    ]);
+  });
+
+  test("a Land gate that waits, a green PR, is no Author's turn: a busy or idle Worker prints nothing before a stall", () => {
+    expect(linesOf(PR, STALL_MS - 1)).toEqual([]);
+  });
+
   test("an issue with no open PR whose Worker stopped without publishing prints once per stop", () => {
     const stop: Stop = { ...unfinished, branch: "issue/7-add-a-flag" };
 
@@ -372,6 +438,7 @@ describe("a PR that landed or closed, an issue closed", () => {
       stepOf([7, 8], { ...READING, prs: [], issues: [closed, { ...open, state: "CLOSED" }] }, step.memory, NOW),
     ).toEqual({
       lines: ["Issue #8 is closed."],
+      retold: [],
       memory: { printed: ["closed:7", "closed:8"], still: {} },
       ends: true,
     } satisfies WatchStep);
@@ -381,6 +448,42 @@ describe("a PR that landed or closed, an issue closed", () => {
     expect(stepOf([], READING, EMPTY_MEMORY, NOW).ends).toBe(false);
     expect(stepOf([], { ...READING, prs: [] }, EMPTY_MEMORY, NOW).ends).toBe(false);
     expect(stepOf([], { ...READING, prs: [{ ...PR, state: "MERGED" }] }, stillFor(PR, 0), NOW).ends).toBe(false);
+  });
+});
+
+describe("what still stands", () => {
+  const held = { ...PR, checks: [...GREEN, OWNER_GATE] };
+
+  test("a standing event an earlier run printed, still true, is retold as standing; a new one is not", () => {
+    const first = stepOf([], { ...READING, prs: [held] }, EMPTY_MEMORY, NOW);
+    const again = stepOf([], { ...READING, prs: [held] }, first.memory, NOW);
+
+    expect(first.retold).toEqual([]);
+    expect(again.lines).toEqual([]);
+    expect(again.retold).toEqual([
+      `Still standing, told by an earlier run: PR #9 (issue #7), its Land gate: ${OWNER_GATE.title} ${URL}`,
+    ]);
+  });
+
+  test("a standing event that no longer holds, and a change such as a closed issue, are not retold", () => {
+    const first = stepOf(
+      [7],
+      { ...READING, prs: [held], issues: [{ number: 7, state: "CLOSED", prs: [] }] },
+      EMPTY_MEMORY,
+      NOW,
+    );
+
+    const landed = { ...held, state: "MERGED" as const };
+
+    const again = stepOf(
+      [7],
+      { ...READING, prs: [landed], issues: [{ number: 7, state: "CLOSED", prs: [] }] },
+      first.memory,
+      NOW,
+    );
+
+    expect(first.lines).toHaveLength(2);
+    expect(again.retold).toEqual([]);
   });
 });
 
@@ -408,6 +511,7 @@ const prNode = (number: number, rest: NodeChange = {}) => ({
   isCrossRepository: false,
   headRefName: `issue/${number}-x`,
   headRefOid: `head-${number}`,
+  baseRefName: "dev",
   mergeable: "MERGEABLE",
   closingIssuesReferences: { nodes: [{ number: 7 }] },
   labels: { nodes: [{ name: "land:auto" }] },
@@ -447,6 +551,7 @@ describe("githubOf", () => {
       draft: false,
       branch: "issue/9-x",
       head: "head-9",
+      base: "dev",
       conflicting: false,
       issues: [7],
       labels: ["land:auto"],

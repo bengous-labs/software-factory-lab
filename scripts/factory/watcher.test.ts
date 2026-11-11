@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { Ran, RunOptions } from "../land-loop/ports/run.ts";
 import { EMPTY_MEMORY } from "./watch-plan.ts";
 import { mainCheckoutOf, watchTurn } from "./watcher.ts";
-import type { WatchPorts } from "./watcher.ts";
+import type { WatchPorts, WatchTurn } from "./watcher.ts";
 
 const NOW = "2026-11-11T16:00:00.000Z";
 
@@ -15,6 +15,7 @@ const PR = {
   isCrossRepository: false,
   headRefName: "issue/7-add-a-flag",
   headRefOid: "h1",
+  baseRefName: "dev",
   mergeable: "UNKNOWN",
   closingIssuesReferences: { nodes: [{ number: 7 }] },
   labels: { nodes: [] },
@@ -26,8 +27,12 @@ const ANSWER = JSON.stringify({
   data: { repository: { i7: { number: 7, state: "CLOSED", closedByPullRequestsReferences: { nodes: [PR] } }, p9: PR } },
 });
 
-const OPEN_ANSWER = JSON.stringify({
-  data: { repository: { open: { nodes: [{ ...PR, number: 10, state: "OPEN", headRefOid: "h2" }] } } },
+const OPEN_PR = { ...PR, number: 10, state: "OPEN", headRefOid: "h2" };
+
+const OPEN_ANSWER = JSON.stringify({ data: { repository: { open: { nodes: [OPEN_PR] } } } });
+
+const CONFLICTING_ANSWER = JSON.stringify({
+  data: { repository: { open: { nodes: [{ ...OPEN_PR, mergeable: "CONFLICTING" }] } } },
 });
 
 const HELD = "Held for the Owner: a path. Waiting for the Owner's Land approval (label land-ok).";
@@ -47,6 +52,8 @@ const CHECKS = JSON.stringify({
 
 const CHECKS_PATH = "repos/{owner}/{repo}/commits/h2/check-runs?filter=latest&per_page=100";
 
+const COMPARE_PATH = "repos/{owner}/{repo}/compare/dev...h2";
+
 const AGENTS = JSON.stringify([{ sessionId: "s-worker", pid: 1, status: "idle" }]);
 
 const LOG =
@@ -64,6 +71,7 @@ function world(answers: Partial<Record<string, Ran>> = {}) {
   const defaults = new Map<string, Ran>([
     ["gh api graphql", { code: 0, stdout: ANSWER, stderr: "" }],
     [`gh api ${CHECKS_PATH}`, { code: 0, stdout: CHECKS, stderr: "" }],
+    [`gh api ${COMPARE_PATH}`, { code: 0, stdout: '{"behind_by":0,"ahead_by":3}', stderr: "" }],
     ["claude agents --json", { code: 0, stdout: AGENTS, stderr: "" }],
     ["git rev-parse --path-format=absolute", { code: 0, stdout: "/repo/.git\n", stderr: "" }],
   ]);
@@ -86,15 +94,20 @@ function world(answers: Partial<Record<string, Ran>> = {}) {
   return { ports, calls, reads };
 }
 
+const TURN: WatchTurn = { checkout: "/repo", issues: [], memory: EMPTY_MEMORY, now: NOW, retell: false };
+
+const commandsOf = (calls: readonly Call[]) => calls.map((call) => call.argv.slice(0, 3).join(" "));
+
 describe("watchTurn", () => {
   test("reads GitHub, the sessions and the outcomes log of the main checkout, then prints what changed", async () => {
     const { ports, calls, reads } = world();
     const memory = { printed: [], still: { "9": { mark: "earlier", since: NOW } } };
 
-    const step = await watchTurn(ports, { checkout: "/repo", issues: [7], memory, now: NOW });
+    const step = await watchTurn(ports, { ...TURN, issues: [7], memory });
 
     expect(step).toEqual({
       lines: ["PR #9 (issue #7) landed: https://github.com/o/r/pull/9", "Issue #7 is closed."],
+      retold: [],
       memory: { printed: ["end:9", "closed:7"], still: {} },
       ends: true,
     });
@@ -109,22 +122,39 @@ describe("watchTurn", () => {
   test("reads the checks of each open PR's head, apart from the PR", async () => {
     const { ports, calls } = world({ "gh api graphql": { code: 0, stdout: OPEN_ANSWER, stderr: "" } });
 
-    const step = await watchTurn(ports, { checkout: "/repo", issues: [], memory: EMPTY_MEMORY, now: NOW });
+    const step = await watchTurn(ports, TURN);
 
     expect(step.lines).toEqual([`PR #10 (issue #7), its Land gate: ${HELD} https://github.com/o/r/pull/9`]);
-    expect(calls.map((call) => call.argv.slice(0, 3).join(" "))).toEqual([
+    expect(commandsOf(calls)).toEqual(["gh api graphql", `gh api ${CHECKS_PATH}`, "claude agents --json"]);
+  });
+
+  test("compares the head of a PR GitHub reads as conflicting with its base", async () => {
+    const { ports, calls } = world({ "gh api graphql": { code: 0, stdout: CONFLICTING_ANSWER, stderr: "" } });
+
+    await watchTurn(ports, TURN);
+
+    expect(commandsOf(calls)).toEqual([
       "gh api graphql",
       `gh api ${CHECKS_PATH}`,
+      `gh api ${COMPARE_PATH}`,
       "claude agents --json",
+    ]);
+  });
+
+  test("a turn that retells prints first what an earlier run told and still holds; one that does not leaves it out", async () => {
+    const { ports } = world({ "gh api graphql": { code: 0, stdout: OPEN_ANSWER, stderr: "" } });
+    const first = await watchTurn(ports, TURN);
+
+    expect((await watchTurn(ports, { ...TURN, memory: first.memory })).lines).toEqual([]);
+    expect((await watchTurn(ports, { ...TURN, memory: first.memory, retell: true })).lines).toEqual([
+      `Still standing, told by an earlier run: PR #10 (issue #7), its Land gate: ${HELD} https://github.com/o/r/pull/9`,
     ]);
   });
 
   test("a command that fails throws, with what it printed", async () => {
     const { ports } = world({ "gh api graphql": { code: 1, stdout: "", stderr: "HTTP 502\n" } });
 
-    expect(await failureOf(watchTurn(ports, { checkout: "/repo", issues: [], memory: EMPTY_MEMORY, now: NOW }))).toBe(
-      "gh api graphql exited 1: HTTP 502",
-    );
+    expect(await failureOf(watchTurn(ports, TURN))).toBe("gh api graphql exited 1: HTTP 502");
   });
 });
 

@@ -3,9 +3,10 @@
  * factory: the PRs it watches, the sessions `claude agents --json` lists, and the stops
  * `.lab/outcomes.log` holds. It tells five events: a PR holds a Worker's question to the Owner; a PR
  * waits for the Owner's Land approval; a PR has not moved for `STALL_MS` while nothing says why; a
- * Worker is idle while its change is the Author's turn, its PR in draft or no PR after a stop that
- * published nothing; a PR landed or closed, an issue closed. Each event has a key, so it is printed
- * once. The clock and the memory of what earlier readings saw are inputs.
+ * Worker is idle while its change is the Author's turn (its PR in draft, conflicting, with a red Land
+ * gate or CI, or no PR after a stop that published nothing); a PR landed or closed, an issue closed.
+ * Each event has a key, so a run prints it once; the first turn of a session's watch tells again the
+ * standing ones an earlier run printed. The clock and the memory of earlier readings are inputs.
  */
 
 import { Result, Schema } from "effect";
@@ -17,15 +18,32 @@ import { decodeJson } from "../lib/json.ts";
 import { unescapeHtml } from "../lib/markdown.ts";
 import { branchMadeFor, printableOf } from "./dispatch-plan.ts";
 
-const USAGE = "usage: bun scripts/factory/watch.ts [<issue>...]";
+const USAGE = "usage: bun scripts/factory/watch.ts [--standing] [<issue>...]";
 
-/** The issues `argv` names, in order and once each; none watches the repository's open PRs. Throws the usage on anything else. */
-export function watchArgsOf(argv: readonly string[]): readonly number[] {
-  if (!argv.every((arg) => /^[1-9]\d*$/u.test(arg))) {
+const STANDING = "--standing";
+
+export interface WatchArgs {
+  /** The issues watched, in order and once each; none watches the repository's open PRs. */
+  readonly issues: readonly number[];
+  /**
+   * The first arming of the watch in a session: its first turn tells again each event an earlier run
+   * told that still holds. A re-arm in the same session leaves it out, so they are not told every time.
+   */
+  readonly standing: boolean;
+}
+
+/** The issues and the flag `argv` names; throws the usage on anything else. */
+export function watchArgsOf(argv: readonly string[]): WatchArgs {
+  const issues = argv.filter((arg) => arg !== STANDING);
+
+  if (!issues.every((arg) => /^[1-9]\d*$/u.test(arg))) {
     throw new Error(USAGE);
   }
 
-  return [...new Set(argv.map(Number))].toSorted((left, right) => left - right);
+  return {
+    issues: [...new Set(issues.map(Number))].toSorted((left, right) => left - right),
+    standing: argv.includes(STANDING),
+  };
 }
 
 /** How long a PR stays still, with nothing that says why, before the watch tells it. */
@@ -78,7 +96,15 @@ export interface Pr {
   readonly draft: boolean;
   readonly branch: string;
   readonly head: string;
+  /** The branch the PR lands on. */
+  readonly base: string;
+  /** GitHub reads the PR as conflicting with its base. */
   readonly conflicting: boolean;
+  /**
+   * How many commits of its base the head lacks, read when GitHub reads the PR as conflicting; null
+   * when not read. 0 is a stale merge state: the head holds the base's tip, so nothing can conflict.
+   */
+  readonly behind: number | null;
   /** The issues the PR closes when it lands. */
   readonly issues: readonly number[];
   readonly labels: readonly string[];
@@ -147,11 +173,16 @@ export function memoryFileOf(checkout: string, issues: readonly number[]): strin
 interface WatchEvent {
   readonly key: string;
   readonly line: string;
+  /** The event tells a state that holds while nothing moves (a question, a wait, a stall, an idle Worker), not a change. */
+  readonly standing: boolean;
 }
 
 /** What one reading prints, the memory it leaves, and whether the watch ends. */
 export interface WatchStep {
+  /** The events no earlier reading printed. */
   readonly lines: readonly string[];
+  /** The standing events an earlier reading printed that still hold, said so: the first turn of a session tells them again. */
+  readonly retold: readonly string[];
   readonly memory: Memory;
   readonly ends: boolean;
 }
@@ -264,10 +295,69 @@ export function questionOf(body: string): string {
 
 const minutesOf = (ms: number): number => Math.floor(ms / 60_000);
 
-/** What a still PR shows: its Land gate, the checks that have not completed, and its Worker. */
+/** Why an open PR is in its state, and what the reader can do about it. */
+interface Turn {
+  readonly why: string;
+  readonly act: string;
+}
+
+const GIVE_TURN = "Give the Worker its turn, or look at the PR";
+
+/**
+ * A PR GitHub reads as conflicting: a real conflict, its head behind its base, the Author's to rebase;
+ * or a stale merge state, its head holding the base's tip, which a rebase does not change and a new push
+ * makes GitHub compute again. The Land gate's own words send the reader to the rebase either way.
+ */
+function conflictOf(pr: Pr): Turn {
+  if (pr.behind === 0) {
+    return {
+      why: `reads as conflicting with ${pr.base} on GitHub, but its head holds the tip of ${pr.base}: a stale merge state, which no rebase changes`,
+      act: "A new push to its branch makes GitHub compute it again; look at the PR",
+    };
+  }
+
+  const behind = pr.behind === null ? "" : `, its head ${pr.behind} commit(s) behind`;
+
+  return {
+    why: `conflicts with ${pr.base}${behind}: the Author's turn to rebase onto origin/${pr.base}`,
+    act: GIVE_TURN,
+  };
+}
+
+/**
+ * Why an open PR is its Author's turn, the first that applies: a conflict with its base, a draft, a red
+ * Land gate (an ejection from the merge queue among them), a red CI check; null while it is not.
+ */
+function authorsTurnOf(pr: Pr, gate: Check | undefined): Turn | null {
+  if (pr.conflicting) {
+    return conflictOf(pr);
+  }
+
+  if (pr.draft) {
+    return { why: "is in draft, the Author's turn", act: GIVE_TURN };
+  }
+
+  if (gate?.status === "completed" && gate.conclusion === "failure") {
+    return {
+      why: `has a red Land gate, the Author's turn: ${quotedTo(gate.title ?? "no summary", 500)}`,
+      act: GIVE_TURN,
+    };
+  }
+
+  const red = pr.checks.filter(
+    (check) => check.name !== LAND_GATE && check.status === "completed" && check.conclusion === "failure",
+  );
+
+  return red.length === 0
+    ? null
+    : { why: `has ${red.map((check) => check.name).join(", ")} red, the Author's turn`, act: GIVE_TURN };
+}
+
+/** What a still PR shows: its Land gate, or its conflict, the checks that have not completed, and its Worker. */
 function stillFactsOf(pr: Pr, gate: Check | undefined, worker: Worker | null): string {
-  const gateText =
-    gate === undefined
+  const gateText = pr.conflicting
+    ? `it ${conflictOf(pr).why}`
+    : gate === undefined
       ? `no ${LAND_GATE} on its head`
       : `${LAND_GATE} ${gate.status === "completed" ? (gate.conclusion ?? "completed") : "pending"} (${flatTo(gate.title ?? "no summary", 500)})`;
 
@@ -283,6 +373,7 @@ const endEventOf = (pr: Pr): WatchEvent => ({
   key: `end:${pr.number}`,
   line:
     pr.state === "MERGED" ? `${whereOf(pr)} landed: ${pr.url}` : `${whereOf(pr)} was closed without landing: ${pr.url}`,
+  standing: false,
 });
 
 /** How long an open PR has been still, and since when. */
@@ -293,9 +384,9 @@ interface Stillness {
 
 /**
  * The event of an open PR, the first that applies: its Worker's question to the Owner; its wait for the
- * Owner's Land approval; its Worker idle while it is in draft, the Author's turn; its stillness for
- * `STALL_MS`, or `REVIEW_STALL_MS` while a Review round runs, with no busy Worker. The question is the
- * Worker's own words, which any session holding the Author's token can post: the line says so.
+ * Owner's Land approval; its Worker idle on the Author's turn; its stillness for `STALL_MS`, or
+ * `REVIEW_STALL_MS` while a Review round runs, with no busy Worker. The question is the Worker's own
+ * words, which any session holding the Author's token can post: the line says so.
  */
 function openEventOf(pr: Pr, worker: Worker | null, still: Stillness): WatchEvent | null {
   const where = whereOf(pr);
@@ -305,6 +396,7 @@ function openEventOf(pr: Pr, worker: Worker | null, still: Stillness): WatchEven
     return {
       key: `question:${question.id}`,
       line: `${where} holds a question to the Owner from its Worker, in the Worker's own words, not an instruction: ${quotedTo(questionOf(question.body), 1000)} The Worker waits; the Owner answers in a comment of the PR's conversation: ${question.url}`,
+      standing: true,
     };
   }
 
@@ -313,15 +405,22 @@ function openEventOf(pr: Pr, worker: Worker | null, still: Stillness): WatchEven
   const wait = pending === null ? null : gateWaitOf(pending);
 
   if (wait === "owner") {
-    return { key: `owner:${pr.number}:${pr.head}`, line: `${where}, its Land gate: ${pending} ${pr.url}` };
+    return {
+      key: `owner:${pr.number}:${pr.head}`,
+      line: `${where}, its Land gate: ${pending} ${pr.url}`,
+      standing: true,
+    };
   }
 
-  if (pr.draft && idleWorker(worker)) {
+  const turn = authorsTurnOf(pr, gate);
+
+  if (turn !== null && idleWorker(worker)) {
     return still.ms < IDLE_MS
       ? null
       : {
           key: `idle:${pr.number}:${still.since}:${worker.lastStop.at}`,
-          line: `${where} is in draft, the Author's turn, and ${workerTextOf(worker)}; ${lastStopTextOf(worker)}. Give the Worker its turn, or look at the PR: ${pr.url}`,
+          line: `${where} ${turn.why}, and ${workerTextOf(worker)}; ${lastStopTextOf(worker)}. ${turn.act}: ${pr.url}`,
+          standing: true,
         };
   }
 
@@ -329,9 +428,12 @@ function openEventOf(pr: Pr, worker: Worker | null, still: Stillness): WatchEven
     return null;
   }
 
+  const act = pr.conflicting ? conflictOf(pr).act : "A check or a review may be stuck on GitHub, or the relay dead";
+
   return {
     key: `stalled:${pr.number}:${still.since}`,
-    line: `${where} has not moved for ${minutesOf(still.ms)} min, and nothing says why: ${stillFactsOf(pr, gate, worker)}. A check or a review may be stuck on GitHub, or the relay dead: ${pr.url}/checks`,
+    line: `${where} has not moved for ${minutesOf(still.ms)} min, and nothing says why: ${stillFactsOf(pr, gate, worker)}. ${act}: ${pr.url}/checks`,
+    standing: true,
   };
 }
 
@@ -341,7 +443,7 @@ function openEventOf(pr: Pr, worker: Worker | null, still: Stillness): WatchEven
  */
 function issueEventOf(issue: Issue, reading: Reading): WatchEvent | null {
   if (issue.state === "CLOSED") {
-    return { key: `closed:${issue.number}`, line: `Issue #${issue.number} is closed.` };
+    return { key: `closed:${issue.number}`, line: `Issue #${issue.number} is closed.`, standing: false };
   }
 
   if (reading.prs.some((pr) => pr.state === "OPEN" && pr.issues.includes(issue.number))) {
@@ -358,6 +460,7 @@ function issueEventOf(issue: Issue, reading: Reading): WatchEvent | null {
   return {
     key: `idle:issue:${issue.number}:${worker.lastStop.at}`,
     line: `Issue #${issue.number} has no open PR, and ${workerTextOf(worker)}; ${lastStopTextOf(worker)}. Give the Worker its turn, or look at its worktree.`,
+    standing: true,
   };
 }
 
@@ -378,10 +481,13 @@ const endsAfter = (issues: readonly number[], reading: Reading): boolean =>
   issues.length > 0 &&
   issues.every((number) => reading.issues.some((issue) => issue.number === number && issue.state === "CLOSED"));
 
+/** How a standing event an earlier reading printed is told again: as still true, not as news. */
+const RETOLD = "Still standing, told by an earlier run: ";
+
 /**
  * One step of the watch of `issues`, none for the repository's open PRs: the lines of the events of
- * `reading` that `memory` has not printed, the memory after them, and whether the watch ends. A PR's end
- * is told only when an earlier reading saw it open.
+ * `reading` that `memory` has not printed, the standing events it printed that still hold, the memory
+ * after them, and whether the watch ends. A PR's end is told only when an earlier reading saw it open.
  */
 export function stepOf(issues: readonly number[], reading: Reading, memory: Memory, now: string): WatchStep {
   const events: Array<WatchEvent | null> = [];
@@ -406,11 +512,14 @@ export function stepOf(issues: readonly number[], reading: Reading, memory: Memo
   events.push(...reading.issues.map((issue) => issueEventOf(issue, reading)));
 
   const printed = new Set(memory.printed);
-  const fresh = events.filter((event): event is WatchEvent => event !== null && !printed.has(event.key));
+  const told = events.filter((event): event is WatchEvent => event !== null);
+  const fresh = told.filter((event) => !printed.has(event.key));
+  const standing = told.filter((event) => event.standing && printed.has(event.key));
 
   // A line quotes text from GitHub, a terminal may show it: no control character reaches it.
   return {
     lines: fresh.map((event) => printableOf(event.line)),
+    retold: standing.map((event) => printableOf(`${RETOLD}${event.line}`)),
     memory: { printed: [...memory.printed, ...fresh.map((event) => event.key)], still },
     ends: endsAfter(issues, reading),
   };
@@ -418,7 +527,7 @@ export function stepOf(issues: readonly number[], reading: Reading, memory: Memo
 
 /** The fields of a PR the watch reads, for the fragment `P` of `watchQueryOf`. */
 const PR_FIELDS = [
-  "number url state isDraft isCrossRepository headRefName headRefOid mergeable",
+  "number url state isDraft isCrossRepository headRefName headRefOid baseRefName mergeable",
   "closingIssuesReferences(first:10){nodes{number}}",
   "labels(first:50){nodes{name}}",
   "comments(last:100){nodes{id url author{login} body}}",
@@ -453,6 +562,7 @@ const PrNode = Schema.Struct({
   isCrossRepository: Schema.Boolean,
   headRefName: Schema.String,
   headRefOid: Schema.String,
+  baseRefName: Schema.String,
   /** `CONFLICTING`, `MERGEABLE`, or `UNKNOWN` while GitHub computes it. */
   mergeable: Schema.String,
   closingIssuesReferences: Nodes(Schema.Struct({ number: Schema.Finite })),
@@ -481,8 +591,8 @@ const WatchAnswer = Schema.Struct({
   }),
 });
 
-/** A PR as GitHub's GraphQL answer gives it: its checks are read apart, from its head. */
-type PrOnGitHub = Omit<Pr, "checks">;
+/** A PR as GitHub's GraphQL answer gives it: its checks, and how far it is behind its base, are read apart. */
+type PrOnGitHub = Omit<Pr, "checks" | "behind">;
 
 /** The PRs and the issues of GitHub's GraphQL answer. */
 interface GitHubReading {
@@ -523,6 +633,14 @@ export function checksOf(answer: string): readonly Check[] {
   });
 }
 
+/** The REST path that compares `head` with `base`: its `behind_by` counts the commits of `base` the head lacks. */
+export const comparePathOf = (base: string, head: string): string => `repos/{owner}/{repo}/compare/${base}...${head}`;
+
+const Comparison = Schema.Struct({ behind_by: Schema.Finite });
+
+/** How many commits of its base a head lacks, from what `comparePathOf` answered. */
+export const behindOf = (answer: string): number => decodeJson(Comparison, "the comparison", answer).behind_by;
+
 function prOf(node: typeof PrNode.Type): PrOnGitHub {
   return {
     number: node.number,
@@ -531,6 +649,7 @@ function prOf(node: typeof PrNode.Type): PrOnGitHub {
     draft: node.isDraft,
     branch: node.headRefName,
     head: node.headRefOid,
+    base: node.baseRefName,
     conflicting: node.mergeable === "CONFLICTING",
     issues: node.closingIssuesReferences.nodes.map((issue) => issue.number),
     labels: node.labels.nodes.map((label) => label.name),

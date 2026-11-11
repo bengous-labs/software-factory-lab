@@ -6,10 +6,11 @@
  * per event it has not printed yet. It ends when every watched issue is closed; given none, it runs until
  * it is stopped. What it printed, and since when each PR is still, stay in
  * `.lab/state/factory-watch-<issues>.json` of the main checkout, so a watch armed again goes on from
- * there. A failed first reading ends it; a later failure to read or to save is printed, once until it
- * changes, and retried.
+ * there; with `--standing`, the first arming of a session, its first turn tells again each standing
+ * event an earlier run printed that still holds. A failed first reading ends it; a later failure to read
+ * or to save is printed, once until it changes, and retried.
  *
- *   bun scripts/factory/watch.ts [<issue>...]
+ *   bun scripts/factory/watch.ts [--standing] [<issue>...]
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -46,7 +47,7 @@ interface WatchState {
 }
 
 if (import.meta.main) {
-  const issues = watchArgsOf(process.argv.slice(2));
+  const { issues, standing } = watchArgsOf(process.argv.slice(2));
 
   const ports: WatchPorts = {
     run,
@@ -74,7 +75,13 @@ if (import.meta.main) {
   /** One turn's step; null when a reading after the first failed. */
   const stepOrNull = async (): Promise<WatchStep | null> => {
     try {
-      return await watchTurn(ports, { checkout, issues, memory: state.memory, now: new Date().toISOString() });
+      return await watchTurn(ports, {
+        checkout,
+        issues,
+        memory: state.memory,
+        now: new Date().toISOString(),
+        retell: standing && state.first,
+      });
     } catch (error) {
       if (state.first) {
         throw error;
