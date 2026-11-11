@@ -9,7 +9,7 @@
 import { Schema, Struct } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
-import { escapeInline } from "../../lib/markdown.ts";
+import { codeSpan, escapeInline } from "../../lib/markdown.ts";
 import type { ReportedResult, ReviewResult } from "../review/review-report.ts";
 
 /** Who lands a change: `auto`, the Merge bot alone, or `owner`, with a Land approval. */
@@ -79,6 +79,9 @@ export type ReviewRound = typeof Round.Type;
 /** What a review calls itself where a human reads it: its Review round, or the Delta read. */
 export const reviewNameOf = (round: ReviewRound): string =>
   round === DELTA_READ ? "Delta read" : `Review round ${round}`;
+
+/** What a review's summary line and the ledger call it, shorter: `Round 2`, or the Delta read. */
+export const roundNameOf = (round: number): string => (round === DELTA_READ ? "Delta read" : `Round ${round}`);
 
 /** The review asked of the review job for one patch and round, and its run; `failed` once it gave no report. */
 const ReviewState = Schema.Union([
@@ -226,6 +229,33 @@ export function storedOfRecord(record: StateRecord): StoredRecord {
   );
 
   return { ...record, triage: Object.fromEntries(triage) };
+}
+
+/** The state record's marker. An external name: existing PR records carry it, so the string stays. */
+export const MERGE_BOT_STATE_MARKER = "<!-- lab-conductor-state";
+
+/**
+ * The record's line in its comment: a line of its own, which no line of the ledger is, since each of
+ * those opens with the ledger's own words. `JSON.stringify` writes no line break.
+ */
+const RECORD_LINE = new RegExp(`(?<=^|\\n)${MERGE_BOT_STATE_MARKER} ([^\\n]*) -->(?=\\n|$)`, "u");
+
+/** The body of the comment that holds the state record: a line for the reader, the ledger, then the record. */
+export function stateCommentOf(record: StateRecord, ledger: string): string {
+  return [
+    "Merge bot state for this PR. Do not edit.",
+    ledger,
+    `${MERGE_BOT_STATE_MARKER} ${JSON.stringify(storedOfRecord(record))} -->`,
+  ]
+    .filter((part) => part !== "")
+    .join("\n\n");
+}
+
+/** The record the comment `body` holds, with a ledger or from before the ledger; the empty record when it holds none. */
+export function recordOfComment(body: string): StateRecord {
+  const json = RECORD_LINE.exec(body)?.[1];
+
+  return json === undefined ? EMPTY_RECORD : recordOfJson(json);
 }
 
 /** An unresolved Important thread of the App: its id, and the patch and round of the review that posted it, null when its review names none. */
@@ -983,4 +1013,182 @@ export function decide(snapshot: Snapshot): Decision {
   );
 
   return { kind: "steps", steps };
+}
+
+/** A posted finding, as a round's count reads it: its severity, and whether the security pass reported it. */
+interface Counted {
+  readonly severity: "important" | "nit";
+  readonly security: boolean;
+}
+
+const SEVERITY_NAME: Readonly<Record<Counted["severity"], string>> = { important: "Important", nit: "Nit" };
+
+/**
+ * What a round posted, in plain words: `2 Important (1 security), 5 Nit (2 security)`. A severity it
+ * posted none of is left out, and a round that posted none says so.
+ */
+export function postedCountOf(findings: readonly Counted[]): string {
+  const counts = (["important", "nit"] as const).flatMap((severity) => {
+    const posted = findings.filter((finding) => finding.severity === severity);
+    const security = posted.filter((finding) => finding.security).length;
+    const pass = security === 0 ? "" : ` (${security} security)`;
+
+    return posted.length === 0 ? [] : [`${posted.length} ${SEVERITY_NAME[severity]}${pass}`];
+  });
+
+  return counts.length === 0 ? "no new finding" : counts.join(", ");
+}
+
+/** A finding the App posted, as the ledger reads its thread (`review/findings.ts`, `ledgerFindingsOf`). */
+export interface LedgerFinding extends Counted {
+  readonly thread: string;
+  /** The finding's comment on GitHub. */
+  readonly url: string;
+  /** `<file>:<line>` of the line its thread is anchored on, or `<file>`. */
+  readonly where: string;
+  /** Its first line, without its label. */
+  readonly summary: string;
+  /** The Review round that posted it. */
+  readonly round: number;
+  readonly resolved: boolean;
+  /** GitHub marks its thread outdated: the lines it is anchored on changed since. */
+  readonly outdated: boolean;
+  /** The Author's rejection reply, the resolved thread's latest answer; null when the Author did not reject it. */
+  readonly rejection: string | null;
+  /** The later Review rounds that report it again in its thread. */
+  readonly again: readonly number[];
+}
+
+/** Where a finding stands now. */
+export type Standing =
+  /** An Important whose thread a later round closed: the round after the last that reported it. */
+  | { readonly kind: "confirmed"; readonly round: number }
+  /** The Author rejected it: `reply` holds the reason. */
+  | { readonly kind: "rejected"; readonly reply: string }
+  /** A Nit the Author says it fixed. `outdated`: the lines its thread is anchored on changed since. */
+  | { readonly kind: "author-fixed"; readonly outdated: boolean }
+  /** A Nit closed with no answer of the Author. */
+  | { readonly kind: "no-answer"; readonly outdated: boolean }
+  /** Its thread is open; `again` is the last round that reports it again, null when none did. */
+  | { readonly kind: "open"; readonly again: number | null }
+  /** An Important closed before a later round read it: by the Owner's Land approval, or by hand. */
+  | { readonly kind: "unread" };
+
+/**
+ * Where `finding` stands, after `rounds` Review rounds, given the threads the Author says it fixed. An
+ * Important is fixed only on a later round's reading, never on its Author's word. A Nit is fixed on the
+ * Author's word, since no later round reads a Nit again; GitHub's outdated mark shows beside it.
+ */
+export function standingOf(finding: LedgerFinding, fixed: ReadonlySet<string>, rounds: number): Standing {
+  if (finding.rejection !== null) {
+    return { kind: "rejected", reply: finding.rejection };
+  }
+
+  if (finding.severity === "nit") {
+    if (fixed.has(finding.thread)) {
+      return { kind: "author-fixed", outdated: finding.outdated };
+    }
+
+    return finding.resolved ? { kind: "no-answer", outdated: finding.outdated } : { kind: "open", again: null };
+  }
+
+  const last = Math.max(finding.round, ...finding.again);
+
+  if (!finding.resolved) {
+    return { kind: "open", again: finding.again.length === 0 ? null : last };
+  }
+
+  return last < rounds ? { kind: "confirmed", round: last + 1 } : { kind: "unread" };
+}
+
+const linesOf = (outdated: boolean): string => (outdated ? "its lines changed since" : "its lines unchanged");
+
+// oxlint-disable-next-line typescript/consistent-return -- the switch covers every Standing kind, so no path reaches the end.
+function standingTextOf(standing: Standing): string {
+  switch (standing.kind) {
+    case "confirmed": {
+      return `Fixed, confirmed by round ${standing.round}.`;
+    }
+
+    case "rejected": {
+      return `[Rejected](${standing.reply}) by the Author.`;
+    }
+
+    case "author-fixed": {
+      return `Fixed, by the Author's word; ${linesOf(standing.outdated)}.`;
+    }
+
+    case "no-answer": {
+      return `No answer; ${linesOf(standing.outdated)}.`;
+    }
+
+    case "open": {
+      return standing.again === null ? "Open." : `Open: round ${standing.again} reports it again.`;
+    }
+
+    case "unread": {
+      return "Closed before a later round read it.";
+    }
+  }
+}
+
+/** How the ledger's first line counts each standing, in its order. */
+const TOTALS: ReadonlyArray<readonly [Standing["kind"], string]> = [
+  ["confirmed", "fixed and confirmed"],
+  ["rejected", "rejected"],
+  ["author-fixed", "fixed by the Author's word"],
+  ["no-answer", "with no answer"],
+  ["open", "open"],
+  ["unread", "closed unread"],
+];
+
+/** The most characters of a summary the ledger shows: it links the finding for the rest. */
+const SUMMARY_MAX = 100;
+
+function briefOf(summary: string): string {
+  const flat = summary.replaceAll(/\s+/gu, " ").trim();
+
+  return escapeInline(flat.length > SUMMARY_MAX ? `${flat.slice(0, SUMMARY_MAX - 1).trimEnd()}…` : flat);
+}
+
+/** A finding's line: where it stands, then the finding, linked. */
+function ledgerLineOf(finding: LedgerFinding, standing: Standing): string {
+  const label = `${SEVERITY_NAME[finding.severity]}${finding.security ? " (security)" : ""}`;
+
+  return `- **${standingTextOf(standing)}** ${label} [${codeSpan(finding.where)}](${finding.url}): ${briefOf(finding.summary)}`;
+}
+
+/**
+ * The ledger of a PR's review, for a person to read: how many findings stand where, then each round,
+ * and the Delta read once it posted a finding, what it posted and where each of its findings stands now.
+ * Empty before any round. `findings` are the App's, `fixed` the threads the Author says it fixed,
+ * `rounds` the Review rounds posted.
+ */
+export function ledgerOf(findings: readonly LedgerFinding[], fixed: ReadonlySet<string>, rounds: number): string {
+  // The Delta read is numbered after round 3, the last round.
+  const last = Math.max(rounds, ...findings.map((finding) => finding.round));
+
+  if (last === 0) {
+    return "";
+  }
+
+  const standings = findings.map((finding) => ({ finding, standing: standingOf(finding, fixed, rounds) }));
+
+  const totals = TOTALS.flatMap(([kind, words]) => {
+    const count = standings.filter(({ standing }) => standing.kind === kind).length;
+
+    return count === 0 ? [] : [`${count} ${words}`];
+  });
+
+  const sections = Array.from({ length: last }, (_, index) => {
+    const round = index + 1;
+    const posted = standings.filter(({ finding }) => finding.round === round);
+
+    return [
+      `**${roundNameOf(round)}**: ${postedCountOf(posted.map(({ finding }) => finding))}.`,
+      ...posted.map(({ finding, standing }) => ledgerLineOf(finding, standing)),
+    ].join("\n");
+  });
+
+  return [`**Review findings**: ${totals.length === 0 ? "none" : totals.join(", ")}.`, ...sections].join("\n\n");
 }

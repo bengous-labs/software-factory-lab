@@ -13,6 +13,8 @@ import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
+import { fixedRecordBodyOf } from "../stop/decide.ts";
+import { EMPTY_RECORD, stateCommentOf } from "./decide.ts";
 import type { ReviewState } from "./decide.ts";
 import {
   ActionsRun,
@@ -53,6 +55,7 @@ import {
   routingLineOf,
   routingPolicyAt,
   startOf,
+  stateCommentIn,
   threadsResolver,
 } from "./main.ts";
 
@@ -229,6 +232,32 @@ describe("the Owner and the Author", () => {
     );
 
     expect(landApprovalByOwnerOf(events, "bengous", "2026-11-05T10:00:00Z")).toBe(false);
+  });
+});
+
+/** The conversation comments of `listed`, each its id, its author's login and its body. */
+const commentsOf = (...listed: ReadonlyArray<readonly [number, string, string]>): typeof IssueComments.Type =>
+  listed.map(([id, login, body]) => ({ id, user: { login }, body }));
+
+describe("stateCommentIn", () => {
+  const logins = { appLogin: "bengous-labs-agents[bot]", authorLogin: "bengous-labs-author" };
+  const record = { ...EMPTY_RECORD, reviewRounds: 2 };
+  const state = stateCommentOf(record, "**Review findings**: none.");
+  const fixed = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T1", "T2"]) ?? "";
+
+  test("reads the App's state comment, its ledger included, and the threads the Author's record says it fixed", () => {
+    expect(
+      stateCommentIn(
+        commentsOf([1, "bengous", "hello"], [2, logins.appLogin, state], [3, logins.authorLogin, fixed]),
+        logins,
+      ),
+    ).toEqual({ id: 2, body: state, record, fixed: new Set(["T1", "T2"]) });
+  });
+
+  test("a mark another login wrote is not read: no state comment, nothing fixed", () => {
+    expect(
+      stateCommentIn(commentsOf([1, "someone", state], [2, "someone", fixed], [3, logins.appLogin, fixed]), logins),
+    ).toEqual({ id: null, body: null, record: EMPTY_RECORD, fixed: new Set() });
   });
 });
 

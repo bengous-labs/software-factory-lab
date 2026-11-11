@@ -4,7 +4,8 @@
  * The Merge bot's adapter, run by `.github/workflows/merge-bot.yml` from the default branch with the
  * App's token. Each start makes one Merge bot run for the PR the event names, or, on a Sweep, one for
  * every open PR. A Merge bot run reads a snapshot of its PR, asks `decide.ts`, performs the steps, and
- * decides again after a model step, until no model step is left.
+ * decides again after a model step, until no model step is left. Each decision rewrites the ledger of
+ * the review's findings in the comment that holds the state record, when what it shows changed.
  *
  * Reads GITHUB_REPOSITORY, OWNER (the only GitHub login whose PRs are served), APP_LOGIN, EVENT_NAME, PR_NUMBER,
  * RUN_HEAD_SHA, RUN_EVENT, EJECTION_REASON; calls gh and git, and the models through the Agent SDK. The Code review runs
@@ -20,6 +21,7 @@ import { Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { escapeHtml } from "../../lib/markdown.ts";
 import { tokensText } from "../../lib/tokens.ts";
+import { FIXED_MARK } from "../author-mark.ts";
 import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import { ask } from "../lib/ask.ts";
@@ -30,13 +32,14 @@ import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
 import {
   graphqlLogin,
+  ledgerFindingsOf,
   nitPathsOf,
   openImportantOf,
   rejectedImportantOf,
   ReviewThreads,
   threadsQueryOf,
 } from "../review/findings.ts";
-import type { ReviewThread } from "../review/findings.ts";
+import type { ReviewThread, ThreadLogins } from "../review/findings.ts";
 import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "../review/post-plan.ts";
 import type { AgainReply } from "../review/post-plan.ts";
 import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
@@ -46,6 +49,7 @@ import { judgeFailed, ROUTING_JUDGE_MODEL, routingJudge } from "../routing/routi
 import type { RoutingVerdict } from "../routing/routing-judge.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
 import type { JudgeAsk } from "../routing/routing-rules.ts";
+import { fixedOfBody } from "../stop/decide.ts";
 import {
   CI_CHECKS,
   ciOf,
@@ -55,12 +59,14 @@ import {
   LAND_APPROVAL_LABEL,
   LAND_GATE,
   landApprovalCounts,
+  ledgerOf,
+  MERGE_BOT_STATE_MARKER,
   patchDeltaStart,
   postedFindingsOf,
-  recordOfJson,
+  recordOfComment,
   REVIEW_CHECK,
+  stateCommentOf,
   storedLandRouteOf,
-  storedOfRecord,
 } from "./decide.ts";
 import type {
   CheckState,
@@ -74,11 +80,6 @@ import type {
   StateRecord,
   Step,
 } from "./decide.ts";
-
-/** The state record's marker. An external name: existing PR records carry it, so the string stays. */
-const MERGE_BOT_STATE_MARKER = "<!-- lab-conductor-state";
-
-const MERGE_BOT_STATE_PATTERN = new RegExp(`${MERGE_BOT_STATE_MARKER} (.*) -->`, "su");
 
 /** Decisions per Merge bot run. */
 const MAX_DECISIONS = 4;
@@ -313,6 +314,13 @@ export const Dispatched = Schema.Struct({ workflow_run_id: Schema.Int });
 /** `repos/<repo>/pulls/<n>/reviews`, as far as the Merge bot reads it. */
 export const PullReviews = Schema.Array(Schema.Struct({ user: Schema.NullOr(Login), body: Schema.String }));
 
+/** The logins whose words a review thread holds that the Merge bot reads. */
+const threadLoginsOf = (env: Env): ThreadLogins => ({
+  app: graphqlLogin(env.appLogin),
+  author: env.authorLogin,
+  owner: env.owner,
+});
+
 async function threadsOf(env: Env, pr: number): Promise<readonly ReviewThread[]> {
   const [owner, name] = env.repo.split("/");
   const out = await graphql(env, ReviewThreads, threadsQueryOf(pr), { owner: owner ?? "", name: name ?? "" });
@@ -332,25 +340,57 @@ async function pullOf(env: Env, number: number): Promise<Pull> {
   return pr;
 }
 
-async function recordOf(env: Env, pr: number): Promise<{ id: number | null; record: StateRecord }> {
-  const comments = await api(env, IssueComments, `repos/${env.repo}/issues/${pr}/comments?per_page=100`);
-
-  const mine = comments.find(
-    (comment) => comment.user?.login === env.appLogin && comment.body.includes(MERGE_BOT_STATE_MARKER),
-  );
-
-  if (mine === undefined) {
-    return { id: null, record: EMPTY_RECORD };
-  }
-
-  const json = MERGE_BOT_STATE_PATTERN.exec(mine.body)?.[1];
-
-  return { id: mine.id, record: json === undefined ? EMPTY_RECORD : recordOfJson(json) };
+/**
+ * What the PR's conversation holds for the Merge bot: its state comment, null before it posts one, the
+ * record it holds, and the threads the Author says it fixed, from the Stop hook's comment.
+ */
+interface StateComment {
+  readonly id: number | null;
+  readonly body: string | null;
+  readonly record: StateRecord;
+  readonly fixed: ReadonlySet<string>;
 }
 
-async function writeRecord(env: Env, pr: number, id: number | null, record: StateRecord): Promise<void> {
-  const body = `Merge bot state for this PR. Do not edit.\n\n${MERGE_BOT_STATE_MARKER} ${JSON.stringify(storedOfRecord(record))} -->`;
+/** The state comment of the PR's conversation `comments`; a comment of any other login is not read, since any login can write a mark. */
+export function stateCommentIn(
+  comments: typeof IssueComments.Type,
+  { appLogin, authorLogin }: Pick<Env, "appLogin" | "authorLogin">,
+): StateComment {
+  const mine = comments.find(
+    (comment) => comment.user?.login === appLogin && comment.body.includes(MERGE_BOT_STATE_MARKER),
+  );
 
+  const authors = comments.find((comment) => comment.user?.login === authorLogin && comment.body.includes(FIXED_MARK));
+
+  return {
+    id: mine?.id ?? null,
+    body: mine?.body ?? null,
+    record: mine === undefined ? EMPTY_RECORD : recordOfComment(mine.body),
+    fixed: new Set(authors === undefined ? [] : fixedOfBody(authors.body)),
+  };
+}
+
+async function stateOf(env: Env, pr: number): Promise<StateComment> {
+  return stateCommentIn(await api(env, IssueComments, `repos/${env.repo}/issues/${pr}/comments?per_page=100`), env);
+}
+
+/**
+ * Writes `body`, the state comment of `record` and the ledger, over `state`, the comment as the decision
+ * read it: when the record changed, or when the comment shows another ledger, whether the record changed
+ * or not. A PR with no comment gets one with its first record.
+ */
+async function refreshState(
+  env: Env,
+  pr: number,
+  state: StateComment,
+  { record, body }: { readonly record: StateRecord; readonly body: string },
+): Promise<void> {
+  if (record !== state.record || (state.id !== null && state.body !== body)) {
+    await writeState(env, pr, state.id, body);
+  }
+}
+
+async function writeState(env: Env, pr: number, id: number | null, body: string): Promise<void> {
   if (id === null) {
     await send(env, "POST", `repos/${env.repo}/issues/${pr}/comments`, { body });
   } else {
@@ -563,10 +603,7 @@ async function snapshotOf(
     landApprovalByOwner,
     landApprovalPutByOwner,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
-    rejectedImportant: rejectedImportantOf(
-      { app: graphqlLogin(env.appLogin), author: env.authorLogin, owner: env.owner },
-      threads,
-    ),
+    rejectedImportant: rejectedImportantOf(threadLoginsOf(env), threads),
     devRed: devRedOf(devRuns),
     conflicting: conflictingOf(pr.mergeable_state),
     record,
@@ -886,7 +923,7 @@ async function perform(
   env: Env,
   pr: Pull,
   range: Range,
-  recordId: number | null,
+  write: (record: StateRecord) => Promise<void>,
   record: StateRecord,
   step: Step,
   log: (line: string) => void,
@@ -896,7 +933,7 @@ async function perform(
       const { answer, judge } = await route(env, range, record, { patchDelta: step.patchDelta, pr: pr.number });
       log(routingLineOf(pr.number, step.patch, answer, judge));
       const next = { ...record, triage: { ...record.triage, [step.patch]: answer } };
-      await writeRecord(env, pr.number, recordId, next);
+      await write(next);
 
       return next;
     }
@@ -929,7 +966,7 @@ async function perform(
         review: { kind: "requested", patch, round: step.reviewRound, runId, at: new Date().toISOString() },
       };
 
-      await writeRecord(env, pr.number, recordId, next);
+      await write(next);
 
       return next;
     }
@@ -999,7 +1036,7 @@ async function perform(
     }
 
     case "record": {
-      await writeRecord(env, pr.number, recordId, step.record);
+      await write(step.record);
 
       return step.record;
     }
@@ -1048,14 +1085,16 @@ async function advance(
     }
 
     const range = await rangeOf(env, pr);
-    const { id, record: stored } = await recordOf(env, number);
+    const state = await stateOf(env, number);
+    const stored = state.record;
 
     const record =
       ejectionReason !== null && decisions === 0
         ? { ...stored, dequeued: { head: pr.head.sha, reason: ejectionReason } }
         : stored;
 
-    const decision = decide(await snapshotOf(env, pr, range, record, await threadsOf(env, number)));
+    const threads = await threadsOf(env, number);
+    const decision = decide(await snapshotOf(env, pr, range, record, threads));
 
     if (decision.kind === "ignore") {
       log(decision.reason);
@@ -1066,13 +1105,17 @@ async function advance(
     log(`#${number} steps: ${decision.steps.map((step) => step.kind).join(", ")}`);
     let current: StateRecord | null = record;
     let decideAgain = false;
+    const findings = ledgerFindingsOf(threadLoginsOf(env), threads);
 
-    if (record !== stored) {
-      await writeRecord(env, number, id, record);
-    }
+    const bodyOf = (next: StateRecord): string =>
+      stateCommentOf(next, ledgerOf(findings, state.fixed, next.reviewRounds));
+
+    await refreshState(env, number, state, { record, body: bodyOf(record) });
 
     for (const step of decision.steps) {
-      current = await perform(env, pr, range, (await recordOf(env, number)).id, current, step, log);
+      const { id } = await stateOf(env, number);
+      const write = (next: StateRecord): Promise<void> => writeState(env, number, id, bodyOf(next));
+      current = await perform(env, pr, range, write, current, step, log);
 
       if (current === null) {
         return;

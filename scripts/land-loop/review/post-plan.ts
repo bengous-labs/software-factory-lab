@@ -8,7 +8,7 @@
 import type { Schema } from "effect";
 
 import { codeSpan, escapeHtml, escapeInline } from "../../lib/markdown.ts";
-import { reviewNameOf } from "../merge-bot/decide.ts";
+import { postedCountOf, roundNameOf } from "../merge-bot/decide.ts";
 import { markerOf, movedLineOf } from "./findings.ts";
 import type { ReviewThread } from "./findings.ts";
 import type { ReportedFinding, ReportedResult, ReviewRequest, Severity } from "./review-report.ts";
@@ -215,25 +215,25 @@ export function againRepliesOf(
   });
 }
 
+/**
+ * The review's body: its summary line, what the round or the Delta read posted in plain words with the
+ * security pass's share of each severity and the Pre-existing findings it did not post, then the run that
+ * read it.
+ */
 function bodyOf(plan: PostPlan, result: ReportedResult): string {
   const { request } = result;
 
-  const counts = (pass: ReportedFinding["pass"]): string => {
-    const count = (severity: PostedSeverity): number =>
-      plan.comments.filter((planned) => planned.severity === severity && planned.finding.pass === pass).length;
+  const posted = postedCountOf(
+    plan.comments.map((planned) => ({ severity: planned.severity, security: planned.finding.pass === "security" })),
+  );
 
-    return `${count("important")} important, ${count("nit")} nit`;
-  };
-
-  const security = request.security ? `; security: ${counts("security")}` : "";
-  const found = plan.comments.length === 0 ? "nothing to fix." : `${counts("code")}${security}.`;
-
-  const preExisting = plan.preExisting === 0 ? "" : ` ${plan.preExisting} pre-existing finding(s) not posted.`;
+  const defects = plan.preExisting === 1 ? "defect" : "defects";
+  const preExisting = plan.preExisting === 0 ? "" : ` ${plan.preExisting} pre-existing ${defects} not posted.`;
 
   return [
-    `${reviewNameOf(request.round)} (${result.model ?? request.model}, /code-review ${request.effort}): ${found}${preExisting}`,
+    `${roundNameOf(request.round)}: ${posted}.${preExisting}`,
     "",
-    `Review run: ${result.runUrl}`,
+    `Review run (${result.model ?? request.model}, /code-review ${request.effort}): ${result.runUrl}`,
     "",
     reviewMarkerOf(request),
   ].join("\n");

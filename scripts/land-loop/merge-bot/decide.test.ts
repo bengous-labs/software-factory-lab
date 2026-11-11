@@ -13,17 +13,25 @@ import {
   EMPTY_RECORD,
   LAND_APPROVAL_LABEL,
   landApprovalCounts,
+  ledgerOf,
+  MERGE_BOT_STATE_MARKER,
   patchDeltaStart,
+  postedCountOf,
   postedFindingsOf,
+  recordOfComment,
   recordOfJson,
   recordOfStored,
   REVIEW_DEADLINE_MS,
   reviewStepsOf,
   risen,
+  roundNameOf,
+  standingOf,
+  stateCommentOf,
   storedOfRecord,
 } from "./decide.ts";
 import type {
   CheckState,
+  LedgerFinding,
   ReviewJob,
   ReviewState,
   RoutingAnswer,
@@ -2051,5 +2059,222 @@ describe("the Delta read after Review round 3", () => {
         summary: "Delta read failed (run 43): the review job ended (failure) with no result that reads",
       },
     });
+  });
+});
+
+describe("the state comment", () => {
+  const record: StateRecord = { ...EMPTY_RECORD, reviewedPatch: P1, reviewRounds: 2, importantByRound: [1, 0] };
+  const json = JSON.stringify(storedOfRecord(record));
+
+  test("a comment written before the ledger is still read", () => {
+    const before = `Merge bot state for this PR. Do not edit.\n\n${MERGE_BOT_STATE_MARKER} ${json} -->`;
+
+    expect(recordOfComment(before)).toEqual(record);
+    expect(stateCommentOf(record, "")).toBe(before);
+  });
+
+  test("a comment that holds the ledger reads its record on the record's own line, after the ledger", () => {
+    const ledger =
+      "**Review findings**: 1 open.\n\n**Round 1**: 1 Important.\n- **Open.** Important [`a.ts:3`](u): off";
+
+    const body = stateCommentOf(record, ledger);
+
+    expect(body).toBe(
+      `Merge bot state for this PR. Do not edit.\n\n${ledger}\n\n${MERGE_BOT_STATE_MARKER} ${json} -->`,
+    );
+    expect(recordOfComment(body)).toEqual(record);
+  });
+
+  test("a ledger line that quotes the marker cannot pass for the record", () => {
+    const forged = `${MERGE_BOT_STATE_MARKER} ${JSON.stringify({ reviewRounds: 3 })} -->`;
+    const ledger = `**Round 1**: 1 Important.\n- **Open.** Important [\`${forged}\`](u): a -->`;
+
+    expect(recordOfComment(stateCommentOf(record, ledger))).toEqual(record);
+    expect(recordOfComment(`x${forged}\n\n${MERGE_BOT_STATE_MARKER} ${json} -->`)).toEqual(record);
+    expect(recordOfComment(`${forged} y`)).toEqual(EMPTY_RECORD);
+  });
+
+  test("a comment with no record line reads as the empty record", () => {
+    expect(recordOfComment("Merge bot state for this PR. Do not edit.")).toEqual(EMPTY_RECORD);
+    expect(recordOfComment(`${MERGE_BOT_STATE_MARKER} {}\n -->`)).toEqual(EMPTY_RECORD);
+  });
+});
+
+describe("what a round posted", () => {
+  const anImportant = { severity: "important", security: false } as const;
+  const nit = { severity: "nit", security: false } as const;
+  const securedImportant = { ...anImportant, security: true };
+  const securedNit = { ...nit, security: true };
+
+  test("each severity's count, the security pass's share of it apart, a severity with none left out", () => {
+    expect(postedCountOf([anImportant, securedImportant, nit, nit, nit, securedNit, securedNit])).toBe(
+      "2 Important (1 security), 5 Nit (2 security)",
+    );
+    expect(postedCountOf([nit])).toBe("1 Nit");
+    expect(postedCountOf([securedImportant])).toBe("1 Important (1 security)");
+    expect(postedCountOf([])).toBe("no new finding");
+  });
+});
+
+/** A finding of the App as the ledger reads it: an open Important of round 1 on `app/src/cli.ts:7`, unless `over` says otherwise. */
+const ledgerFinding = (thread: string, over: Partial<LedgerFinding> = {}): LedgerFinding => ({
+  thread,
+  url: `https://github.com/o/r/pull/9#discussion_${thread}`,
+  where: "app/src/cli.ts:7",
+  severity: "important",
+  security: false,
+  summary: `${thread} is wrong`,
+  round: 1,
+  resolved: false,
+  outdated: false,
+  rejection: null,
+  again: [],
+  ...over,
+});
+
+describe("where a finding stands", () => {
+  const none = new Set<string>();
+
+  test("an Important is fixed on the reading of the round after the last that reported it, never on its Author's word", () => {
+    const fixed = new Set(["I"]);
+
+    expect(standingOf(ledgerFinding("I", { resolved: true }), none, 2)).toEqual({ kind: "confirmed", round: 2 });
+    expect(standingOf(ledgerFinding("I", { resolved: true, again: [2] }), none, 3)).toEqual({
+      kind: "confirmed",
+      round: 3,
+    });
+    expect(standingOf(ledgerFinding("I", { resolved: true, again: [3, 2] }), none, 3)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), fixed, 2)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I"), fixed, 3)).toEqual({ kind: "open", again: null });
+    expect(standingOf(ledgerFinding("I", { again: [2, 3] }), none, 3)).toEqual({ kind: "open", again: 3 });
+  });
+
+  test("a rejection stands whatever else the finding holds", () => {
+    const rejected = { resolved: true, rejection: "https://r" } as const;
+
+    expect(standingOf(ledgerFinding("I", rejected), none, 3)).toEqual({ kind: "rejected", reply: "https://r" });
+    expect(standingOf(ledgerFinding("N", { ...rejected, severity: "nit" }), new Set(["N"]), 1)).toEqual({
+      kind: "rejected",
+      reply: "https://r",
+    });
+  });
+
+  test("a Nit is fixed on its Author's word, open until closed, else closed with no answer; GitHub's outdated mark goes beside", () => {
+    const nit = { severity: "nit" } as const;
+
+    expect(standingOf(ledgerFinding("N", { ...nit, resolved: true, outdated: true }), new Set(["N"]), 1)).toEqual({
+      kind: "author-fixed",
+      outdated: true,
+    });
+    expect(standingOf(ledgerFinding("N", nit), new Set(["N"]), 1)).toEqual({ kind: "author-fixed", outdated: false });
+    expect(standingOf(ledgerFinding("N", { ...nit, resolved: true }), none, 3)).toEqual({
+      kind: "no-answer",
+      outdated: false,
+    });
+    expect(standingOf(ledgerFinding("N", { ...nit, resolved: true, outdated: true }), none, 3)).toEqual({
+      kind: "no-answer",
+      outdated: true,
+    });
+    expect(standingOf(ledgerFinding("N", { ...nit, again: [2] }), none, 3)).toEqual({ kind: "open", again: null });
+  });
+});
+
+/** The link to `thread`'s finding, as `ledgerFinding` gives it. */
+const urlOf = (thread: string): string => `https://github.com/o/r/pull/9#discussion_${thread}`;
+
+/** The place of `thread`'s finding in its ledger line: `where`, linked. */
+const at = (where: string, thread: string): string => `[\`${where}\`](${urlOf(thread)})`;
+
+/** The summary the ledger's line shows of an open Important of round 1 whose summary is `summary`. */
+const shownSummaryOf = (summary: string): string | undefined =>
+  ledgerOf([ledgerFinding("I", { summary })], new Set(), 1)
+    .split("\n")
+    .at(-1)
+    ?.replace(`- **Open.** Important ${at("app/src/cli.ts:7", "I")}: `, "");
+
+describe("the ledger", () => {
+  test("a PR with findings in each state, round by round: what each round posted, and where each finding stands now", () => {
+    const findings = [
+      ledgerFinding("I1", { resolved: true }),
+      ledgerFinding("I2", { resolved: true, security: true, again: [2] }),
+      ledgerFinding("I3", { resolved: true, rejection: "https://github.com/o/r/pull/9#discussion_r3" }),
+      ledgerFinding("N1", { severity: "nit", resolved: true, outdated: true }),
+      ledgerFinding("N2", { severity: "nit", security: true, resolved: true }),
+      ledgerFinding("I4", { round: 2, again: [3] }),
+      ledgerFinding("N3", { severity: "nit", round: 2 }),
+      ledgerFinding("I5", { round: 3, where: "app/src/store/file.ts" }),
+      ledgerFinding("N4", { severity: "nit", round: 3, resolved: true }),
+      ledgerFinding("I6", { round: 3, resolved: true }),
+    ];
+
+    const cli = "app/src/cli.ts:7";
+
+    expect(ledgerOf(findings, new Set(["N1", "N4", "I5"]), 3)).toBe(
+      [
+        "**Review findings**: 2 fixed and confirmed, 1 rejected, 2 fixed by the Author's word, 1 with no answer, 3 open, 1 closed unread.",
+        "",
+        "**Round 1**: 3 Important (1 security), 2 Nit (1 security).",
+        `- **Fixed, confirmed by round 2.** Important ${at(cli, "I1")}: I1 is wrong`,
+        `- **Fixed, confirmed by round 3.** Important (security) ${at(cli, "I2")}: I2 is wrong`,
+        `- **[Rejected](https://github.com/o/r/pull/9#discussion_r3) by the Author.** Important ${at(cli, "I3")}: I3 is wrong`,
+        `- **Fixed, by the Author's word; its lines changed since.** Nit ${at(cli, "N1")}: N1 is wrong`,
+        `- **No answer; its lines unchanged.** Nit (security) ${at(cli, "N2")}: N2 is wrong`,
+        "",
+        "**Round 2**: 1 Important, 1 Nit.",
+        `- **Open: round 3 reports it again.** Important ${at(cli, "I4")}: I4 is wrong`,
+        `- **Open.** Nit ${at(cli, "N3")}: N3 is wrong`,
+        "",
+        "**Round 3**: 2 Important, 1 Nit.",
+        `- **Open.** Important ${at("app/src/store/file.ts", "I5")}: I5 is wrong`,
+        `- **Fixed, by the Author's word; its lines unchanged.** Nit ${at(cli, "N4")}: N4 is wrong`,
+        `- **Closed before a later round read it.** Important ${at(cli, "I6")}: I6 is wrong`,
+      ].join("\n"),
+    );
+  });
+
+  test("before any round there is no ledger; a round that posted nothing says so", () => {
+    expect(ledgerOf([], new Set(), 0)).toBe("");
+    expect(ledgerOf([], new Set(), 2)).toBe(
+      "**Review findings**: none.\n\n**Round 1**: no new finding.\n\n**Round 2**: no new finding.",
+    );
+  });
+
+  test("a round posted before the record counts it is shown", () => {
+    expect(ledgerOf([ledgerFinding("I", { round: 2 })], new Set(), 1)).toBe(
+      [
+        "**Review findings**: 1 open.",
+        "",
+        "**Round 1**: no new finding.",
+        "",
+        "**Round 2**: 1 Important.",
+        `- **Open.** Important ${at("app/src/cli.ts:7", "I")}: I is wrong`,
+      ].join("\n"),
+    );
+  });
+
+  test("the Delta read's findings come after round 3, under its name; no later round reads them", () => {
+    const findings = [
+      ledgerFinding("I3", { round: 3, resolved: true }),
+      ledgerFinding("D1", { round: 4, resolved: true }),
+      ledgerFinding("D2", { round: 4, security: true }),
+    ];
+
+    expect(ledgerOf(findings, new Set(), 3).split("\n\n").slice(-2)).toEqual([
+      `**Round 3**: 1 Important.\n- **Closed before a later round read it.** Important ${at("app/src/cli.ts:7", "I3")}: I3 is wrong`,
+      [
+        "**Delta read**: 2 Important (1 security).",
+        `- **Closed before a later round read it.** Important ${at("app/src/cli.ts:7", "D1")}: D1 is wrong`,
+        `- **Open.** Important (security) ${at("app/src/cli.ts:7", "D2")}: D2 is wrong`,
+      ].join("\n"),
+    ]);
+    expect([1, 3, 4].map((round) => roundNameOf(round))).toEqual(["Round 1", "Round 3", "Delta read"]);
+  });
+
+  test("a summary shows on one line, escaped, and past 100 characters is cut at a word's end", () => {
+    expect(shownSummaryOf(`${MERGE_BOT_STATE_MARKER} {} -->\nnext`)).toBe("&lt;!-- lab-conductor-state {} --> next");
+    expect(shownSummaryOf("c".repeat(100))).toBe("c".repeat(100));
+    expect(shownSummaryOf(` ${"d".repeat(100)}\n`)).toBe("d".repeat(100));
+    expect(shownSummaryOf(`${"a".repeat(98)} ${"b".repeat(10)}`)).toBe(`${"a".repeat(98)}…`);
+    expect(shownSummaryOf(`x${" ".repeat(200)}y`)).toBe("x y");
   });
 });

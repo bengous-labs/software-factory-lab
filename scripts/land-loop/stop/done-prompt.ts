@@ -7,7 +7,7 @@ import { FORK_MARKER } from "./decide.ts";
 
 /** An open finding of the App, as the Done judge's question lists it. */
 export interface AskedFinding {
-  /** The id of the finding's review thread, which a rejection names. */
+  /** The id of the finding's review thread, which a rejection or a fix names. */
   readonly thread: string;
   /** `<file>` or `<file>:<line>`. */
   readonly where: string;
@@ -26,13 +26,14 @@ const ANSWER = [
   "- question: the question or choice your last message puts to your user, quoted; an empty string when it puts none. A choice you offered stays open even where you recommended one option or acted on it for now: only your user's answer settles it.",
   "- reason: one sentence.",
   "- rejections: the open review findings listed below that you decided not to fix, each with the id of its thread and your own reason, as you gave it in this conversation. Declare a rejection only where you had decided, before this question, not to fix the finding. A finding you fixed, or one you have not decided on, is no rejection: leave it out. A reason never cites a commit.",
+  "- fixed: the ids of the threads of the open review findings listed below that your committed change fixed, as this conversation shows. A finding you rejected, left as it is, or have not decided on, is not fixed: leave it out.",
 ];
 
 /** The Done judge's question, with the App's open findings on the Author's pull request, when it has one. */
 export function doneQuestionOf(findings: readonly AskedFinding[]): string {
   const listed =
     findings.length === 0
-      ? ["Your pull request has no open review finding: answer `rejections` with an empty list."]
+      ? ["Your pull request has no open review finding: answer `rejections` and `fixed` with empty lists."]
       : [
           "The open review findings on your pull request:",
           ...findings.map(

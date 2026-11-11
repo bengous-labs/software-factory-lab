@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
+import { ledgerOf, standingOf } from "../merge-bot/decide.ts";
 import {
   EarlierThreads,
   earlierThreadsOf,
   findingFileOf,
   graphqlLogin,
+  ledgerFindingsOf,
   markerOf,
   movedLineOf,
   nitPathsOf,
@@ -45,12 +49,17 @@ const thread = (
 ): ReviewThread => ({
   id: "T",
   isResolved,
+  isOutdated: false,
   path: "a.ts",
   line,
   comments: {
     nodes: [
-      { author: by === null ? null : { login: by }, body },
-      ...replies.map(([login, reply]) => ({ author: { login }, body: reply })),
+      { author: by === null ? null : { login: by }, body, url: "https://github.com/o/r/pull/7#discussion_r1" },
+      ...replies.map(([login, reply], index) => ({
+        author: { login },
+        body: reply,
+        url: `https://github.com/o/r/pull/7#discussion_r${index + 2}`,
+      })),
     ],
   },
 });
@@ -75,7 +84,8 @@ describe("the review threads", () => {
   test("the query names the PR and takes the repository as variables", () => {
     expect(threadsQueryOf(12)).toContain("query($owner:String!,$name:String!){repository(owner:$owner,name:$name)");
     expect(threadsQueryOf(12)).toContain("pullRequest(number:12)");
-    expect(threadsQueryOf(12)).toContain("comments(first:20){nodes{author{login} body pullRequestReview{body}}}");
+    expect(threadsQueryOf(12)).toContain("nodes{id isResolved isOutdated path line comments(first:20)");
+    expect(threadsQueryOf(12)).toContain("comments(first:20){nodes{author{login} body url pullRequestReview{body}}}");
   });
 
   test("a thread whose author was deleted reads with a null author; an answer outside the schema is refused", () => {
@@ -438,5 +448,129 @@ describe("earlierThreadsOf", () => {
     expect(() => decodeJson(EarlierThreads, "review-threads.json", JSON.stringify([{ where: "a.ts:3" }]))).toThrow(
       "review-threads.json",
     );
+  });
+});
+
+const ROUND_2 = { patch: "p2", round: 2 } as const;
+
+/** The App's reply that reports the thread's Important again in the review of `round`. */
+const againIn = (round: 2 | 3): readonly [string, string] => [
+  APP,
+  `Review round ${round} still holds this finding.\n\n${markerOf("important")}\n${reviewMarkerOf({ ...REQUEST, patch: `p${round}`, round })}`,
+];
+
+/** The rejection the ledger reads in `found`, a thread of Review round 2. */
+const rejectionIn = (found: ReviewThread): string | null | undefined =>
+  ledgerFindingsOf(LOGINS, [postedIn(found, ROUND_2, "a.ts")])[0]?.rejection;
+
+describe("ledgerFindingsOf", () => {
+  test("an App finding of a review that names its round reads with its place, its pass, its summary and its thread's state", () => {
+    const secured = `**Important (security)**: off by &lt;one\n\nwhy\n\n${markerOf("important")}`;
+    const found = { ...postedIn(thread(secured), ROUND_2, "app/a.ts"), isOutdated: true };
+
+    expect(ledgerFindingsOf(LOGINS, [found])).toEqual([
+      {
+        thread: "T",
+        url: "https://github.com/o/r/pull/7#discussion_r1",
+        where: "app/a.ts:3",
+        severity: "important",
+        security: true,
+        summary: "off by <one",
+        round: 2,
+        resolved: false,
+        outdated: true,
+        rejection: null,
+        again: [],
+      },
+    ]);
+    expect(
+      ledgerFindingsOf(LOGINS, [postedIn(thread(NIT, [], { line: null, isResolved: true }), ROUND_2, "b.ts")]),
+    ).toMatchObject([{ where: "b.ts", severity: "nit", security: false, summary: "a name", resolved: true }]);
+  });
+
+  test("a finding of no named round, a Pre-existing one, another login's or a human comment is not read", () => {
+    const preExisting = `**Pre-existing**: old\n\n${markerOf("pre_existing")}`;
+
+    expect(
+      ledgerFindingsOf(LOGINS, [
+        thread(IMPORTANT),
+        postedIn(thread(preExisting), ROUND_2, "a.ts"),
+        postedIn(thread(IMPORTANT, [], { by: AUTHOR }), ROUND_2, "a.ts"),
+        postedIn(thread(IMPORTANT, [], { by: null }), ROUND_2, "a.ts"),
+        postedIn(thread("a human's question"), ROUND_2, "a.ts"),
+      ]),
+    ).toEqual([]);
+  });
+
+  test("the rounds that report an Important again are the App's replies that carry a review's marker, no other login's", () => {
+    const forged = againIn(3);
+
+    const replies = [
+      againIn(2),
+      [AUTHOR, forged[1]] as const,
+      [APP, "a reply of the App with no marker"] as const,
+      againIn(3),
+    ];
+
+    expect(
+      ledgerFindingsOf(LOGINS, [postedIn(thread(IMPORTANT, replies), { patch: "p1", round: 1 }, "a.ts")]),
+    ).toMatchObject([{ round: 1, again: [2, 3] }]);
+  });
+
+  test("a rejection is the Author's reply that closes a resolved thread with the reject mark, linked", () => {
+    expect(rejectionIn(thread(NIT, [[AUTHOR, REJECTED]], { isResolved: true }))).toBe(
+      "https://github.com/o/r/pull/7#discussion_r2",
+    );
+    expect(rejectionIn(thread(NIT, [[AUTHOR, REJECTED]]))).toBeNull();
+    expect(
+      rejectionIn(
+        thread(
+          NIT,
+          [
+            [AUTHOR, REJECTED],
+            ["bengous", "No: fix it."],
+          ],
+          { isResolved: true },
+        ),
+      ),
+    ).toBeNull();
+    expect(rejectionIn(thread(NIT, [["someone", REJECTED]], { isResolved: true }))).toBeNull();
+    expect(rejectionIn(thread(NIT, [], { isResolved: true }))).toBeNull();
+  });
+
+  test("PR #173's findings read as its review left them: by round, Importants fixed and confirmed, rejected, Nits closed with no answer, and Importants open", () => {
+    const threads = decodeJson(
+      ReviewThreads,
+      "PR #173's review threads",
+      readFileSync(join(import.meta.dir, "fixtures", "pr-173-threads.json"), "utf8"),
+    ).data.repository.pullRequest.reviewThreads.nodes;
+
+    const findings = ledgerFindingsOf(LOGINS, threads);
+
+    const table = [1, 2, 3].map((round) => {
+      const standings = findings
+        .filter((finding) => finding.round === round)
+        .map((finding) => `${finding.severity} ${standingOf(finding, new Set(), 3).kind}`);
+
+      return Object.fromEntries(
+        [...new Set(standings)].map((standing) => [standing, standings.filter((one) => one === standing).length]),
+      );
+    });
+
+    expect(table).toEqual([
+      { "important confirmed": 6, "important rejected": 2, "nit no-answer": 4 },
+      { "important confirmed": 1, "important rejected": 1, "nit no-answer": 5 },
+      { "important open": 2, "nit no-answer": 3, "nit rejected": 2 },
+    ]);
+    expect(ledgerOf(findings, new Set(), 3).split("\n")[0]).toBe(
+      "**Review findings**: 7 fixed and confirmed, 5 rejected, 12 with no answer, 2 open.",
+    );
+    expect(findings.find((finding) => finding.again.length > 0)).toMatchObject({
+      round: 1,
+      severity: "important",
+      security: true,
+      again: [2, 3],
+      rejection: "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539420516",
+    });
   });
 });

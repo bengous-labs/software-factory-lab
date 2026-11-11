@@ -1,0 +1,628 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "reviewThreads": {
+          "nodes": [
+            {
+              "id": "PRRT_kwDOVkHqEM62NRiN",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important**: Bench sessions drop LAB_AUTHOR, so on dev, where role.ts already gives each session its role, they read owner.md instead of worker.md, and the bench no longer tests a Worker.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974729",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRic",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench-report.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important**: The Worker prompt sends the session to AGENTS.md's 'Your task' section, which dev has moved to .claude/roles/worker.md.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974746",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRig",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important**: sessionEnv removes only LAB_AUTHOR and passes on the rest of the caller's environment (GH_TOKEN, LAB_AUTHOR_TOKEN, CLAUDECODE, ...). A bench run from a Worker therefore launches sessions that hold the Author token with no publish guard. This contradicts the comment \"no token\", and nothing tests it.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974755",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRin",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench-report.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important**: WORKER_SETTINGS is documented as 'the settings of a Worker but its env', but it leaves out claudeMdExcludes, so bench sessions read the Owner's global CLAUDE.md, which real Workers never see.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974767",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRiu",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important (security)**: Bench sessions inherit the launcher's whole environment minus LAB_AUTHOR. The model-driven sessions therefore act with the launcher's GitHub credentials: the Owner's gh login, or GH_TOKEN when that variable is set. They do not act as the Author machine account, and they do not run tokenless.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974780",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRiy",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important (security)**: Dropping LAB_AUTHOR but keeping GH_TOKEN means a bench launched from a Worker's session gives its sessions the Author's token while turning off refuse-author-publish, the guard that only acts when LAB_AUTHOR=1.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974786",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRi7",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important (security)**: The 'push must reach nothing' guard sets only origin's push URL, so the sessions it constrains can step around it with the `Bash(git *)` permission they are given.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974796",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "Review round 2 still holds this finding.\n\n<!-- lab-finding severity=important -->\n\n<!-- lab-review patch=320c84eec280fb4667814baac4c7825ce58d2c26 round=2 -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539194764",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "Review round 3 still holds this finding.\n\n<!-- lab-finding severity=important -->\n\n<!-- lab-review patch=9202eaa39dbf18c12212d936eb9365befbc6c608 round=3 -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539359232",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous-labs-author"
+                    },
+                    "body": "Rejected: The reflog no longer names the checkout's path, but a session that runs git and bun with no prompt, as the Owner chose, can still push to a path or URL it finds; only a sandbox closes that, which is outside issue #160, and the help now says so plainly.\n\n<!-- lab-author-reject -->\n\n<!-- lab-author-reply -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539420516",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRjE",
+              "isResolved": true,
+              "isOutdated": false,
+              "path": "scripts/lab/bench-report.ts",
+              "line": 205,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important (security)**: Pre-approving `Bash(bun *)` and `Bash(git *)` with acceptEdits in headless sessions grants arbitrary code execution with no prompt, on the Owner's machine and outside any sandbox. That is a permission widening.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974808",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous-labs-author"
+                    },
+                    "body": "Rejected: The Owner chose this exact launch for the bench, acceptEdits with only git and bun allowed, in place of bypassPermissions. The --help text now states that the sessions run git and bun with no prompt, outside any sandbox.\n\n<!-- lab-author-reject -->\n\n<!-- lab-author-reply -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539112760",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRjK",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench-report.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: HELP says 'nothing is published', but the only safeguard is the push URL of `origin`. `Bash(git *)` and `Bash(bun *)` still allow pushing to any other URL, using the caller's credentials.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974819",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRjQ",
+              "isResolved": true,
+              "isOutdated": false,
+              "path": "scripts/lab/bench.ts",
+              "line": 78,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: runBench runs all sessions with Promise.all, so one failed session rejects the whole bench and loses the reports of every other run, while their sessions keep running.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974826",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRjZ",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench-report.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: readingOf strictly decodes every transcript line against TranscriptLine. If any attachment of an unrelated type carries `path`, `files` or `style` in another shape, the whole bench throws.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974839",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NRjh",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit (security)**: Hardening: the child env is the full process.env (deny-list of one variable) instead of an allow-list. Any secret the launcher's shell exports reaches the model-driven session and can land in its transcript and in the printed report.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4538974856",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=55016787b9814aaf45f968c0901920ccc99ce1e8 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NyFd",
+              "isResolved": true,
+              "isOutdated": false,
+              "path": "scripts/hooks/role.ts",
+              "line": 35,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important**: role.ts now gives worker.md to any session that holds LAB_ROLE=worker (isWorker). AGENTS.md's Roles section still says worker.md goes only to a session whose environment holds LAB_AUTHOR=1, so the agent doc no longer matches the code.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539194234",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=320c84eec280fb4667814baac4c7825ce58d2c26 round=2 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NyFl",
+              "isResolved": true,
+              "isOutdated": false,
+              "path": "scripts/lab/bench.ts",
+              "line": 114,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important (security)**: Each bench session starts in its own clone, so \\$CLAUDE_PROJECT_DIR is the clone. The hooks guarding the session, refuse-author-publish.ts and role.ts, therefore run from files inside the session's own working tree, which acceptEdits lets it rewrite with no prompt.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539194248",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=320c84eec280fb4667814baac4c7825ce58d2c26 round=2 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous-labs-author"
+                    },
+                    "body": "Rejected: A bench session has to run its own clone's hooks, or it isn't testing the branch's Worker. With Bash(bun *) allowed, as the Owner chose, a session can already do anything those hooks block, so the --help text says the bench is no sandbox and that a session can rewrite its own hooks.\n\n<!-- lab-author-reject -->\n\n<!-- lab-author-reply -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539267208",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NyFo",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/hooks/refuse-author-publish.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: The hook now acts on any Worker (isWorker), but its doc still limits the deny-on-unreadable-input rule and answerOf to an Author's session.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539194255",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=320c84eec280fb4667814baac4c7825ce58d2c26 round=2 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NyFv",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench-report.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: KEPT drops every variable through which claude itself can authenticate or reach the API (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_BASE_URL, HTTPS_PROXY, NODE_EXTRA_CA_CERTS). HELP still says the environment 'keeps only what claude needs'.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539194265",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=320c84eec280fb4667814baac4c7825ce58d2c26 round=2 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NyF0",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench-report.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: loadedBy parses each transcript line twice: once with decodeJson(TranscriptLine), then again with parseJson and objectAt. The local `decoded` helper copies the error wrapping of decodeJson from scripts/lib/json.ts.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539194270",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=320c84eec280fb4667814baac4c7825ce58d2c26 round=2 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NyF6",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench-report.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit (security)**: The allow-list keeps HOME and XDG_RUNTIME_DIR, and that is enough for git to find the Owner's GitHub credential. HELP's \"with no token\" claim therefore holds only for gh.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539194279",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=320c84eec280fb4667814baac4c7825ce58d2c26 round=2 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62NyF_",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit (security)**: `git clone <local path>` hardlinks the main checkout's object files into each bench clone. A session that writes to those files changes the main repository's objects too.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539194295",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=320c84eec280fb4667814baac4c7825ce58d2c26 round=2 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62OKjd",
+              "isResolved": false,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important**: The isolation steps round 2 added to realIo have no test: the --no-hardlinks clone, `remote set-url origin no-remote`, and writing the bench's gitconfig (line 97).\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539358609",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9202eaa39dbf18c12212d936eb9365befbc6c608 round=3 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62OKjn",
+              "isResolved": false,
+              "isOutdated": false,
+              "path": "scripts/lab/bench-report.ts",
+              "line": 105,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important (security)**: The allow-list keeps HOME. The bench's git config takes away the credential helper, but ssh still loads the Owner's unencrypted keys from ~/.ssh by default. git over SSH therefore reaches GitHub as the Owner, not as the Author machine account and not without credentials.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539358626",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9202eaa39dbf18c12212d936eb9365befbc6c608 round=3 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62OKj0",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: The comment says no git command finds the checkout's path once origin's URL is reset, and HELP says 'its origin names no path'. But the clone's reflog (`.git/logs/HEAD`, `git reflog`) keeps `clone: from <checkout>`.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539358645",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9202eaa39dbf18c12212d936eb9365befbc6c608 round=3 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62OKj7",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: In the clone, `origin/dev` is the checkout's local `dev` branch, not GitHub's dev. With origin now pointing at `no-remote`, `git fetch origin` fails, so the session cannot correct it.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539358657",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9202eaa39dbf18c12212d936eb9365befbc6c608 round=3 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62OKkF",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "scripts/lab/bench-report.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: gitConfigOf writes user.name and user.email into the git config file without quoting or escaping them.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539358668",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9202eaa39dbf18c12212d936eb9365befbc6c608 round=3 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62OKkS",
+              "isResolved": true,
+              "isOutdated": false,
+              "path": "scripts/lab/bench.ts",
+              "line": 95,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit (security)**: Sessions run under the Owner's CLAUDE_CONFIG_DIR, so the Owner's user-level settings.json reaches them. Its `env`, `permissions.allow`, hooks and MCP servers all apply, which steps around the env allow-list of benchEnvOf and the narrow `--allowedTools` the bench passes.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539358686",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9202eaa39dbf18c12212d936eb9365befbc6c608 round=3 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous-labs-author"
+                    },
+                    "body": "Rejected: A real Worker runs under the Owner's user settings too, so the bench keeps them to measure the same Worker; the help says they apply.\n\n<!-- lab-author-reject -->\n\n<!-- lab-author-reply -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539421170",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62OKkb",
+              "isResolved": true,
+              "isOutdated": false,
+              "path": "scripts/lab/bench-report.ts",
+              "line": 113,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit (security)**: KEPT forwards ANTHROPIC_BASE_URL, HTTPS_PROXY and HTTP_PROXY as values that are \"none a secret\". A proxy URL often carries basic-auth credentials, though, and those reach the model-driven session.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539358699",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9202eaa39dbf18c12212d936eb9365befbc6c608 round=3 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous-labs-author"
+                    },
+                    "body": "Rejected: claude needs the proxy variables to work behind a proxy, so they stay; the code comment now says a password in a proxy URL reaches the session.\n\n<!-- lab-author-reject -->\n\n<!-- lab-author-reply -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/173#discussion_r4539421930",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

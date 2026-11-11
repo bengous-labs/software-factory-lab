@@ -305,7 +305,7 @@ describe("reviewOf", () => {
     ]);
   });
 
-  test("the body counts what is posted and the Pre-existing findings left out, links the run, and carries the review's marker", () => {
+  test("the body says what the round posted in plain words and the Pre-existing findings left out, names the model and links the run, and carries the review's marker", () => {
     const result = resultOf(
       finding("important", "b.ts", 1),
       finding("nit", "b.ts", 1),
@@ -315,9 +315,9 @@ describe("reviewOf", () => {
 
     expect(reviewOf(postPlanOf(result.report.findings, LINES), result, "c")["body"]).toBe(
       [
-        "Review round 2 (claude-sonnet-5-5, /code-review medium): 1 important, 2 nit. 1 pre-existing finding(s) not posted.",
+        "Round 2: 1 Important, 2 Nit. 1 pre-existing defect not posted.",
         "",
-        "Review run: https://github.com/o/r/actions/runs/7",
+        "Review run (claude-sonnet-5-5, /code-review medium): https://github.com/o/r/actions/runs/7",
         "",
         "<!-- lab-review patch=p1 round=2 -->",
       ].join("\n"),
@@ -328,7 +328,7 @@ describe("reviewOf", () => {
     const result = { ...resultOf(), model: null };
 
     expect(reviewOf(postPlanOf([], LINES), result, "c")["body"]).toStartWith(
-      "Review round 2 (sonnet, /code-review medium): nothing to fix.\n",
+      "Round 2: no new finding.\n\nReview run (sonnet, /code-review medium): ",
     );
     expect(reviewOf(postPlanOf([], LINES), result, "c")["comments"]).toEqual([]);
   });
@@ -368,7 +368,7 @@ describe("reviewOf", () => {
     ]);
   });
 
-  test("with a security pass, the body counts each pass's findings apart; with nothing posted by either, nothing to fix", () => {
+  test("with a security pass, the summary line tells each severity's security findings apart; a severity with none posted is left out", () => {
     const result = withPass(
       finding("important", "b.ts", 1),
       finding("nit", "b.ts", 1),
@@ -377,19 +377,37 @@ describe("reviewOf", () => {
       secured("pre_existing", "b.ts", 1),
     );
 
-    expect(firstLine(result)).toBe(
-      "Review round 1 (claude-opus-5-5, /code-review high): 1 important, 2 nit; security: 1 important, 0 nit. 1 pre-existing finding(s) not posted.",
+    expect(firstLine(result)).toBe("Round 1: 2 Important (1 security), 2 Nit. 1 pre-existing defect not posted.");
+    expect(firstLine(withPass(secured("nit", "b.ts", 1)))).toBe("Round 1: 1 Nit (1 security).");
+    expect(firstLine(withPass())).toBe("Round 1: no new finding.");
+  });
+
+  test("the summary line of a third round, as the issue that asked for it reads it", () => {
+    const third = withPass(
+      finding("important", "b.ts", 1),
+      secured("important", "b.ts", 1),
+      finding("nit", "b.ts", 1),
+      finding("nit", "b.ts", 1),
+      finding("nit", "b.ts", 1),
+      secured("nit", "b.ts", 1),
+      secured("nit", "b.ts", 1),
+      finding("pre_existing", "b.ts", 1),
+      secured("pre_existing", "b.ts", 1),
     );
-    expect(firstLine(withPass(secured("nit", "b.ts", 1)))).toBe(
-      "Review round 1 (claude-opus-5-5, /code-review high): 0 important, 0 nit; security: 0 important, 1 nit.",
+
+    expect(firstLine({ ...third, request: { ...third.request, round: 3 } })).toBe(
+      "Round 3: 2 Important (1 security), 5 Nit (2 security). 2 pre-existing defects not posted.",
     );
-    expect(firstLine(withPass())).toBe("Review round 1 (claude-opus-5-5, /code-review high): nothing to fix.");
   });
 
   test("a Delta read's body names it so, never as a Review round 4", () => {
     const read = { ...withPass(), request: { ...withPass().request, round: 4 as const } };
+    const posted = withPass(finding("important", "b.ts", 1), secured("important", "b.ts", 1));
 
-    expect(firstLine(read)).toBe("Delta read (claude-opus-5-5, /code-review high): nothing to fix.");
+    expect(firstLine(read)).toBe("Delta read: no new finding.");
+    expect(firstLine({ ...posted, request: { ...posted.request, round: 4 } })).toBe(
+      "Delta read: 2 Important (1 security).",
+    );
   });
 });
 
@@ -399,9 +417,12 @@ const APP = "bengous-labs-agents";
 const threadOf = (id: string, ...comments: ReadonlyArray<readonly [string, string]>): ReviewThread => ({
   id,
   isResolved: false,
+  isOutdated: false,
   path: "b.ts",
   line: 1,
-  comments: { nodes: comments.map(([login, body]) => ({ author: { login }, body })) },
+  comments: {
+    nodes: comments.map(([login, body]) => ({ author: { login }, body, url: `https://github.com/o/r/pull/7#${id}` })),
+  },
 });
 
 /** An Important that reports again the earlier one in `thread`. */
@@ -488,7 +509,12 @@ describe("againRepliesOf", () => {
   test("a deleted user's comment that holds the marker does not count either", () => {
     const deleted: ReviewThread = {
       ...threadOf("T1", FIRST),
-      comments: { nodes: [...threadOf("T1", FIRST).comments.nodes, { author: null, body: MARKER }] },
+      comments: {
+        nodes: [
+          ...threadOf("T1", FIRST).comments.nodes,
+          { author: null, body: MARKER, url: "https://github.com/o/r/pull/7#gone" },
+        ],
+      },
     };
 
     expect(againRepliesOf(resultOf(again("T1")), ["T1"], [deleted], APP).map((reply) => reply.thread)).toEqual(["T1"]);

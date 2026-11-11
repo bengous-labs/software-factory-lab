@@ -234,6 +234,45 @@ describe("Rounds and Important found", () => {
     expect(importantFoundOf(reviews)).toBe(5);
   });
 
+  test("a round's summary line in plain words counts its round and its Importants, the security pass's among them, next to one written before", () => {
+    const app = { login: "bengous-labs-agents[bot]" };
+
+    const reviews = [
+      {
+        user: app,
+        body: "Review round 1 (m, /code-review high): 2 important, 1 nit; security: 1 important, 0 nit.",
+        submitted_at: "2026-11-07T21:00:00Z",
+      },
+      {
+        user: app,
+        body: "Round 2: 2 Important (1 security), 5 Nit (2 security). 2 pre-existing defects not posted.\n\nReview run (m, /code-review high): u",
+        submitted_at: "2026-11-07T22:00:00Z",
+      },
+      { user: app, body: "Round 3: 1 Nit.", submitted_at: "2026-11-07T23:00:00Z" },
+      { user: { login: "bengous" }, body: "Round 4: 9 Important.", submitted_at: "2026-11-08T00:00:00Z" },
+    ];
+
+    expect(roundsOf(reviews)).toBe(3);
+    expect(importantFoundOf(reviews)).toBe(5);
+  });
+
+  test("a Delta read's summary line in plain words counts its Importants next to one written before, and no round", () => {
+    const plain = (patch: string, line: string, at: string) => ({
+      ...read(patch, 0, at),
+      body: `${line}\n\nReview run (m, /code-review medium): u\n\n<!-- lab-review patch=${patch} round=4 -->`,
+    });
+
+    const reviews = [
+      read("p4", 1, "2026-11-07T21:40:00Z"),
+      plain("p5", "Delta read: 2 Important (1 security).", "2026-11-07T21:50:00Z"),
+      plain("p6", "Delta read: no new finding.", "2026-11-07T21:55:00Z"),
+      plain("p7", "Delta reading: 9 Important.", "2026-11-07T21:58:00Z"),
+    ];
+
+    expect(roundsOf(reviews)).toBe(0);
+    expect(importantFoundOf(reviews)).toBe(3);
+  });
+
   test("a pending review, which GitHub sends without submitted_at, reads and counts no round", () => {
     const reviews = decodeReviewsPages(
       JSON.stringify([[...PR86.reviews, { user: { login: "bengous" }, body: "", state: "PENDING" }]]),

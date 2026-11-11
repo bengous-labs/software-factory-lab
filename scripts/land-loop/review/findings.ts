@@ -1,15 +1,15 @@
 /**
  * The App's findings as GitHub holds them. Each posted finding carries a marker that names its
  * severity, read back to count the open Important threads and by the relay of the Author's PR. A pull
- * request's review threads come from one GraphQL query: the Merge bot counts them, and the review job
- * gives Review rounds 2 and 3 the earlier findings with the author's answers.
+ * request's review threads come from one GraphQL query: the Merge bot counts them and keeps their
+ * ledger, and the review job gives Review rounds 2 and 3 the earlier findings with the author's answers.
  */
 
 import { Option, Schema } from "effect";
 
 import { codeSpan, unescapeHtml } from "../../lib/markdown.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
-import type { ImportantThread } from "../merge-bot/decide.ts";
+import type { ImportantThread, LedgerFinding } from "../merge-bot/decide.ts";
 import { Severity } from "./review-report.ts";
 
 /** The marker a finding's comment carries. An external name: posted findings carry it, so the string stays. */
@@ -34,6 +34,8 @@ const Login = Schema.Struct({ login: Schema.String });
 const ReviewThread = Schema.Struct({
   id: Schema.String,
   isResolved: Schema.Boolean,
+  /** GitHub marks the thread outdated once the lines it is anchored on changed. */
+  isOutdated: Schema.Boolean,
   path: Schema.String,
   line: Schema.NullOr(Schema.Finite),
   comments: Schema.Struct({
@@ -41,6 +43,7 @@ const ReviewThread = Schema.Struct({
       Schema.Struct({
         author: Schema.NullOr(Login),
         body: Schema.String,
+        url: Schema.String,
         /** The review the comment was posted in: an App finding's carries its round's marker. */
         pullRequestReview: Schema.optionalKey(Schema.NullOr(Schema.Struct({ body: Schema.String }))),
       }),
@@ -62,7 +65,7 @@ export const ReviewThreads = Schema.Struct({
 
 /** The GraphQL query of the review threads of PR `pr`, over the variables `owner` and `name`. */
 export function threadsQueryOf(pr: number): string {
-  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{author{login} body pullRequestReview{body}}}}}}}}`;
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:20){nodes{author{login} body url pullRequestReview{body}}}}}}}}`;
 }
 
 /** The App's login as GraphQL prints it, without REST's `[bot]` suffix. */
@@ -263,6 +266,50 @@ export function earlierThreadsOf(logins: ThreadLogins, threads: readonly ReviewT
         where: `${thread.path}:${thread.line ?? "?"}`,
         finding: unescapeHtml(finding.body.split("\n")[0] ?? ""),
         reply: `${answers.length === 0 ? "no answer" : answers.join(" / ")} (thread ${state})`,
+      },
+    ];
+  });
+}
+
+const SECURITY_LABEL = /^\*\*[^*]+ \(security\)\*\*: /u;
+
+/**
+ * The App's Important and Nit findings of a review that names its round, each as the ledger reads its
+ * thread: where its comment is, its severity and pass, its first line without the label, its round, the
+ * thread's state, the Author's rejection reply when the thread is resolved with it as its latest answer,
+ * and the later rounds that report it again there. `logins.app` is the App's login as GraphQL prints it.
+ */
+export function ledgerFindingsOf(logins: ThreadLogins, threads: readonly ReviewThread[]): LedgerFinding[] {
+  return threads.flatMap((thread) => {
+    const [finding, ...replies] = thread.comments.nodes;
+    const severity = finding?.author?.login === logins.app ? severityOfBody(finding.body) : null;
+    const posted = reviewOfBody(finding?.pullRequestReview?.body ?? "");
+
+    if (finding === undefined || (severity !== "important" && severity !== "nit") || posted === null) {
+      return [];
+    }
+
+    const first = unescapeHtml(finding.body.split("\n")[0] ?? "");
+
+    const again = replies.flatMap((reply) => {
+      const review = reply.author?.login === logins.app ? reviewOfBody(reply.body) : null;
+
+      return review === null ? [] : [review.round];
+    });
+
+    return [
+      {
+        thread: thread.id,
+        url: finding.url,
+        where: thread.line === null ? thread.path : `${thread.path}:${thread.line}`,
+        severity,
+        security: SECURITY_LABEL.test(first),
+        summary: first.replace(SEVERITY_LABEL, ""),
+        round: posted.round,
+        resolved: thread.isResolved,
+        outdated: thread.isOutdated,
+        rejection: rejectedOf(logins, thread) ? (answersOf(logins, thread).at(-1)?.url ?? null) : null,
+        again,
       },
     ];
   });

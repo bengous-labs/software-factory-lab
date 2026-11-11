@@ -13,7 +13,7 @@ import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
 import type { RelayStart } from "../ports/relay.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
 import { conversationArgsOf } from "../relay/wakes.ts";
-import { DONE_SCHEMA, FORK_MARKER, questionCommentOf } from "./decide.ts";
+import { DONE_SCHEMA, fixedOfBody, fixedRecordBodyOf, FORK_MARKER, questionCommentOf } from "./decide.ts";
 import { BODY_REQUEST, doneQuestionOf } from "./done-prompt.ts";
 import {
   FORK_FLAG,
@@ -82,6 +82,7 @@ function thread(id: string, severity: "important" | "nit" | "pre_existing", reso
   return {
     id,
     isResolved: resolved,
+    isOutdated: false,
     path: "app/src/cli.ts",
     line: 7,
     comments: {
@@ -89,6 +90,7 @@ function thread(id: string, severity: "important" | "nit" | "pre_existing", reso
         {
           author: { login: "bengous-labs-agents" },
           body: `**${label}**: ${id} is wrong\n\nscenario\n\n<!-- lab-finding severity=${severity} -->`,
+          url: `https://github.com/o/r/pull/12#discussion_${id}`,
         },
       ],
     },
@@ -314,6 +316,10 @@ function writes(calls: readonly Call[]): string[] {
 
     if (call.argv.includes("push")) {
       return ["push"];
+    }
+
+    if (line.startsWith("gh api -X PATCH")) {
+      return [`edit ${call.argv[4]}`];
     }
 
     const undo = call.argv.includes("--undo") ? " --undo" : "";
@@ -1120,6 +1126,121 @@ describe("rejections and Nit threads", () => {
     expect(await stopIn(next)).toEqual({ kind: "allow" });
     expect(writes(next.calls)).toEqual(["resolve T2"]);
     expect(next.calls.some((call) => call.argv[0] === "claude" || call.argv[0] === "bun")).toBe(false);
+  });
+});
+
+/** The body the hook wrote for its record, as `gh pr comment` or the edit read it on stdin. */
+function recordWritten(found: World): string | undefined {
+  const call = found.calls.find((one) => /^gh (pr comment|api -X PATCH)/u.test(one.argv.join(" ")));
+  const stdin = call?.options.stdin;
+
+  return call?.argv[1] === "api" && stdin !== undefined
+    ? decodeJson(Schema.Struct({ body: Schema.String }), "the edit", stdin).body
+    : stdin;
+}
+
+describe("the findings the Author fixed", () => {
+  const FIXING = {
+    ...FINISHED,
+    rejections: [{ thread: "T1", reason: "by design" }],
+    fixed: ["T1", "T2", "T3", "T9"],
+  };
+
+  const THREADS = [thread("T1", "important"), thread("T2", "nit"), thread("T3", "important"), thread("T4", "nit")];
+
+  test("the hook records the open findings the Author fixed, but a rejected one, in one comment posted before the push", async () => {
+    const found = world({ done: [FIXING], listed: draftPr(), threads: THREADS });
+    await stopIn(found);
+
+    expect(writes(found.calls)).toEqual([
+      "reply T1",
+      "resolve T1",
+      "pr comment",
+      "push",
+      "pr ready",
+      "resolve T2",
+      "resolve T4",
+    ]);
+    expect(fixedOfBody(recordWritten(found) ?? "")).toEqual(["T2", "T3"]);
+    expect(recordWritten(found)).toContain(AUTHOR_MARK);
+    expect(found.records).toContainEqual({ step: "fixed", threads: ["T2", "T3"] });
+  });
+
+  test("a later stop edits the record the PR's conversation holds, adding its fixes to those listed", async () => {
+    const record = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T0"]) ?? "";
+
+    const found = world({
+      done: [{ ...FINISHED, fixed: ["T2"] }],
+      listed: draftPr(),
+      threads: THREADS,
+      conversation: conversationLine("901", AUTHOR_LOGIN, record),
+    });
+
+    await stopIn(found);
+
+    expect(writes(found.calls)).toEqual([
+      "edit repos/{owner}/{repo}/issues/comments/901",
+      "push",
+      "pr ready",
+      "resolve T2",
+      "resolve T4",
+    ]);
+    expect(fixedOfBody(recordWritten(found) ?? "")).toEqual(["T0", "T2"]);
+  });
+
+  test("a stop that adds no fix writes no record; a forged record of another login is not edited", async () => {
+    const forged = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T2"]) ?? "";
+
+    const none = world({ listed: draftPr(), threads: THREADS });
+    await stopIn(none);
+
+    const again = world({
+      done: [{ ...FINISHED, fixed: ["T2"] }],
+      listed: draftPr(),
+      threads: THREADS,
+      conversation: conversationLine("901", AUTHOR_LOGIN, forged),
+    });
+
+    await stopIn(again);
+
+    const other = world({
+      done: [{ ...FINISHED, fixed: ["T2"] }],
+      listed: draftPr(),
+      threads: THREADS,
+      conversation: conversationLine("902", OWNER_LOGIN, forged),
+    });
+
+    await stopIn(other);
+
+    expect(writes(none.calls)).toEqual(["push", "pr ready", "resolve T2", "resolve T4"]);
+    expect(writes(again.calls)).toEqual(["push", "pr ready", "resolve T2", "resolve T4"]);
+    expect(writes(other.calls)[0]).toBe("pr comment");
+  });
+
+  test("a record that cannot be written is logged, and the PR is published", async () => {
+    const found = world({
+      done: [{ ...FINISHED, fixed: ["T2"] }],
+      listed: draftPr(),
+      threads: THREADS,
+      failing: ["gh pr comment"],
+    });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(found.outcomes.map((outcome) => outcome.line)).toMatchObject([{ outcome: "published", pr: 12 }]);
+    expect(found.records).toContainEqual({ step: "fixed", threads: null, error: "gh pr comment exited 1: gh failed" });
+  });
+
+  test("a stop that asks the Owner, or holds for the answer, records no fix", async () => {
+    const asking = world({
+      done: [{ ...FINISHED, question: "Which?", fixed: ["T2"] }],
+      listed: draftPr(),
+      threads: THREADS,
+    });
+
+    await stopIn(asking);
+
+    expect(fixedOfBody(recordWritten(asking) ?? "")).toEqual([]);
+    expect(asking.records.some((record) => record.step === "fixed")).toBe(false);
   });
 });
 
