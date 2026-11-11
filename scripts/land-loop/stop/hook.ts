@@ -6,7 +6,8 @@
  * with `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the
  * session whether the change is finished and which findings the Author rejects, then publishes: posts
  * the rejections, pushes the branch, opens or readies the PR, resolves the App's open Nit threads, and
- * leaves the PR's relay. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's
+ * leaves the PR's relay. A stop that leaves a question to the Owner pushes the branch to a PR in draft,
+ * posts the question there once, and leaves the relay that brings the answer back. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's
  * latency and tokens, and every stop of an Author leaves one line in `.lab/outcomes.log` of the main
  * checkout.
  *
@@ -30,6 +31,7 @@ import { replyInThread, resolveThread } from "../lib/threads.ts";
 import { APP_LOGIN } from "../logins.ts";
 import type { StartRelay } from "../ports/relay.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
+import { conversationArgsOf, conversationOf } from "../relay/wakes.ts";
 import { openFindingsOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
 import type { OpenFinding } from "../review/findings.ts";
 import {
@@ -47,11 +49,14 @@ import {
   noAuthorToken,
   noDoneAnswer,
   outcomeLineOf,
+  questionCommentOf,
+  questionOpen,
   quotedQuestionOf,
   rejectionReplyOf,
   rejectionsOf,
 } from "./decide.ts";
 import type {
+  Action,
   ClosedPullRequest,
   DoneAnswer,
   Outcome,
@@ -475,8 +480,8 @@ function leaveRelay(stopping: AuthorStop, pr: number): void {
   }
 }
 
-/** Opens the PR of the pushed branch, with the title and body a fork writes; returns its number. */
-async function openPr(stopping: AuthorStop, gh: RunOptions): Promise<number> {
+/** Opens the PR of the pushed branch, in draft when `draft`, with the title and body a fork writes; returns its number. */
+async function openPr(stopping: AuthorStop, gh: RunOptions, draft: boolean): Promise<number> {
   const { deps, input, branch } = stopping;
 
   const bodyFork = await askFork(deps, input, {
@@ -499,7 +504,20 @@ async function openPr(stopping: AuthorStop, gh: RunOptions): Promise<number> {
 
   const url = await checked(
     deps.run,
-    ["gh", "pr", "create", "--base", TRUNK, "--head", branch, "--title", text.title, "--body-file", "-"],
+    [
+      "gh",
+      "pr",
+      "create",
+      "--base",
+      TRUNK,
+      "--head",
+      branch,
+      ...(draft ? ["--draft"] : []),
+      "--title",
+      text.title,
+      "--body-file",
+      "-",
+    ],
     { ...gh, stdin: body === "" ? "(no body)" : body },
   );
 
@@ -513,16 +531,62 @@ interface Judged {
   readonly answer: DoneAnswer;
 }
 
+async function push(stopping: AuthorStop, author: Credential): Promise<void> {
+  await checked(stopping.deps.run, pushArgs(stopping.branch), {
+    cwd: stopping.input.cwd,
+    env: { LAB_AUTHOR_TOKEN: author.token },
+    timeoutMs: 120_000,
+  });
+}
+
+/**
+ * Puts the Author's question to the Owner on a draft PR, so nothing lands while it is open: a ready PR
+ * goes back to draft before the push, a branch with none opens one in draft. The question is posted
+ * unless one the Owner has not answered is there already, and the relay is left to bring the answer.
+ */
+async function askOwner(
+  stopping: AuthorStop,
+  author: Credential,
+  action: Extract<Action, { kind: "ask" }>,
+): Promise<Stopped> {
+  const { deps, input, log, branch } = stopping;
+
+  if (action.pr !== null && action.toDraft) {
+    await checked(deps.run, ["gh", "pr", "ready", String(action.pr), "--undo"], author.gh);
+  }
+
+  await push(stopping, author);
+
+  const pr = action.pr ?? (await openPr(stopping, author.gh, true));
+  const posted = !questionOpen(conversationOf(await checked(deps.run, conversationArgsOf(pr), author.gh)));
+
+  if (posted) {
+    await checked(deps.run, ["gh", "pr", "comment", String(pr), "--body-file", "-"], {
+      ...author.gh,
+      stdin: questionCommentOf(action.question, branch, input.session_id),
+    });
+  }
+
+  log({ step: "question", pr, posted });
+  leaveRelay(stopping, pr);
+
+  return notPublished(action.reason);
+}
+
 /**
  * The Publication: the rejections first, each a reply and a resolved thread, then the push, the PR opened
  * or readied, the Nit threads resolved and the relay left. A push that fails writes nothing after it.
  */
 async function publish(stopping: AuthorStop, author: Credential, judged: Judged): Promise<Stopped> {
-  const { deps, input, log, branch, head } = stopping;
+  const { deps, log, head } = stopping;
   const action = decide(judged.pr, judged.answer);
 
   if (action.kind === "none") {
     return notPublished(action.reason);
+  }
+
+  if (action.kind === "ask") {
+    return askOwner(stopping, author, action);
   }
 
   const rejections = rejectionsOf(
@@ -544,16 +608,12 @@ async function publish(stopping: AuthorStop, author: Credential, judged: Judged)
     log({ step: "rejection", thread: rejection.thread });
   }
 
-  await checked(deps.run, pushArgs(branch), {
-    cwd: input.cwd,
-    env: { LAB_AUTHOR_TOKEN: author.token },
-    timeoutMs: 120_000,
-  });
+  await push(stopping, author);
 
   let number: number;
 
   if (action.kind === "open") {
-    number = await openPr(stopping, author.gh);
+    number = await openPr(stopping, author.gh, false);
   } else {
     number = action.pr;
 

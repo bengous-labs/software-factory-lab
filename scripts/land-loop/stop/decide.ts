@@ -3,13 +3,15 @@
  * says whose stop the hook leaves alone; `admit` settles what git and the PR alone settle;
  * `afterAuthorToken` whether the Author's token lets it publish; `afterStopChecks` what the Stop checks'
  * result adds; `decide` what the Done judge's answer adds. Each returns the next thing the hook does.
+ * `questionOpen` says whether a question the hook put to the Owner still waits for the answer.
  */
 
 import { Result, Schema } from "effect";
 
 import { AUTHOR_VARIABLE } from "../../lib/author-session.ts";
 import { escapeHtml } from "../../lib/markdown.ts";
-import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
+import { AUTHOR_MARK, QUESTION_MARK, REJECT_MARK } from "../author-mark.ts";
+import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
 
 /**
  * The marker that opens every question the hook puts to a fork, so a fork stays recognisable. The
@@ -152,7 +154,18 @@ export interface DoneAnswer {
 export type Action =
   | { readonly kind: "none"; readonly reason: string }
   | { readonly kind: "open" }
-  | { readonly kind: "push"; readonly pr: number; readonly ready: boolean };
+  | { readonly kind: "push"; readonly pr: number; readonly ready: boolean }
+  /**
+   * The Author's question goes to the Owner on a draft PR: the one opened for it when `pr` is null, else
+   * `pr`, sent back to draft first when `toDraft`. `question` is quoted, `reason` says why nothing lands.
+   */
+  | {
+      readonly kind: "ask";
+      readonly question: string;
+      readonly reason: string;
+      readonly pr: number | null;
+      readonly toDraft: boolean;
+    };
 
 const none = (reason: string): Extract<Refusal, { kind: "none" }> => ({ kind: "none", reason });
 
@@ -304,7 +317,13 @@ export function decide(pr: PullRequest | null, answer: DoneAnswer): Action {
   if (question !== "") {
     const asking = `the Author's last message leaves a question to its user: ${question}`;
 
-    return none(answer.finished ? asking : `${asking}; ${unfinished}`);
+    return {
+      kind: "ask",
+      question,
+      reason: answer.finished ? asking : `${asking}; ${unfinished}`,
+      pr: pr?.number ?? null,
+      toDraft: pr !== null && !pr.draft,
+    };
   }
 
   if (!answer.finished) {
@@ -344,6 +363,48 @@ export function rejectionsOf(rejections: readonly Rejection[], openThreads: read
  */
 export function rejectionReplyOf(reason: string): string {
   return `Rejected: ${escapeHtml(reason.trim())}\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`;
+}
+
+/** A comment on a PR, by its author's login. */
+export interface PrComment {
+  readonly author: string;
+  readonly body: string;
+}
+
+/**
+ * Whether the Owner wrote these words by hand. The lab is public and any GitHub login can comment on a
+ * pull request: of a person's words, the Land loop reads the Owner's alone, never another login's, which
+ * would reach the Author's session as a turn to act on.
+ */
+export const byOwner = (comment: PrComment): boolean =>
+  comment.author === OWNER_LOGIN && !comment.body.includes(AUTHOR_MARK);
+
+/**
+ * Whether the PR's conversation `comments`, in their order, hold a question of the Author the Owner has
+ * not answered: a comment the hook posted with the question mark, and no comment of the Owner after it.
+ */
+export function questionOpen(comments: readonly PrComment[]): boolean {
+  const asked = comments.findLastIndex(
+    (comment) => comment.author === AUTHOR_LOGIN && comment.body.includes(QUESTION_MARK),
+  );
+
+  return asked !== -1 && !comments.slice(asked + 1).some((comment) => byOwner(comment));
+}
+
+/** The comment that puts the Author's quoted `question` to the Owner, from `branch` and `session`. */
+export function questionCommentOf(question: string, branch: string, session: string): string {
+  const quoted = escapeHtml(question)
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+
+  return [
+    `The Author of \`${branch}\` (session \`${session}\`) asks the Owner, and waits for the answer:`,
+    quoted,
+    "Answer in a comment on this pull request: it reaches the Author's session. The pull request stays in draft until the Author stops with no question.",
+    QUESTION_MARK,
+    AUTHOR_MARK,
+  ].join("\n\n");
 }
 
 /** A Worker's branch is `<type>/<N>-<slug>`, made for issue N. */

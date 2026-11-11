@@ -23,6 +23,7 @@ import { relayFilesOf } from "../lib/relay-start.ts";
 import { checked, run } from "../lib/run.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
 import {
+  conversationArgsOf,
   ownerWordsIn,
   prStateOf,
   readingOf,
@@ -50,18 +51,7 @@ export async function readPr(runner: Run, options: RunOptions, pr: number): Prom
 
   const checks = await runner(["gh", "pr", "checks", String(pr), "--json", "name,bucket,link"], options);
 
-  const conversation = await checked(
-    runner,
-    [
-      "gh",
-      "api",
-      "--paginate",
-      `repos/{owner}/{repo}/issues/${pr}/comments?per_page=100`,
-      "--jq",
-      ".[] | {id: (.id | tostring), author: .user.login, body}",
-    ],
-    options,
-  );
+  const conversation = await checked(runner, conversationArgsOf(pr), options);
 
   const threads = await checked(
     runner,

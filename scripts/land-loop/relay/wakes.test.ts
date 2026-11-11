@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import { decodeJson } from "../../lib/json.ts";
 import { AUTHOR_MARK } from "../author-mark.ts";
+import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
+import { questionCommentOf } from "../stop/decide.ts";
 import {
   answerOf,
   ownerWordsIn,
@@ -383,6 +385,17 @@ describe("wakesOf", () => {
 
   test("a PR back in draft says so, once per head", () => {
     expect(wakesOf(7, { ...OPEN, draft: true })).toEqual([{ key: `draft:${HEAD}`, kind: "draft", line: DRAFT_LINE }]);
+  });
+
+  test("a draft that holds the Author's open question wakes nobody; the Owner's answer wakes the Author with it", () => {
+    const asked = { id: "C1", author: AUTHOR_LOGIN, body: questionCommentOf("Which wording?", "agent/x", "S1") };
+    const answer = { id: "C2", author: OWNER_LOGIN, body: "The first." };
+
+    expect(wakesOf(7, { ...OPEN, draft: true, comments: [asked] })).toEqual([]);
+    expect(wakesOf(7, { ...OPEN, draft: true, comments: [asked, answer] })).toEqual([
+      { key: "comment:C2", kind: "owner", line: `Comment on PR #7 by ${OWNER_LOGIN}: The first.` },
+      { key: `draft:${HEAD}`, kind: "draft", line: DRAFT_LINE },
+    ]);
   });
 
   test("a landed or closed PR gives no Wake, whatever else it carries", () => {
