@@ -21,5 +21,5 @@ Each rule keeps a change small enough to review and land fast, and the code read
 - A new version replaces the old one in the same change: no parallel versions.
 - Strict types, clear names, typed states and data shapes, visible error paths.
 - Validate at system boundaries only, and fail fast there: propagate an error with its context. Write no fallback or compatibility code for an old format unless the issue or this repository names data to preserve, as `AGENTS.md` does for the task file's two format versions.
-- Doc comments follow the neighbours: where they document each module and export, as under `scripts/`, yours do too; where they do not, as under `app/`, yours do not. Inside a body, a comment survives only for a why the code cannot say: a workaround, an external constraint, a TODO. History belongs in the commit message.
+- Doc comments follow the neighbours of the file you edit: under `scripts/`, each module and each export has one. Inside a body, a comment survives only for a why the code cannot say: a workaround, an external constraint, a TODO. History belongs in the commit message.
 - Code, comments, commit messages and docs are in English. Docs state the current design: no date, commit SHA or time word (`currently`, `no longer`).
