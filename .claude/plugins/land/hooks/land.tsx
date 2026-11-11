@@ -117,44 +117,45 @@ const isLabelWrite = (command: string): boolean => {
   return command.includes(LABEL) && (isLabelEdit || isApiWrite || isLabelCommand);
 };
 
-const LABEL_KEY = /label/iu;
+const LABEL_TOOL = /label/iu;
 
-const parsed = (text: string): unknown => {
+const PROSE_KEYS: ReadonlySet<string> = new Set([
+  "text",
+  "body",
+  "message",
+  "content",
+  "comment",
+  "title",
+  "description",
+  "summary",
+  "note",
+]);
+
+const REQUEST_KEY = /^(?:path|url|endpoint|method|query|command|cmd|args|argv|script)$/iu;
+
+const isJson = (text: string): boolean => {
   try {
-    return JSON.parse(text) as unknown;
+    JSON.parse(text);
+
+    return true;
   } catch {
-    return undefined;
-  }
-};
-
-const putsLabel = (key: string, value: unknown): boolean => {
-  if (typeof value === "string") {
-    if (!value.includes(LABEL)) {
-      return false;
-    }
-
-    const inner = parsed(value);
-
-    return (
-      LABEL_KEY.test(key) ||
-      isLabelWrite(value) ||
-      (typeof inner === "object" && inner !== null && putsLabel(key, inner))
-    );
-  }
-
-  if (typeof value !== "object" || value === null) {
     return false;
   }
-
-  if (LABEL_KEY.test(key) && JSON.stringify(value).includes(LABEL)) {
-    return true;
-  }
-
-  return Object.entries(value).some(([entry, held]) => putsLabel(Array.isArray(value) ? key : entry, held));
 };
 
-const isMcpLabelWrite = (tool: string, input: object): boolean =>
-  JSON.stringify(input).includes(LABEL) && (LABEL_KEY.test(tool) || putsLabel("", input));
+const isProse = (key: string, value: unknown): boolean =>
+  PROSE_KEYS.has(key) && typeof value === "string" && /\s/u.test(value) && !isJson(value) && !isLabelWrite(value);
+
+const isMcpLabelWrite = (tool: string, input: object): boolean => {
+  const naming = Object.entries(input).filter(([, value]) => JSON.stringify(value)?.includes(LABEL) ?? false);
+
+  return (
+    naming.length > 0 &&
+    (LABEL_TOOL.test(tool) ||
+      Object.keys(input).some((key) => REQUEST_KEY.test(key)) ||
+      !naming.every(([key, value]) => isProse(key, value)))
+  );
+};
 
 const drop = ($: EngineInterface, band: Band, n: string, line?: string): void => {
   band.rows.delete(n);

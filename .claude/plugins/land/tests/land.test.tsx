@@ -512,6 +512,19 @@ const MCP_REFUSED = [
   { tool: "mcp__github__create_label", name: "land-ok" },
   { tool: "mcp__shell__run", command: "gh pr edit 120 --add-label land-ok" },
   { tool: "mcp__github__api", path: "repos/o/r/issues/120/labels", body: '{"labels":["land-ok"]}' },
+  { tool: "mcp__shell__exec", command: "gh", args: ["gh", "pr", "edit", "120", "--add-label", "land-ok"] },
+  { tool: "mcp__shell__exec", argv: ["gh", "pr", "edit", "120", "--add-label", "land-ok"] },
+  { tool: "mcp__x__gh", args: ["api", "-X", "POST", "repos/o/r/issues/120/labels", "-f", "labels[]=land-ok"] },
+  { tool: "mcp__github__api", method: "POST", path: "repos/o/r/issues/120/labels", body: '["land-ok"]' },
+  { tool: "mcp__github__api", method: "POST", path: "repos/o/r/issues/120/labels", body: '"[\\"land-ok\\"]"' },
+  { tool: "mcp__github__api", method: "PATCH", path: "repos/o/r/labels/bug", body: { new_name: "land-ok" } },
+  { tool: "mcp__github__graphql", query: 'mutation{updateLabel(input:{id:"LA_x",name:"land-ok"}){label{id}}}' },
+  {
+    tool: "mcp__shell__run",
+    command: "curl -X POST -d '[\"land-ok\"]' https://api.github.com/repos/o/r/issues/120/labels",
+  },
+  { tool: "mcp__github__add_issue_comment", issue_number: 120, body: "gh pr edit 120 --add-label land-ok" },
+  { tool: "mcp__github__add_issue_comment", issue_number: 120, body: "land-ok" },
 ];
 
 for (const call of MCP_REFUSED) {
@@ -524,6 +537,19 @@ for (const call of MCP_REFUSED) {
     expect(seen.passed).toEqual([]);
   });
 }
+
+test("the guard refuses a land-ok write nested as deep as the engine takes", async ($, on) => {
+  const seen = stubEngine(on, gitHub({}));
+  let deep: unknown = ["land-ok"];
+  for (let level = 0; level < 27_000; level += 1) {
+    deep = [deep];
+  }
+
+  const result = await $.tool.call({ tool: "mcp__shell__exec", argv: deep });
+
+  expect(result).toEqual({ deny: DENY });
+  expect(seen.passed).toEqual([]);
+});
 
 test("the guard lets an MCP call that names land-ok in its text through", async ($, on) => {
   const seen = stubEngine(on, gitHub({}));
