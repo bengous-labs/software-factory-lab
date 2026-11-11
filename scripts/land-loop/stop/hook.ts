@@ -529,6 +529,8 @@ interface Judged {
   readonly pr: PullRequest | null;
   readonly findings: readonly OpenFinding[];
   readonly answer: DoneAnswer;
+  /** The PR's conversation holds a question the hook put to the Owner, still unanswered. */
+  readonly asked: boolean;
 }
 
 async function push(stopping: AuthorStop, author: Credential): Promise<void> {
@@ -548,6 +550,7 @@ async function askOwner(
   stopping: AuthorStop,
   author: Credential,
   action: Extract<Action, { kind: "ask" }>,
+  asked: boolean,
 ): Promise<Stopped> {
   const { deps, input, log, branch } = stopping;
 
@@ -558,7 +561,7 @@ async function askOwner(
   await push(stopping, author);
 
   const pr = action.pr ?? (await openPr(stopping, author.gh, true));
-  const posted = !questionOpen(conversationOf(await checked(deps.run, conversationArgsOf(pr), author.gh)));
+  const posted = !asked;
 
   if (posted) {
     await checked(deps.run, ["gh", "pr", "comment", String(pr), "--body-file", "-"], {
@@ -570,7 +573,7 @@ async function askOwner(
   log({ step: "question", pr, posted });
   leaveRelay(stopping, pr);
 
-  return notPublished(action.reason);
+  return { answer: ALLOW, outcome: { kind: "asked", pr, reason: action.reason } };
 }
 
 /**
@@ -579,14 +582,14 @@ async function askOwner(
  */
 async function publish(stopping: AuthorStop, author: Credential, judged: Judged): Promise<Stopped> {
   const { deps, log, head } = stopping;
-  const action = decide(judged.pr, judged.answer);
+  const action = decide(judged.pr, judged.answer, judged.asked);
 
   if (action.kind === "none") {
     return notPublished(action.reason);
   }
 
   if (action.kind === "ask") {
-    return askOwner(stopping, author, action);
+    return askOwner(stopping, author, action, judged.asked);
   }
 
   const rejections = rejectionsOf(
@@ -734,7 +737,11 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     return stoppedOf(noDoneAnswer(doneJudge.code, chain.reported), "the Done judge gave no answer");
   }
 
-  return publish(stopping, { token: token.token, gh }, { pr: snapshot.pr, findings, answer });
+  const asked =
+    snapshot.pr !== null &&
+    questionOpen(conversationOf(await checked(deps.run, conversationArgsOf(snapshot.pr.number), gh)));
+
+  return publish(stopping, { token: token.token, gh }, { pr: snapshot.pr, findings, answer, asked });
 }
 
 /** Where a session stops: its worktree, the repository's main checkout, and whether they are the same. */

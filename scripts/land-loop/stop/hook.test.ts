@@ -64,7 +64,7 @@ const OutcomeLine = Schema.Struct({
   worktree: Schema.String,
   branch: Schema.NullOr(Schema.String),
   head: Schema.NullOr(Schema.String),
-  outcome: Schema.Literals(["published", "not-published"]),
+  outcome: Schema.Literals(["published", "asked", "not-published"]),
   pr: Schema.optionalKey(Schema.Finite),
   reason: Schema.optionalKey(Schema.String),
 });
@@ -844,9 +844,30 @@ describe("the Done judge", () => {
       question: "Leave the doc, or update it?",
     });
     expect(found.outcomes[0]?.line).toMatchObject({
-      outcome: "not-published",
+      outcome: "asked",
+      pr: 12,
       reason: "the Author's last message leaves a question to its user: Leave the doc, or update it?",
     });
+  });
+
+  test("a finished stop on a draft whose question the Owner has not answered readies nothing and pushes nothing", async () => {
+    const asked = conversationLine("1", AUTHOR_LOGIN, questionCommentOf("Which wording?", "agent/x", "S1"));
+    const found = world({ listed: draftPr("e".repeat(40)), conversation: asked });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(writes(found.calls)).toEqual([]);
+    expect(found.outcomes[0]?.line).toMatchObject({
+      outcome: "not-published",
+      reason: "#12 holds a question to the Owner with no answer: it stays in draft",
+    });
+
+    const answered = world({
+      listed: draftPr("e".repeat(40)),
+      conversation: `${asked}${conversationLine("2", OWNER_LOGIN, "The first.")}`,
+    });
+
+    await stopIn(answered);
+    expect(writes(answered.calls)).toEqual(["push", "pr ready"]);
   });
 
   test("a question still open on the PR is not posted again; one the Owner answered is followed by the new one", async () => {

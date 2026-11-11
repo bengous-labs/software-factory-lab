@@ -302,11 +302,11 @@ describe("decide", () => {
   test("a change the Done judge says is not finished publishes nothing, and says why", () => {
     const unfinished: DoneAnswer = { finished: false, question: "", reason: "a test is missing", rejections: [] };
 
-    expect(decide(null, unfinished)).toEqual({
+    expect(decide(null, unfinished, false)).toEqual({
       kind: "none",
       reason: "the Done judge says the change is not finished: a test is missing",
     });
-    expect(decide(draft, unfinished).kind).toBe("none");
+    expect(decide(draft, unfinished, false).kind).toBe("none");
   });
 
   test("a question left to the user asks the Owner on a draft, whatever the Done judge says of the change, and quotes it", () => {
@@ -314,12 +314,12 @@ describe("decide", () => {
     const reason = "the Author's last message leaves a question to its user: Leave the doc, or update it in this PR?";
     const question = "Leave the doc, or update it in this PR?";
 
-    expect(decide(null, asking)).toEqual({ kind: "ask", question, reason, pr: null, toDraft: false });
-    expect(decide(draft, asking)).toEqual({ kind: "ask", question, reason, pr: 7, toDraft: false });
+    expect(decide(null, asking, false)).toEqual({ kind: "ask", question, reason, pr: null, toDraft: false });
+    expect(decide(draft, asking, false)).toEqual({ kind: "ask", question, reason, pr: 7, toDraft: false });
   });
 
   test("a question on a ready PR sends it back to draft: nothing lands while it is open", () => {
-    expect(decide(ready, { ...FINISHED, question: "Which wording?" })).toMatchObject({
+    expect(decide(ready, { ...FINISHED, question: "Which wording?" }, false)).toMatchObject({
       kind: "ask",
       pr: 7,
       toDraft: true,
@@ -334,7 +334,7 @@ describe("decide", () => {
       rejections: [],
     };
 
-    expect(decide(ready, asking)).toMatchObject({
+    expect(decide(ready, asking, false)).toMatchObject({
       kind: "ask",
       reason:
         "the Author's last message leaves a question to its user: Which wording?; the Done judge says the change is not finished: a test is missing",
@@ -347,28 +347,41 @@ describe("decide", () => {
     expect(quotedQuestionOf(" \n\t")).toBe("");
   });
 
-  test("the quoted question is cut to its first 300 characters", () => {
-    const action = decide(null, { ...FINISHED, question: `${"a".repeat(300)}b` });
+  test("the reason quotes the question cut to its first 300 characters; the Owner is asked the whole of it, trimmed", () => {
+    const action = decide(null, { ...FINISHED, question: ` ${"a".repeat(300)}b\n` }, false);
 
     expect(action).toMatchObject({
       kind: "ask",
-      question: "a".repeat(300),
+      question: `${"a".repeat(300)}b`,
       reason: `the Author's last message leaves a question to its user: ${"a".repeat(300)}`,
     });
   });
 
+  test("a finished change does not ready a draft whose question the Owner has not answered: it lands around nobody", () => {
+    expect(decide(draft, FINISHED, true)).toEqual({
+      kind: "none",
+      reason: "#7 holds a question to the Owner with no answer: it stays in draft",
+    });
+    expect(decide(ready, FINISHED, true)).toEqual({ kind: "push", pr: 7, ready: false });
+    expect(decide(draft, { ...FINISHED, question: "And now?" }, true)).toMatchObject({ kind: "ask", pr: 7 });
+  });
+
   test("a question of blanks alone is no question", () => {
-    expect(decide(null, { ...FINISHED, question: " \n\t" })).toEqual({ kind: "open" });
+    expect(decide(null, { ...FINISHED, question: " \n\t" }, false)).toEqual({ kind: "open" });
   });
 
   test("a finished change opens the PR when there is none, pushes and readies a draft, pushes a ready one", () => {
-    expect(decide(null, FINISHED)).toEqual({ kind: "open" });
-    expect(decide(draft, FINISHED)).toEqual({ kind: "push", pr: 7, ready: true });
-    expect(decide(ready, FINISHED)).toEqual({ kind: "push", pr: 7, ready: false });
+    expect(decide(null, FINISHED, false)).toEqual({ kind: "open" });
+    expect(decide(draft, FINISHED, false)).toEqual({ kind: "push", pr: 7, ready: true });
+    expect(decide(ready, FINISHED, false)).toEqual({ kind: "push", pr: 7, ready: false });
   });
 
   test("no answer holds a PR: an action names no label", () => {
-    for (const action of [decide(null, FINISHED), decide(draft, FINISHED), decide(ready, FINISHED)]) {
+    for (const action of [
+      decide(null, FINISHED, false),
+      decide(draft, FINISHED, false),
+      decide(ready, FINISHED, false),
+    ]) {
       expect(JSON.stringify(action)).not.toContain("hold");
       expect(JSON.stringify(action)).not.toContain("land:human");
     }
@@ -388,12 +401,18 @@ describe("the Owner's question", () => {
         "",
         "> Keep &lt;b>?\n> Or drop it?",
         "",
-        "Answer in a comment on this pull request: it reaches the Author's session. The pull request stays in draft until the Author stops with no question.",
+        "Answer in a comment in this pull request's conversation: it reaches the Author's session. The pull request stays in draft until the Owner answers there and the Author stops with no question.",
         "",
         QUESTION_MARK,
         "",
         AUTHOR_MARK,
       ].join("\n"),
+    );
+  });
+
+  test("a branch that holds a backtick or an HTML opener stays inside its code span", () => {
+    expect(questionCommentOf("Q?", "feat/1-a`<!--", "S1").split("\n")[0]).toBe(
+      "The Author of ``feat/1-a`<!--`` (session `S1`) asks the Owner, and waits for the answer:",
     );
   });
 
@@ -485,6 +504,15 @@ describe("outcomeLineOf", () => {
     expect(
       JSON.parse(outcomeLineOf(facts, { kind: "not-published", reason: "the tree has uncommitted changes" })),
     ).toEqual({ ...facts, outcome: "not-published", reason: "the tree has uncommitted changes" });
+  });
+
+  test("a question to the Owner names the draft PR it went to, and why nothing lands", () => {
+    expect(JSON.parse(outcomeLineOf(facts, { kind: "asked", pr: 12, reason: "a question" }))).toEqual({
+      ...facts,
+      outcome: "asked",
+      pr: 12,
+      reason: "a question",
+    });
   });
 
   test("the line is one line", () => {
