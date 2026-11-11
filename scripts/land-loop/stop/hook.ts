@@ -4,9 +4,9 @@
  * The Stop hook. It does nothing for a session that is not an Author, whose environment holds no
  * `LAB_AUTHOR=1`, nor for a fork it launched. For an Author it reads git and the branch's PR, decides
  * with `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the
- * session whether the change is finished and which findings the Author rejects, then publishes: posts
- * the rejections, pushes the branch, opens or readies the PR, resolves the App's open Nit threads, and
- * leaves the PR's relay. A stop that leaves a question to the Owner pushes the branch to a PR in draft,
+ * session whether the change is finished and which findings the Author rejects or fixed, then publishes:
+ * posts the rejections, records the fixed findings on the PR, pushes the branch, opens or readies the PR,
+ * resolves the App's open Nit threads, and leaves the PR's relay. A stop that leaves a question to the Owner pushes the branch to a PR in draft,
  * posts the question there once, and leaves the relay that brings the answer back. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's
  * latency and tokens, and every stop of an Author leaves one line in `.lab/outcomes.log` of the main
  * checkout.
@@ -45,6 +45,9 @@ import {
   decide,
   DONE_SCHEMA,
   doneAnswerOf,
+  fixedOf,
+  fixedRecordBodyOf,
+  fixedRecordIn,
   FORK_MARKER,
   noAuthorToken,
   noDoneAnswer,
@@ -59,6 +62,7 @@ import type {
   Action,
   ClosedPullRequest,
   DoneAnswer,
+  FixedRecord,
   Outcome,
   PullRequest,
   Refusal,
@@ -532,6 +536,8 @@ interface Judged {
   readonly answer: DoneAnswer;
   /** The PR's conversation holds a question the hook put to the Owner, still unanswered. */
   readonly asked: boolean;
+  /** What the PR records of the findings the Author says it fixed. */
+  readonly fixed: FixedRecord;
 }
 
 async function push(stopping: AuthorStop, author: Credential): Promise<void> {
@@ -577,8 +583,52 @@ async function askOwner(
 }
 
 /**
- * The Publication: the rejections first, each a reply and a resolved thread, then the push, the PR opened
- * or readied, the Nit threads resolved and the relay left. A push that fails writes nothing after it.
+ * Records on PR `pr` the findings the Author says it fixed, in the hook's one comment there, posted or
+ * edited. It goes before the push, so the Merge bot run the push starts reads it for its ledger. A
+ * failure is logged: the ledger only shows it, so the PR is published either way.
+ */
+async function recordFixed(
+  stopping: AuthorStop,
+  author: Credential,
+  pr: number,
+  { judged, posted }: { readonly judged: Judged; readonly posted: readonly Rejection[] },
+): Promise<void> {
+  const recorded = fixedOf(
+    judged.answer.fixed,
+    judged.findings.map((finding) => finding.thread),
+    posted,
+  );
+
+  const body = fixedRecordBodyOf(judged.fixed, recorded);
+
+  if (body === null) {
+    return;
+  }
+
+  const { comment } = judged.fixed;
+
+  try {
+    await (comment === null
+      ? checked(stopping.deps.run, ["gh", "pr", "comment", String(pr), "--body-file", "-"], {
+          ...author.gh,
+          stdin: body,
+        })
+      : checked(
+          stopping.deps.run,
+          ["gh", "api", "-X", "PATCH", `repos/{owner}/{repo}/issues/comments/${comment}`, "--input", "-"],
+          { ...author.gh, stdin: JSON.stringify({ body }) },
+        ));
+
+    stopping.log({ step: "fixed", threads: [...recorded] });
+  } catch (error) {
+    stopping.log({ step: "fixed", threads: null, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/**
+ * The Publication: the rejections first, each a reply and a resolved thread, and the findings the Author
+ * fixed, then the push, the PR opened or readied, the Nit threads resolved and the relay left. A push that
+ * fails writes nothing after it.
  */
 async function publish(stopping: AuthorStop, author: Credential, judged: Judged): Promise<Stopped> {
   const { deps, log, head } = stopping;
@@ -621,6 +671,10 @@ async function publish(stopping: AuthorStop, author: Credential, judged: Judged)
     log({ step: "rejection", thread: rejection.thread });
   }
 
+  if (action.kind === "push") {
+    await recordFixed(stopping, author, action.pr, { judged, posted: rejections.posted });
+  }
+
   await push(stopping, author);
 
   let number: number;
@@ -649,7 +703,7 @@ async function publish(stopping: AuthorStop, author: Credential, judged: Judged)
   return { answer: ALLOW, outcome: { kind: "published", pr: number } };
 }
 
-/** The Done judge: a fork of the session answers whether the change is finished and which findings the Author rejects. */
+/** The Done judge: a fork of the session answers whether the change is finished and which findings the Author rejects or fixed. */
 function askDoneJudge(stopping: AuthorStop, findings: readonly OpenFinding[]): Promise<ForkResult> {
   const question = doneQuestionOf(
     findings.map((finding) => ({
@@ -737,6 +791,7 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     question: answer === null ? null : quotedQuestionOf(answer.question),
     reason: answer?.reason.slice(0, 300) ?? null,
     rejections: answer?.rejections.length ?? null,
+    fixed: answer?.fixed.length ?? null,
     ms: doneJudge.ms,
     tokens: doneJudge.tokens,
     code: doneJudge.code,
@@ -747,11 +802,14 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     return stoppedOf(noDoneAnswer(doneJudge.code, chain.reported), "the Done judge gave no answer");
   }
 
-  const asked =
-    snapshot.pr !== null &&
-    questionOpen(conversationOf(await checked(deps.run, conversationArgsOf(snapshot.pr.number), gh)));
+  const conversation =
+    snapshot.pr === null ? [] : conversationOf(await checked(deps.run, conversationArgsOf(snapshot.pr.number), gh));
 
-  return publish(stopping, { token: token.token, gh }, { pr: snapshot.pr, findings, answer, asked });
+  return publish(
+    stopping,
+    { token: token.token, gh },
+    { pr: snapshot.pr, findings, answer, asked: questionOpen(conversation), fixed: fixedRecordIn(conversation) },
+  );
 }
 
 /** Where a session stops: its worktree, the repository's main checkout, and whether they are the same. */

@@ -1,0 +1,394 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "reviewThreads": {
+          "nodes": [
+            {
+              "id": "PRRT_kwDOVkHqEM62KOjX",
+              "isResolved": true,
+              "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
+              "path": "scripts/land-loop/stop/decide.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important**: The new dirty-tree block spends the session's single `stop_hook_active` block. After the Author commits, the next stop arrives with `stop_hook_active=true`, so the Stop checks, the missing-token check and the Done-judge failure never get their own block and report.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537658015",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=f65588c8c453ee529c3dcfb104ac055e82181156 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62KOjh",
+              "isResolved": true,
+              "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
+              "path": "scripts/land-loop/relay/wakes.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important**: Dropping every failing `land-gate` check removes the only Wake for a merge-queue ejection. No finding or draft reports an ejection, so the Author is never told.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537658027",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=f65588c8c453ee529c3dcfb104ac055e82181156 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62KOjr",
+              "isResolved": true,
+              "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
+              "path": "scripts/land-loop/relay/wakes.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important**: The conflict Wake tells the Author to \"rebase onto origin/dev\" without fetching first. The Author's `origin/dev` is usually older than the commit that caused the conflict, so the rebase does nothing and the Wake, keyed per head, never fires again.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537658041",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=f65588c8c453ee529c3dcfb104ac055e82181156 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62KOj2",
+              "isResolved": true,
+              "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
+              "path": "scripts/land-loop/review/run-review.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important (security)**: The new scan of `.claude/rules/**/*.md` reads every match with `readFileSync`. It never resolves a symlink and never checks that the real path stays under `.claude/rules/`, so any file the runner can read can end up in the review model's prompt, including the process's own environment.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537658058",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=f65588c8c453ee529c3dcfb104ac055e82181156 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62KOj8",
+              "isResolved": true,
+              "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous-labs-agents[bot]"
+              },
+              "path": "scripts/land-loop/review/run-review.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Important (security)**: Every rule under `.claude/rules/` is now part of the reviewer's guide, in both the Code review prompt and the security prompt. Unlike REVIEW.md and the `*-prompt.ts` files, these files fall under factoryPaths (`.claude/**`), not ownerPaths, so a text that guards the landing can change without the Owner.\n\n<!-- lab-finding severity=important -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537658067",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=f65588c8c453ee529c3dcfb104ac055e82181156 round=1 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous"
+                    },
+                    "body": "Rejected for this pull request. The guide's text and its route are what they were: `AGENTS.md` is a `factoryPaths` file, and it held this very text until this change moved it under `.claude/rules/`. Who lands the agent docs is the routing policy of `.github/software-factory.json`, which the Owner sets. Making `.claude/rules/**` an `ownerPaths` path would send to the Owner every change that updates the doc of the step it touches, which is most changes to the Land loop. That trade is the Owner's to decide, apart from this change.",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537739764",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62KOkD",
+              "isResolved": true,
+              "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous"
+              },
+              "path": "scripts/land-loop/stop/decide.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: A dirty tree now blocks with \"Commit your changes, then stop.\" even when the PR is already ready at this head or the branch has no commit ahead. This pushes the Author to commit stray files and republish a PR it had no reason to touch.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537658074",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=f65588c8c453ee529c3dcfb104ac055e82181156 round=1 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous"
+                    },
+                    "body": "Rejected. A tree that is dirty when the pull request is ready at this head is also the case of an Author that fixed a finding and forgot the commit: its stop published nothing and said nothing, which is the defect #126 names. The hook cannot tell a stray file from that fix. It asks once, with the commit alone, and the Author decides what its changes are worth: commit them or drop them.",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537740030",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62KOkH",
+              "isResolved": true,
+              "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
+              "path": "AGENTS.md",
+              "line": 10,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: \"Your task\" no longer tells Workers that the Stop hook publishes their work or that they never run `git push`, `gh pr create` or `gh pr ready`. The only place that says so is `.claude/rules/land-loop/stop.md`, which loads only when a file under `stop/` is read.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537658080",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=f65588c8c453ee529c3dcfb104ac055e82181156 round=1 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous"
+                    },
+                    "body": "Rejected. #126 asks for this: `AGENTS.md` no longer tells a Worker who pushes, since Workers repeated it in every closing message. A Worker that tries is refused by `refuse-author-publish.ts`, whose message says what to do: commit, then stop. Four bench sessions launched with this `AGENTS.md` ran no `git push`, `gh pr create` or `gh pr ready`.",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537740421",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62KOkQ",
+              "isResolved": true,
+              "isOutdated": true,
+              "resolvedBy": {
+                "login": "bengous"
+              },
+              "path": "scripts/land-loop/stop/hook.ts",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: `stoppedOf(admission, UNCOMMITTED)` labels every blocking admission as \"uncommitted\". The label is right only because `admit` currently blocks for no other reason, and any future block from `admit` would be logged with the wrong reason.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537658092",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=f65588c8c453ee529c3dcfb104ac055e82181156 round=1 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62KOkV",
+              "isResolved": true,
+              "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
+              "path": "scripts/land-loop/review/review-prompt.ts",
+              "line": 30,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit (security)**: `projectGuideOf` joins each rule as `<path>:\\n<text>` with no delimiter or escaping. Rule text can therefore fake further sections of the prompt, such as a new 'Review guide' block, an instruction block, or earlier-finding ids, and the reviewer cannot tell where the trusted guide ends.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537658099",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=f65588c8c453ee529c3dcfb104ac055e82181156 round=1 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous"
+                    },
+                    "body": "Rejected. The guide is trusted text read from `dev`: `AGENTS.md` and `REVIEW.md` go into the prompt the same way, with no fence, and a rule that fakes a section has to land through a review first.",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537740825",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62LMG3",
+              "isResolved": true,
+              "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
+              "path": "scripts/land-loop/relay/wakes.ts",
+              "line": 86,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: The relay decides that a red `land-gate` is the conflict's from GitHub's `mergeable` field. That field reads UNKNOWN while GitHub recomputes after a push to dev, and during that time a red conflict gate wakes the Author as a plain failed check.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4538072549",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9c9ff1e2b1f73d89252fdd3dace42f4bba56faa9 round=2 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous"
+                    },
+                    "body": "Rejected for this pull request. The window is the few seconds GitHub recomputes `mergeable`, and its cost is one more turn. Telling a conflict from an ejection by the gate's own summary needs the relay to read that summary, which `gh pr checks` does not print: a read of its own, for a change of its own, with the fetch in the gate's summary.",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4538104156",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62LMG-",
+              "isResolved": true,
+              "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
+              "path": "scripts/land-loop/relay/wakes.ts",
+              "line": 148,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: A red `land-gate` Wake gives only the check link, never the gate's reason, yet the turn tells the Author to 'Fix it with a commit, then stop.'\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4538072556",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9c9ff1e2b1f73d89252fdd3dace42f4bba56faa9 round=2 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous"
+                    },
+                    "body": "Rejected for this pull request. The line is the one a red Land gate had before this change, so nothing is lost here. Putting the gate's summary in the Wake needs the relay to read it, which `gh pr checks` does not print: the same change as the thread above.",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4538104426",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62LMHC",
+              "isResolved": true,
+              "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
+              "path": "scripts/land-loop/stop/hook.ts",
+              "line": 650,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit**: `noAuthorToken`, `afterStopChecks` and `noDoneAnswer` now receive `chain.reported`, but their parameter is still named `stopHookActive` and their doc comments still say 'a second stop … lets the session end'.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4538072565",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9c9ff1e2b1f73d89252fdd3dace42f4bba56faa9 round=2 -->"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOVkHqEM62LMHD",
+              "isResolved": true,
+              "isOutdated": false,
+              "resolvedBy": {
+                "login": "bengous"
+              },
+              "path": "scripts/land-loop/stop/hook.ts",
+              "line": 631,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "bengous-labs-agents"
+                    },
+                    "body": "**Nit (security)**: The new `commit-asked-<session>` marker is written with `writeFileSync` into `.lab/state/` of the Author's own worktree, and the hook never checks that the path is not a link it would follow. The hook also trusts the file's existence without checking where it came from.\n\n<!-- lab-finding severity=nit -->",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4538072567",
+                    "pullRequestReview": {
+                      "body": "<!-- lab-review patch=9c9ff1e2b1f73d89252fdd3dace42f4bba56faa9 round=2 -->"
+                    }
+                  },
+                  {
+                    "author": {
+                      "login": "bengous"
+                    },
+                    "body": "Rejected. An Author's session writes with the user's rights already: it can truncate that file itself, and forging the marker only buys itself one more block. The marker adds no capability, as the finding says.",
+                    "url": "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4538104827",
+                    "pullRequestReview": {
+                      "body": ""
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

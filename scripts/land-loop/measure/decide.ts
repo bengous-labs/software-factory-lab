@@ -164,16 +164,23 @@ export function ownerWaitOf(pr: PrData): number {
   return total;
 }
 
-const ROUND = /^Review round (\d+) /u;
+/** A round's summary line, as `post-plan.ts` writes it, `Round 2: ` or, in reviews posted before it, `Review round 2 `. */
+const ROUND = /^(?:Review round (\d+) |Round (\d+): )/u;
 
-/** A Delta read's body as `post-plan.ts` writes it, opening with its name, with the patch its marker names. */
+/**
+ * A Delta read's body as `post-plan.ts` writes it, opening with its name, `Delta read: ` or, in reads
+ * posted before the summary line said what it posted, `Delta read `, with the patch its marker names.
+ */
 const DELTA_READ_BODY = new RegExp(
-  `^${reviewNameOf(DELTA_READ)} [\\s\\S]*<!-- lab-review patch=(\\S+) round=${DELTA_READ} -->`,
+  `^${reviewNameOf(DELTA_READ)}[ :][\\s\\S]*<!-- lab-review patch=(\\S+) round=${DELTA_READ} -->`,
   "u",
 );
 
-/** A round's counts as `post-plan.ts` writes them: the Code review's, then the security pass's when it ran. */
+/** A review's Important count in one posted before its summary line said what it posted: the Code review's, then the security pass's when it ran. */
 const IMPORTANT_COUNT = /: (\d+) important, \d+ nit(?:; security: (\d+) important, \d+ nit)?\./u;
+
+/** A review's Important count as `post-plan.ts` writes its summary line, both passes in one; a review that posted none names none. */
+const IMPORTANT_POSTED = new RegExp(`^(?:Round \\d+|${reviewNameOf(DELTA_READ)}): (\\d+) Important\\b`, "u");
 
 /** The latest body the App posted under each key `keyOf` reads from it: a review posted again counts once. */
 function latestBy(reviews: PrData["reviews"], keyOf: (body: string) => string | undefined): readonly string[] {
@@ -192,7 +199,11 @@ function latestBy(reviews: PrData["reviews"], keyOf: (body: string) => string | 
 
 /** The latest review of each round the App posted. */
 const latestRounds = (reviews: PrData["reviews"]): readonly string[] =>
-  latestBy(reviews, (body) => ROUND.exec(body)?.[1]);
+  latestBy(reviews, (body) => {
+    const summary = ROUND.exec(body);
+
+    return summary?.[1] ?? summary?.[2];
+  });
 
 /** The latest review of each patch's Delta read the App posted. */
 const latestDeltaReads = (reviews: PrData["reviews"]): readonly string[] =>
@@ -203,9 +214,10 @@ export const roundsOf = (reviews: PrData["reviews"]): number => latestRounds(rev
 /** The Importants of each round and each Delta read, from the latest posting of each. */
 export const importantFoundOf = (reviews: PrData["reviews"]): number =>
   [...latestRounds(reviews), ...latestDeltaReads(reviews)].reduce((sum, body) => {
+    const [, posted] = IMPORTANT_POSTED.exec(body) ?? [];
     const [, code = "0", security = "0"] = IMPORTANT_COUNT.exec(body) ?? [];
 
-    return sum + Number(code) + Number(security);
+    return sum + (posted === undefined ? Number(code) + Number(security) : Number(posted));
   }, 0);
 
 export interface FindingAnswers {

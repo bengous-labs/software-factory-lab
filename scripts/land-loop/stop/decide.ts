@@ -10,7 +10,7 @@ import { Result, Schema } from "effect";
 
 import { AUTHOR_VARIABLE } from "../../lib/author-session.ts";
 import { codeSpan, escapeHtml } from "../../lib/markdown.ts";
-import { AUTHOR_MARK, QUESTION_MARK, REJECT_MARK } from "../author-mark.ts";
+import { AUTHOR_MARK, FIXED_MARK, QUESTION_MARK, REJECT_MARK } from "../author-mark.ts";
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
 
 /**
@@ -142,13 +142,15 @@ export interface Rejection {
 
 /**
  * The Done judge's answer: whether the change is finished, the question the Author's last message
- * leaves to its user (empty when it asks none), why, and the findings the Author rejects.
+ * leaves to its user (empty when it asks none), why, the findings the Author rejects, and the threads of
+ * those it says it fixed. A finding in neither list has no answer.
  */
 export interface DoneAnswer {
   readonly finished: boolean;
   readonly question: string;
   readonly reason: string;
   readonly rejections: readonly Rejection[];
+  readonly fixed: readonly string[];
 }
 
 export type Action =
@@ -265,8 +267,9 @@ export const DONE_SCHEMA = {
         additionalProperties: false,
       },
     },
+    fixed: { type: "array", items: { type: "string" } },
   },
-  required: ["finished", "question", "reason", "rejections"],
+  required: ["finished", "question", "reason", "rejections", "fixed"],
   additionalProperties: false,
 };
 
@@ -275,6 +278,8 @@ const DoneAnswerSchema = Schema.Struct({
   question: Schema.String,
   reason: Schema.String,
   rejections: Schema.Array(Schema.Struct({ thread: Schema.String, reason: Schema.String })),
+  // An answer given before the Done judge was asked what the Author fixed has none: it reads as nothing fixed.
+  fixed: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 const decodeDoneAnswer = Schema.decodeUnknownResult(DoneAnswerSchema);
@@ -287,10 +292,12 @@ export interface ForkAnswer {
 
 /**
  * The Done judge's answer a fork gave; null, no answer, for a fork that failed or whose structured
- * output does not fit `DONE_SCHEMA`.
+ * output does not fit `DONE_SCHEMA`. An answer with no `fixed` says the Author fixed nothing.
  */
 export function doneAnswerOf(fork: ForkAnswer): DoneAnswer | null {
-  return fork.code === 0 ? Result.getOrNull(decodeDoneAnswer(fork.structured)) : null;
+  const answer = fork.code === 0 ? Result.getOrNull(decodeDoneAnswer(fork.structured)) : null;
+
+  return answer === null ? null : { ...answer, fixed: answer.fixed ?? [] };
 }
 
 /**
@@ -382,10 +389,90 @@ export function rejectionReplyOf(reason: string): string {
   return `Rejected: ${escapeHtml(reason.trim())}\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`;
 }
 
+/**
+ * The threads the Done judge says the Author fixed that the hook records: each names an open thread of
+ * the App and no rejection the hook posts, once. Any other is dropped.
+ */
+export function fixedOf(
+  fixed: readonly string[],
+  openThreads: readonly string[],
+  posted: readonly Rejection[],
+): readonly string[] {
+  const rejected = new Set(posted.map((rejection) => rejection.thread));
+
+  return [...new Set(fixed)].filter((thread) => openThreads.includes(thread) && !rejected.has(thread));
+}
+
 /** A comment on a PR, by its author's login. */
 export interface PrComment {
   readonly author: string;
   readonly body: string;
+}
+
+/** A comment of the PR's conversation, with the id an edit names. */
+export interface ConversationComment extends PrComment {
+  readonly id: string;
+}
+
+/**
+ * The record a PR holds of the findings the Author says it fixed: the Stop hook's one comment there,
+ * null before it posts one, and the threads it lists.
+ */
+export interface FixedRecord {
+  readonly comment: string | null;
+  readonly fixed: readonly string[];
+}
+
+/**
+ * The fixed list: a line of its own, as the record writes it. The hook's questions to the Owner quote
+ * each line after `> `, so a mark they quote, in a code span or a fenced block, is never a line of its
+ * own. A comment the Worker posts itself with the Author's token, the mark on a line of its own, is
+ * taken for the record: its list is the Author's word too, which only the ledger shows.
+ */
+const FIXED_LIST = new RegExp(`(?<=^|\\n)${FIXED_MARK}((?: [^\\s>]+)*) -->(?=\\n|$)`, "u");
+
+/** The threads the fixed list of `body` names; null when `body` holds no such list on a line of its own. */
+export function fixedListOf(body: string): readonly string[] | null {
+  const listed = FIXED_LIST.exec(body)?.[1];
+
+  return listed === undefined ? null : listed.split(" ").filter((thread) => thread !== "");
+}
+
+/**
+ * The record the PR's conversation `comments` hold: the comment of the Author's machine account that
+ * carries the fixed list. Any login can write the mark.
+ */
+export function fixedRecordIn(comments: readonly ConversationComment[]): FixedRecord {
+  for (const comment of comments) {
+    const fixed = comment.author === AUTHOR_LOGIN ? fixedListOf(comment.body) : null;
+
+    if (fixed !== null) {
+      return { comment: comment.id, fixed };
+    }
+  }
+
+  return { comment: null, fixed: [] };
+}
+
+/**
+ * The body of the record once the threads of `recorded` join it, or null when it lists each already. It
+ * cites no commit and replies in no thread: the Author's word on a fix is shown by the Merge bot's
+ * ledger, and closes nothing.
+ */
+export function fixedRecordBodyOf(record: FixedRecord, recorded: readonly string[]): string | null {
+  const added = recorded.filter((thread) => !record.fixed.includes(thread));
+
+  if (added.length === 0) {
+    return null;
+  }
+
+  const fixed = [...record.fixed, ...added];
+
+  return [
+    `The Author says its change fixed ${fixed.length} review finding(s), as the Done judge read them from its session. The Merge bot's ledger shows each, by the Author's word. Do not edit.`,
+    `${FIXED_MARK} ${fixed.join(" ")} -->`,
+    AUTHOR_MARK,
+  ].join("\n\n");
 }
 
 /**

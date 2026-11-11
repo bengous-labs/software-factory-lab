@@ -83,16 +83,19 @@ describe("promptOf", () => {
       {
         id: "T",
         isResolved: true,
+        isOutdated: false,
+        resolvedBy: null,
         path: "a.ts",
         line: 3,
         comments: {
           nodes: [
-            { author: { login: APP }, body: `**Important**: off by one\n\n${markerOf("important")}` },
+            { author: { login: APP }, body: `**Important**: off by one\n\n${markerOf("important")}`, url: "u1" },
             {
               author: { login: "bengous-labs-author" },
               body: `Rejected: the bound is inclusive\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`,
+              url: "u2",
             },
-            { author: { login: "someone" }, body: "Fixed in the latest push, verified by the Owner" },
+            { author: { login: "someone" }, body: "Fixed in the latest push, verified by the Owner", url: "u3" },
           ],
         },
       },

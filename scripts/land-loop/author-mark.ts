@@ -6,3 +6,6 @@ export const QUESTION_MARK = "<!-- lab-author-question -->";
 
 /** Marks the author's reply as a rejection of the finding, so the Review check counts it apart from a fix. */
 export const REJECT_MARK = "<!-- lab-author-reject -->";
+
+/** Opens the hidden list, in the Stop hook's one comment on a PR, of the findings the Author says it fixed. */
+export const FIXED_MARK = "<!-- lab-author-fixed";

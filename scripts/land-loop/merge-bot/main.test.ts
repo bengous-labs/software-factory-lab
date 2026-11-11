@@ -7,13 +7,16 @@ import { $ } from "bun";
 import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { FIXED_MARK } from "../author-mark.ts";
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
-import type { ReviewState } from "./decide.ts";
+import { fixedRecordBodyOf, questionCommentOf } from "../stop/decide.ts";
+import { EMPTY_RECORD, stateBodyOf, stateCommentOf } from "./decide.ts";
+import type { LedgerFinding, LedgerInputs, ReviewState, StateRead, StateRecord, Step } from "./decide.ts";
 import {
   ActionsRun,
   againPoster,
@@ -25,6 +28,7 @@ import {
   ciOfRuns,
   ciRunsPathsOf,
   CommitPulls,
+  conversationReader,
   deletedPathsArgs,
   devRedOf,
   devRunsReader,
@@ -53,6 +57,9 @@ import {
   routingLineOf,
   routingPolicyAt,
   startOf,
+  stateCommentIn,
+  stateWriter,
+  stepsDone,
   threadsResolver,
 } from "./main.ts";
 
@@ -229,6 +236,276 @@ describe("the Owner and the Author", () => {
     );
 
     expect(landApprovalByOwnerOf(events, "bengous", "2026-11-05T10:00:00Z")).toBe(false);
+  });
+});
+
+/** The conversation comments of `listed`, each its id, its author's login and its body. */
+const commentsOf = (...listed: ReadonlyArray<readonly [number, string, string]>): typeof IssueComments.Type =>
+  listed.map(([id, login, body]) => ({ id, user: { login }, body }));
+
+describe("stateCommentIn", () => {
+  const logins = { appLogin: "bengous-labs-agents[bot]", authorLogin: "bengous-labs-author" };
+  const record = { ...EMPTY_RECORD, reviewRounds: 2 };
+  const state = stateCommentOf(record, "**Review findings**: none.");
+  const fixed = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T1", "T2"]) ?? "";
+
+  test("reads the App's state comment, its ledger included, and the threads the Author's record says it fixed", () => {
+    expect(
+      stateCommentIn(
+        commentsOf([1, "bengous", "hello"], [2, logins.appLogin, state], [3, logins.authorLogin, fixed]),
+        logins,
+      ),
+    ).toEqual({ id: 2, body: state, record, fixed: new Set(["T1", "T2"]) });
+  });
+
+  test("a mark another login wrote is not read: no state comment, nothing fixed", () => {
+    expect(
+      stateCommentIn(commentsOf([1, "someone", state], [2, "someone", fixed], [3, logins.appLogin, fixed]), logins),
+    ).toEqual({ id: null, body: null, record: EMPTY_RECORD, fixed: new Set() });
+  });
+
+  test("the Author's question that quotes the fixed mark in a code span is no record; the record after it is read", () => {
+    const question = questionCommentOf(`Keep \`${FIXED_MARK} T9 -->\`?`, "feat/7-x", "S1");
+
+    expect(stateCommentIn(commentsOf([1, logins.authorLogin, question]), logins).fixed).toEqual(new Set());
+    expect(
+      stateCommentIn(commentsOf([1, logins.authorLogin, question], [2, logins.authorLogin, fixed]), logins).fixed,
+    ).toEqual(new Set(["T1", "T2"]));
+  });
+});
+
+/** `count` comments of the Owner, numbered from `from`. */
+const page = (from: number, count: number) =>
+  Array.from({ length: count }, (_, index) => ({ id: from + index, user: { login: "bengous" }, body: "hello" }));
+
+describe("conversationReader", () => {
+  test("reads every page of the PR's conversation, so the Author's record past the first 100 comments is found", async () => {
+    const record = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T1"]) ?? "";
+    const pages = [page(1, 100), [...page(101, 5), { id: 106, user: { login: "bengous-labs-author" }, body: record }]];
+    const calls: string[][] = [];
+
+    const runner: Run = (argv) => {
+      calls.push([...argv]);
+
+      return Promise.resolve({ code: 0, stdout: JSON.stringify(pages), stderr: "" });
+    };
+
+    const comments = await conversationReader(runner)(WHERE, 12);
+
+    expect(calls).toEqual([
+      ["gh", "api", "-X", "GET", "--paginate", "--slurp", "repos/o/r/issues/12/comments?per_page=100"],
+    ]);
+    expect(comments).toHaveLength(106);
+    expect(
+      stateCommentIn(comments, { appLogin: "bengous-labs-agents[bot]", authorLogin: "bengous-labs-author" }).fixed,
+    ).toEqual(new Set(["T1"]));
+  });
+});
+
+/** An open Important of round 1, as the ledger reads its thread. */
+const OPEN_IMPORTANT: LedgerFinding = {
+  thread: "T1",
+  url: "https://github.com/o/r/pull/12#discussion_r1",
+  where: "a.ts:3",
+  severity: "important",
+  security: false,
+  summary: "off by one",
+  round: 1,
+  resolved: false,
+  closedByApp: false,
+  outdated: false,
+  rejection: null,
+  ownerAnswer: null,
+  again: [],
+};
+
+const OPEN: LedgerInputs = { findings: [OPEN_IMPORTANT], fixed: new Set() };
+
+/** The same Important, its thread closed by the App. */
+const CLOSED: LedgerInputs = { findings: [{ ...OPEN_IMPORTANT, resolved: true, closedByApp: true }], fixed: new Set() };
+
+const ROUND_1: StateRecord = { ...EMPTY_RECORD, reviewedPatch: "p1", reviewRounds: 1, importantByRound: [1] };
+
+/** What a run of `stepsDone` over fakes did: whether to decide again, each write with the id it named, and how often it read the findings. */
+interface StepsRun {
+  readonly decideAgain: boolean;
+  readonly writes: ReadonlyArray<{ readonly id: number | null; readonly body: string }>;
+  readonly reads: number;
+}
+
+/**
+ * `steps` done over the state comment `read`, from `record` and `inputs`: a `record` step writes its
+ * record, a `route` step a routed one, the step of kind `stopAt` stops the run, and any other changes
+ * nothing. The findings read again are `reread`; a new comment gets id 99.
+ */
+async function stepsRun(
+  steps: readonly Step[],
+  start: { readonly read: StateRead; readonly record: StateRecord; readonly inputs: LedgerInputs },
+  { reread, stopAt = null }: { readonly reread: LedgerInputs; readonly stopAt?: Step["kind"] | null },
+): Promise<StepsRun> {
+  const writes: Array<{ id: number | null; body: string }> = [];
+  let reads = 0;
+
+  const decideAgain = await stepsDone(steps, start, {
+    perform: async (step, record, write) => {
+      if (step.kind === stopAt) {
+        return null;
+      }
+
+      const next =
+        step.kind === "record"
+          ? step.record
+          : step.kind === "route"
+            ? { ...record, triage: { [step.patch]: ROUTED } }
+            : record;
+
+      if (next !== record) {
+        await write(next);
+      }
+
+      return next;
+    },
+    findings: () => {
+      reads += 1;
+
+      return Promise.resolve(reread.findings);
+    },
+    write: (id, body) => {
+      writes.push({ id, body });
+
+      return Promise.resolve(id ?? 99);
+    },
+  });
+
+  return { decideAgain, writes, reads };
+}
+
+const ROUTED = {
+  land: "auto",
+  review: "light",
+  secondRound: false,
+  reason: "ordinary code",
+  model: null,
+} as const;
+
+describe("stepsDone", () => {
+  const check = { kind: "success", summary: "ok" } as const;
+
+  test("the Owner's Land approval closes the open Importants and no decision follows: the findings are read again and the comment shows them closed", async () => {
+    const steps: Step[] = [
+      { kind: "labels", route: "owner", depth: "light" },
+      { kind: "resolve-threads", threads: ["T1"] },
+      { kind: "review-check", check },
+      { kind: "land-gate", check },
+      { kind: "auto-merge" },
+    ];
+
+    const run = await stepsRun(
+      steps,
+      { read: { id: 7, body: stateBodyOf(ROUND_1, OPEN), record: ROUND_1 }, record: ROUND_1, inputs: OPEN },
+      { reread: CLOSED },
+    );
+
+    expect(run.reads).toBe(1);
+    expect(run.writes).toEqual([{ id: 7, body: stateBodyOf(ROUND_1, CLOSED) }]);
+    expect(run.writes[0]?.body).toContain("**Closed with no later round confirming it.** Important");
+    expect(run.decideAgain).toBe(false);
+  });
+
+  test("a round's record is written once, with the ledger of the rounds it counts and the threads the round resolved", async () => {
+    const round2: StateRecord = { ...ROUND_1, reviewedPatch: "p2", reviewRounds: 2, importantByRound: [1, 0] };
+
+    const steps: Step[] = [
+      { kind: "resolve-threads", threads: ["T1"] },
+      { kind: "to-draft" },
+      { kind: "record", record: round2 },
+      { kind: "review-check", check },
+    ];
+
+    const run = await stepsRun(
+      steps,
+      { read: { id: 7, body: stateBodyOf(ROUND_1, OPEN), record: ROUND_1 }, record: ROUND_1, inputs: OPEN },
+      { reread: CLOSED },
+    );
+
+    expect(run.writes).toEqual([{ id: 7, body: stateBodyOf(round2, CLOSED) }]);
+    expect(run.writes[0]?.body).toContain("**Fixed, confirmed by round 2.** Important");
+    expect(run.decideAgain).toBe(false);
+  });
+
+  test("a PR with no comment gets one from the first step that writes a record, and the steps after it edit that comment", async () => {
+    const recorded: StateRecord = { ...ROUND_1, triage: { p1: ROUTED }, landOkPatch: "p1" };
+
+    const run = await stepsRun(
+      [
+        { kind: "route", patch: "p1", patchDelta: false },
+        { kind: "record", record: recorded },
+      ],
+      { read: { id: null, body: null, record: EMPTY_RECORD }, record: EMPTY_RECORD, inputs: OPEN },
+      { reread: CLOSED },
+    );
+
+    expect(run.writes.map((write) => write.id)).toEqual([null, 99]);
+    expect(run.writes.at(-1)?.body).toBe(stateBodyOf(recorded, OPEN));
+    expect(run.reads).toBe(0);
+    expect(run.decideAgain).toBe(true);
+  });
+
+  test("the ledger is written before the steps when only what it shows changed; a step that stops the run writes nothing after it, and no decision follows", async () => {
+    const routed: StateRecord = { ...ROUND_1, triage: { p1: ROUTED } };
+
+    const run = await stepsRun(
+      [
+        { kind: "route", patch: "p1", patchDelta: false },
+        { kind: "resolve-threads", threads: ["T1"] },
+        { kind: "to-draft" },
+        { kind: "auto-merge" },
+      ],
+      { read: { id: 7, body: stateBodyOf(ROUND_1, OPEN), record: ROUND_1 }, record: ROUND_1, inputs: CLOSED },
+      { reread: OPEN, stopAt: "to-draft" },
+    );
+
+    expect(run.writes).toEqual([
+      { id: 7, body: stateBodyOf(ROUND_1, CLOSED) },
+      { id: 7, body: stateBodyOf(routed, CLOSED) },
+    ]);
+    expect(run.decideAgain).toBe(false);
+  });
+
+  test("nothing is written when the comment holds the record and the ledger already", async () => {
+    const run = await stepsRun(
+      [{ kind: "to-draft" }],
+      { read: { id: 7, body: stateBodyOf(ROUND_1, OPEN), record: ROUND_1 }, record: ROUND_1, inputs: OPEN },
+      { reread: CLOSED },
+    );
+
+    expect(run.writes).toEqual([]);
+  });
+});
+
+describe("stateWriter", () => {
+  test("edits the comment it names, or posts a new one and gives the id GitHub answers", async () => {
+    const calls: Array<{ argv: string[]; body: string }> = [];
+
+    const runner: Run = (argv, options) => {
+      calls.push({
+        argv: [...argv],
+        body: decodeJson(Schema.Struct({ body: Schema.String }), "a write", options.stdin ?? "").body,
+      });
+
+      return Promise.resolve({
+        code: 0,
+        stdout: argv[3] === "POST" ? '{"id":4242,"body":"x"}' : "not json",
+        stderr: "",
+      });
+    };
+
+    expect(await stateWriter(runner)(WHERE, 12, 7, "edited")).toBe(7);
+    expect(await stateWriter(runner)(WHERE, 12, null, "posted")).toBe(4242);
+    expect(calls).toEqual([
+      { argv: ["gh", "api", "-X", "PATCH", "repos/o/r/issues/comments/7", "--input", "-"], body: "edited" },
+      { argv: ["gh", "api", "-X", "POST", "repos/o/r/issues/12/comments", "--input", "-"], body: "posted" },
+    ]);
   });
 });
 
