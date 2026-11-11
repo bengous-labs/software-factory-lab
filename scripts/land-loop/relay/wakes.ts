@@ -2,7 +2,7 @@
  * The Wakes of a pull request, as pure functions over one reading of it: a failing check on its head, a
  * conflict with the Trunk, a new open Important or Nit finding of the App, an Important a later round
  * reports again, a new comment of the Owner in an open thread or in the conversation, the PR back in
- * draft. A failing check another Wake already tells makes none: the Review check, which a finding
+ * draft unless it holds the Author's question the Owner has not answered yet. A failing check another Wake already tells makes none: the Review check, which a finding
  * carries, and the Land gate of a conflicting PR. Nor do the App's own Pre-existing findings and its
  * conversation comments (state record, verdicts); nor the replies the Stop hook posts for the Author; nor
  * any other login's comment: the lab is public, and a Wake starts a turn in a session that holds the
@@ -14,10 +14,10 @@ import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import { unescapeHtml } from "../../lib/markdown.ts";
-import { AUTHOR_MARK } from "../author-mark.ts";
-import { APP_LOGIN, OWNER_LOGIN } from "../logins.ts";
+import { APP_LOGIN } from "../logins.ts";
 import { LAND_GATE, REVIEW_CHECK } from "../merge-bot/decide.ts";
 import { severityOfBody } from "../review/findings.ts";
+import { byOwner, questionOpen } from "../stop/decide.ts";
 
 /** One check as `gh pr checks --json name,bucket,link` prints it. */
 const Check = Schema.Struct({ name: Schema.String, bucket: Schema.String, link: Schema.String });
@@ -87,14 +87,6 @@ const saidElsewhere = (check: Check, conflicting: boolean): boolean =>
 
 /** The most characters of a reply that reports an Important again: it may hold the finding of each pass of its round. */
 const AGAIN_MAX = 3000;
-
-/**
- * Whether the Owner wrote these words by hand. The lab is public and any GitHub login can comment on a
- * pull request: of a person's words, the relay delivers the Owner's alone, never another login's, which
- * would reach the Author's session as a turn to act on.
- */
-const byOwner = (found: Pick<Comment, "author" | "body">): boolean =>
-  found.author === OWNER_LOGIN && !found.body.includes(AUTHOR_MARK);
 
 /** The Wake of an open thread's first comment: the App's Important or Nit finding, or the Owner's comment. */
 function threadWakesOf(thread: Thread, where: string): readonly Wake[] {
@@ -174,7 +166,8 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
     });
   }
 
-  if (state.draft) {
+  // A draft that holds the Author's open question waits for the Owner, whose answer brings this line along.
+  if (state.draft && !questionOpen(state.comments)) {
     wakes.push({
       key: `draft:${state.head}`,
       kind: "draft",
@@ -295,15 +288,32 @@ export function prStateOf(view: string, checks: string, conversation: string, th
         .slice(1)
         .map((comment) => ({ id: comment.id, author: comment.author?.login ?? "unknown", body: comment.body })),
     })),
-    comments: conversation
-      .split("\n")
-      .filter((line) => line !== "")
-      .map((line) => {
-        const comment = decodeJson(ConversationComment, "a conversation comment", line);
-
-        return { ...comment, author: comment.author?.replace(/\[bot\]$/u, "") ?? "unknown" };
-      }),
+    comments: conversationOf(conversation),
   };
+}
+
+/** The `gh` command that prints the conversation comments of PR `pr`, one JSON line each, for `conversationOf`. */
+export function conversationArgsOf(pr: number): readonly string[] {
+  return [
+    "gh",
+    "api",
+    "--paginate",
+    `repos/{owner}/{repo}/issues/${pr}/comments?per_page=100`,
+    "--jq",
+    ".[] | {id: (.id | tostring), author: .user.login, body}",
+  ];
+}
+
+/** A PR's conversation comments, from the lines `conversationArgsOf` prints. */
+export function conversationOf(conversation: string): readonly Comment[] {
+  return conversation
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => {
+      const comment = decodeJson(ConversationComment, "a conversation comment", line);
+
+      return { ...comment, author: comment.author?.replace(/\[bot\]$/u, "") ?? "unknown" };
+    });
 }
 
 /**

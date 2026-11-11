@@ -9,9 +9,11 @@ import * as fc from "fast-check";
 import { decodeJson } from "../../lib/json.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
 import { pushArgs } from "../lib/author.ts";
+import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
 import type { RelayStart } from "../ports/relay.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
-import { DONE_SCHEMA, FORK_MARKER } from "./decide.ts";
+import { conversationArgsOf } from "../relay/wakes.ts";
+import { DONE_SCHEMA, FORK_MARKER, questionCommentOf } from "./decide.ts";
 import { BODY_REQUEST, doneQuestionOf } from "./done-prompt.ts";
 import {
   FORK_FLAG,
@@ -62,7 +64,7 @@ const OutcomeLine = Schema.Struct({
   worktree: Schema.String,
   branch: Schema.NullOr(Schema.String),
   head: Schema.NullOr(Schema.String),
-  outcome: Schema.Literals(["published", "not-published"]),
+  outcome: Schema.Literals(["published", "asked", "not-published"]),
   pr: Schema.optionalKey(Schema.Finite),
   reason: Schema.optionalKey(Schema.String),
 });
@@ -118,7 +120,12 @@ interface Fake {
   readonly checkout: string | null;
   /** The commit HEAD names. */
   readonly head: string;
+  /** What the PR's conversation comments print, one JSON line each, as the relay's filter prints them. */
+  readonly conversation: string;
 }
+
+const conversationLine = (id: string, author: string, body: string): string =>
+  `${JSON.stringify({ id, author, body })}\n`;
 
 interface World {
   readonly deps: Deps;
@@ -157,6 +164,7 @@ function world(fake: Partial<Fake> = {}): World {
     failing = [],
     env = AUTHOR_ENV,
     head = HEAD,
+    conversation = "",
   } = fake;
 
   const checkout = fake.checkout ?? mkdtempSync(join(tmpdir(), "stop-"));
@@ -173,6 +181,7 @@ function world(fake: Partial<Fake> = {}): World {
     ["git rev-parse --path-format=absolute --git-common-dir", `${checkout}/.git\n`],
     ["git rev-parse HEAD", `${head}\n`],
     ["git status --porcelain", dirty ? " M app/src/cli.ts\n" : ""],
+    [conversationArgsOf(12).join(" "), conversation],
   ]);
 
   /** What a fork asked `prompt` prints: the PR's text, or the Done judge's next answer. */
@@ -307,7 +316,9 @@ function writes(calls: readonly Call[]): string[] {
       return ["push"];
     }
 
-    return /^gh pr (create|edit|comment|ready)/u.test(line) ? [call.argv.slice(1, 3).join(" ")] : [];
+    const undo = call.argv.includes("--undo") ? " --undo" : "";
+
+    return /^gh pr (create|edit|comment|ready)/u.test(line) ? [`${call.argv.slice(1, 3).join(" ")}${undo}`] : [];
   });
 }
 
@@ -815,19 +826,96 @@ describe("the Done judge", () => {
     expect(writes(found.calls)).toEqual([]);
   });
 
-  test("a finished change whose last message leaves a question to the user publishes nothing, and the log quotes it", async () => {
-    const found = world({ done: [{ ...FINISHED, question: "  Leave the doc, or update it?\n" }] });
+  test("a question with no PR opens one in draft, posts the question on it, and leaves its relay to this session", async () => {
+    const found = world({ branch: "feat/7-x", done: [{ ...FINISHED, question: "  Leave the doc, or update it?\n" }] });
 
     expect(await stopIn(found)).toEqual({ kind: "allow" });
-    expect(writes(found.calls)).toEqual([]);
+    expect(writes(found.calls)).toEqual(["push", "pr create", "pr comment"]);
+    expect(found.calls.find((call) => call.argv.join(" ").startsWith("gh pr create"))?.argv).toContain("--draft");
+
+    const comment = found.calls.find((call) => call.argv.join(" ").startsWith("gh pr comment"));
+    expect(comment?.argv).toEqual(["gh", "pr", "comment", "12", "--body-file", "-"]);
+    expect(comment?.options.stdin).toBe(questionCommentOf("Leave the doc, or update it?", "feat/7-x", "S1"));
+    expect(comment?.options.env).toEqual({ GH_TOKEN: TOKEN });
+
+    expect(found.relays).toEqual([{ pr: 12, session: "S1", checkout: found.checkout }]);
     expect(found.records.find((record) => record.step === "done-judge")).toMatchObject({
       answer: "finished",
       question: "Leave the doc, or update it?",
     });
     expect(found.outcomes[0]?.line).toMatchObject({
-      outcome: "not-published",
+      outcome: "asked",
+      pr: 12,
       reason: "the Author's last message leaves a question to its user: Leave the doc, or update it?",
     });
+  });
+
+  test("a stop held on a question, or asking one, posts no rejection and logs each as dropped", async () => {
+    const asked = conversationLine("1", AUTHOR_LOGIN, questionCommentOf("Which wording?", "agent/x", "S1"));
+    const rejecting = { ...FINISHED, rejections: [{ thread: "T1", reason: "by design" }] };
+
+    for (const answer of [rejecting, { ...rejecting, question: "And now?" }]) {
+      const found = world({
+        done: [answer],
+        listed: draftPr("e".repeat(40)),
+        conversation: asked,
+        threads: [thread("T1", "nit")],
+      });
+
+      await stopIn(found);
+
+      expect(writes(found.calls).filter((write) => write.includes("T1"))).toEqual([]);
+      expect(found.records).toContainEqual({ step: "rejection-dropped", thread: "T1", reason: "by design" });
+    }
+  });
+
+  test("a finished stop on a draft whose question the Owner has not answered readies nothing and pushes nothing", async () => {
+    const asked = conversationLine("1", AUTHOR_LOGIN, questionCommentOf("Which wording?", "agent/x", "S1"));
+    const found = world({ listed: draftPr("e".repeat(40)), conversation: asked });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(writes(found.calls)).toEqual([]);
+    expect(found.outcomes[0]?.line).toMatchObject({
+      outcome: "not-published",
+      reason: "#12 holds a question to the Owner with no answer: nothing is pushed or readied",
+    });
+    expect(found.relays).toEqual([{ pr: 12, session: "S1", checkout: found.checkout }]);
+
+    const answered = world({
+      listed: draftPr("e".repeat(40)),
+      conversation: `${asked}${conversationLine("2", OWNER_LOGIN, "The first.")}`,
+    });
+
+    await stopIn(answered);
+    expect(writes(answered.calls)).toEqual(["push", "pr ready"]);
+  });
+
+  test("a question still open on the PR is not posted again; one the Owner answered is followed by the new one", async () => {
+    const asked = conversationLine("1", AUTHOR_LOGIN, questionCommentOf("Which wording?", "agent/x", "S1"));
+    const answered = conversationLine("2", OWNER_LOGIN, "The first.");
+    const asking = { done: [{ ...FINISHED, question: "Which wording, again?" }], listed: draftPr() };
+
+    const repeated = world({ ...asking, conversation: asked });
+    await stopIn(repeated);
+    expect(writes(repeated.calls)).toEqual(["push"]);
+    expect(repeated.records.find((record) => record.step === "question")).toEqual({
+      step: "question",
+      pr: 12,
+      posted: false,
+    });
+    expect(repeated.relays).toHaveLength(1);
+
+    const next = world({ ...asking, conversation: `${asked}${answered}` });
+    await stopIn(next);
+    expect(writes(next.calls)).toEqual(["push", "pr comment"]);
+  });
+
+  test("a question on a ready PR sends it to draft before the push, and nothing readies it: nothing lands while it is open", async () => {
+    const found = world({ done: [{ ...FINISHED, question: "Which wording?" }], listed: readyPr("e".repeat(40)) });
+
+    await stopIn(found);
+
+    expect(writes(found.calls)).toEqual(["pr ready --undo", "push", "pr comment"]);
   });
 
   test("not finished, then finished, on the same head with no new commit: the second stop publishes", async () => {

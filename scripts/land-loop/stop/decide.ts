@@ -3,13 +3,15 @@
  * says whose stop the hook leaves alone; `admit` settles what git and the PR alone settle;
  * `afterAuthorToken` whether the Author's token lets it publish; `afterStopChecks` what the Stop checks'
  * result adds; `decide` what the Done judge's answer adds. Each returns the next thing the hook does.
+ * `questionOpen` says whether a question the hook put to the Owner still waits for the answer.
  */
 
 import { Result, Schema } from "effect";
 
 import { AUTHOR_VARIABLE } from "../../lib/author-session.ts";
-import { escapeHtml } from "../../lib/markdown.ts";
-import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
+import { codeSpan, escapeHtml } from "../../lib/markdown.ts";
+import { AUTHOR_MARK, QUESTION_MARK, REJECT_MARK } from "../author-mark.ts";
+import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
 
 /**
  * The marker that opens every question the hook puts to a fork, so a fork stays recognisable. The
@@ -152,7 +154,22 @@ export interface DoneAnswer {
 export type Action =
   | { readonly kind: "none"; readonly reason: string }
   | { readonly kind: "open" }
-  | { readonly kind: "push"; readonly pr: number; readonly ready: boolean };
+  | { readonly kind: "push"; readonly pr: number; readonly ready: boolean }
+  /**
+   * The Author's question goes to the Owner on a draft PR: the one opened for it when `pr` is null, else
+   * `pr`, sent back to draft first when `toDraft`. `question` is posted when `post`, which is false while
+   * an earlier question waits for its answer; `reason` says why nothing lands.
+   */
+  | {
+      readonly kind: "ask";
+      readonly question: string;
+      readonly reason: string;
+      readonly pr: number | null;
+      readonly toDraft: boolean;
+      readonly post: boolean;
+    }
+  /** PR `pr` waits for the Owner's answer: nothing is pushed or readied, and its relay is left to bring the answer. */
+  | { readonly kind: "hold"; readonly pr: number; readonly reason: string };
 
 const none = (reason: string): Extract<Refusal, { kind: "none" }> => ({ kind: "none", reason });
 
@@ -297,18 +314,37 @@ export function quotedQuestionOf(question: string): string {
   return question.trim().slice(0, 300);
 }
 
-export function decide(pr: PullRequest | null, answer: DoneAnswer): Action {
+/**
+ * What the Done judge's answer does to the branch's PR `pr`. `asked`: the PR's conversation holds a
+ * question the hook put to the Owner, still unanswered; a PR that holds one is never pushed or readied.
+ */
+export function decide(pr: PullRequest | null, answer: DoneAnswer, asked: boolean): Action {
   const question = quotedQuestionOf(answer.question);
   const unfinished = `the Done judge says the change is not finished: ${answer.reason}`;
 
   if (question !== "") {
     const asking = `the Author's last message leaves a question to its user: ${question}`;
 
-    return none(answer.finished ? asking : `${asking}; ${unfinished}`);
+    return {
+      kind: "ask",
+      question: answer.question.trim(),
+      reason: answer.finished ? asking : `${asking}; ${unfinished}`,
+      pr: pr?.number ?? null,
+      toDraft: pr !== null && !pr.draft,
+      post: !asked,
+    };
   }
 
   if (!answer.finished) {
     return none(unfinished);
+  }
+
+  if (pr !== null && asked) {
+    return {
+      kind: "hold",
+      pr: pr.number,
+      reason: `#${pr.number} holds a question to the Owner with no answer: nothing is pushed or readied`,
+    };
   }
 
   return pr === null ? { kind: "open" } : { kind: "push", pr: pr.number, ready: pr.draft };
@@ -346,6 +382,48 @@ export function rejectionReplyOf(reason: string): string {
   return `Rejected: ${escapeHtml(reason.trim())}\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`;
 }
 
+/** A comment on a PR, by its author's login. */
+export interface PrComment {
+  readonly author: string;
+  readonly body: string;
+}
+
+/**
+ * Whether the Owner wrote these words by hand. The lab is public and any GitHub login can comment on a
+ * pull request: of a person's words, the Land loop reads the Owner's alone, never another login's, which
+ * would reach the Author's session as a turn to act on.
+ */
+export const byOwner = (comment: PrComment): boolean =>
+  comment.author === OWNER_LOGIN && !comment.body.includes(AUTHOR_MARK);
+
+/**
+ * Whether the PR's conversation `comments`, in their order, hold a question of the Author the Owner has
+ * not answered: a comment the hook posted with the question mark, and no comment of the Owner after it.
+ */
+export function questionOpen(comments: readonly PrComment[]): boolean {
+  const asked = comments.findLastIndex(
+    (comment) => comment.author === AUTHOR_LOGIN && comment.body.includes(QUESTION_MARK),
+  );
+
+  return asked !== -1 && !comments.slice(asked + 1).some((comment) => byOwner(comment));
+}
+
+/** The comment that puts the Author's quoted `question` to the Owner, from `branch` and `session`. */
+export function questionCommentOf(question: string, branch: string, session: string): string {
+  const quoted = escapeHtml(question)
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+
+  return [
+    `The Author of ${codeSpan(branch)} (session ${codeSpan(session)}) asks the Owner, and waits for the answer:`,
+    quoted,
+    "Answer in a comment in this pull request's conversation: it reaches the Author's session. The pull request stays in draft until the Owner answers there and the Author stops with no question.",
+    QUESTION_MARK,
+    AUTHOR_MARK,
+  ].join("\n\n");
+}
+
 /** A Worker's branch is `<type>/<N>-<slug>`, made for issue N. */
 const ISSUE_BRANCH = /^[a-z]+\/(\d+)-/u;
 
@@ -362,9 +440,14 @@ export function closingLineOf(branch: string, body: string): string | null {
   return closes.test(body) ? null : `Closes #${issue}`;
 }
 
-/** What one stop of an Author left: a Publication with its PR, or nothing published and why. */
+/**
+ * What one stop of an Author left: a Publication with its PR, a question to the Owner with the draft PR
+ * it went to and why nothing lands, or nothing published and why.
+ */
 export type Outcome =
-  { readonly kind: "published"; readonly pr: number } | { readonly kind: "not-published"; readonly reason: string };
+  | { readonly kind: "published"; readonly pr: number }
+  | { readonly kind: "asked"; readonly pr: number; readonly reason: string }
+  | { readonly kind: "not-published"; readonly reason: string };
 
 /** Where and when an Author stopped. `branch` and `head` are null when the hook could not read them. */
 export interface StopFacts {
@@ -375,11 +458,12 @@ export interface StopFacts {
   readonly head: string | null;
 }
 
-/** One line of `.lab/outcomes.log`, without its newline: the stop, then `published` with the PR or `not-published` with its reason. */
+/**
+ * One line of `.lab/outcomes.log`, without its newline: the stop, then `published` with the PR, `asked`
+ * with the PR and its reason, or `not-published` with its reason.
+ */
 export function outcomeLineOf(facts: StopFacts, outcome: Outcome): string {
-  return JSON.stringify(
-    outcome.kind === "published"
-      ? { ...facts, outcome: outcome.kind, pr: outcome.pr }
-      : { ...facts, outcome: outcome.kind, reason: outcome.reason },
-  );
+  const { kind, ...fields } = outcome;
+
+  return JSON.stringify({ ...facts, outcome: kind, ...fields });
 }
