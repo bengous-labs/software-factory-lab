@@ -13,7 +13,7 @@
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { Predicate, Result, Schema } from "effect";
@@ -37,6 +37,7 @@ import {
   afterClosed,
   afterStopChecks,
   bystanderOf,
+  chainOf,
   checkoutOf,
   closingLineOf,
   decide,
@@ -49,7 +50,6 @@ import {
   quotedQuestionOf,
   rejectionReplyOf,
   rejectionsOf,
-  UNCOMMITTED,
 } from "./decide.ts";
 import type {
   ClosedPullRequest,
@@ -598,7 +598,10 @@ function askDoneJudge(stopping: AuthorStop, findings: readonly OpenFinding[]): P
 async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopped> {
   const { deps, input, log, branch, head } = stopping;
   const { cwd } = input;
-  const stopHookActive = input.stop_hook_active === true;
+  // Left by the stop that asked for the commit, and read once by the next one.
+  const commitAsked = join(stateDir, `commit-asked-${input.session_id}`);
+  const chain = chainOf(input.stop_hook_active === true, existsSync(commitAsked));
+  rmSync(commitAsked, { force: true });
 
   await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
 
@@ -614,14 +617,20 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     pr: await prOf(deps, gh, branch),
   };
 
-  const first = admit(snapshot, stopHookActive);
+  const first = admit(snapshot, chain.blocked);
 
   const admission = first.kind === "read-closed" ? afterClosed(head, await closedPrsOf(deps, gh, branch)) : first;
 
   log({ step: "admit", branch, head, pr: snapshot.pr?.number ?? null, ...admission });
 
-  if (admission.kind === "none" || admission.kind === "block") {
-    return stoppedOf(admission, UNCOMMITTED);
+  if (admission.kind === "none") {
+    return notPublished(admission.reason);
+  }
+
+  if (admission.kind === "block") {
+    writeFileSync(commitAsked, "asked\n");
+
+    return notPublished(admission.outcome, { kind: "block", reason: admission.reason });
   }
 
   if (admission.kind === "ready") {
@@ -635,10 +644,10 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
   log({ step: "author-token", found: token.kind === "found", path: token.path });
 
   if (token.kind === "missing") {
-    return stoppedOf(noAuthorToken(token.path, stopHookActive), `no Author token at ${token.path}`);
+    return stoppedOf(noAuthorToken(token.path, chain.reported), `no Author token at ${token.path}`);
   }
 
-  const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), stopHookActive);
+  const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), chain.reported);
   log({ step: "stop-checks", next: next.kind });
 
   if (next.kind !== "ask-done-judge") {
@@ -662,7 +671,7 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
   });
 
   if (answer === null) {
-    return stoppedOf(noDoneAnswer(doneJudge.code, stopHookActive), "the Done judge gave no answer");
+    return stoppedOf(noDoneAnswer(doneJudge.code, chain.reported), "the Done judge gave no answer");
   }
 
   return publish(stopping, { token: token.token, gh }, { pr: snapshot.pr, findings, answer });

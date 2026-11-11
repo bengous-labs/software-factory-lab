@@ -113,6 +113,8 @@ interface Fake {
   /** The command line prefixes that exit 1. */
   readonly failing: readonly string[];
   readonly env: Readonly<Record<string, string | undefined>>;
+  /** The main checkout of an earlier world, to stop again where its state files are; null for a new one. */
+  readonly checkout: string | null;
 }
 
 interface World {
@@ -153,7 +155,7 @@ function world(fake: Partial<Fake> = {}): World {
     env = AUTHOR_ENV,
   } = fake;
 
-  const checkout = mkdtempSync(join(tmpdir(), "stop-"));
+  const checkout = fake.checkout ?? mkdtempSync(join(tmpdir(), "stop-"));
   const root = mainCheckout ? checkout : join(checkout, ".claude", "worktrees", "x");
   const calls: Call[] = [];
   const relays: RelayStart[] = [];
@@ -646,6 +648,28 @@ describe("the stop of an Author", () => {
         calls.some((call) => call.argv[0] === "claude" || call.argv[0] === "bun" || call.argv.includes("push")),
       ).toBe(false);
     }
+  });
+
+  test("the block that asked for the commit leaves the Stop checks their own: red after the commit, they block with their report, once", async () => {
+    const dirty = world({ dirty: true });
+    await stopIn(dirty);
+
+    const red = { checkout: dirty.checkout, failing: ["bun check"] };
+    const committed = await stopIn(world(red), true);
+
+    expect(committed.kind === "block" ? committed.reason : "").toStartWith(
+      "The Stop checks are red on this head, so nothing was published:",
+    );
+    expect(await stopIn(world(red), true)).toEqual({ kind: "allow" });
+  });
+
+  test("the commit asked for in one session leaves another session's chain as it was", async () => {
+    const dirty = world({ dirty: true });
+    await stop({ ...input(dirty.root), session_id: "S0" }, dirty.deps, dirty.log);
+
+    const other = world({ checkout: dirty.checkout, failing: ["bun check"] });
+
+    expect(await stopIn(other, true)).toEqual({ kind: "allow" });
   });
 
   test("no Author token: the hook blocks once with the reason, then lets the session end, and runs no Stop check, fork or push", async () => {

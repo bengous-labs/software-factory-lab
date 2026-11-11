@@ -50,10 +50,9 @@ describe("wakesOf", () => {
     ]);
   });
 
-  test("the App's two checks make no Wake when red: the findings and the draft carry what they report", () => {
+  test("a red Review check makes no Wake: the finding it reports carries it", () => {
     const checks = [
       { name: "agent-review", bucket: "fail", link: "https://ci/2" },
-      { name: "land-gate", bucket: "fail", link: "https://ci/3" },
       { name: "mutation", bucket: "fail", link: "https://ci/4" },
     ];
 
@@ -62,10 +61,25 @@ describe("wakesOf", () => {
     ]);
   });
 
-  test("a conflict with dev wakes once per head, with the rebase to run", () => {
-    expect(wakesOf(7, { ...OPEN, conflicting: true })).toEqual([
-      { key: `conflict:${HEAD}`, kind: "conflict", line: "PR #7 conflicts with dev: rebase onto origin/dev." },
+  test("a red Land gate wakes when no other Wake tells why, as on an ejection from the merge queue", () => {
+    const checks = [{ name: "land-gate", bucket: "fail", link: "https://ci/3" }];
+
+    expect(wakesOf(7, { ...OPEN, checks })).toEqual([
+      { key: `check:land-gate:${HEAD}`, kind: "check", line: "Check land-gate failed on c0ffee1: https://ci/3" },
     ]);
+  });
+
+  test("a conflict with dev wakes once per head, with the fetch and the rebase to run, and its red Land gate adds nothing", () => {
+    const checks = [{ name: "land-gate", bucket: "fail", link: "https://ci/3" }];
+
+    const conflict = {
+      key: `conflict:${HEAD}`,
+      kind: "conflict",
+      line: "PR #7 conflicts with dev: run `git fetch origin dev`, then rebase onto origin/dev.",
+    } as const;
+
+    expect(wakesOf(7, { ...OPEN, conflicting: true })).toEqual([conflict]);
+    expect(wakesOf(7, { ...OPEN, conflicting: true, checks })).toEqual([conflict]);
   });
 
   test("an open Important or Nit finding wakes as a Finding and a human thread as a Comment, with its thread id; a resolved one or a Pre-existing makes no Wake", () => {

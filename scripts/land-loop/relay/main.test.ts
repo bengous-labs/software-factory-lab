@@ -130,16 +130,21 @@ describe("turn", () => {
     expect(sent).toHaveLength(2);
   });
 
-  test("a PR held with the App's two checks red starts no turn: its Author has nothing to act on", async () => {
-    const checks = [
-      { name: "agent-review", bucket: "fail", link: "https://ci/2" },
-      { name: "land-gate", bucket: "fail", link: "https://ci/3" },
-    ];
-
-    const held = relay({ ...OPEN, checks });
+  test("a red Review check alone starts no turn: its findings start theirs", async () => {
+    const held = relay({ ...OPEN, checks: [{ name: "agent-review", bucket: "fail", link: "https://ci/2" }] });
 
     expect(await turn(7, new Set(), held.io)).toEqual({ delivered: [], via: null, pending: 0, ends: false });
     expect(held.sent).toEqual([]);
+  });
+
+  test("a red Land gate on a PR with no conflict starts a turn: nothing else tells an ejection", async () => {
+    const ejected = relay({ ...OPEN, checks: [{ name: "land-gate", bucket: "fail", link: "https://ci/3" }] });
+
+    await turn(7, new Set(), ejected.io);
+
+    expect(ejected.sent.map((found) => found.text)).toEqual([
+      "The Land loop, about your pull request #7:\nCheck land-gate failed on c0ffee1: https://ci/3\nFix it with a commit, then stop.",
+    ]);
   });
 
   test("a conflict with dev starts one turn that names the rebase, and no finding", async () => {
@@ -156,7 +161,7 @@ describe("turn", () => {
     expect(conflicting.sent).toEqual([
       {
         session: "S1",
-        text: "The Land loop, about your pull request #7:\nPR #7 conflicts with dev: rebase onto origin/dev.\nFix it with a commit, then stop.",
+        text: "The Land loop, about your pull request #7:\nPR #7 conflicts with dev: run `git fetch origin dev`, then rebase onto origin/dev.\nFix it with a commit, then stop.",
         ownerWords: false,
       },
     ]);

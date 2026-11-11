@@ -6,6 +6,7 @@ import {
   afterClosed,
   afterStopChecks,
   bystanderOf,
+  chainOf,
   checkoutOf,
   closingLineOf,
   decide,
@@ -17,7 +18,6 @@ import {
   quotedQuestionOf,
   rejectionReplyOf,
   rejectionsOf,
-  UNCOMMITTED,
 } from "./decide.ts";
 import type { Admission, DoneAnswer, Snapshot } from "./decide.ts";
 
@@ -86,6 +86,24 @@ describe("checkoutOf", () => {
   });
 });
 
+describe("chainOf", () => {
+  test("a first stop follows no block", () => {
+    expect(chainOf(false, false)).toEqual({ blocked: false, reported: false });
+  });
+
+  test("a stop after the block that asked for the commit leaves the failures their one block", () => {
+    expect(chainOf(true, true)).toEqual({ blocked: true, reported: false });
+  });
+
+  test("a stop after any other block is after a reported failure", () => {
+    expect(chainOf(true, false)).toEqual({ blocked: true, reported: true });
+  });
+
+  test("a commit asked for in a chain that ended counts for nothing in the next one", () => {
+    expect(chainOf(false, true)).toEqual({ blocked: false, reported: false });
+  });
+});
+
 describe("admit", () => {
   test("a clean branch with commits dev lacks and no open PR asks for the branch's closed PRs", () => {
     expect(admit(SNAPSHOT, false)).toEqual({ kind: "read-closed" });
@@ -93,7 +111,12 @@ describe("admit", () => {
   });
 
   test("a dirty tree blocks once with a message that only asks to commit, whatever the branch holds", () => {
-    const block: Admission = { kind: "block", reason: "Commit your changes, then stop." };
+    const block: Admission = {
+      kind: "block",
+      reason: "Commit your changes, then stop.",
+      outcome: "the tree has uncommitted changes",
+    };
+
     const ready = { number: 7, draft: false, headSha: HEAD };
 
     expect(admit({ ...SNAPSHOT, treeClean: false }, false)).toEqual(block);
@@ -101,10 +124,11 @@ describe("admit", () => {
     expect(admit({ ...SNAPSHOT, treeClean: false, pr: ready }, false)).toEqual(block);
   });
 
-  test("a second stop on a tree still dirty lets the session end, and publishes nothing", () => {
-    expect(UNCOMMITTED).toBe("the tree has uncommitted changes");
-    expect(admit({ ...SNAPSHOT, treeClean: false }, true)).toEqual({ kind: "none", reason: UNCOMMITTED });
-    expect(admit({ ...SNAPSHOT, treeClean: false, ahead: 0 }, true)).toEqual({ kind: "none", reason: UNCOMMITTED });
+  test("a later stop of the chain on a tree still dirty lets the session end, and publishes nothing", () => {
+    const none: Admission = { kind: "none", reason: "the tree has uncommitted changes" };
+
+    expect(admit({ ...SNAPSHOT, treeClean: false }, true)).toEqual(none);
+    expect(admit({ ...SNAPSHOT, treeClean: false, ahead: 0 }, true)).toEqual(none);
   });
 
   test("nothing is published with no new commit, on the first stop as after a block", () => {

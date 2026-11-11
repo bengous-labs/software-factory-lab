@@ -94,11 +94,30 @@ export interface Snapshot {
   readonly pr: PullRequest | null;
 }
 
-/** Why a stop on a dirty tree publishes nothing, as the outcomes log reads it. */
-export const UNCOMMITTED = "the tree has uncommitted changes";
+/**
+ * Where a stop stands in a chain of stops: Claude Code marks each stop that follows a block of the hook,
+ * and the hook keeps whether that block only asked for the commit.
+ */
+export interface Chain {
+  /** A block came before this stop: a dirty tree is not asked about again. */
+  readonly blocked: boolean;
+  /** A block that reported a failure came before: the Author token, the Stop checks and the Done judge block no more. */
+  readonly reported: boolean;
+}
+
+/**
+ * The chain of a stop Claude Code marks `stopHookActive`, when the block before it asked for the commit
+ * (`commitAsked`) or not. Asking for the commit reports no failure, so it leaves the token, the Stop
+ * checks and the Done judge their one block: a chain blocks at most twice.
+ */
+export function chainOf(stopHookActive: boolean, commitAsked: boolean): Chain {
+  return { blocked: stopHookActive, reported: stopHookActive && !commitAsked };
+}
 
 export type Admission =
-  | Refusal
+  | { readonly kind: "none"; readonly reason: string }
+  /** Blocked once: `reason` is what the Author reads, `outcome` why nothing is published. */
+  | { readonly kind: "block"; readonly reason: string; readonly outcome: string }
   /** The stop could open a PR: `afterClosed` decides, once the branch's closed PRs are read. */
   | { readonly kind: "read-closed" }
   /** The PR is ready at this head: nothing to publish; the Nit threads a stop closes are closed. */
@@ -137,10 +156,17 @@ export type Action =
 
 const none = (reason: string): Extract<Refusal, { kind: "none" }> => ({ kind: "none", reason });
 
-/** Uncommitted changes block once, asking for the commit alone; a second stop on a tree still dirty lets the session end. */
-export function admit(snapshot: Snapshot, stopHookActive: boolean): Admission {
+const UNCOMMITTED = "the tree has uncommitted changes";
+
+/**
+ * Uncommitted changes block the first stop of a chain, asking for the commit alone; a later stop on a
+ * tree still dirty (`blocked`) lets the session end.
+ */
+export function admit(snapshot: Snapshot, blocked: boolean): Admission {
   if (!snapshot.treeClean) {
-    return stopHookActive ? none(UNCOMMITTED) : { kind: "block", reason: "Commit your changes, then stop." };
+    return blocked
+      ? none(UNCOMMITTED)
+      : { kind: "block", reason: "Commit your changes, then stop.", outcome: UNCOMMITTED };
   }
 
   if (snapshot.ahead === 0) {

@@ -2,8 +2,8 @@
  * The Wakes of a pull request, as pure functions over one reading of it: a failing check on its head, a
  * conflict with the Trunk, a new open Important or Nit finding of the App, an Important a later round
  * reports again, a new comment of the Owner in an open thread or in the conversation, the PR back in
- * draft. The App's two checks make no Wake: the findings and the draft carry what they report, and a PR
- * held for the Owner leaves its Author nothing to do. Nor do the App's own Pre-existing findings and its
+ * draft. A failing check another Wake already tells makes none: the Review check, which a finding
+ * carries, and the Land gate of a conflicting PR. Nor do the App's own Pre-existing findings and its
  * conversation comments (state record, verdicts); nor the replies the Stop hook posts for the Author; nor
  * any other login's comment: the lab is public, and a Wake starts a turn in a session that holds the
  * Author's token. A PR that lands or closes starts no turn. Each Wake has a key, so the relay delivers it
@@ -77,8 +77,13 @@ const flatTo = (body: string, max: number): string => body.replaceAll(/\s+/gu, "
 
 const flat = (body: string): string => flatTo(body, 400);
 
-/** The App's two checks, which the Merge bot posts: red, they report a finding, a draft or a hold, never the Author's code. */
-const APP_CHECKS: ReadonlySet<string> = new Set([REVIEW_CHECK, LAND_GATE]);
+/**
+ * Whether a failing check tells the Author nothing another Wake does not. The Review check is red on an
+ * open Important, which its finding carries. The Land gate is red on a conflict, which the conflict Wake
+ * says with what to run; its other reds, an ejection from the merge queue among them, have no other Wake.
+ */
+const saidElsewhere = (check: Check, conflicting: boolean): boolean =>
+  check.name === REVIEW_CHECK || (check.name === LAND_GATE && conflicting);
 
 /** The most characters of a reply that reports an Important again: it may hold the finding of each pass of its round. */
 const AGAIN_MAX = 3000;
@@ -136,7 +141,7 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
   }
 
   const wakes: Wake[] = state.checks
-    .filter((check) => check.bucket === "fail" && !APP_CHECKS.has(check.name))
+    .filter((check) => check.bucket === "fail" && !saidElsewhere(check, state.conflicting))
     .map((check) => ({
       key: `check:${check.name}:${state.head}`,
       kind: "check",
@@ -147,7 +152,8 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
     wakes.push({
       key: `conflict:${state.head}`,
       kind: "conflict",
-      line: `PR #${pr} conflicts with dev: rebase onto origin/dev.`,
+      // The Author's `origin/dev` dates from its last stop: without the fetch the rebase would change nothing.
+      line: `PR #${pr} conflicts with dev: run \`git fetch origin dev\`, then rebase onto origin/dev.`,
     });
   }
 
