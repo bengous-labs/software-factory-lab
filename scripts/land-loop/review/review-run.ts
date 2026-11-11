@@ -47,5 +47,8 @@ export async function reviewRunOf(
   const reported = resultOf(request, code, runUrl).kind === "reported";
   const security = request.security && reported ? await session(securityPromptOf(request, guides, threads)) : null;
 
-  return withEarlierThreads(mergedResultOf(request, code, security, runUrl), request.round === 1 ? [] : threads);
+  // Round 1 and the Delta read (4) list no earlier finding: an id they name is none.
+  const shown = request.round === 1 || request.round === 4 ? [] : threads;
+
+  return withEarlierThreads(mergedResultOf(request, code, security, runUrl), shown);
 }

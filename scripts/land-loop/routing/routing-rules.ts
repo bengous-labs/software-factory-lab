@@ -169,11 +169,16 @@ export interface NitAnswerInput {
   readonly nitPaths: readonly string[];
 }
 
+/** A test file and the file it tests beside it: `x.test.ts` for `x.ts`. */
+const TEST_FILE = /\.test(\.[^./]+)$/u;
+
 /**
  * The Routing answer of a Patch delta that only answers the Nits of the last Review round, whichever it was, when it posted no
- * Important: the delta starts at the head that round read, touches only files it posted a Nit on and
- * no `deepReviewPaths` path, in at most NIT_ANSWER_LINE_CAP lines. It needs no read, so it starts no round, holds nothing
- * for the Owner and the change keeps its Land route. Any other answer stands.
+ * Important: the delta starts at the head that round read, touches no `deepReviewPaths` path, in at most
+ * NIT_ANSWER_LINE_CAP lines. One that touches only files the round posted a Nit on needs no read, so it
+ * starts no round, holds nothing for the Owner and the change keeps its Land route. After Review round 3,
+ * one that also touches the test file beside a Nit file, on a change that lands `auto`, gets a Delta read
+ * in place of the hold for the Owner: an unread test could switch a guard's test off. Any other answer stands.
  */
 export function withNitAnswers(
   policy: RoutingPolicy,
@@ -183,20 +188,31 @@ export function withNitAnswers(
 ): RoutingAnswer {
   const nits = new Set(nitPaths);
 
-  const answersNits =
+  const inBounds =
     answer.secondRound &&
     record.importantByRound?.[record.reviewRounds - 1] === 0 &&
     record.reviewedHead === deltaFrom &&
     delta.lines <= NIT_ANSWER_LINE_CAP &&
-    delta.paths.every((path) => nits.has(path)) &&
     matching(policy.deepReviewPaths, delta.paths).length === 0;
 
-  if (!answersNits) {
+  if (!inBounds) {
     return answer;
   }
 
-  const nitAnswer = `a push after Review round ${record.reviewRounds} that only answers its Nits: ${delta.lines} lines in ${listed(delta.paths)}`;
+  const nitAnswer = `a push after Review round ${record.reviewRounds} that only answers its Nits`;
+  const what = `${delta.lines} lines in ${listed(delta.paths)}`;
 
-  // The Owner's route keeps its reason alone: the land-gate and the Owner's comment give it as why the PR is held.
-  return { ...answer, secondRound: false, reason: answer.land === "owner" ? answer.reason : nitAnswer };
+  if (delta.paths.every((path) => nits.has(path))) {
+    // The Owner's route keeps its reason alone: the land-gate and the Owner's comment give it as why the PR is held.
+    return { ...answer, secondRound: false, reason: answer.land === "owner" ? answer.reason : `${nitAnswer}: ${what}` };
+  }
+
+  const testedAnswer =
+    record.reviewRounds === 3 &&
+    answer.land === "auto" &&
+    delta.paths.every((path) => nits.has(path) || nits.has(path.replace(TEST_FILE, "$1")));
+
+  return testedAnswer
+    ? { ...answer, deltaRead: true, reason: `${nitAnswer}, its tests included: ${what}; one Delta read` }
+    : answer;
 }

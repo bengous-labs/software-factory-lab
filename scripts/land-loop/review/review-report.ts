@@ -15,7 +15,8 @@ export type Severity = typeof Severity.Type;
 
 const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
 
-const Round = Schema.Literals([1, 2, 3]);
+/** Review rounds 1 to 3, and 4 for the Delta read of a push after round 3. */
+const Round = Schema.Literals([1, 2, 3, 4]);
 
 const Sha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/u));
 

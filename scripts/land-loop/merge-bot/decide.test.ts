@@ -894,7 +894,21 @@ describe("the stored record", () => {
     expect(recordOfJson(JSON.stringify(storedOfRecord(record)))).toEqual(record);
     expect(recordOfJson(JSON.stringify({ reviewRounds: 1 })).review).toBeUndefined();
     expect(recordOfJson(JSON.stringify({ review: { ...review, round: 3 } })).review?.round).toBe(3);
-    expect(() => recordOfJson(JSON.stringify({ review: { ...review, round: 4 } }))).toThrow('at ["review"]');
+    expect(recordOfJson(JSON.stringify({ review: { ...review, round: 4 } })).review?.round).toBe(4);
+    expect(() => recordOfJson(JSON.stringify({ review: { ...review, round: 5 } }))).toThrow('at ["review"]');
+  });
+
+  test("a Delta read's Routing flag and patch are stored and read back; a record written before them reads with neither", () => {
+    const record = { ...EMPTY_RECORD, deltaReadPatch: P1, triage: { [P1]: { ...LIGHT, deltaRead: true } } };
+    const old = recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, land: "auto" } } }));
+
+    expect(recordOfJson(JSON.stringify(storedOfRecord(record)))).toEqual(record);
+    expect(old).not.toHaveProperty("deltaReadPatch");
+    expect(old.triage[P1]).toEqual(LIGHT);
+    expect(() => recordOfJson(JSON.stringify({ deltaReadPatch: 1 }))).toThrow('at ["deltaReadPatch"]');
+    expect(() => recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, deltaRead: "yes" } } }))).toThrow(
+      `at ["triage"]["${P1}"]["deltaRead"]`,
+    );
   });
 
   test("a record that counted Important findings posted in a review's body still reads, and the count is left out", () => {
@@ -1889,5 +1903,142 @@ describe("the Merge bot's invariants", () => {
       }),
       RUNS,
     );
+  });
+});
+
+describe("the Delta read after Review round 3", () => {
+  const RISKY = { ...LIGHT, secondRound: true };
+
+  const ANSWERED: RoutingAnswer = {
+    ...RISKY,
+    deltaRead: true,
+    reason: "a push after Review round 3 that only answers its Nits",
+  };
+
+  const running: CheckState = { kind: "pending", summary: "Delta read running." };
+  const asked: ReviewState = { kind: "requested", patch: P1, round: 4, runId: 43, at: "2026-11-07T11:50:00.000Z" };
+
+  const read = (...findings: ReportedFinding[]): ReportedResult => ({
+    kind: "reported",
+    report: { findings, namesEarlier: true },
+    request: {
+      pr: 9,
+      head: "a".repeat(40),
+      base: "b".repeat(40),
+      patch: P1,
+      round: 4,
+      model: "sonnet",
+      effort: "medium",
+      security: false,
+    },
+    model: "claude-sonnet-5-5",
+    claudeCodeVersion: "2.1.318",
+    tokens: null,
+    runUrl: "u",
+  });
+
+  const reading = (result: ReportedResult): Snapshot => ({
+    ...READY,
+    openedByAuthor: true,
+    record: afterRound3(ANSWERED, { review: asked }),
+    reviewJob: completed(result),
+  });
+
+  test("a push routed as only answering round 3's Nits, its tests included, gets a light Delta read and no hold for the Owner", () => {
+    expect(stepsOf({ ...READY, labels: ["review:deep"], record: afterRound3(ANSWERED) })).toEqual([
+      { kind: "labels", route: "auto", depth: "deep" },
+      { kind: "request-review", depth: "light", reviewRound: 4, security: false },
+      { kind: "review-check", check: running },
+      { kind: "land-gate", check: running },
+    ]);
+  });
+
+  test("the Delta read runs the security pass the change's Routing answer asks", () => {
+    expect(stepsOf({ ...READY, record: afterRound3({ ...ANSWERED, security: true }) })).toContainEqual({
+      kind: "request-review",
+      depth: "light",
+      reviewRound: 4,
+      security: true,
+    });
+  });
+
+  test("a Delta read that posts no Important posts none of its Nits, keeps the PR ready, records its patch apart from the rounds, and the PR lands by its route", () => {
+    const result = read(finding("nit"), finding("pre_existing"));
+    const record = { ...afterRound3(ANSWERED), deltaReadPatch: P1 };
+
+    expect(stepsOf(reading(result))).toEqual([
+      { kind: "post-review", result: read(), heldOpen: [] },
+      { kind: "record", record },
+      GREEN,
+    ]);
+    expect(afterReview(afterRound3(ANSWERED, { review: asked }), result)).toEqual(record);
+    expect(kinds({ ...READY, record })).toEqual(["labels", "review-check", "land-gate", "auto-merge"]);
+  });
+
+  test("an Important from the Delta read sends the PR back to draft and holds it for the Owner", () => {
+    const record = {
+      ...afterRound3(ANSWERED),
+      deltaReadPatch: P1,
+      ownerHold: "The Delta read of a push after Review round 3 posted 1 Important finding(s).",
+    };
+
+    expect(stepsOf(reading(read(finding("important"), finding("nit"))))).toEqual([
+      { kind: "post-review", result: read(finding("important")), heldOpen: [] },
+      { kind: "to-draft" },
+      { kind: "record", record },
+      red(1),
+    ]);
+
+    const held = { ...READY, openImportant: important(1), record };
+
+    expect(kinds(held)).not.toContain("auto-merge");
+    expect(kinds(held)).not.toContain("request-review");
+    expect(gateSummary(held)).toBe(
+      "Held for the Owner: The Delta read of a push after Review round 3 posted 1 Important finding(s). Waiting for the Owner's Land approval (label land-ok).",
+    );
+  });
+
+  test("the Delta read leaves the Important threads open before it as they are: it was shown none", () => {
+    const open = [{ thread: "T1", review: { patch: "patch-0", round: 2 } }];
+
+    expect(earlierImportantsOf(read(), open)).toEqual({ kept: [], closed: [], left: 1 });
+  });
+
+  test("a Delta read runs once per push: a later push in the bounds gets its own, a PR held for the Owner none", () => {
+    const P2 = "patch-2";
+    const record = afterRound3(ANSWERED, { deltaReadPatch: P1, triage: { [P2]: ANSWERED } });
+    const held = afterRound3(ANSWERED, { ownerHold: "Review round 3 posted 1 Important finding(s)." });
+
+    expect(stepsOf({ ...READY, patch: P2, record })).toContainEqual({
+      kind: "request-review",
+      depth: "light",
+      reviewRound: 4,
+      security: false,
+    });
+    expect(kinds({ ...READY, record: held })).not.toContain("request-review");
+  });
+
+  test("a push after Review round 3 outside the bounds is held for the Owner, as before", () => {
+    expect(stepsOf({ ...READY, record: afterRound3(RISKY) })[0]).toEqual({
+      kind: "record",
+      record: { ...afterRound3(RISKY), ownerHold: "A push after Review round 3 needs a read." },
+    });
+    expect(kinds({ ...READY, record: afterRound3(RISKY) })).not.toContain("request-review");
+  });
+
+  test("a Delta read that failed names itself in the Review check", () => {
+    const failed = {
+      ...READY,
+      record: afterRound3(ANSWERED, { review: asked }),
+      reviewJob: completed(null, "failure"),
+    };
+
+    expect(stepsOf(failed)).toContainEqual({
+      kind: "review-check",
+      check: {
+        kind: "failure",
+        summary: "Delta read failed (run 43): the review job ended (failure) with no result that reads",
+      },
+    });
   });
 });

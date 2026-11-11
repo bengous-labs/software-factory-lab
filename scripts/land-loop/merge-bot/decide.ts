@@ -49,9 +49,14 @@ export interface RoutingAnswer {
    * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names; never when it
    * only answers the Nits of the last Review round, which posted no Important (`withNitAnswers`). After Review
    * round 1 it runs Review round 2, after Review round 2 Review round 3; after Review round 3 it holds the
-   * change for the Owner.
+   * change for the Owner, unless `deltaRead`.
    */
   readonly secondRound: boolean;
+  /**
+   * On a Patch delta after Review round 3 that only answers that round's Nits, its tests included
+   * (`withNitAnswers`): one Delta read in place of the hold for the Owner. Absent, as in older records, reads as false.
+   */
+  readonly deltaRead?: boolean;
   readonly reason: string;
   /** The model asked, exact when it answered; null when the Routing rules decided. */
   readonly model: string | null;
@@ -59,9 +64,18 @@ export interface RoutingAnswer {
   readonly security?: boolean;
 }
 
-const Round = Schema.Literals([1, 2, 3]);
+/**
+ * The review job's number for the Delta read: the job, its artifact and its posted review are keyed by
+ * a number, but the record never counts it among the three Review rounds.
+ */
+const DELTA_READ = 4;
+
+/** Review rounds 1 to 3, and the Delta read. */
+const Round = Schema.Literals([1, 2, 3, DELTA_READ]);
 
 export type ReviewRound = typeof Round.Type;
+
+const reviewNameOf = (round: ReviewRound): string => (round === DELTA_READ ? "Delta read" : `Review round ${round}`);
 
 /** The review asked of the review job for one patch and round, and its run; `failed` once it gave no report. */
 const ReviewState = Schema.Union([
@@ -105,6 +119,8 @@ export interface StateRecord {
   readonly ownerHold?: string;
   /** The patch the Owner was last asked in a comment to give the Land approval for. Absent: never asked. */
   readonly ownerAskedPatch?: string;
+  /** The patch the last Delta read read. Absent: none ran. */
+  readonly deltaReadPatch?: string;
   /** The Routing answer of each patch, keyed by patch identity. */
   readonly triage: Readonly<Record<string, RoutingAnswer>>;
   /** The patch the owner's Land approval was given for. */
@@ -146,6 +162,7 @@ const ReadRecord = Schema.Struct({
       // Records written before the Routing answer named its model have none.
       model: Schema.optionalKey(Schema.NullOr(Schema.String)),
       security: Schema.optionalKey(Schema.Boolean),
+      deltaRead: Schema.optionalKey(Schema.Boolean),
       // Records written while the Principal judge existed: the field still reads, and is left out.
       needsFable: Schema.optionalKey(Schema.Boolean),
     }),
@@ -162,6 +179,7 @@ const ReadRecord = Schema.Struct({
   importantByRound: Schema.optionalKey(Schema.Array(Schema.NullOr(Schema.Finite))),
   ownerHold: Schema.optionalKey(Schema.String),
   ownerAskedPatch: Schema.optionalKey(Schema.String),
+  deltaReadPatch: Schema.optionalKey(Schema.String),
 });
 
 type ReadRecord = typeof ReadRecord.Type;
@@ -496,10 +514,22 @@ function countedAt(
 /**
  * The record once the review of `result` is posted: the patch and the head it read, its round, its
  * Important count, and no review asked. A Review round 3 that posted an Important holds the PR for the Owner.
+ * A Delta read leaves the rounds as they are and records only its patch; its Important holds the PR for the Owner.
  */
 export function afterReview(record: StateRecord, result: ReportedResult): StateRecord {
   const { round } = result.request;
   const important = importantOf(result);
+
+  if (round === DELTA_READ) {
+    const read: StateRecord = { ...withoutReview(record), deltaReadPatch: result.request.patch };
+
+    return important > 0
+      ? {
+          ...read,
+          ownerHold: `The Delta read of a push after Review round 3 posted ${important} Important finding(s).`,
+        }
+      : read;
+  }
 
   const next: StateRecord = {
     ...withoutReview(record),
@@ -516,10 +546,11 @@ export function afterReview(record: StateRecord, result: ReportedResult): StateR
 
 /**
  * The record with an Owner hold when this patch, routed, comes after Review round 3 and its Patch delta
- * needs a read: no Review round 4 runs. The same record otherwise.
+ * needs a read other than a Delta read: no Review round 4 runs. The same record otherwise.
  */
 function heldAfterRound3(record: StateRecord, patch: string): StateRecord {
-  const needsRead = record.triage[patch]?.secondRound === true;
+  const routing = record.triage[patch];
+  const needsRead = routing?.secondRound === true && routing.deltaRead !== true;
 
   return record.reviewRounds === 3 && record.reviewedPatch !== patch && needsRead && record.ownerHold === undefined
     ? { ...record, ownerHold: "A push after Review round 3 needs a read." }
@@ -566,7 +597,7 @@ function outcomeOf(snapshot: Snapshot, review: ReviewState): JobOutcome {
 }
 
 const runningSteps = (round: ReviewRound): readonly Step[] => {
-  const check = pending(`Review round ${round} running.`);
+  const check = pending(`${reviewNameOf(round)} running.`);
 
   return [
     { kind: "review-check", check },
@@ -583,7 +614,7 @@ function failedOf(record: StateRecord, review: ReviewState, cause: string): Revi
     end: [
       {
         kind: "review-check",
-        check: { kind: "failure", summary: `Review round ${review.round} failed (run ${review.runId}): ${cause}` },
+        check: { kind: "failure", summary: `${reviewNameOf(review.round)} failed (run ${review.runId}): ${cause}` },
       },
       { kind: "land-gate", check: pending("Not landable: the Code review failed.") },
     ],
@@ -605,7 +636,7 @@ export interface EarlierImportants {
  * first reports again every earlier Important that is still wrong, naming its thread in `earlier`; an
  * open Important thread of an earlier review that the round does not name is closed. A thread the
  * review of `result` posted itself, when its posting is retried, is not an earlier one. A report that was
- * not asked to name the earlier findings closes none.
+ * not asked to name the earlier findings closes none, nor does a Delta read, which is shown none.
  */
 export function earlierImportantsOf(result: ReportedResult, open: readonly ImportantThread[]): EarlierImportants {
   const { patch, round } = result.request;
@@ -614,7 +645,7 @@ export function earlierImportantsOf(result: ReportedResult, open: readonly Impor
     found.review === null || found.review.patch !== patch || found.review.round !== round ? [found.thread] : [],
   );
 
-  if (round === 1 || !result.report.namesEarlier) {
+  if (round === 1 || round === DELTA_READ || !result.report.namesEarlier) {
     return { kept: [], closed: [], left: earlier.length };
   }
 
@@ -659,9 +690,21 @@ function sendsBack(snapshot: Snapshot, result: ReportedResult): boolean {
  * The review is posted, the earlier Importants it no longer holds are resolved, the PR goes back to
  * draft when the round asks its Author for something, and only then is the round recorded: a run that
  * stops before the record does all of it again. The Review check counts the Important findings open
- * once the review is posted.
+ * once the review is posted. A Delta read posts its Importants alone: a Nit after Review round 3 is not
+ * worth another turn.
  */
-function postedSteps(snapshot: Snapshot, record: StateRecord, result: ReportedResult): readonly Step[] {
+function postedSteps(snapshot: Snapshot, record: StateRecord, reported: ReportedResult): readonly Step[] {
+  const result: ReportedResult =
+    reported.request.round === DELTA_READ
+      ? {
+          ...reported,
+          report: {
+            ...reported.report,
+            findings: reported.report.findings.filter((finding) => finding.severity === "important"),
+          },
+        }
+      : reported;
+
   const earlier = earlierImportantsOf(result, snapshot.openImportant);
 
   return [
@@ -761,7 +804,8 @@ interface RoundNeed {
 /**
  * The Review round this patch needs; null when none. A later patch is read again when its Patch delta
  * needs a read, and always when the last round posted an Important, or its count is unknown, whatever
- * the Routing answer says of the delta. Review round 3 is the last.
+ * the Routing answer says of the delta. Review round 3 is the last; after it, a patch routed for a Delta
+ * read on a PR no one holds for the Owner gets one, light, once.
  */
 function roundNeedOf(record: StateRecord, routing: RoutingAnswer, depth: ReviewDepth, patch: string): RoundNeed | null {
   if (depth === "none" || record.reviewedPatch === patch) {
@@ -770,6 +814,12 @@ function roundNeedOf(record: StateRecord, routing: RoutingAnswer, depth: ReviewD
 
   if (record.reviewRounds === 0) {
     return { depth, round: 1 };
+  }
+
+  if (record.reviewRounds === 3) {
+    const owed = routing.deltaRead === true && record.ownerHold === undefined && record.deltaReadPatch !== patch;
+
+    return owed ? { depth: "light", round: DELTA_READ } : null;
   }
 
   if (record.reviewRounds !== 1 && record.reviewRounds !== 2) {

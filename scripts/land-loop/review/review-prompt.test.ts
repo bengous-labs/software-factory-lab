@@ -120,6 +120,18 @@ describe("promptOf", () => {
   });
 });
 
+describe("the Delta read", () => {
+  test("it names the head round 3 read, asks for Important findings alone, and lists no earlier thread", () => {
+    const threads = [{ thread: "PRRT_1", where: "a.ts:3", finding: "off by one", reply: "Fixed" }];
+
+    expect(roundText({ ...REQUEST, round: 4 }, threads)).toEqual([
+      "",
+      `This is a read of a push after review round 3, the last round. ${BASE} is the head review round 3 read: read only what changed since, and the rest only to judge it.`,
+      "Report Important findings only: a Nit is not worth another turn now.",
+    ]);
+  });
+});
+
 describe("round 1", () => {
   test("it has no round text, whatever the threads", () => {
     const threads = [

@@ -567,6 +567,10 @@ describe("withNitAnswers", () => {
   const nitsOnly = (input: NitAnswerInput, answer = READ): RoutingAnswer =>
     withNitAnswers(LAB, answer, delta(["scripts/a.ts"], 10), input);
 
+  /** The answer of a delta in `scripts/a.ts` and its test file beside it. */
+  const tested = (input: NitAnswerInput, answer = READ, lines = 42): RoutingAnswer =>
+    withNitAnswers(LAB, answer, delta(["scripts/a.ts", "scripts/a.test.ts"], lines), input);
+
   test("after a Review round 3 with no Important, a Patch delta from its head in round 3's Nit files within the cap needs no read, and keeps its route", () => {
     expect(withNitAnswers(LAB, READ, delta(["scripts/a.ts", "scripts/a.test.ts"], 42), AFTER_CLEAN_ROUND_3)).toEqual({
       ...READ,
@@ -643,6 +647,61 @@ describe("withNitAnswers", () => {
     const unread = { ...READ, secondRound: false, reason: "the Patch delta touches no file: nothing to read again" };
 
     expect(nitsOnly(AFTER_CLEAN_ROUND_3, unread)).toBe(unread);
+  });
+
+  describe("with the test file beside a Nit file", () => {
+    const ROUND_3_NITS: NitAnswerInput = {
+      ...AFTER_CLEAN_ROUND_3,
+      nitPaths: ["scripts/a.ts", "app/src/store/format.ts"],
+    };
+
+    test("after a Review round 3 with no Important, a delta from its head within the cap gets one Delta read and no hold", () => {
+      expect(tested(ROUND_3_NITS)).toEqual({
+        ...READ,
+        deltaRead: true,
+        reason:
+          "a push after Review round 3 that only answers its Nits, its tests included: 42 lines in scripts/a.ts, scripts/a.test.ts; one Delta read",
+      });
+      expect(tested(ROUND_3_NITS, READ, NIT_ANSWER_LINE_CAP).deltaRead).toBe(true);
+      expect(
+        withNitAnswers(LAB, READ, delta(["scripts/a.test.ts", "scripts/b.test.ts"], 10), {
+          ...ROUND_3_NITS,
+          nitPaths: ["scripts/a.test.ts", "scripts/b.ts"],
+        }).deltaRead,
+      ).toBe(true);
+    });
+
+    test("past the cap, with a path neither a Nit file nor its test, in a deepReviewPaths path, or not from round 3's head, the delta keeps its answer", () => {
+      const store = delta(["app/src/store/format.ts", "app/src/store/format.test.ts"], 10);
+
+      expect(withNitAnswers(LAB, READ, store, ROUND_3_NITS)).toBe(READ);
+      expect(tested(ROUND_3_NITS, READ, NIT_ANSWER_LINE_CAP + 1)).toBe(READ);
+      expect(withNitAnswers(LAB, READ, delta(["scripts/a.ts", "scripts/b.test.ts"], 10), ROUND_3_NITS)).toBe(READ);
+      expect(withNitAnswers(LAB, READ, delta(["scripts/a.test.ts", "scripts/c.ts"], 10), ROUND_3_NITS)).toBe(READ);
+      expect(withNitAnswers(LAB, READ, delta(["scripts/a.test.tsx"], 10), ROUND_3_NITS)).toBe(READ);
+      expect(tested({ ...ROUND_3_NITS, deltaFrom: "merge-base" })).toBe(READ);
+    });
+
+    test("after a round 3 that posted an Important, or after round 1 or 2, the delta keeps its answer", () => {
+      const others: ReadonlyArray<[number, ReadonlyArray<number | null>]> = [
+        [3, [0, 0, 1]],
+        [3, [0, 0, null]],
+        [1, [0]],
+        [2, [0, 0]],
+      ];
+
+      for (const [reviewRounds, importantByRound] of others) {
+        expect(tested({ ...ROUND_3_NITS, record: { ...ROUND_3_NITS.record, reviewRounds, importantByRound } })).toBe(
+          READ,
+        );
+      }
+    });
+
+    test("a change the Owner lands keeps its answer, and is held for the Owner as before", () => {
+      const owner = { ...READ, land: "owner" as const };
+
+      expect(tested(ROUND_3_NITS, owner)).toBe(owner);
+    });
   });
 });
 
