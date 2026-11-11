@@ -1,11 +1,13 @@
 /**
  * The Wakes of a pull request, as pure functions over one reading of it: a failing check on its head, a
- * new open Important or Nit finding of the App, an Important a later round reports again, a new comment
- * of the Owner in an open thread or in the conversation, the PR back in draft, the PR landed or closed.
- * The App's own Pre-existing findings and its conversation comments (state record, verdicts) make no
- * Wake; nor do the replies the Stop hook posts for the Author; nor does any other login's comment: the
- * lab is public, and a Wake starts a turn in a session that holds the Author's token. Each Wake has a
- * key, so the relay delivers it once.
+ * conflict with the Trunk, a new open Important or Nit finding of the App, an Important a later round
+ * reports again, a new comment of the Owner in an open thread or in the conversation, the PR back in
+ * draft. The App's two checks make no Wake: the findings and the draft carry what they report, and a PR
+ * held for the Owner leaves its Author nothing to do. Nor do the App's own Pre-existing findings and its
+ * conversation comments (state record, verdicts); nor the replies the Stop hook posts for the Author; nor
+ * any other login's comment: the lab is public, and a Wake starts a turn in a session that holds the
+ * Author's token. A PR that lands or closes starts no turn. Each Wake has a key, so the relay delivers it
+ * once.
  */
 
 import { Schema } from "effect";
@@ -14,6 +16,7 @@ import { decodeJson } from "../../lib/json.ts";
 import { unescapeHtml } from "../../lib/markdown.ts";
 import { AUTHOR_MARK } from "../author-mark.ts";
 import { APP_LOGIN, OWNER_LOGIN } from "../logins.ts";
+import { LAND_GATE, REVIEW_CHECK } from "../merge-bot/decide.ts";
 import { severityOfBody } from "../review/findings.ts";
 
 /** One check as `gh pr checks --json name,bucket,link` prints it. */
@@ -49,42 +52,36 @@ export interface PrState {
   readonly state: "OPEN" | "MERGED" | "CLOSED";
   readonly draft: boolean;
   readonly head: string;
+  /** GitHub reads the PR as conflicting with its base. */
+  readonly conflicting: boolean;
   readonly checks: readonly Check[];
   readonly threads: readonly Thread[];
   /** The PR's conversation comments. */
   readonly comments: readonly Comment[];
 }
 
+/**
+ * What a Wake reports, which sets how the Author is told to answer. `owner` is the Owner's own words
+ * alone: they reach a running session as a turn of its user, not as a peer's message.
+ */
+export type WakeKind = "check" | "conflict" | "finding" | "owner" | "draft";
+
 export interface Wake {
   readonly key: string;
+  readonly kind: WakeKind;
   readonly line: string;
-  /** Set on the Owner's own words alone: they reach a running session as a turn of its user, not as a peer's message. */
-  readonly owner?: true;
 }
-
-/** The key that keeps the end line from being delivered twice. */
-export const END_KEY = "end";
 
 /** `body` on one line, cut at `max` characters. */
 const flatTo = (body: string, max: number): string => body.replaceAll(/\s+/gu, " ").slice(0, max);
 
 const flat = (body: string): string => flatTo(body, 400);
 
+/** The App's two checks, which the Merge bot posts: red, they report a finding, a draft or a hold, never the Author's code. */
+const APP_CHECKS: ReadonlySet<string> = new Set([REVIEW_CHECK, LAND_GATE]);
+
 /** The most characters of a reply that reports an Important again: it may hold the finding of each pass of its round. */
 const AGAIN_MAX = 3000;
-
-/** The end line of a landed or closed PR; null while it is open. */
-export function endOf(pr: number, state: PrState): string | null {
-  if (state.state === "MERGED") {
-    return `PR #${pr} landed.`;
-  }
-
-  if (state.state === "CLOSED") {
-    return `PR #${pr} closed.`;
-  }
-
-  return null;
-}
 
 /**
  * Whether the Owner wrote these words by hand. The lab is public and any GitHub login can comment on a
@@ -103,11 +100,11 @@ function threadWakesOf(thread: Thread, where: string): readonly Wake[] {
     const kind = severity === null ? "Comment" : "Finding";
     const line = `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(unescapeHtml(thread.body))}`;
 
-    return severity === "pre_existing" ? [] : [{ key, line }];
+    return severity === "pre_existing" ? [] : [{ key, kind: "finding", line }];
   }
 
   return byOwner(thread)
-    ? [{ key, line: `Comment ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}`, owner: true }]
+    ? [{ key, kind: "owner", line: `Comment ${thread.id} on ${where} by ${thread.author}: ${flat(thread.body)}` }]
     : [];
 }
 
@@ -122,11 +119,11 @@ function replyWakesOf(thread: Thread, where: string, reply: Comment): readonly W
     const again = thread.author === APP_LOGIN && severityOfBody(reply.body) === "important";
     const line = `Finding ${thread.id} on ${where} by ${reply.author}, still wrong: ${flatTo(unescapeHtml(reply.body), AGAIN_MAX)}`;
 
-    return again ? [{ key, line }] : [];
+    return again ? [{ key, kind: "finding", line }] : [];
   }
 
   return byOwner(reply)
-    ? [{ key, line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}`, owner: true }]
+    ? [{ key, kind: "owner", line: `Reply in ${thread.id} on ${where} by ${reply.author}: ${flat(reply.body)}` }]
     : [];
 }
 
@@ -139,11 +136,20 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
   }
 
   const wakes: Wake[] = state.checks
-    .filter((check) => check.bucket === "fail")
+    .filter((check) => check.bucket === "fail" && !APP_CHECKS.has(check.name))
     .map((check) => ({
       key: `check:${check.name}:${state.head}`,
+      kind: "check",
       line: `Check ${check.name} failed on ${short}: ${check.link}`,
     }));
+
+  if (state.conflicting) {
+    wakes.push({
+      key: `conflict:${state.head}`,
+      kind: "conflict",
+      line: `PR #${pr} conflicts with dev: rebase onto origin/dev.`,
+    });
+  }
 
   for (const thread of state.threads.filter((found) => !found.resolved)) {
     const where = thread.line === null ? thread.path : `${thread.path}:${thread.line}`;
@@ -157,14 +163,15 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
   for (const comment of state.comments.filter((found) => byOwner(found))) {
     wakes.push({
       key: `comment:${comment.id}`,
+      kind: "owner",
       line: `Comment on PR #${pr} by ${comment.author}: ${flat(comment.body)}`,
-      owner: true,
     });
   }
 
   if (state.draft) {
     wakes.push({
       key: `draft:${state.head}`,
+      kind: "draft",
       line: `PR #${pr} is back in draft at ${short}: it lands only after your next stop.`,
     });
   }
@@ -174,7 +181,7 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
 
 /**
  * What one reading delivers, each Wake `seen` does not hold yet, and whether the relay ends. A landed
- * or closed PR ends it at once, even when its end line was delivered before.
+ * or closed PR ends it with no Wake: its Author has nothing left to do, so no turn starts.
  */
 export interface Reading {
   readonly wakes: readonly Wake[];
@@ -182,26 +189,38 @@ export interface Reading {
 }
 
 export function readingOf(pr: number, state: PrState, seen: ReadonlySet<string>): Reading {
-  const end = endOf(pr, state);
-  const wakes = end === null ? wakesOf(pr, state) : [{ key: END_KEY, line: end }];
-
-  return { wakes: wakes.filter((wake) => !seen.has(wake.key)), ends: end !== null };
+  return { wakes: wakesOf(pr, state).filter((wake) => !seen.has(wake.key)), ends: state.state !== "OPEN" };
 }
 
 /** Whether a Wake the reading delivers holds the Owner's words. */
-export const ownerWordsIn = (reading: Reading): boolean => reading.wakes.some((wake) => wake.owner === true);
+export const ownerWordsIn = (reading: Reading): boolean => reading.wakes.some((wake) => wake.kind === "owner");
+
+/** How the Author answers findings: it names its rejections alone, since nobody declares a fix. */
+const FINDINGS_ANSWER =
+  "Fix what you accept with a commit, name in your last message each finding you reject and why, then stop.";
+
+const FIX_ANSWER = "Fix it with a commit, then stop.";
 
 /**
- * The text of the turn a reading's Wakes start in the Author's session: the Wakes' lines, and, while the
- * PR is open, how the Author answers.
+ * How the Author answers Wakes of `kinds`; null when their lines say it all, as the Owner's words and a
+ * PR back in draft do.
  */
+export function answerOf(kinds: readonly WakeKind[]): string | null {
+  if (kinds.includes("finding")) {
+    return FINDINGS_ANSWER;
+  }
+
+  return kinds.includes("check") || kinds.includes("conflict") ? FIX_ANSWER : null;
+}
+
+/** The text of the turn a reading's Wakes start in the Author's session: their lines, then how the Author answers them. */
 export function wakeTextOf(pr: number, reading: Reading): string {
+  const answer = answerOf(reading.wakes.map((wake) => wake.kind));
+
   return [
     `The Land loop, about your pull request #${pr}:`,
     ...reading.wakes.map((wake) => wake.line),
-    ...(reading.ends
-      ? []
-      : ["Fix what you accept with a commit, say in your last message which findings you reject and why, then stop."]),
+    ...(answer === null ? [] : [answer]),
   ].join("\n");
 }
 
@@ -209,6 +228,8 @@ const PrView = Schema.Struct({
   state: Schema.Literals(["OPEN", "MERGED", "CLOSED"]),
   isDraft: Schema.Boolean,
   headRefOid: Schema.String,
+  /** `CONFLICTING`, `MERGEABLE`, or `UNKNOWN` while GitHub computes it. */
+  mergeable: Schema.String,
 });
 
 const Author = Schema.NullOr(Schema.Struct({ login: Schema.String }));
@@ -245,7 +266,7 @@ export const SeenKeys = Schema.Array(Schema.String);
 
 /** A PR's state from what gh printed: its view, its checks, its conversation's lines and its review threads. */
 export function prStateOf(view: string, checks: string, conversation: string, threads: string): PrState {
-  const { state, isDraft, headRefOid } = decodeJson(PrView, "gh pr view", view);
+  const { state, isDraft, headRefOid, mergeable } = decodeJson(PrView, "gh pr view", view);
 
   const nodes = decodeJson(ReviewThreads, "the review threads query", threads).data.repository.pullRequest.reviewThreads
     .nodes;
@@ -254,6 +275,7 @@ export function prStateOf(view: string, checks: string, conversation: string, th
     state,
     draft: isDraft,
     head: headRefOid,
+    conflicting: mergeable === "CONFLICTING",
     // `gh pr checks` exits 8 while checks are pending and 1 when one fails; its JSON is printed either way.
     checks: checks.trim() === "" ? [] : decodeJson(Schema.Array(Check), "gh pr checks", checks),
     threads: nodes.map((node) => ({
