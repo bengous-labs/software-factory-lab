@@ -6,6 +6,7 @@ import {
   argsOf,
   benchEnvOf,
   claudeArgv,
+  cloneSteps,
   closingOf,
   gitConfigOf,
   HELP,
@@ -98,13 +99,30 @@ test("a session's environment keeps no token nor session bus, and gives gh and g
     GH_CONFIG_DIR: "/b/gh",
     GIT_CONFIG_GLOBAL: "/b/gitconfig",
     GIT_CONFIG_NOSYSTEM: "1",
+    GIT_SSH_COMMAND: "false",
   });
 });
 
 test("the bench's git config holds the committer alone, so git finds no credential helper", () => {
   expect(gitConfigOf({ name: "O Wner", email: "o@example.com" })).toBe(
-    "[user]\n\tname = O Wner\n\temail = o@example.com\n",
+    '[user]\n\tname = "O Wner"\n\temail = "o@example.com"\n',
   );
+});
+
+test("the git config quotes a committer whose name git would read as a comment or an escape", () => {
+  expect(gitConfigOf({ name: String.raw`A; B # "C" \D`, email: "o@example.com" })).toBe(
+    '[user]\n\tname = "A; B # \\"C\\" \\\\D"\n\temail = "o@example.com"\n',
+  );
+});
+
+test("a clone copies its objects, takes origin/dev from the checkout's, and keeps no path to the checkout", () => {
+  expect(cloneSteps({ checkout: "/c", dir: "/b/run-1", run: 1, head: "abc" })).toEqual([
+    ["git", "clone", "--quiet", "--no-hardlinks", "/c", "/b/run-1"],
+    ["git", "-C", "/b/run-1", "fetch", "--quiet", "/c", "+refs/remotes/origin/dev:refs/remotes/origin/dev"],
+    ["git", "-C", "/b/run-1", "switch", "--quiet", "-c", "bench/run-1", "abc"],
+    ["git", "-C", "/b/run-1", "remote", "set-url", "origin", "no-remote"],
+    ["git", "-C", "/b/run-1", "reflog", "expire", "--expire=now", "--all"],
+  ]);
 });
 
 test("the prompt holds the issue, and names no section the role's text moved away", () => {

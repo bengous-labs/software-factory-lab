@@ -15,6 +15,7 @@ import {
   argsOf,
   benchEnvOf,
   claudeArgv,
+  cloneSteps,
   closingOf,
   gitConfigOf,
   HELP,
@@ -102,11 +103,10 @@ async function realIo(): Promise<BenchIo> {
     settings,
     prepare: async (run) => {
       const dir = join(root, `run-${run}`);
-      // No hardlink: a session that rewrites its clone's objects must not rewrite the checkout's.
-      await $`git clone --quiet --no-hardlinks ${checkout} ${dir}`;
-      await $`git -C ${dir} switch --quiet -c bench/run-${run} ${head}`;
-      // The clone keeps origin's branches but not the checkout's path, so no git command finds it there.
-      await $`git -C ${dir} remote set-url origin no-remote`;
+
+      for (const step of cloneSteps({ checkout, dir, run, head })) {
+        await $`${step}`.quiet();
+      }
 
       return dir;
     },

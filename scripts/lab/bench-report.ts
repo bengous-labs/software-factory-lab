@@ -18,14 +18,16 @@ transcript holds an output style reminder other than the Worker's.
 
 The sessions run with the Worker's settings, but LAB_ROLE=worker in place of LAB_AUTHOR=1: they read
 the Worker's role and the guard refuses a git push written plainly, but they are no Author, so the Stop
-hook publishes nothing. Each clone copies its objects, and its origin names no path. Their environment
-holds no token and no session bus, gh reads an empty config and git a config of the bench that holds
-the committer alone. claude logs in through the credentials under CLAUDE_CONFIG_DIR: an API key in the
-environment does not reach it.
+hook publishes nothing. Each clone copies its objects, and neither its origin nor its reflog names the
+checkout's path. Their environment holds no token and no session bus, gh reads an empty config, git a
+config of the bench that holds the committer alone, and git over ssh fails. claude logs in through the
+credentials under CLAUDE_CONFIG_DIR: an API key in the environment does not reach it. The Owner's user
+settings apply, as they do to a Worker.
 
 The bench is no sandbox. The sessions edit files and run git and bun with no prompt, and the hooks that
 guard them run from their own clone: a session that means to can get around the guard, rewrite its
-hooks, and reach what the Owner's files hold. Run a bench only on a change you have read.
+hooks, push to a path or URL it finds, and reach what the Owner's files hold. Run a bench only on a
+change you have read.
 
   --issue <file>   the fake issue, in Markdown
   --runs <n>       how many sessions
@@ -95,8 +97,9 @@ export function workerSettings(ownerClaudeMd: string) {
 }
 
 /**
- * The variables of the launcher's environment a bench session keeps: no secret, so claude logs in through
- * `CLAUDE_CONFIG_DIR`'s credentials, and no session bus, through which git would reach a keyring.
+ * The variables of the launcher's environment a bench session keeps: no token, so claude logs in through
+ * `CLAUDE_CONFIG_DIR`'s credentials, and no session bus, through which git would reach a keyring. A proxy
+ * URL that holds a password reaches the session with it.
  */
 const KEPT = [
   "HOME",
@@ -135,12 +138,41 @@ export function benchEnvOf(env: Readonly<Record<string, string | undefined>>, co
     ["GH_CONFIG_DIR", configs.ghConfigDir] as const,
     ["GIT_CONFIG_GLOBAL", configs.gitConfig] as const,
     ["GIT_CONFIG_NOSYSTEM", "1"] as const,
+    ["GIT_SSH_COMMAND", "false"] as const,
   ]);
 }
 
+/** `value` as a git config value: quoted, its `\` and `"` escaped, so no `#` or `;` in it starts a comment. */
+const configValue = (value: string): string =>
+  `"${value.replaceAll("\\", String.raw`\\`).replaceAll('"', String.raw`\"`)}"`;
+
 /** The bench's global git config: the committer the sessions commit as, and nothing else. */
 export function gitConfigOf(user: { readonly name: string; readonly email: string }): string {
-  return `[user]\n\tname = ${user.name}\n\temail = ${user.email}\n`;
+  return `[user]\n\tname = ${configValue(user.name)}\n\temail = ${configValue(user.email)}\n`;
+}
+
+export interface Clone {
+  readonly checkout: string;
+  readonly dir: string;
+  readonly run: number;
+  readonly head: string;
+}
+
+/**
+ * The git commands that make the clone of a run: its own copy of the objects, the checkout's `origin/dev`
+ * as its own, so a base of `origin/dev` is the Trunk's and not the checkout's local `dev`, then a branch at
+ * `head`. Last, it forgets the checkout's path: in origin's URL, and in the reflog's `clone: from` entry.
+ */
+export function cloneSteps({ checkout, dir, run, head }: Clone): string[][] {
+  const inClone = (...words: string[]): string[] => ["git", "-C", dir, ...words];
+
+  return [
+    ["git", "clone", "--quiet", "--no-hardlinks", checkout, dir],
+    inClone("fetch", "--quiet", checkout, "+refs/remotes/origin/dev:refs/remotes/origin/dev"),
+    inClone("switch", "--quiet", "-c", `bench/run-${run}`, head),
+    inClone("remote", "set-url", "origin", "no-remote"),
+    inClone("reflog", "expire", "--expire=now", "--all"),
+  ];
 }
 
 export function workerPrompt(issue: string): string {
