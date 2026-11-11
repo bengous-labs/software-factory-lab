@@ -206,7 +206,7 @@ describe("dispatch", () => {
     });
 
     expect(await failureOf(dispatch(ports, REQUEST))).toBe(
-      `claude --bg exited 1: no such model. Remove what it left: git worktree remove ${WORKTREE} exited 128: worktree is locked; git branch -D issue/7-add-a-flag exited 1: branch is checked out`,
+      `claude --bg exited 1: no such model. Its worktree and branch are left (git worktree remove ${WORKTREE} exited 128: worktree is locked; git branch -D issue/7-add-a-flag exited 1: branch is checked out): remove them with git worktree remove --force ${WORKTREE} && git branch -D issue/7-add-a-flag`,
     );
     expect(calls.slice(-2).map((call) => call.argv.slice(0, 3).join(" "))).toEqual([
       "git worktree remove",

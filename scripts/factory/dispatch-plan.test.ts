@@ -148,19 +148,26 @@ describe("launchArgvOf", () => {
 });
 
 describe("launchEnvOf", () => {
-  test("keeps what Claude Code needs to authenticate and reach the API", () => {
+  test("keeps what Claude Code needs to reach the API, proxies in either case", () => {
     const reach = {
-      ANTHROPIC_API_KEY: "k",
-      CLAUDE_CODE_OAUTH_TOKEN: "o",
       HTTPS_PROXY: "http://p",
       HTTP_PROXY: "http://p",
+      ALL_PROXY: "socks5://p",
       NO_PROXY: "localhost",
+      https_proxy: "http://p",
+      http_proxy: "http://p",
+      all_proxy: "socks5://p",
+      no_proxy: "localhost",
       NODE_EXTRA_CA_CERTS: "/ca.pem",
       TMPDIR: "/tmp/x",
       XDG_CONFIG_HOME: "/h/.config",
     };
 
     expect(launchEnvOf({ ...reach, GH_TOKEN: "t" })).toEqual(reach);
+  });
+
+  test("keeps no API credential of the caller, which the Worker could read with env", () => {
+    expect(launchEnvOf({ HOME: "/h", ANTHROPIC_API_KEY: "k", CLAUDE_CODE_OAUTH_TOKEN: "o" })).toEqual({ HOME: "/h" });
   });
 
   test("keeps only what a session needs to start, so no token or Author marker of the caller reaches it", () => {

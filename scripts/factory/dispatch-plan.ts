@@ -137,10 +137,11 @@ export function launchArgvOf({ issue, model, settings, prompt }: Launch): string
 }
 
 /**
- * The variables the launch keeps of the caller's environment: what a session needs to start, to
- * authenticate to the API and to reach it. When this launch starts Claude Code's background service,
+ * The variables the launch keeps of the caller's environment: what a session needs to start and to
+ * reach the API. No credential: a Worker runs code and could read it with `env`, so it authenticates
+ * from `CLAUDE_CONFIG_DIR` or its settings. When this launch starts Claude Code's background service,
  * the service gives its environment to every session started after it, so the caller's `GH_TOKEN`,
- * Author marker or session variables stay out of it. A service already running keeps the environment
+ * API credentials, Author marker or session variables stay out of it. A service already running keeps the environment
  * it started with; the Worker settings' `env` still sets the Worker's identity over it.
  */
 const KEPT = [
@@ -154,11 +155,14 @@ const KEPT = [
   "XDG_RUNTIME_DIR",
   "XDG_CONFIG_HOME",
   "CLAUDE_CONFIG_DIR",
-  "ANTHROPIC_API_KEY",
-  "CLAUDE_CODE_OAUTH_TOKEN",
   "HTTPS_PROXY",
   "HTTP_PROXY",
+  "ALL_PROXY",
   "NO_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "all_proxy",
+  "no_proxy",
   "NODE_EXTRA_CA_CERTS",
 ];
 

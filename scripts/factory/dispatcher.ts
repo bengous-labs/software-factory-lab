@@ -186,9 +186,12 @@ export async function dispatch(
       at,
     );
 
-    throw new Error(
-      `${failureOf("claude --bg", launched)}${left.length === 0 ? "" : `. Remove what it left: ${left.join("; ")}`}`,
-    );
+    const leftover =
+      left.length === 0
+        ? ""
+        : `. Its worktree and branch are left (${left.join("; ")}): remove them with git worktree remove --force ${worktree} && git branch -D ${branch}`;
+
+    throw new Error(`${failureOf("claude --bg", launched)}${leftover}`);
   }
 
   return { issue, title, worktree, branch, session: sessionIdOf(launched.stdout) };
