@@ -1,10 +1,10 @@
 /**
- * The watch's reads: one reading of the factory from GitHub, the sessions and `.lab/outcomes.log` of
- * the main checkout, then the step `watch-plan.ts` decides over it.
+ * The watch's reads: one reading of the factory from GitHub, the PRs then the checks on each open head,
+ * the sessions and `.lab/outcomes.log` of the main checkout, then the step `watch-plan.ts` decides over it.
  */
 
 import type { Run, RunOptions } from "../land-loop/ports/run.ts";
-import { githubOf, sessionsOf, stepOf, stopsOf, watchQueryOf } from "./watch-plan.ts";
+import { checkRunsPathOf, checksOf, githubOf, sessionsOf, stepOf, stopsOf, watchQueryOf } from "./watch-plan.ts";
 import type { Memory, Reading, WatchStep } from "./watch-plan.ts";
 
 export interface WatchPorts {
@@ -57,10 +57,19 @@ async function readFactory(
     at,
   );
 
+  const github = githubOf(answer);
+
+  const read = await Promise.all(
+    github.prs.map(async (pr) => ({
+      ...pr,
+      checks: pr.state === "OPEN" ? checksOf(await out(run, ["gh", "api", checkRunsPathOf(pr.head)], at)) : [],
+    })),
+  );
+
   const agents = await out(run, ["claude", "agents", "--json"], at);
   const log = await readText(`${checkout}/.lab/outcomes.log`);
 
-  return { ...githubOf(answer), sessions: sessionsOf(agents), stops: stopsOf(log) };
+  return { prs: read, issues: github.issues, sessions: sessionsOf(agents), stops: stopsOf(log) };
 }
 
 /** One turn of the watch: reads the factory, then decides what to print. */

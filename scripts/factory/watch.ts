@@ -11,7 +11,7 @@
  *   bun scripts/factory/watch.ts [<issue>...]
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -61,7 +61,9 @@ for (;;) {
 
     state.memory = step.memory;
     state.failure = null;
-    writeFileSync(file, JSON.stringify(state.memory));
+    // The Monitor tool kills the watch when it expires: a rename never leaves the memory half written.
+    writeFileSync(`${file}.tmp`, JSON.stringify(state.memory));
+    renameSync(`${file}.tmp`, file);
 
     if (step.ends) {
       process.exit(0);

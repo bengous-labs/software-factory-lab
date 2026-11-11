@@ -19,12 +19,32 @@ const PR = {
   labels: { nodes: [] },
   comments: { nodes: [] },
   reviewThreads: { nodes: [] },
-  commits: { nodes: [] },
 };
 
 const ANSWER = JSON.stringify({
   data: { repository: { i7: { number: 7, state: "CLOSED", closedByPullRequestsReferences: { nodes: [PR] } }, p9: PR } },
 });
+
+const OPEN_ANSWER = JSON.stringify({
+  data: { repository: { open: { nodes: [{ ...PR, number: 10, state: "OPEN", headRefOid: "h2" }] } } },
+});
+
+const HELD = "Held for the Owner: a path. Waiting for the Owner's Land approval (label land-ok).";
+
+const CHECKS = JSON.stringify({
+  check_runs: [
+    {
+      name: "land-gate",
+      status: "in_progress",
+      conclusion: null,
+      started_at: "t1",
+      output: { title: HELD },
+      app: { slug: "bengous-labs-agents" },
+    },
+  ],
+});
+
+const CHECKS_PATH = "repos/{owner}/{repo}/commits/h2/check-runs?filter=latest&per_page=100";
 
 const AGENTS = JSON.stringify([{ sessionId: "s-worker", pid: 1, status: "idle" }]);
 
@@ -42,6 +62,7 @@ function world(answers: Partial<Record<string, Ran>> = {}) {
 
   const defaults = new Map<string, Ran>([
     ["gh api graphql", { code: 0, stdout: ANSWER, stderr: "" }],
+    [`gh api ${CHECKS_PATH}`, { code: 0, stdout: CHECKS, stderr: "" }],
     ["claude agents --json", { code: 0, stdout: AGENTS, stderr: "" }],
     ["git rev-parse --path-format=absolute", { code: 0, stdout: "/repo/.git\n", stderr: "" }],
   ]);
@@ -82,6 +103,19 @@ describe("watchTurn", () => {
     expect(calls[0]?.argv[4]).toContain("i7:issue(number:7)");
     expect(calls[0]?.argv[4]).toContain("p9:pullRequest(number:9)");
     expect(calls[0]?.argv.slice(5)).toEqual(["-F", "owner={owner}", "-F", "name={repo}"]);
+  });
+
+  test("reads the checks of each open PR's head, apart from the PR", async () => {
+    const { ports, calls } = world({ "gh api graphql": { code: 0, stdout: OPEN_ANSWER, stderr: "" } });
+
+    const step = await watchTurn(ports, { checkout: "/repo", issues: [], memory: EMPTY_MEMORY, now: NOW });
+
+    expect(step.lines).toEqual([`PR #10 (issue #7), its Land gate: ${HELD} https://github.com/o/r/pull/9`]);
+    expect(calls.map((call) => call.argv.slice(0, 3).join(" "))).toEqual([
+      "gh api graphql",
+      `gh api ${CHECKS_PATH}`,
+      "claude agents --json",
+    ]);
   });
 
   test("a command that fails throws, with what it printed", async () => {

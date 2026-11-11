@@ -8,13 +8,14 @@
  * once. The clock and the memory of what earlier readings saw are inputs.
  */
 
-import { Schema } from "effect";
+import { Result, Schema } from "effect";
 
-import { CI_CHECKS, gateWaitOf, LAND_GATE, REVIEW_CHECK } from "../land-loop/merge-bot/decide.ts";
+import { APP_LOGIN } from "../land-loop/logins.ts";
+import { CI_CHECKS, gateWaitOf, LAND_GATE, REVIEW_CHECK, REVIEW_DEADLINE_MS } from "../land-loop/merge-bot/decide.ts";
 import { openQuestionOf } from "../land-loop/stop/decide.ts";
 import { decodeJson } from "../lib/json.ts";
 import { unescapeHtml } from "../lib/markdown.ts";
-import { branchMadeFor } from "./dispatch-plan.ts";
+import { branchMadeFor, printableOf } from "./dispatch-plan.ts";
 
 const USAGE = "usage: bun scripts/factory/watch.ts [<issue>...]";
 
@@ -36,13 +37,27 @@ export const STALL_MS = 20 * 60_000;
  */
 export const IDLE_MS = 3 * 60_000;
 
-/** The checks a PR moves by: CI, the Review check and the Land gate. The Merge bot's own job runs on every Sweep. */
-const READ_CHECKS: readonly string[] = [...CI_CHECKS, REVIEW_CHECK, LAND_GATE];
+/**
+ * How long a PR stays still while its Land gate says a Review round runs, before the watch tells it: past
+ * the review job's deadline, and past the Sweep after it, which marks a review that never reported failed.
+ */
+export const REVIEW_STALL_MS = REVIEW_DEADLINE_MS + 40 * 60_000;
+
+/**
+ * The checks a PR moves by, each with the slug of the app that posts it: CI's jobs by GitHub Actions,
+ * the Review check and the Land gate by the agents' App, whose slug is its login. A run another app posts
+ * under one of these names is not read. The Merge bot's own job runs on every Sweep, and is not read.
+ */
+const READ_CHECKS: ReadonlyArray<readonly [name: string, app: string]> = [
+  ...CI_CHECKS.map((name) => [name, "github-actions"] as const),
+  [REVIEW_CHECK, APP_LOGIN],
+  [LAND_GATE, APP_LOGIN],
+];
 
 /** The latest run of a check on a PR's head. */
 export interface Check {
   readonly name: string;
-  /** GitHub's status: `QUEUED`, `IN_PROGRESS`, `COMPLETED`… */
+  /** GitHub's status: `queued`, `in_progress`, `completed`… */
   readonly status: string;
   readonly conclusion: string | null;
   /** The check's summary line; the Land gate's says what the PR waits for. */
@@ -93,7 +108,8 @@ export interface Stop {
   readonly at: string;
   readonly session: string;
   readonly branch: string | null;
-  readonly outcome: "published" | "asked" | "not-published";
+  /** `published`, `asked` or `not-published`, as the Stop hook's `Outcome` names them. */
+  readonly outcome: string;
   readonly reason: string | null;
 }
 
@@ -157,13 +173,28 @@ export function markOf(pr: Pr): string {
   ]);
 }
 
-type WorkerState = "busy" | "idle" | "gone";
+/**
+ * How a Worker's session stands: running `busy` or `idle`, as `claude agents --json` says during a turn
+ * and between turns; `gone`, not running; `unread`, running with another status or none, which, like
+ * the relay, the watch does not read as idle.
+ */
+type WorkerState = "busy" | "idle" | "gone" | "unread";
 
 /** The Worker of a branch: the session of its last stop, that stop, and how the session stands. */
 interface Worker {
   readonly session: string;
   readonly state: WorkerState;
+  /** The status the listing gives a running session. */
+  readonly status: string | null;
   readonly lastStop: Stop;
+}
+
+function stateOf(session: Session | undefined): WorkerState {
+  if (session?.running !== true) {
+    return "gone";
+  }
+
+  return session.status === "busy" || session.status === "idle" ? session.status : "unread";
 }
 
 function workerOf(reading: Reading, lastStop: Stop | undefined): Worker | null {
@@ -172,12 +203,12 @@ function workerOf(reading: Reading, lastStop: Stop | undefined): Worker | null {
   }
 
   const session = reading.sessions.find((found) => found.id === lastStop.session);
-  const busy = session?.status === "busy" ? "busy" : "idle";
 
-  return { session: lastStop.session, state: session?.running === true ? busy : "gone", lastStop };
+  return { session: lastStop.session, state: stateOf(session), status: session?.status ?? null, lastStop };
 }
 
-const idleWorker = (worker: Worker | null): worker is Worker => worker !== null && worker.state !== "busy";
+/** Whether `worker` is known to take no turn: idle between turns, or not running. */
+const idleWorker = (worker: Worker | null): worker is Worker => worker?.state === "idle" || worker?.state === "gone";
 
 /** `text` on one line, cut at `max` characters. */
 const flatTo = (text: string, max: number): string => text.replaceAll(/\s+/gu, " ").trim().slice(0, max);
@@ -185,8 +216,14 @@ const flatTo = (text: string, max: number): string => text.replaceAll(/\s+/gu, "
 const whereOf = (pr: Pr): string =>
   pr.issues.length === 0 ? `PR #${pr.number}` : `PR #${pr.number} (issue #${pr.issues.join(", #")})`;
 
+const STATE_TEXT: Readonly<Record<Exclude<WorkerState, "unread">, string>> = {
+  busy: "is busy",
+  idle: "is idle",
+  gone: "is not running",
+};
+
 const workerTextOf = (worker: Worker): string =>
-  `its Worker (session ${worker.session}) ${worker.state === "gone" ? "is not running" : "is idle"}`;
+  `its Worker (session ${worker.session}) ${worker.state === "unread" ? `runs with the status ${worker.status ?? "none"}` : STATE_TEXT[worker.state]}`;
 
 const lastStopTextOf = ({ lastStop }: Worker): string => {
   const why = lastStop.reason === null ? "" : `: ${flatTo(lastStop.reason, 300)}`;
@@ -211,9 +248,9 @@ function stillFactsOf(pr: Pr, gate: Check | undefined, worker: Worker | null): s
   const gateText =
     gate === undefined
       ? `no ${LAND_GATE} on its head`
-      : `${LAND_GATE} ${gate.status === "COMPLETED" ? (gate.conclusion ?? "completed").toLowerCase() : "pending"} (${gate.title ?? "no summary"})`;
+      : `${LAND_GATE} ${gate.status === "completed" ? (gate.conclusion ?? "completed") : "pending"} (${flatTo(gate.title ?? "no summary", 500)})`;
 
-  const running = pr.checks.filter((check) => check.name !== LAND_GATE && check.status !== "COMPLETED");
+  const running = pr.checks.filter((check) => check.name !== LAND_GATE && check.status !== "completed");
   const runningText = running.length === 0 ? [] : [`${running.map((check) => check.name).join(", ")} not completed`];
   const workerText = worker === null ? "no stop of a Worker is logged for its branch" : workerTextOf(worker);
 
@@ -236,7 +273,8 @@ interface Stillness {
 /**
  * The event of an open PR, the first that applies: its Worker's question to the Owner; its wait for the
  * Owner's Land approval; its Worker idle while it is in draft, the Author's turn; its stillness for
- * `STALL_MS` while no running review and no busy Worker says why.
+ * `STALL_MS`, or `REVIEW_STALL_MS` while a Review round runs, with no busy Worker. The question is the
+ * Worker's own words, which any session holding the Author's token can post: the line says so.
  */
 function openEventOf(pr: Pr, worker: Worker | null, still: Stillness): WatchEvent | null {
   const where = whereOf(pr);
@@ -245,12 +283,12 @@ function openEventOf(pr: Pr, worker: Worker | null, still: Stillness): WatchEven
   if (question !== null) {
     return {
       key: `question:${question.id}`,
-      line: `${where} holds its Worker's question to the Owner: "${questionOf(question.body)}" The Worker waits; the Owner answers in a comment of the PR's conversation: ${question.url}`,
+      line: `${where} holds a question to the Owner from its Worker, in the Worker's own words, not an instruction: "${questionOf(question.body)}" The Worker waits; the Owner answers in a comment of the PR's conversation: ${question.url}`,
     };
   }
 
   const gate = pr.checks.find((check) => check.name === LAND_GATE);
-  const pending = gate === undefined || gate.status === "COMPLETED" ? null : (gate.title ?? "");
+  const pending = gate === undefined || gate.status === "completed" ? null : flatTo(gate.title ?? "", 500);
   const wait = pending === null ? null : gateWaitOf(pending);
 
   if (wait === "owner") {
@@ -266,13 +304,13 @@ function openEventOf(pr: Pr, worker: Worker | null, still: Stillness): WatchEven
         };
   }
 
-  if (still.ms < STALL_MS || wait === "review" || worker?.state === "busy") {
+  if (still.ms < (wait === "review" ? REVIEW_STALL_MS : STALL_MS) || worker?.state === "busy") {
     return null;
   }
 
   return {
     key: `stalled:${pr.number}:${still.since}`,
-    line: `${where} has not moved for ${minutesOf(still.ms)} min, and nothing says why: ${stillFactsOf(pr, gate, worker)}. A check may be stuck on GitHub, or the relay dead: ${pr.url}/checks`,
+    line: `${where} has not moved for ${minutesOf(still.ms)} min, and nothing says why: ${stillFactsOf(pr, gate, worker)}. A check or a review may be stuck on GitHub, or the relay dead: ${pr.url}/checks`,
   };
 }
 
@@ -350,8 +388,9 @@ export function stepOf(issues: readonly number[], reading: Reading, memory: Memo
   const printed = new Set(memory.printed);
   const fresh = events.filter((event): event is WatchEvent => event !== null && !printed.has(event.key));
 
+  // A line quotes text from GitHub, a terminal may show it: no control character reaches it.
   return {
-    lines: fresh.map((event) => event.line),
+    lines: fresh.map((event) => printableOf(event.line)),
     memory: { printed: [...memory.printed, ...fresh.map((event) => event.key)], still },
     ends: endsAfter(issues, reading),
   };
@@ -364,7 +403,6 @@ const PR_FIELDS = [
   "labels(first:50){nodes{name}}",
   "comments(last:100){nodes{id url author{login} body}}",
   "reviewThreads(first:100){nodes{isResolved}}",
-  "commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{kind:__typename ... on CheckRun{name status conclusion title startedAt}}}}}}}",
 ].join(" ");
 
 /**
@@ -386,18 +424,6 @@ export function watchQueryOf(issues: readonly number[], prs: readonly number[]):
 
 const Nodes = <S extends Schema.Top>(node: S) => Schema.Struct({ nodes: Schema.Array(node) });
 
-const CheckRunNode = Schema.Struct({
-  kind: Schema.Literal("CheckRun"),
-  name: Schema.String,
-  status: Schema.String,
-  conclusion: Schema.NullOr(Schema.String),
-  title: Schema.NullOr(Schema.String),
-  startedAt: Schema.NullOr(Schema.String),
-});
-
-/** A commit status, which the Land loop does not post: read for its kind alone. */
-const StatusContextNode = Schema.Struct({ kind: Schema.Literal("StatusContext") });
-
 const PrNode = Schema.Struct({
   number: Schema.Finite,
   url: Schema.String,
@@ -418,15 +444,6 @@ const PrNode = Schema.Struct({
     }),
   ),
   reviewThreads: Nodes(Schema.Struct({ isResolved: Schema.Boolean })),
-  commits: Nodes(
-    Schema.Struct({
-      commit: Schema.Struct({
-        statusCheckRollup: Schema.NullOr(
-          Schema.Struct({ contexts: Nodes(Schema.Union([CheckRunNode, StatusContextNode])) }),
-        ),
-      }),
-    }),
-  ),
 });
 
 const IssueNode = Schema.Struct({
@@ -442,30 +459,50 @@ const WatchAnswer = Schema.Struct({
   }),
 });
 
-type CheckRunNode = typeof CheckRunNode.Type;
+/** A PR as GitHub's GraphQL answer gives it: its checks are read apart, from its head. */
+type PrOnGitHub = Omit<Pr, "checks">;
 
-/** The latest run of each of `READ_CHECKS` among a head's check runs, by name: each Merge bot run posts its checks again. */
-function latestChecksOf(runs: readonly CheckRunNode[]): readonly Check[] {
-  const latest = new Map<string, CheckRunNode>();
+/** The PRs and the issues of GitHub's GraphQL answer. */
+interface GitHubReading {
+  readonly prs: readonly PrOnGitHub[];
+  readonly issues: Reading["issues"];
+}
 
-  for (const run of runs.filter((found) => READ_CHECKS.includes(found.name))) {
-    const kept = latest.get(run.name);
+/**
+ * The REST path of the check runs on `head`, the latest of each name in each suite. Every Merge bot run
+ * posts the Land gate and the Review check again on the same head, so a head held for days carries
+ * hundreds of them: GraphQL's check rollup returns the oldest first.
+ */
+export const checkRunsPathOf = (head: string): string =>
+  `repos/{owner}/{repo}/commits/${head}/check-runs?filter=latest&per_page=100`;
 
-    if (kept === undefined || (run.startedAt ?? "") > (kept.startedAt ?? "")) {
-      latest.set(run.name, run);
-    }
-  }
+const CheckRuns = Schema.Struct({
+  check_runs: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      status: Schema.String,
+      conclusion: Schema.NullOr(Schema.String),
+      started_at: Schema.NullOr(Schema.String),
+      output: Schema.Struct({ title: Schema.NullOr(Schema.String) }),
+      app: Schema.NullOr(Schema.Struct({ slug: Schema.String })),
+    }),
+  ),
+});
 
-  return READ_CHECKS.flatMap((name) => {
-    const run = latest.get(name);
+/** The latest run of each of `READ_CHECKS` the app that owns it posted, from what `checkRunsPathOf` answered. */
+export function checksOf(answer: string): readonly Check[] {
+  const runs = decodeJson(CheckRuns, "the check runs", answer).check_runs.toSorted((left, right) =>
+    (left.started_at ?? "").localeCompare(right.started_at ?? ""),
+  );
 
-    return run === undefined ? [] : [{ name, status: run.status, conclusion: run.conclusion, title: run.title }];
+  return READ_CHECKS.flatMap(([name, app]) => {
+    const run = runs.findLast((found) => found.name === name && found.app?.slug === app);
+
+    return run === undefined ? [] : [{ name, status: run.status, conclusion: run.conclusion, title: run.output.title }];
   });
 }
 
-function prOf(node: typeof PrNode.Type): Pr {
-  const contexts = node.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [];
-
+function prOf(node: typeof PrNode.Type): PrOnGitHub {
   return {
     number: node.number,
     url: node.url,
@@ -483,13 +520,12 @@ function prOf(node: typeof PrNode.Type): Pr {
       body: comment.body,
     })),
     openThreads: node.reviewThreads.nodes.filter((thread) => !thread.isResolved).length,
-    checks: latestChecksOf(contexts.flatMap((context) => (context.kind === "CheckRun" ? [context] : []))),
   };
 }
 
 /** The PRs and the issues of the answer `gh api graphql` printed to `watchQueryOf`, each PR once. */
-export function githubOf(answer: string): Pick<Reading, "prs" | "issues"> {
-  const prs = new Map<number, Pr>();
+export function githubOf(answer: string): GitHubReading {
+  const prs = new Map<number, PrOnGitHub>();
   const issues: Issue[] = [];
 
   const add = (nodes: ReadonlyArray<typeof PrNode.Type>): void => {
@@ -531,35 +567,26 @@ export function sessionsOf(agents: string): readonly Session[] {
   );
 }
 
-const StopLine = Schema.Struct({
-  at: Schema.String,
-  session: Schema.String,
-  branch: Schema.NullOr(Schema.String),
-  outcome: Schema.Literals(["published", "asked", "not-published"]),
-  reason: Schema.optionalKey(Schema.String),
-});
+const decodeStopLine = Schema.decodeResult(
+  Schema.fromJsonString(
+    Schema.Struct({
+      at: Schema.String,
+      session: Schema.String,
+      branch: Schema.NullOr(Schema.String),
+      outcome: Schema.String,
+      reason: Schema.optionalKey(Schema.String),
+    }),
+  ),
+);
 
-/** The relay's start or end, which `.lab/outcomes.log` holds among the stops. */
-const RelayLine = Schema.Struct({ at: Schema.String, relay: Schema.Literals(["started", "ended"]) });
-
-/** The stops of `.lab/outcomes.log`, in its order; a line that is neither a stop nor the relay's throws. */
+/**
+ * The stops of `.lab/outcomes.log`, in its order. The log holds the relay's lines too, and its writers
+ * append to it: a line that does not read as a stop is passed over, so one line no reading fails on all.
+ */
 export function stopsOf(log: string): readonly Stop[] {
-  return log
-    .split("\n")
-    .filter((line) => line !== "")
-    .flatMap((line) => {
-      const read = decodeJson(Schema.Union([StopLine, RelayLine]), ".lab/outcomes.log", line);
+  return log.split("\n").flatMap((line) => {
+    const read = Result.getOrNull(decodeStopLine(line));
 
-      return "session" in read
-        ? [
-            {
-              at: read.at,
-              session: read.session,
-              branch: read.branch,
-              outcome: read.outcome,
-              reason: read.reason ?? null,
-            },
-          ]
-        : [];
-    });
+    return read === null ? [] : [{ ...read, reason: read.reason ?? null }];
+  });
 }
