@@ -1064,7 +1064,7 @@ describe("Land approval across a patch change", () => {
 
     const steps = stepsOf(snapshot);
 
-    expect(steps.map((step) => step.kind)).toEqual(["remove-land-approval", "owner-comment", "record", "route"]);
+    expect(steps.map((step) => step.kind)).toEqual(["owner-comment", "remove-land-approval", "record", "route"]);
     expect(steps[2]).toEqual({ kind: "record", record: { ...EMPTY_RECORD, landOkPatch: null } });
   });
 
@@ -1081,14 +1081,32 @@ const checksOf = (snapshot: Snapshot): string[] =>
     step.kind === "review-check" || step.kind === "land-gate" ? [step.check.summary] : [],
   );
 
+/** The times a Land approval is weighed against: the head pushed at `headPushedAt`, and no review of the App. */
+const pushedOnly = (headPushedAt: string | null) => ({ headPushedAt, reviewedAt: null });
+
 describe("landApprovalCounts", () => {
   test("the owner's Land approval counts when put after the head was pushed, never before, and never someone else's", () => {
-    expect(landApprovalCounts(true, "2026-11-05T20:00:00Z", "2026-11-05T19:00:00Z")).toBe(true);
-    expect(landApprovalCounts(true, "2026-11-05T18:00:00Z", "2026-11-05T19:00:00Z")).toBe(false);
-    expect(landApprovalCounts(false, "2026-11-05T20:00:00Z", "2026-11-05T19:00:00Z")).toBe(false);
-    expect(landApprovalCounts(true, null, null)).toBe(false);
-    expect(landApprovalCounts(true, "2026-11-05T20:00:00Z", null)).toBe(true);
-    expect(landApprovalCounts(true, "2026-11-05T19:00:00Z", "2026-11-05T19:00:00Z")).toBe(true);
+    expect(landApprovalCounts(true, "2026-11-05T20:00:00Z", pushedOnly("2026-11-05T19:00:00Z"))).toBe(true);
+    expect(landApprovalCounts(true, "2026-11-05T18:00:00Z", pushedOnly("2026-11-05T19:00:00Z"))).toBe(false);
+    expect(landApprovalCounts(false, "2026-11-05T20:00:00Z", pushedOnly("2026-11-05T19:00:00Z"))).toBe(false);
+    expect(landApprovalCounts(true, null, pushedOnly(null))).toBe(false);
+    expect(landApprovalCounts(true, "2026-11-05T20:00:00Z", pushedOnly(null))).toBe(true);
+    expect(landApprovalCounts(true, "2026-11-05T19:00:00Z", pushedOnly("2026-11-05T19:00:00Z"))).toBe(true);
+  });
+
+  test("the owner's Land approval counts only when put after the App's latest review, never within its second: it covers only the findings the Owner could read", () => {
+    const times = { headPushedAt: "2026-11-05T19:00:00Z", reviewedAt: "2026-11-05T20:00:00Z" };
+
+    expect(landApprovalCounts(true, "2026-11-05T20:00:01Z", times)).toBe(true);
+    expect(landApprovalCounts(true, "2026-11-05T20:00:00Z", times)).toBe(false);
+    expect(landApprovalCounts(true, "2026-11-05T19:30:00Z", times)).toBe(false);
+    expect(landApprovalCounts(true, "2026-11-05T18:30:00Z", { ...times, reviewedAt: "2026-11-05T18:00:00Z" })).toBe(
+      false,
+    );
+    expect(landApprovalCounts(true, "2026-11-05T20:00:01Z", { headPushedAt: null, reviewedAt: times.reviewedAt })).toBe(
+      true,
+    );
+    expect(landApprovalCounts(false, "2026-11-05T21:00:00Z", times)).toBe(false);
   });
 
   test("the checks of a landable PR say why: no Important open or review:none, then its land:auto or the Owner's Land approval", () => {
@@ -1536,8 +1554,8 @@ describe("the review job's run", () => {
     };
 
     expect(stepsOf(snapshot).slice(0, 3)).toEqual([
-      { kind: "remove-land-approval" },
       { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+      { kind: "remove-land-approval" },
       {
         kind: "record",
         record: {
@@ -1618,7 +1636,7 @@ describe("the review job's run", () => {
 });
 
 const EARLIER_PATCH_COMMENT =
-  "The Land approval (land-ok) was given for an earlier push, so the Merge bot removed it. The land-gate check of this push says whether it waits for the Owner.";
+  "The Land approval (land-ok) was given before this push or before its latest review, so the Merge bot removed it: an approval covers only what the Owner could read. The land-gate check of this push says whether it waits for the Owner.";
 
 const NOT_OWNER_COMMENT =
   "Only the Owner's Land approval counts: the Merge bot removed a land-ok the Owner did not put.";
@@ -1704,8 +1722,8 @@ describe("why a PR is held, where the Owner looks", () => {
     };
 
     expect(stepsOf(stale).slice(0, 2)).toEqual([
-      { kind: "remove-land-approval" },
       { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+      { kind: "remove-land-approval" },
     ]);
   });
 
@@ -1713,14 +1731,14 @@ describe("why a PR is held, where the Owner looks", () => {
     const pushed = { ...READY, labels: [LAND_APPROVAL_LABEL], landApprovalPutByOwner: true, record: reviewed(LIGHT) };
 
     expect(stepsOf(pushed).slice(0, 2)).toEqual([
-      { kind: "remove-land-approval" },
       { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+      { kind: "remove-land-approval" },
     ]);
 
     for (const landOkPatch of ["patch-0", P1]) {
       expect(stepsOf({ ...pushed, record: reviewed(LIGHT, { landOkPatch }) }).slice(0, 3)).toEqual([
-        { kind: "remove-land-approval" },
         { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+        { kind: "remove-land-approval" },
         { kind: "record", record: reviewed(LIGHT) },
       ]);
     }
@@ -1731,8 +1749,8 @@ describe("why a PR is held, where the Owner looks", () => {
 
     for (const snapshot of [foreign, { ...foreign, record: reviewed(LIGHT, { landOkPatch: P1 }) }]) {
       expect(stepsOf(snapshot).slice(0, 2)).toEqual([
-        { kind: "remove-land-approval" },
         { kind: "owner-comment", body: NOT_OWNER_COMMENT },
+        { kind: "remove-land-approval" },
       ]);
     }
 
@@ -2144,68 +2162,27 @@ describe("the Delta read after Review round 3", () => {
       expect(kinds({ ...asking3, reviewJob: completed(round3) })).toContain("to-draft");
     });
 
-    test("a Land approval given before the Delta read posted a new Important goes, with a comment that says why; one before a read that only reports open ones again stays", () => {
-      const approvedBefore = {
-        ...answering(LIGHT, { review: asked }),
+    test("a Land approval the Owner gave while the Delta read ran stops counting once it posts: the next decision removes it, comment first, and lands nothing", () => {
+      const read1 = answering(LIGHT, { deltaReadPatch: P1, landOkPatch: P1 });
+
+      const before = {
+        ...read1,
+        openImportant: [...ROUND_3, { thread: "T3", review: { patch: P1, round: 4 } }],
         labels: [LAND_APPROVAL_LABEL],
-        landApprovalByOwner: true,
+        landApprovalByOwner: false,
+        landApprovalPutByOwner: true,
       };
 
-      const fresh = read(finding("important"), again("T1"));
-      const steps = stepsOf({ ...approvedBefore, reviewJob: completed(fresh) });
+      const steps = stepsOf(before);
 
-      expect(steps.map((step) => step.kind)).toEqual([
-        "record",
-        "post-review",
-        "resolve-threads",
-        "remove-land-approval",
-        "owner-comment",
-        "record",
-        "review-check",
+      expect(steps.slice(0, 3)).toEqual([
+        { kind: "owner-comment", body: EARLIER_PATCH_COMMENT },
+        { kind: "remove-land-approval" },
+        { kind: "record", record: { ...read1.record, landOkPatch: null } },
       ]);
-      expect(steps).toContainEqual({
-        kind: "owner-comment",
-        body: "A review posted 1 new Important finding(s) after the Land approval (land-ok) was given, so the Merge bot removed it: it covers only the findings the Owner could read. Read them, then add land-ok again to land the PR.",
-      });
-      expect(steps.at(-2)).toMatchObject({ kind: "record", record: { landOkPatch: null, deltaReadPatch: P1 } });
-
-      const reportedAgain = stepsOf({ ...approvedBefore, reviewJob: completed(read(again("T1"))) });
-
-      expect(reportedAgain.map((step) => step.kind)).not.toContain("remove-land-approval");
-      expect(reportedAgain.at(-2)).toMatchObject({ kind: "record", record: { landOkPatch: P1 } });
-    });
-
-    test("a Land approval given while round 3 ran goes once round 3 posts a new Important: it never lands one the Owner could not read", () => {
-      const round3: ReviewState = { kind: "requested", patch: P1, round: 3, runId: 44, at: asked.at };
-
-      const result: ReportedResult = {
-        ...read(finding("important")),
-        request: { ...read().request, round: 3 },
-      };
-
-      const snapshot: Snapshot = {
-        ...READY,
-        labels: [LAND_APPROVAL_LABEL],
-        landApprovalByOwner: true,
-        record: {
-          ...READY.record,
-          reviewedPatch: "patch-0",
-          reviewRounds: 2,
-          importantByRound: [1, 1],
-          triage: { [P1]: { ...LIGHT, land: "owner" } },
-          review: round3,
-        },
-        reviewJob: completed(result),
-      };
-
-      expect(kinds(snapshot)).toContain("remove-land-approval");
-      expect(stepsOf(snapshot).at(-2)).toMatchObject({ kind: "record", record: { landOkPatch: null } });
-
-      const nit: ReportedResult = { ...result, report: { ...result.report, findings: [finding("nit")] } };
-      const nitOnly = { ...snapshot, reviewJob: completed(nit) };
-
-      expect(kinds(nitOnly)).not.toContain("remove-land-approval");
-      expect(stepsOf(nitOnly).at(-2)).toMatchObject({ kind: "record", record: { landOkPatch: P1 } });
+      expect(steps.map((step) => step.kind)).not.toContain("land-open");
+      expect(steps.map((step) => step.kind)).not.toContain("auto-merge");
+      expect(kinds({ ...before, landApprovalByOwner: true })).toContain("land-open");
     });
 
     test("on a PR no one holds for the Owner, an open Important owes no Delta read: only a push routed for one gets it", () => {

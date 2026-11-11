@@ -290,7 +290,7 @@ export interface Snapshot {
    * follows the route.
    */
   readonly humanLabelBy: "merge-bot" | "author" | "other" | null;
-  /** The Land approval label is on the PR and the owner put it there, after this head was pushed. */
+  /** The Land approval label is on the PR and the owner put it there, after this head was pushed and after the App's latest review (`landApprovalCounts`). */
   readonly landApprovalByOwner: boolean;
   /** The Land approval label is on the PR and the owner put it there, before or after this head was pushed. */
   readonly landApprovalPutByOwner: boolean;
@@ -350,13 +350,25 @@ export function patchDeltaStart(base: string, reviewedHead: string | null, ances
   return reviewedHead !== null && ancestorExit === 0 ? reviewedHead : base;
 }
 
-/** The owner's Land approval counts only when it was put after the head it would land was pushed. */
-export function landApprovalCounts(byOwner: boolean, labeledAt: string | null, headPushedAt: string | null): boolean {
+/**
+ * The owner's Land approval counts only when it was put after the head it would land was pushed, and
+ * after the App's latest review, `reviewedAt`, was posted: it covers only the findings the Owner could
+ * read, and a review posted after it, a round or a Delta read, may post one it would land open unread.
+ * Within the second a review is posted, the Owner read none of it.
+ */
+export function landApprovalCounts(
+  byOwner: boolean,
+  labeledAt: string | null,
+  { headPushedAt, reviewedAt }: { readonly headPushedAt: string | null; readonly reviewedAt: string | null },
+): boolean {
   if (!byOwner || labeledAt === null) {
     return false;
   }
 
-  return headPushedAt === null || Date.parse(labeledAt) >= Date.parse(headPushedAt);
+  const labeled = Date.parse(labeledAt);
+  const afterPush = headPushedAt === null || labeled >= Date.parse(headPushedAt);
+
+  return afterPush && (reviewedAt === null || labeled > Date.parse(reviewedAt));
 }
 
 export type CheckState =
@@ -463,7 +475,7 @@ function landApprovalOf(snapshot: Snapshot, record: StateRecord): LandApproval {
 
 /** The comment that says why the Land approval label went. */
 const REMOVAL_COMMENTS: Readonly<Record<NonNullable<LandApproval["removed"]>, string>> = {
-  "earlier-patch": `The Land approval (${LAND_APPROVAL_LABEL}) was given for an earlier push, so the Merge bot removed it. The ${LAND_GATE} check of this push says whether it waits for the Owner.`,
+  "earlier-patch": `The Land approval (${LAND_APPROVAL_LABEL}) was given before this push or before its latest review, so the Merge bot removed it: an approval covers only what the Owner could read. The ${LAND_GATE} check of this push says whether it waits for the Owner.`,
   "not-owner": `Only the Owner's Land approval counts: the Merge bot removed a ${LAND_APPROVAL_LABEL} the Owner did not put.`,
 };
 
@@ -751,31 +763,12 @@ function sendsBack(snapshot: Snapshot, record: StateRecord, result: ReportedResu
 }
 
 /**
- * The comment that says why a Land approval went when a review posted a new Important after it: an
- * approval covers only the findings the Owner could read when giving it.
- */
-const unseenCommentOf = (fresh: number): string =>
-  `A review posted ${fresh} new Important finding(s) after the Land approval (${LAND_APPROVAL_LABEL}) was given, so the Merge bot removed it: it covers only the findings the Owner could read. Read them, then add ${LAND_APPROVAL_LABEL} again to land the PR.`;
-
-/**
- * The steps that remove a Land approval `record` holds for this patch when the review of `result` posts a
- * new Important, one that reports no open thread again: else the approval, given before the review was
- * posted, would land that Important open unread.
- */
-function unseenSteps(record: StateRecord, result: ReportedResult, kept: readonly string[]): readonly Step[] {
-  const fresh = postedFindingsOf(result, kept).filter((finding) => finding.severity === "important").length;
-
-  return fresh > 0 && record.landOkPatch !== null
-    ? [{ kind: "remove-land-approval" }, { kind: "owner-comment", body: unseenCommentOf(fresh) }]
-    : [];
-}
-
-/**
  * The review is posted, the earlier Importants it no longer holds are resolved, the PR goes back to
- * draft when the round asks its Author for something, a Land approval given before a new Important goes,
- * and only then is the round recorded: a run that stops before the record does all of it again. The
- * Review check counts the Important findings open once the review is posted. A Delta read posts its
- * Importants alone: a Nit after Review round 3 is not worth another turn.
+ * draft when the round asks its Author for something, and only then is the round recorded: a run that
+ * stops before the record does all of it again. The Review check counts the Important findings open
+ * once the review is posted. A Delta read posts its Importants alone: a Nit after Review round 3 is not
+ * worth another turn. A Land approval given before the review stops counting once it is posted
+ * (`landApprovalCounts`), and the next decision removes it.
  */
 function postedSteps(snapshot: Snapshot, record: StateRecord, reported: ReportedResult): readonly Step[] {
   const result: ReportedResult =
@@ -790,14 +783,12 @@ function postedSteps(snapshot: Snapshot, record: StateRecord, reported: Reported
       : reported;
 
   const earlier = earlierImportantsOf(result, snapshot.openImportant);
-  const unseen = unseenSteps(record, result, earlier.kept);
 
   return [
     { kind: "post-review", result, heldOpen: earlier.kept },
     ...(earlier.closed.length === 0 ? [] : [{ kind: "resolve-threads", threads: earlier.closed } as const]),
     ...(sendsBack(snapshot, record, result) ? [{ kind: "to-draft" } as const] : []),
-    ...unseen,
-    { kind: "record", record: afterReview(unseen.length === 0 ? record : { ...record, landOkPatch: null }, result) },
+    { kind: "record", record: afterReview(record, result) },
     {
       kind: "review-check",
       check: importantCheckOf(importantOf(result) + earlier.left, snapshot.rejectedImportant),
@@ -983,8 +974,10 @@ export function decide(snapshot: Snapshot): Decision {
   const machine = reviewStepsOf(snapshot, heldAfterRound3(approval.next, snapshot.patch));
   const next = machine.record;
 
+  // The comment goes first: a run that stops between them posts it again rather than never, since the
+  // next run, with the label gone, has no approval left to remove.
   if (approval.removed !== null) {
-    steps.push({ kind: "remove-land-approval" }, { kind: "owner-comment", body: REMOVAL_COMMENTS[approval.removed] });
+    steps.push({ kind: "owner-comment", body: REMOVAL_COMMENTS[approval.removed] }, { kind: "remove-land-approval" });
   }
 
   // Written now: a routing or a review below ends this decision before the Land gate is reached.

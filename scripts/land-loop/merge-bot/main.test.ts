@@ -44,6 +44,7 @@ import {
   labelEventsReader,
   landApprovalByOwnerOf,
   landApprovalPutByOwnerOf,
+  latestReviewAtOf,
   linesOfNumstat,
   ListedPrs,
   notFound,
@@ -55,6 +56,7 @@ import {
   rangeRefspecsOf,
   readsPatchDelta,
   reviewJobReader,
+  reviewsReader,
   routingLineOf,
   routingPolicyAt,
   startOf,
@@ -78,6 +80,16 @@ const PULL = {
   base: { ref: "dev" },
   title: "feat: x",
 };
+
+/** The times a Land approval is weighed against: the head pushed at `headPushedAt`, and no review of the App. */
+const pushedAt = (headPushedAt: string | null) => ({ headPushedAt, reviewedAt: null });
+
+/** A review of the PR by `login`, posted at `submittedAt`, null while pending. */
+const reviewBy = (login: string, submittedAt: string | null) => ({
+  user: { login },
+  body: "Delta read: 1 Important.",
+  submitted_at: submittedAt,
+});
 
 describe("the GitHub answers the Merge bot reads", () => {
   test("a PR whose mergeability GitHub has not computed, from a deleted fork, reads", () => {
@@ -140,8 +152,12 @@ describe("the GitHub answers the Merge bot reads", () => {
       ),
     ).toEqual({ workflow_run_id: 42_364_772_835 });
     expect(
-      decodeJson(PullReviews, "reviews", JSON.stringify([{ id: 1, user: null, body: "b", state: "COMMENTED" }])),
-    ).toEqual([{ user: null, body: "b" }]);
+      decodeJson(
+        PullReviews,
+        "reviews",
+        JSON.stringify([{ id: 1, user: null, body: "b", state: "COMMENTED", submitted_at: "2026-11-05T11:00:00Z" }]),
+      ),
+    ).toEqual([{ user: null, body: "b", submitted_at: "2026-11-05T11:00:00Z" }]);
   });
 
   test("GitHub's null user, actor and App read, and a deleted user's event leaves the Land approval as it was", () => {
@@ -155,9 +171,9 @@ describe("the GitHub answers the Merge bot reads", () => {
       ]),
     );
 
-    expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T10:00:00Z")).toBe(true);
-    expect(landApprovalByOwnerOf(events, "owner", "2026-11-05T12:00:00Z")).toBe(false);
-    expect(landApprovalByOwnerOf(events, "someone", "2026-11-05T10:00:00Z")).toBe(false);
+    expect(landApprovalByOwnerOf(events, "owner", pushedAt("2026-11-05T10:00:00Z"))).toBe(true);
+    expect(landApprovalByOwnerOf(events, "owner", pushedAt("2026-11-05T12:00:00Z"))).toBe(false);
+    expect(landApprovalByOwnerOf(events, "someone", pushedAt("2026-11-05T10:00:00Z"))).toBe(false);
     expect(landApprovalPutByOwnerOf(events, "owner")).toBe(true);
     expect(landApprovalPutByOwnerOf(events, "someone")).toBe(false);
 
@@ -169,7 +185,7 @@ describe("the GitHub answers the Merge bot reads", () => {
       ]),
     );
 
-    expect(landApprovalByOwnerOf(byGhost, "owner", null)).toBe(false);
+    expect(landApprovalByOwnerOf(byGhost, "owner", pushedAt(null))).toBe(false);
 
     const runs = JSON.stringify({
       check_runs: [{ name: "validate", status: "completed", conclusion: "success", app: null, check_suite: { id: 1 } }],
@@ -201,11 +217,66 @@ describe("the GitHub answers the Merge bot reads", () => {
       [ActionsRun, { status: "completed" }],
       [Dispatched, { workflow_run_id: "42" }],
       [PullReviews, [{ user: { login: "a" } }]],
+      [PullReviews, [{ user: null, body: "b" }]],
     ];
 
     for (const [schema, answer] of refused) {
       expect(Result.isFailure(Schema.decodeUnknownResult(schema)(answer))).toBe(true);
     }
+  });
+});
+
+describe("a Land approval and the App's reviews", () => {
+  const APP = "bengous-labs-agents[bot]";
+
+  const events = decodeJson(
+    IssueEvents,
+    "events",
+    JSON.stringify([
+      { event: "labeled", label: { name: "land-ok" }, actor: { login: "owner" }, created_at: "2026-11-05T11:00:00Z" },
+    ]),
+  );
+
+  test("the App's latest review is its last submitted one, whatever the order GitHub lists them in; another login's or a pending one is none", () => {
+    expect(
+      latestReviewAtOf(
+        [
+          reviewBy(APP, "2026-11-05T11:30:00Z"),
+          reviewBy(APP, "2026-11-05T09:00:00Z"),
+          reviewBy("bengous", "2026-11-05T12:00:00Z"),
+          reviewBy(APP, null),
+        ],
+        APP,
+      ),
+    ).toBe("2026-11-05T11:30:00Z");
+    expect(latestReviewAtOf([reviewBy("bengous", "2026-11-05T12:00:00Z")], APP)).toBeNull();
+    expect(latestReviewAtOf([], APP)).toBeNull();
+  });
+
+  test("a land-ok the Owner put before the App's latest review was posted does not count: the Owner could not read it", () => {
+    const headPushedAt = "2026-11-05T10:00:00Z";
+
+    expect(landApprovalByOwnerOf(events, "owner", { headPushedAt, reviewedAt: "2026-11-05T11:30:00Z" })).toBe(false);
+    expect(landApprovalByOwnerOf(events, "owner", { headPushedAt, reviewedAt: "2026-11-05T10:30:00Z" })).toBe(true);
+    expect(landApprovalPutByOwnerOf(events, "owner")).toBe(true);
+  });
+
+  test("every page of the PR's reviews is read, so the latest past the first hundred is found", async () => {
+    const pages = [[reviewBy(APP, "2026-11-05T09:00:00Z")], [reviewBy(APP, "2026-11-05T11:30:00Z")]];
+    const calls: string[][] = [];
+
+    const runner: Run = (argv) => {
+      calls.push([...argv]);
+
+      return Promise.resolve({ code: 0, stdout: JSON.stringify(pages), stderr: "" });
+    };
+
+    const reviews = await reviewsReader(runner)(WHERE, 12);
+
+    expect(calls).toEqual([
+      ["gh", "api", "-X", "GET", "--paginate", "--slurp", "repos/o/r/pulls/12/reviews?per_page=100"],
+    ]);
+    expect(latestReviewAtOf(reviews, APP)).toBe("2026-11-05T11:30:00Z");
   });
 });
 
@@ -236,7 +307,7 @@ describe("the Owner and the Author", () => {
       ]),
     );
 
-    expect(landApprovalByOwnerOf(events, "bengous", "2026-11-05T10:00:00Z")).toBe(false);
+    expect(landApprovalByOwnerOf(events, "bengous", pushedAt("2026-11-05T10:00:00Z"))).toBe(false);
   });
 });
 

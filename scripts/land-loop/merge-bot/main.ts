@@ -224,16 +224,42 @@ export function landApprovalPutByOwnerOf(events: typeof IssueEvents.Type, owner:
   return lastLandApprovalOf(events)?.actor?.login === owner;
 }
 
-/** Whether the last Land approval label put on the PR was put by `owner` after its head was pushed. */
+/**
+ * Whether the last Land approval label put on the PR was put by `owner` after its head was pushed and
+ * after the App's latest review was posted (`landApprovalCounts`).
+ */
 export function landApprovalByOwnerOf(
   events: typeof IssueEvents.Type,
   owner: string,
-  headPushedAt: string | null,
+  times: { readonly headPushedAt: string | null; readonly reviewedAt: string | null },
 ): boolean {
   const last = lastLandApprovalOf(events);
 
-  return landApprovalCounts(landApprovalPutByOwnerOf(events, owner), last?.created_at ?? null, headPushedAt);
+  return landApprovalCounts(landApprovalPutByOwnerOf(events, owner), last?.created_at ?? null, times);
 }
+
+/** When the App posted its latest review on the PR, as `reviews` give them; null when it posted none. */
+export function latestReviewAtOf(reviews: typeof PullReviews.Type, appLogin: string): string | null {
+  const posted = reviews.flatMap((review) =>
+    review.user?.login === appLogin && review.submitted_at !== null ? [review.submitted_at] : [],
+  );
+
+  return posted.toSorted((one, other) => Date.parse(one) - Date.parse(other)).at(-1) ?? null;
+}
+
+/** Every page of `repos/<repo>/pulls/<n>/reviews`: past 100 reviews, the latest is on a later page. */
+export function reviewsReader(
+  runner: Run,
+): (where: Pick<Env, "repo" | "cwd">, pr: number) => Promise<typeof PullReviews.Type> {
+  return async (where, pr) => {
+    const path = `repos/${where.repo}/pulls/${pr}/reviews?per_page=100`;
+    const out = await checked(runner, ["gh", "api", "-X", "GET", "--paginate", "--slurp", path], { cwd: where.cwd });
+
+    return decodeJson(Schema.Array(PullReviews), `gh api ${path}`, out).flat();
+  };
+}
+
+const reviewsOf = reviewsReader(run);
 
 /** Who set the PR's `land:human`, by its latest `labeled` event; see `Snapshot["humanLabelBy"]`. */
 export function humanLabelByOf(
@@ -336,8 +362,10 @@ export const ActionsRun = Schema.Struct({ status: Schema.String, conclusion: Sch
 /** The answer of a workflow dispatch asked with `return_run_details`. */
 export const Dispatched = Schema.Struct({ workflow_run_id: Schema.Int });
 
-/** `repos/<repo>/pulls/<n>/reviews`, as far as the Merge bot reads it. */
-export const PullReviews = Schema.Array(Schema.Struct({ user: Schema.NullOr(Login), body: Schema.String }));
+/** `repos/<repo>/pulls/<n>/reviews`, as far as the Merge bot reads it: `submitted_at` is null while a review is pending. */
+export const PullReviews = Schema.Array(
+  Schema.Struct({ user: Schema.NullOr(Login), body: Schema.String, submitted_at: Schema.NullOr(Schema.String) }),
+);
 
 /** The logins whose words a review thread holds that the Merge bot reads. */
 const threadLoginsOf = (env: Env): ThreadLogins => ({
@@ -686,8 +714,9 @@ async function snapshotOf(
     // The head's first check suite is created when it is pushed: a Land approval put before that was given for another head.
     const suites = await api(env, CheckSuites, `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`);
 
-    const pushedAt = suites.check_suites.map((suite) => suite.created_at).toSorted()[0] ?? null;
-    landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, pushedAt);
+    const headPushedAt = suites.check_suites.map((suite) => suite.created_at).toSorted()[0] ?? null;
+    const reviewedAt = latestReviewAtOf(await reviewsOf(env, pr.number), env.appLogin);
+    landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, { headPushedAt, reviewedAt });
     landApprovalPutByOwner = landApprovalPutByOwnerOf(events, env.owner);
   }
 
