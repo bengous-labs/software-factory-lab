@@ -658,8 +658,19 @@ describe("an Owner hold", () => {
     test("a second run over the approved PR opens no second follow-up issue: the record holds the first", () => {
       const followed = { ...approved, record: { ...approved.record, followUpIssue: 31 } };
 
-      expect(kinds(followed)).not.toContain("follow-up");
-      expect(stepsOf(followed)).toContainEqual({ kind: "land-open", threads: ["T1", "T2"] });
+      expect(stepsOf(followed)).toEqual([
+        { kind: "labels", route: "owner", depth: "light" },
+        { kind: "land-open", threads: ["T1", "T2"] },
+        {
+          kind: "review-check",
+          check: { kind: "success", summary: "2 Important finding(s) closed by the Owner's Land approval." },
+        },
+        {
+          kind: "land-gate",
+          check: { kind: "success", summary: "Landable, with the Owner's Land approval (label land-ok)." },
+        },
+        { kind: "auto-merge" },
+      ]);
       expect(kinds({ ...followed, openImportant: [] })).toEqual(["labels", "review-check", "land-gate", "auto-merge"]);
     });
 
