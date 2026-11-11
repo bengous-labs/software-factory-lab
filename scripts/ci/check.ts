@@ -57,10 +57,11 @@ export async function spawnStage(command: readonly string[]): Promise<Ran> {
   return { exitCode, output };
 }
 
-const failed = (stage: Stage, exitCode: number, output: string): Verdict => {
-  const shown = output.trimEnd();
+/** A red verdict whose report joins the non-empty `parts`, each trimmed at its end, then names the stage. */
+const failed = (stage: Stage, exitCode: number, parts: readonly string[]): Verdict => {
+  const shown = parts.flatMap((part) => (part.trimEnd() === "" ? [] : [part.trimEnd()]));
 
-  return { kind: "red", exitCode, report: `${shown === "" ? "" : `${shown}\n`}failed: ${stage.name}` };
+  return { kind: "red", exitCode, report: [...shown, `failed: ${stage.name}`].join("\n") };
 };
 
 export async function runStages(
@@ -73,15 +74,13 @@ export async function runStages(
     const ran = await run(stage.command);
 
     if (ran.exitCode !== 0) {
-      return failed(stage, ran.exitCode, ran.output);
+      return failed(stage, ran.exitCode, [ran.output]);
     }
 
     try {
       labels.push(stage.label === undefined ? stage.name : stage.label(ran.output));
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-
-      return failed(stage, 1, [ran.output.trimEnd(), message].filter((part) => part !== "").join("\n"));
+      return failed(stage, 1, [ran.output, error instanceof Error ? error.message : String(error)]);
     }
   }
 
