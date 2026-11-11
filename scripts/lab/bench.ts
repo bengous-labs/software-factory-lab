@@ -16,6 +16,7 @@ import {
   benchEnvOf,
   claudeArgv,
   closingOf,
+  gitConfigOf,
   HELP,
   readingOf,
   reportOf,
@@ -80,13 +81,20 @@ export async function runBench(io: BenchIo, bench: BenchRun): Promise<string> {
 async function realIo(): Promise<BenchIo> {
   const root = await mkdtemp(join(tmpdir(), "worker-bench-"));
   const settings = join(root, "worker-settings.json");
-  const ghConfig = join(root, "gh");
+  const configs = { ghConfigDir: join(root, "gh"), gitConfig: join(root, "gitconfig") };
   const checkout = (await $`git rev-parse --show-toplevel`.text()).trim();
   const head = (await $`git rev-parse HEAD`.text()).trim();
+
+  const user = {
+    name: (await $`git config user.name`.text()).trim(),
+    email: (await $`git config user.email`.text()).trim(),
+  };
+
   const config = process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude");
   const projects = join(config, "projects");
-  const sessionEnv = benchEnvOf(process.env, ghConfig);
-  await mkdir(ghConfig);
+  const sessionEnv = benchEnvOf(process.env, configs);
+  await mkdir(configs.ghConfigDir);
+  await writeFile(configs.gitConfig, gitConfigOf(user));
   await writeFile(settings, `${JSON.stringify(workerSettings(join(config, "CLAUDE.md")))}\n`);
 
   return {
@@ -94,10 +102,11 @@ async function realIo(): Promise<BenchIo> {
     settings,
     prepare: async (run) => {
       const dir = join(root, `run-${run}`);
-      await $`git clone --quiet ${checkout} ${dir}`;
+      // No hardlink: a session that rewrites its clone's objects must not rewrite the checkout's.
+      await $`git clone --quiet --no-hardlinks ${checkout} ${dir}`;
       await $`git -C ${dir} switch --quiet -c bench/run-${run} ${head}`;
-      // The clone's origin is the checkout it came from: a plain `git push` must reach nothing.
-      await $`git -C ${dir} remote set-url --push origin no-push`;
+      // The clone keeps origin's branches but not the checkout's path, so no git command finds it there.
+      await $`git -C ${dir} remote set-url origin no-remote`;
 
       return dir;
     },

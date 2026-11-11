@@ -5,12 +5,10 @@
 
 import { parseArgs } from "node:util";
 
-import { Result, Schema } from "effect";
+import { Schema } from "effect";
 
 import { ROLE_VARIABLE } from "../lib/author-session.ts";
 import { decodeJson } from "../lib/json.ts";
-import { objectAt, parseJson } from "../lib/plain-json.ts";
-import type { Json } from "../lib/plain-json.ts";
 
 export const HELP = `usage: bun scripts/lab/bench.ts --issue <file> --runs <n> [--model <model>] [--wake <file>]
 
@@ -19,10 +17,15 @@ then prints per session its closing message, the rules under .claude/rules/ it l
 transcript holds an output style reminder other than the Worker's.
 
 The sessions run with the Worker's settings, but LAB_ROLE=worker in place of LAB_AUTHOR=1: they read
-the Worker's role and the guard refuses their git push, but they are no Author, so the Stop hook
-publishes nothing. Their environment keeps only what claude needs, with no token, and gh reads an
-empty config. They edit files and run git and bun with no prompt, outside any sandbox: a session that
-means to can still reach what the Owner's files hold. Run a bench only on a change you have read.
+the Worker's role and the guard refuses a git push written plainly, but they are no Author, so the Stop
+hook publishes nothing. Each clone copies its objects, and its origin names no path. Their environment
+holds no token and no session bus, gh reads an empty config and git a config of the bench that holds
+the committer alone. claude logs in through the credentials under CLAUDE_CONFIG_DIR: an API key in the
+environment does not reach it.
+
+The bench is no sandbox. The sessions edit files and run git and bun with no prompt, and the hooks that
+guard them run from their own clone: a session that means to can get around the guard, rewrite its
+hooks, and reach what the Owner's files hold. Run a bench only on a change you have read.
 
   --issue <file>   the fake issue, in Markdown
   --runs <n>       how many sessions
@@ -91,18 +94,53 @@ export function workerSettings(ownerClaudeMd: string) {
   };
 }
 
-/** The variables of the launcher's environment a bench session keeps: what claude and the tools need, no secret. */
-const KEPT = ["HOME", "PATH", "USER", "SHELL", "LANG", "TERM", "TMPDIR", "XDG_RUNTIME_DIR", "CLAUDE_CONFIG_DIR"];
+/**
+ * The variables of the launcher's environment a bench session keeps: no secret, so claude logs in through
+ * `CLAUDE_CONFIG_DIR`'s credentials, and no session bus, through which git would reach a keyring.
+ */
+const KEPT = [
+  "HOME",
+  "PATH",
+  "USER",
+  "SHELL",
+  "LANG",
+  "TERM",
+  "TMPDIR",
+  "CLAUDE_CONFIG_DIR",
+  "ANTHROPIC_BASE_URL",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "NO_PROXY",
+  "NODE_EXTRA_CA_CERTS",
+];
 
-/** A bench session's whole environment, from the launcher's: `KEPT`, and gh pointed at the empty `ghConfigDir`. */
-export function benchEnvOf(env: Readonly<Record<string, string | undefined>>, ghConfigDir: string) {
+/** The configs of gh and git a bench gives its sessions in place of the Owner's. */
+export interface BenchConfigs {
+  /** An empty directory: gh has no login. */
+  readonly ghConfigDir: string;
+  /** A file `gitConfigOf` wrote: git has no credential helper. */
+  readonly gitConfig: string;
+}
+
+/** A bench session's whole environment, from the launcher's: `KEPT`, and the bench's gh and git configs. */
+export function benchEnvOf(env: Readonly<Record<string, string | undefined>>, configs: BenchConfigs) {
   const kept = KEPT.flatMap((name) => {
     const value = env[name];
 
     return value === undefined ? [] : [[name, value] as const];
   });
 
-  return Object.fromEntries([...kept, ["GH_CONFIG_DIR", ghConfigDir] as const]);
+  return Object.fromEntries([
+    ...kept,
+    ["GH_CONFIG_DIR", configs.ghConfigDir] as const,
+    ["GIT_CONFIG_GLOBAL", configs.gitConfig] as const,
+    ["GIT_CONFIG_NOSYSTEM", "1"] as const,
+  ]);
+}
+
+/** The bench's global git config: the committer the sessions commit as, and nothing else. */
+export function gitConfigOf(user: { readonly name: string; readonly email: string }): string {
+  return `[user]\n\tname = ${user.name}\n\temail = ${user.email}\n`;
 }
 
 export function workerPrompt(issue: string): string {
@@ -169,44 +207,39 @@ const NOTHING: Loaded = { paths: [], styles: [] };
 
 const TranscriptLine = Schema.Struct({ attachment: Schema.optionalKey(Schema.Struct({ type: Schema.String })) });
 
-const Instructions = Schema.Struct({ files: Schema.Array(Schema.Struct({ path: Schema.String })) });
+const lineWith = <Fields extends Schema.Struct.Fields>(fields: Fields) =>
+  Schema.Struct({ attachment: Schema.Struct(fields) });
 
-const NestedMemory = Schema.Struct({ path: Schema.String });
+const Instructions = lineWith({ files: Schema.Array(Schema.Struct({ path: Schema.String })) });
 
-const OutputStyle = Schema.Struct({ style: Schema.String });
+const NestedMemory = lineWith({ path: Schema.String });
 
-const OutputStyleInstructions = Schema.Struct({ style: Schema.Struct({ name: Schema.String }) });
+const OutputStyle = lineWith({ style: Schema.String });
 
-function decoded<S extends Schema.ConstraintDecoder<unknown>>(schema: S, source: string, value: Json): S["Type"] {
-  const result = Schema.decodeUnknownResult(schema)(value);
+const OutputStyleInstructions = lineWith({ style: Schema.Struct({ name: Schema.String }) });
 
-  if (Result.isFailure(result)) {
-    throw new Error(`${source}: ${result.failure.message}`, { cause: result.failure });
-  }
-
-  return result.success;
-}
-
-/** What the attachment of one transcript line loaded; an attachment of a type the bench does not read loaded nothing. */
+/**
+ * What the attachment of one transcript line loaded; an attachment of a type the bench does not read loaded
+ * nothing. The line is decoded once for its type, then once more, only when the bench reads that type, for its fields.
+ */
 function loadedBy(text: string, source: string): Loaded {
   const type = decodeJson(TranscriptLine, source, text).attachment?.type ?? "";
-  const attachment = (): Json => objectAt(source, parseJson(source, text))["attachment"] ?? null;
 
   switch (type) {
     case "instructions": {
-      return { paths: decoded(Instructions, source, attachment()).files.map((file) => file.path), styles: [] };
+      return { paths: decodeJson(Instructions, source, text).attachment.files.map((file) => file.path), styles: [] };
     }
 
     case "nested_memory": {
-      return { paths: [decoded(NestedMemory, source, attachment()).path], styles: [] };
+      return { paths: [decodeJson(NestedMemory, source, text).attachment.path], styles: [] };
     }
 
     case "output_style": {
-      return { paths: [], styles: [decoded(OutputStyle, source, attachment()).style] };
+      return { paths: [], styles: [decodeJson(OutputStyle, source, text).attachment.style] };
     }
 
     case "output_style_instructions": {
-      return { paths: [], styles: [decoded(OutputStyleInstructions, source, attachment()).style.name] };
+      return { paths: [], styles: [decodeJson(OutputStyleInstructions, source, text).attachment.style.name] };
     }
 
     default: {

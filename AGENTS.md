@@ -6,7 +6,7 @@ The factory is built one subsystem at a time, and its design keeps moving. The L
 
 ## Roles
 
-Each session reads its role's instructions at start, from `.claude/roles/`: `worker.md` for a Worker, a session whose environment holds `LAB_AUTHOR=1`, and `owner.md` for every other session, which the Owner attends. `scripts/hooks/role.ts` gives them.
+Each session reads its role's instructions at start, from `.claude/roles/`: `worker.md` for a Worker, a session whose environment holds `LAB_AUTHOR=1`, or `LAB_ROLE=worker` for a session the Worker bench (`scripts/lab/bench.ts`) launches, and `owner.md` for every other session, which the Owner attends. `scripts/hooks/role.ts` gives them.
 
 ## How to decide
 

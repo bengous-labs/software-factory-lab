@@ -4,7 +4,7 @@
  * The PreToolUse hook on Bash that keeps an Author from publishing by hand. In a Worker's session, an Author's or
  * a bench session's (`isWorker`), it denies a command that runs `git push`, `gh pr create` or
  * `gh pr ready`: the Stop hook alone pushes, opens and readies an Author's PR. In any other session it
- * reads nothing and allows everything. In an Author's session, an input it cannot read is denied. A
+ * reads nothing and allows everything. In a Worker's session, an input it cannot read is denied. A
  * guard that cannot start, or times out, lets the call run, as any settings hook does: its entry sets no
  * `"onFailure": "block"`, because a session in a worktree reads that worktree's `.claude/settings.json`
  * and runs the hook's file from the main checkout, so a worktree ahead of the main checkout would have
@@ -120,7 +120,7 @@ export function refusalFor(published: string): string {
   return `Refused: an Author does not run \`${published}\`. The Stop hook pushes your branch and opens or readies its pull request when you stop: commit, then stop.`;
 }
 
-/** The hook's answer to the PreToolUse input `stdin` in an Author's session: the refusal's reason, or null to allow. */
+/** The hook's answer to the PreToolUse input `stdin` in a Worker's session: the refusal's reason, or null to allow. */
 export function answerOf(stdin: string): string | null {
   let command: string;
 

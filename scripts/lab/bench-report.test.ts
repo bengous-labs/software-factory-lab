@@ -7,6 +7,7 @@ import {
   benchEnvOf,
   claudeArgv,
   closingOf,
+  gitConfigOf,
   HELP,
   readingOf,
   reportOf,
@@ -69,24 +70,41 @@ test("the Worker settings give the Worker's role, output style and CLAUDE.md exc
   expect(isAuthor(settings.env)).toBe(false);
 });
 
-test("a session's environment keeps only what claude needs, and gives gh an empty config", () => {
+test("a session's environment keeps no token nor session bus, and gives gh and git configs of the bench", () => {
   const env = benchEnvOf(
     {
       HOME: "/home/o",
       PATH: "/bin",
       LANG: "C",
+      HTTPS_PROXY: "http://proxy",
       LAB_AUTHOR: "1",
       LAB_AUTHOR_TOKEN_FILE: "/t",
       GH_TOKEN: "ghp_x",
       ANTHROPIC_API_KEY: "sk",
       CLAUDECODE: "1",
       SSH_AUTH_SOCK: "/s",
+      XDG_RUNTIME_DIR: "/run/user/1000",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
       TERM: undefined,
     },
-    "/b/gh",
+    { ghConfigDir: "/b/gh", gitConfig: "/b/gitconfig" },
   );
 
-  expect(env).toEqual({ HOME: "/home/o", PATH: "/bin", LANG: "C", GH_CONFIG_DIR: "/b/gh" });
+  expect(env).toEqual({
+    HOME: "/home/o",
+    PATH: "/bin",
+    LANG: "C",
+    HTTPS_PROXY: "http://proxy",
+    GH_CONFIG_DIR: "/b/gh",
+    GIT_CONFIG_GLOBAL: "/b/gitconfig",
+    GIT_CONFIG_NOSYSTEM: "1",
+  });
+});
+
+test("the bench's git config holds the committer alone, so git finds no credential helper", () => {
+  expect(gitConfigOf({ name: "O Wner", email: "o@example.com" })).toBe(
+    "[user]\n\tname = O Wner\n\temail = o@example.com\n",
+  );
 });
 
 test("the prompt holds the issue, and names no section the role's text moved away", () => {
