@@ -6,7 +6,7 @@
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
-import { LAND_APPROVAL_LABEL } from "../merge-bot/decide.ts";
+import { DELTA_READ, LAND_APPROVAL_LABEL, reviewNameOf } from "../merge-bot/decide.ts";
 
 export const REPO = "bengous-labs/software-factory-lab";
 
@@ -166,42 +166,43 @@ export function ownerWaitOf(pr: PrData): number {
 
 const ROUND = /^Review round (\d+) /u;
 
-/** A Delta read's body as `post-plan.ts` writes it, with the patch its marker names. */
-const DELTA_READ = /^Delta read [\s\S]*<!-- lab-review patch=(\S+) round=\d+ -->/u;
+/** A Delta read's body as `post-plan.ts` writes it, opening with its name, with the patch its marker names. */
+const DELTA_READ_BODY = new RegExp(
+  `^${reviewNameOf(DELTA_READ)} [\\s\\S]*<!-- lab-review patch=(\\S+) round=${DELTA_READ} -->`,
+  "u",
+);
 
 /** A round's counts as `post-plan.ts` writes them: the Code review's, then the security pass's when it ran. */
 const IMPORTANT_COUNT = /: (\d+) important, \d+ nit(?:; security: (\d+) important, \d+ nit)?\./u;
 
-/**
- * The latest review the App posted of each round, keyed `round <n>`, and of each patch's Delta read,
- * keyed `delta <patch>`: a review posted again counts once.
- */
-function latestReviews(reviews: PrData["reviews"]): ReadonlyMap<string, string> {
+/** The latest body the App posted under each key `keyOf` reads from it: a review posted again counts once. */
+function latestBy(reviews: PrData["reviews"], keyOf: (body: string) => string | undefined): readonly string[] {
   const latest = new Map<string, string>();
 
   for (const review of reviews.toSorted((a, b) => (a.submitted_at ?? "").localeCompare(b.submitted_at ?? ""))) {
-    if (review.user?.login !== APP) {
-      continue;
-    }
-
-    const round = ROUND.exec(review.body)?.[1];
-    const patch = DELTA_READ.exec(review.body)?.[1];
-    const key = round === undefined ? (patch === undefined ? undefined : `delta ${patch}`) : `round ${round}`;
+    const key = review.user?.login === APP ? keyOf(review.body) : undefined;
 
     if (key !== undefined) {
       latest.set(key, review.body);
     }
   }
 
-  return latest;
+  return [...latest.values()];
 }
 
-export const roundsOf = (reviews: PrData["reviews"]): number =>
-  [...latestReviews(reviews).keys()].filter((key) => key.startsWith("round ")).length;
+/** The latest review of each round the App posted. */
+const latestRounds = (reviews: PrData["reviews"]): readonly string[] =>
+  latestBy(reviews, (body) => ROUND.exec(body)?.[1]);
+
+/** The latest review of each patch's Delta read the App posted. */
+const latestDeltaReads = (reviews: PrData["reviews"]): readonly string[] =>
+  latestBy(reviews, (body) => DELTA_READ_BODY.exec(body)?.[1]);
+
+export const roundsOf = (reviews: PrData["reviews"]): number => latestRounds(reviews).length;
 
 /** The Importants of each round and each Delta read, from the latest posting of each. */
 export const importantFoundOf = (reviews: PrData["reviews"]): number =>
-  [...latestReviews(reviews).values()].reduce((sum, body) => {
+  [...latestRounds(reviews), ...latestDeltaReads(reviews)].reduce((sum, body) => {
     const [, code = "0", security = "0"] = IMPORTANT_COUNT.exec(body) ?? [];
 
     return sum + Number(code) + Number(security);
