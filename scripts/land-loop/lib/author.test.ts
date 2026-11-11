@@ -42,7 +42,7 @@ describe("requiredAuthorToken", () => {
 
     expect(requiredAuthorToken({ LAB_AUTHOR_TOKEN_FILE: path })).toBe("t0k");
     expect(() => requiredAuthorToken({ LAB_AUTHOR_TOKEN_FILE: missing })).toThrow(
-      `no Author token at ${missing}: the Owner provisions it (AGENTS.md, Identities); nothing was posted`,
+      `no Author token at ${missing}: the Owner provisions it (.claude/rules/identities.md); nothing was posted`,
     );
   });
 });

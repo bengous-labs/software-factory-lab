@@ -94,8 +94,11 @@ export interface Snapshot {
   readonly pr: PullRequest | null;
 }
 
+/** Why a stop on a dirty tree publishes nothing, as the outcomes log reads it. */
+export const UNCOMMITTED = "the tree has uncommitted changes";
+
 export type Admission =
-  | { readonly kind: "none"; readonly reason: string }
+  | Refusal
   /** The stop could open a PR: `afterClosed` decides, once the branch's closed PRs are read. */
   | { readonly kind: "read-closed" }
   /** The PR is ready at this head: nothing to publish; the Nit threads a stop closes are closed. */
@@ -134,13 +137,14 @@ export type Action =
 
 const none = (reason: string): Extract<Refusal, { kind: "none" }> => ({ kind: "none", reason });
 
-export function admit(snapshot: Snapshot): Admission {
-  if (snapshot.ahead === 0) {
-    return none(`${snapshot.branch} has no commit that dev lacks`);
+/** Uncommitted changes block once, asking for the commit alone; a second stop on a tree still dirty lets the session end. */
+export function admit(snapshot: Snapshot, stopHookActive: boolean): Admission {
+  if (!snapshot.treeClean) {
+    return stopHookActive ? none(UNCOMMITTED) : { kind: "block", reason: "Commit your changes, then stop." };
   }
 
-  if (!snapshot.treeClean) {
-    return none("the tree has uncommitted changes");
+  if (snapshot.ahead === 0) {
+    return none(`${snapshot.branch} has no commit that dev lacks`);
   }
 
   const { pr } = snapshot;
@@ -176,7 +180,7 @@ export function noAuthorToken(path: string, stopHookActive: boolean): Refusal {
 
   return {
     kind: "block",
-    reason: `The Stop hook found no Author token at ${path}, so nothing was published. The Owner provisions it (AGENTS.md, Identities). Stop, and ask no question.`,
+    reason: `The Stop hook found no Author token at ${path}, so nothing was published. The Owner provisions it (.claude/rules/identities.md). Stop, and ask no question.`,
   };
 }
 

@@ -49,6 +49,7 @@ import {
   quotedQuestionOf,
   rejectionReplyOf,
   rejectionsOf,
+  UNCOMMITTED,
 } from "./decide.ts";
 import type {
   ClosedPullRequest,
@@ -613,14 +614,14 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     pr: await prOf(deps, gh, branch),
   };
 
-  const first = admit(snapshot);
+  const first = admit(snapshot, stopHookActive);
 
   const admission = first.kind === "read-closed" ? afterClosed(head, await closedPrsOf(deps, gh, branch)) : first;
 
   log({ step: "admit", branch, head, pr: snapshot.pr?.number ?? null, ...admission });
 
-  if (admission.kind === "none") {
-    return notPublished(admission.reason);
+  if (admission.kind === "none" || admission.kind === "block") {
+    return stoppedOf(admission, UNCOMMITTED);
   }
 
   if (admission.kind === "ready") {

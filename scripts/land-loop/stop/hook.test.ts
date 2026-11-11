@@ -632,6 +632,22 @@ describe("the stop of an Author", () => {
     expect(writes(behind.calls)).toEqual(["push"]);
   });
 
+  test("uncommitted changes: the hook blocks once asking for the commit alone, then lets the session end, and runs no Stop check, fork or push", async () => {
+    const first = world({ dirty: true });
+
+    expect(await stopIn(first)).toEqual({ kind: "block", reason: "Commit your changes, then stop." });
+
+    const second = world({ dirty: true });
+
+    expect(await stopIn(second, true)).toEqual({ kind: "allow" });
+
+    for (const { calls } of [first, second]) {
+      expect(
+        calls.some((call) => call.argv[0] === "claude" || call.argv[0] === "bun" || call.argv.includes("push")),
+      ).toBe(false);
+    }
+  });
+
   test("no Author token: the hook blocks once with the reason, then lets the session end, and runs no Stop check, fork or push", async () => {
     const missing = join(mkdtempSync(join(tmpdir(), "author-")), "absent");
     const env = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: missing };
@@ -639,7 +655,7 @@ describe("the stop of an Author", () => {
 
     expect(await stopIn(first)).toEqual({
       kind: "block",
-      reason: `The Stop hook found no Author token at ${missing}, so nothing was published. The Owner provisions it (AGENTS.md, Identities). Stop, and ask no question.`,
+      reason: `The Stop hook found no Author token at ${missing}, so nothing was published. The Owner provisions it (.claude/rules/identities.md). Stop, and ask no question.`,
     });
     expect(first.records).toContainEqual({ step: "author-token", found: false, path: missing });
 
@@ -1023,6 +1039,7 @@ describe("the outcome of each stop", () => {
       ],
       [{ ahead: 0 }, false, "agent/x has no commit that dev lacks"],
       [{ dirty: true }, false, "the tree has uncommitted changes"],
+      [{ dirty: true }, true, "the tree has uncommitted changes"],
       [{ listed: readyPr() }, false, `#12 is ready at ${HEAD} already`],
       [
         { closedListed: closedPr("CLOSED") },
