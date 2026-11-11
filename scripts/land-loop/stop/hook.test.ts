@@ -742,7 +742,10 @@ const STOP_STATE: fc.Arbitrary<StopState> = fc.record({
 
 const COMMIT_ASKED = "Commit your changes, then stop.";
 
-const NO_TOKEN_ENV = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: join(tmpdir(), "no-author-token-here") };
+const NO_TOKEN_ENV = {
+  LAB_AUTHOR: "1",
+  LAB_AUTHOR_TOKEN_FILE: join(mkdtempSync(join(tmpdir(), "author-")), "absent"),
+};
 
 /** A clean stop the hook reports a failure on: no Author token, red Stop checks, or a Done judge with no answer. */
 const failsOn = (state: StopState): boolean => !state.dirty && (!state.token || state.checksRed || !state.doneAnswers);
@@ -773,10 +776,10 @@ function expectChainRule(chain: ChainSoFar, state: StopState, answer: Answer): v
 
   if (state.dirty) {
     expect(reason).toBe(chain.blocks === 0 ? COMMIT_ASKED : "");
-  }
-
-  if (failsOn(state) && !chain.reported) {
+  } else if (failsOn(state) && !chain.reported) {
     expect(reason).not.toBeOneOf(["", COMMIT_ASKED]);
+  } else {
+    expect(reason).toBe("");
   }
 }
 
