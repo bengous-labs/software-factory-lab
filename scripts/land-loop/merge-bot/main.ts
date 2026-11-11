@@ -69,6 +69,7 @@ import {
 import type {
   CheckState,
   LandRoute,
+  LedgerFinding,
   LedgerInputs,
   ReviewDepth,
   ReviewJob,
@@ -389,38 +390,99 @@ async function stateOf(env: Env, pr: number): Promise<StateComment> {
   return stateCommentIn(await conversationOf(env, pr), env);
 }
 
+/** The answer of `POST repos/<repo>/issues/<n>/comments`, as far as the Merge bot reads it. */
+const PostedComment = Schema.Struct({ id: Schema.Finite });
+
 /**
- * Writes over the state comment `read` the record `record` and its ledger from `inputs`, when the comment
- * does not hold them already (`stateWriteOf`): a new comment when the PR has none, else an edit.
+ * Writes `body` as the state comment: an edit of comment `id`, or a new comment on the PR when `id` is
+ * null. Returns the comment's id, so the steps after it edit the comment it posted.
  */
-export function stateSaver(
+export function stateWriter(
   runner: Run,
-): (
-  where: Pick<Env, "repo" | "cwd">,
-  pr: number,
-  read: StateRead,
-  change: { readonly record: StateRecord; readonly inputs: LedgerInputs },
-) => Promise<void> {
-  return async (where, pr, read, { record, inputs }) => {
-    const body = stateWriteOf(read, record, inputs);
-
-    if (body === null) {
-      return;
-    }
-
+): (where: Pick<Env, "repo" | "cwd">, pr: number, id: number | null, body: string) => Promise<number> {
+  return async (where, pr, id, body) => {
     const [method, path] =
-      read.id === null
+      id === null
         ? ["POST", `repos/${where.repo}/issues/${pr}/comments`]
-        : ["PATCH", `repos/${where.repo}/issues/comments/${read.id}`];
+        : ["PATCH", `repos/${where.repo}/issues/comments/${id}`];
 
-    await checked(runner, ["gh", "api", "-X", method, path, "--input", "-"], {
+    const out = await checked(runner, ["gh", "api", "-X", method, path, "--input", "-"], {
       cwd: where.cwd,
       stdin: JSON.stringify({ body }),
     });
+
+    return id ?? decodeJson(PostedComment, `gh api ${path}`, out).id;
   };
 }
 
-const saveState = stateSaver(run);
+const writeState = stateWriter(run);
+
+/** What the steps of a decision do beside the state comment, which `stepsDone` keeps. */
+export interface StepsIo {
+  /** Performs `step` on `record`; `write` writes a record the step changes. Null stops the run. */
+  readonly perform: (
+    step: Step,
+    record: StateRecord,
+    write: (next: StateRecord) => Promise<void>,
+  ) => Promise<StateRecord | null>;
+  /** The App's findings, read again. */
+  readonly findings: () => Promise<readonly LedgerFinding[]>;
+  /** Writes `body` over comment `id`, or as a new one when null; returns its id. */
+  readonly write: (id: number | null, body: string) => Promise<number>;
+}
+
+/** Where the steps of a decision leave the PR: its record, null when a step stopped the run, and whether to decide again. */
+export interface StepsDone {
+  readonly record: StateRecord | null;
+  readonly decideAgain: boolean;
+}
+
+/**
+ * Performs the steps of a decision over the state comment `read`, which holds the record the decision
+ * starts from, `record`, and the ledger from `inputs`. The comment is written when what it shows changed,
+ * and the comment as last written is kept, so no step reads it again. A step that resolves threads has
+ * the findings read again, and the comment is written last with the final record: the ledger shows
+ * those threads closed even when no decision follows, as when the Owner's Land approval closes the open
+ * Importants and the PR lands.
+ */
+export async function stepsDone(
+  steps: readonly Step[],
+  start: { readonly read: StateRead; readonly record: StateRecord; readonly inputs: LedgerInputs },
+  io: StepsIo,
+): Promise<StepsDone> {
+  let { read, inputs } = start;
+
+  const save = async (record: StateRecord): Promise<void> => {
+    const body = stateWriteOf(read, record, inputs);
+
+    if (body !== null) {
+      read = { id: await io.write(read.id, body), body, record };
+    }
+  };
+
+  let current: StateRecord | null = start.record;
+  let decideAgain = false;
+
+  await save(current);
+
+  for (const step of steps) {
+    current = await io.perform(step, current, save);
+
+    if (current === null) {
+      return { record: null, decideAgain: false };
+    }
+
+    if (step.kind === "resolve-threads") {
+      inputs = { ...inputs, findings: await io.findings() };
+    }
+
+    decideAgain ||= step.kind === "route" || step.kind === "post-review";
+  }
+
+  await save(current);
+
+  return { record: current, decideAgain };
+}
 
 interface Range {
   readonly base: string;
@@ -1093,27 +1155,6 @@ async function perform(
   }
 }
 
-/**
- * The ledger's inputs once `step` is done. Resolving threads changes what the ledger shows, and no later
- * decision may come to show it, as when the Owner's Land approval closes the open Importants and the PR
- * lands: the threads are read again and the ledger written now.
- */
-async function ledgerAfter(
-  env: Env,
-  pr: number,
-  step: Step,
-  { record, inputs }: { readonly record: StateRecord; readonly inputs: LedgerInputs },
-): Promise<LedgerInputs> {
-  if (step.kind !== "resolve-threads") {
-    return inputs;
-  }
-
-  const next = { ...inputs, findings: ledgerFindingsOf(threadLoginsOf(env), await threadsOf(env, pr)) };
-  await saveState(env, pr, await stateOf(env, pr), { record, inputs: next });
-
-  return next;
-}
-
 async function advance(
   env: Env,
   number: number,
@@ -1148,33 +1189,19 @@ async function advance(
     }
 
     log(`#${number} steps: ${decision.steps.map((step) => step.kind).join(", ")}`);
-    let current: StateRecord | null = record;
-    let decideAgain = false;
-    let inputs: LedgerInputs = { findings: ledgerFindingsOf(threadLoginsOf(env), threads), fixed: state.fixed };
+    const logins = threadLoginsOf(env);
 
-    await saveState(env, number, state, { record, inputs });
+    const done = await stepsDone(
+      decision.steps,
+      { read: state, record, inputs: { findings: ledgerFindingsOf(logins, threads), fixed: state.fixed } },
+      {
+        perform: (step, current, write) => perform(env, pr, range, write, current, step, log),
+        findings: async () => ledgerFindingsOf(logins, await threadsOf(env, number)),
+        write: (id, body) => writeState(env, number, id, body),
+      },
+    );
 
-    for (const step of decision.steps) {
-      const read = await stateOf(env, number);
-      const ledger = inputs;
-
-      const write = (next: StateRecord): Promise<void> =>
-        saveState(env, number, read, { record: next, inputs: ledger });
-
-      current = await perform(env, pr, range, write, current, step, log);
-
-      if (current === null) {
-        return;
-      }
-
-      inputs = await ledgerAfter(env, number, step, { record: current, inputs });
-
-      if (step.kind === "route" || step.kind === "post-review") {
-        decideAgain = true;
-      }
-    }
-
-    if (!decideAgain) {
+    if (!done.decideAgain) {
       return;
     }
   }

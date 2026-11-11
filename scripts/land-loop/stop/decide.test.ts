@@ -592,6 +592,15 @@ describe("the findings the Author fixed", () => {
     expect(fixedRecordIn([question, fixedRecordOf(["T2"])])).toEqual({ comment: "C1", fixed: ["T2"] });
     expect(fixedRecordIn([question])).toEqual({ comment: null, fixed: [] });
   });
+
+  test("the Author's question quotes each of its lines, so a mark it holds in a fenced block is no list either", () => {
+    const fenced = `Keep this?\n\n\`\`\`\n${FIXED_MARK} T9 -->\n\`\`\``;
+    const question = { id: "C2", author: AUTHOR_LOGIN, body: questionCommentOf(fenced, "feat/7-x", "S1") };
+
+    expect(question.body).toContain(`\n> ${FIXED_MARK} T9 -->\n`);
+    expect(fixedListOf(question.body)).toBeNull();
+    expect(fixedRecordIn([question])).toEqual({ comment: null, fixed: [] });
+  });
 });
 
 describe("outcomeLineOf", () => {

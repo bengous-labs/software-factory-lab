@@ -424,8 +424,9 @@ export interface FixedRecord {
 }
 
 /**
- * The fixed list: a line of its own, as the record writes it. A comment that quotes the mark, such as
- * the Author's question in a code span, holds it inside a line, never as one.
+ * The fixed list: a line of its own, as the record writes it. The only other comments of the Author's
+ * machine account, its questions to the Owner, quote each line after `> `, so a mark they quote, in a
+ * code span or a fenced block, is never a line of its own.
  */
 const FIXED_LIST = new RegExp(`(?<=^|\\n)${FIXED_MARK}((?: [^\\s>]+)*) -->(?=\\n|$)`, "u");
 
