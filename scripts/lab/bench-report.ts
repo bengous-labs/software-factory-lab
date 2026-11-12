@@ -7,8 +7,8 @@ import { parseArgs } from "node:util";
 
 import { Schema } from "effect";
 
-import { ROLE_VARIABLE } from "../lib/author-session.ts";
-import { decodeJson } from "../lib/json.ts";
+import { ROLE_VARIABLE } from "../../factory/lib/author-session.ts";
+import { decodeJson } from "../../factory/lib/json.ts";
 
 export const HELP = `usage: bun scripts/lab/bench.ts --issue <file> --runs <n> [--model <model>] [--wake <file>]
 

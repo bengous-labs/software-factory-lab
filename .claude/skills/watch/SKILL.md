@@ -1,14 +1,14 @@
 ---
 name: watch
-description: Follow the Workers of this session's issues with `bun scripts/factory/watch.ts`, armed with the Monitor tool, and tell the Owner what needs them. Use when the Owner types /watch [<issue>...], or after a dispatch, to follow the issues handed to Workers.
+description: Follow the Workers of this session's issues with `bun factory/bin/watch.ts`, armed with the Monitor tool, and tell the Owner what needs them. Use when the Owner types /watch [<issue>...], or after a dispatch, to follow the issues handed to Workers.
 argument-hint: [<issue>...]
-allowed-tools: Bash(bun scripts/factory/watch.ts:*)
+allowed-tools: Bash(bun factory/bin/watch.ts:*)
 ---
 
 The first time in this session, arm the Monitor tool on this command, run from the project directory, with `timeout_ms` 1800000, its maximum:
 
 ```
-bun scripts/factory/watch.ts --standing $ARGUMENTS
+bun factory/bin/watch.ts --standing $ARGUMENTS
 ```
 
 It follows the PRs of the issues named, or with none the repository's open PRs, and prints one line per event, once: a Worker's question to the Owner, a PR that waits for the Owner's Land approval, a PR that has not moved while nothing says why, a Worker left idle on the Author's turn, a PR that landed or closed, an issue closed. `--standing` makes its first turn tell again, as still standing, each such state an earlier run told that still holds.

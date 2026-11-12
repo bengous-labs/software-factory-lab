@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { $ } from "bun";
 import { Schema } from "effect";
 
-import { decodeJson } from "../lib/json.ts";
+import { decodeJson } from "../../factory/lib/json.ts";
 import { EXCEPTIONS } from "../lint/exceptions.ts";
 import type { BudgetRule, Exception } from "../lint/exceptions.ts";
 

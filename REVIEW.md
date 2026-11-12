@@ -5,8 +5,8 @@ The Code review reads this guide in its prompt. Review each change against what 
 ## What failure looks like here
 
 - `app/`: a command gives a wrong result, loses or corrupts the task file, crashes on input a user can type, or leaves an existing task file unreadable. Both format versions in `app/test/fixtures/` must still read.
-- `scripts/land-loop/`: a change lands without the review, the checks or the `land-ok` its route requires; an Important finding stops blocking; a Merge bot run acts differently when an event arrives twice, late or never.
-- `scripts/hooks/`, `.claude/`: a guard fails open and lets through what it exists to refuse, refuses valid work, or keeps a session blocked with no way out.
+- `factory/land/`: a change lands without the review, the checks or the `land-ok` its route requires; an Important finding stops blocking; a Merge bot run acts differently when an event arrives twice, late or never.
+- `factory/hooks/`, `scripts/hooks/`, `.claude/`: a guard fails open and lets through what it exists to refuse, refuses valid work, or keeps a session blocked with no way out.
 - `.github/`: text or code from the pull request runs, or is obeyed, next to the job's secrets; a secret or token reaches a log, a comment or a model's prompt; a trigger or a permission widens.
 - `scripts/gates/`, `scripts/lint/` and the gate configs: a gate stops failing on what it was built to catch.
 - Agent docs (`AGENTS.md`, the rules under `.claude/rules/`, `REVIEW.md`, skills): a line that contradicts the code. For a doc, failure is that it lies.

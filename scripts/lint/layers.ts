@@ -13,8 +13,11 @@ import {
   IO_GLOBALS,
   IO_LAYERS,
   LAYER_IMPORTS,
+  OPEN_ZONE,
   PACKAGE_IMPORTS,
   TYPE_ONLY_IMPORTS,
+  ZONE_CALLS,
+  ZONES,
 } from "./layers.map.ts";
 import type { External, Place } from "./layers.map.ts";
 
@@ -48,6 +51,27 @@ const MATCHERS = FILES.map(([glob, place]) => [globToRegExp(glob), place] as con
 /** The place the map gives `path`, relative to the repository root; null when no glob matches it. */
 export function placeOf(path: string): Place | null {
   return MATCHERS.find(([matcher]) => matcher.test(path))?.[1] ?? null;
+}
+
+/** A zone of the factory: the directory, or the file, that names it, and its rank. */
+export interface Zone {
+  readonly name: string;
+  readonly rank: number;
+}
+
+/** A zone's path matches a file it names, or any file under a directory it names. */
+const ZONE_MATCHERS = ZONES.map(([path, rank]) => ({
+  matcher: globToRegExp(path.endsWith(".ts") ? path : `${path}/**/*`),
+  depth: path.split("/").length,
+  rank,
+}));
+
+/** The zone of `path`, relative to the repository root; null for a file of no zone, such as one outside the factory. */
+export function zoneOf(path: string): Zone | null {
+  const found = ZONE_MATCHERS.find(({ matcher }) => matcher.test(path));
+
+  // A zone is named by the path that holds the file, each `*` of the map read from it.
+  return found === undefined ? null : { name: path.split("/").slice(0, found.depth).join("/"), rank: found.rank };
 }
 
 function externalOf(specifier: string): External | null {
@@ -84,6 +108,36 @@ const labelOf = (place: Place, from: Place): string =>
 const refusal = (importer: string, from: Place, target: string, label: string): string =>
   `\`${importer}\` (${labelOf(from, from)}) imports \`${target}\` (${label}). ${FIX} ${OWNER}`;
 
+const ZONE_FIX =
+  "Move what both need down to a zone both may import (`factory/land/shared/`, `factory/contract.ts`, `factory/lib/`), or have the door in `factory/bin/` pass it.";
+
+/**
+ * Why the zones refuse `importer`, placed at `from`, an import of `target`; null when they allow it. A test
+ * imports any zone, a file outside the factory only the open one, and a file of the factory its own zone
+ * and those of a lower rank.
+ */
+function zoneRefusal(importer: string, from: Place, target: string): string | null {
+  const to = zoneOf(target);
+
+  if (from.layer === "test" || to === null) {
+    return null;
+  }
+
+  const own = zoneOf(importer);
+
+  if (own === null) {
+    return to.name === OPEN_ZONE
+      ? null
+      : `\`${importer}\` imports \`${target}\` (zone \`${to.name}\`): a file outside the factory imports only \`${OPEN_ZONE}/\`. ${OWNER}`;
+  }
+
+  const called = ZONE_CALLS.some(([caller, callee]) => caller === own.name && callee === to.name);
+
+  return own.name === to.name || to.rank < own.rank || called
+    ? null
+    : `\`${importer}\` (zone \`${own.name}\`) imports \`${target}\` (zone \`${to.name}\`): a zone imports only itself and the zones below it. ${ZONE_FIX} ${OWNER}`;
+}
+
 function externalRefusal(importer: string, from: Place, edge: Edge, external: External): string | null {
   if (!EXTERNAL_IMPORTS[from.layer].includes(external)) {
     return refusal(importer, from, edge.specifier, external);
@@ -118,7 +172,7 @@ function localRefusal(importer: string, from: Place, target: string, kind: Impor
     PACKAGE_IMPORTS[from.package].includes(to.package) &&
     (LAYER_IMPORTS[from.layer].includes(to.layer) || (kind === "type" && TYPE_ONLY_IMPORTS.includes(to.layer)));
 
-  return reachable ? null : refusal(importer, from, target, labelOf(to, from));
+  return reachable ? zoneRefusal(importer, from, target) : refusal(importer, from, target, labelOf(to, from));
 }
 
 /** Why the map refuses `edge` out of `importer`, placed at `from`; null when it allows it. */
@@ -140,6 +194,9 @@ export function edgeRefusal(importer: string, from: Place, edge: Edge): string |
 
 const unplacedMessage = (path: string): string =>
   `\`${path}\` is in no layer of \`scripts/lint/layers.map.ts\`. Put the file in a directory the map classifies. ${OWNER}`;
+
+const unzonedMessage = (path: string): string =>
+  `\`${path}\` is in no zone of \`scripts/lint/layers.map.ts\`. Put the file in a directory of \`factory/\` the map names: a step of \`factory/land/\`, \`factory/land/shared/\`, \`factory/lib/\`. ${OWNER}`;
 
 const ioGlobalMessage = (path: string, from: Place, global: string): string =>
   `\`${path}\` (${from.layer}) uses \`${global}\`, I/O that only ${IO_LAYERS.join(", ")} may do. The entry point does the I/O and passes the result, or the code goes behind a port. ${OWNER}`;
@@ -275,6 +332,9 @@ export const layersRule = defineRule({
       };
     }
 
+    // Every source file of the factory lies in a zone: one that lies in none could import, and be imported by, any.
+    const unzoned = from.package === "factory" && from.layer !== "test" && zoneOf(path) === null;
+
     const check = (node: ESTree.Node, edge: Edge): void => {
       const message = edgeRefusal(path, from, edge);
 
@@ -299,6 +359,10 @@ export const layersRule = defineRule({
 
     return {
       Program(node) {
+        if (unzoned) {
+          context.report({ node, message: unzonedMessage(path) });
+        }
+
         if (IO_LAYERS.includes(from.layer)) {
           return;
         }

@@ -6,7 +6,7 @@ The factory is built one subsystem at a time, and its design keeps moving. The L
 
 ## Roles
 
-Each session reads its role's instructions at start, from `.claude/roles/`: `worker.md` for a Worker, a session whose environment holds `LAB_AUTHOR=1`, or `LAB_ROLE=worker` for a session the Worker bench (`scripts/lab/bench.ts`) launches, and `owner.md` for every other session, which the Owner attends. `scripts/hooks/role.ts` gives them.
+Each session reads its role's instructions at start, from `factory/roles/`: `worker.md` for a Worker, a session whose environment holds `LAB_AUTHOR=1`, or `LAB_ROLE=worker` for a session the Worker bench (`scripts/lab/bench.ts`) launches, and `owner.md` for every other session, which the Owner attends. `factory/hooks/role.ts` gives them.
 
 ## How to decide
 
@@ -24,16 +24,16 @@ The factory is young and its design moves: a rule serves the goal, it is not the
 - `bun test <file>` runs one test file; add `-t <name>` to run the tests whose name matches.
 - `bun scripts/ci/mutation.ts run` is CI's `mutation` job: Stryker on each module `stryker.config.ts` lists that your branch changes, through its lines or its test file. `bun check` does not run it; run it before you stop when your change reaches one of those modules.
 - `bun app/src/cli.ts <command>` runs the CLI on `todo.json`, or on the file `TODO_FILE` names.
-- `bun scripts/factory/dispatch.ts <issue> [--model <model>]`, or `/dispatch <issue>` in the Owner's session, hands an issue to a Worker: its worktree from `origin/dev`, and a background session launched with the one versioned prompt.
-- `bun scripts/factory/watch.ts [--standing] [<issue>...]`, or `/watch` in the Owner's session, follows the Workers of those issues until every one is closed, or the open PRs until it is stopped: one line per event, and with `--standing` first what an earlier run told that still holds.
+- `bun factory/bin/dispatch.ts <issue> [--model <model>]`, or `/dispatch <issue>` in the Owner's session, hands an issue to a Worker: its worktree from `origin/dev`, and a background session launched with the one versioned prompt.
+- `bun factory/bin/watch.ts [--standing] [<issue>...]`, or `/watch` in the Owner's session, follows the Workers of those issues until every one is closed, or the open PRs until it is stopped: one line per event, and with `--standing` first what an earlier run told that still holds.
 
 ## Architecture
 
-The repository holds three packages, the app (`app/`), the Land loop (`scripts/land-loop/`) and the factory's Dispatch and watch (`scripts/factory/`), the tooling that checks them (`scripts/gates/`, `scripts/lint/`, `scripts/ci/`, `scripts/hooks/`), and pure helpers both import (`scripts/lib/`).
+The repository holds the factory (`factory/`), the app the agents change (`app/`), and the tooling that checks both (`scripts/gates/`, `scripts/lint/`, `scripts/ci/`, `scripts/hooks/`, `scripts/lab/`). Inside the factory: the Land loop (`land/`), Dispatch and the watch (`dispatch/`, `watch/`), the measure (`measure/`), the session hooks (`hooks/`), the roles' instructions (`roles/`), what an installation sets (`install/`), the names stored outside the code (`contract.ts`), and small helpers the tooling imports too (`lib/`). `factory/bin/` holds one file per process, the only files a hook, a workflow or a skill names.
 
 ### The Land loop
 
-The Trunk is `dev`; `main` is the release branch. A finished change goes through five steps, each in its own directory under `scripts/land-loop/`:
+The Trunk is `dev`; `main` is the release branch. A finished change goes through five steps, each in its own directory under `factory/land/`:
 
 1. `stop/`: the Stop hook publishes an Author's committed branch as a pull request.
 2. `relay/`: one process per pull request starts a turn in the Author's session when the pull request needs it.
@@ -49,7 +49,7 @@ The rules under `.claude/rules/` hold each step's design. Claude Code loads one 
 
 ### Layers
 
-`scripts/lint/layers.map.ts` places every linted file in a package and a layer, and the `local/layers` lint rule holds each file to what its layer may import and do. The domain layer takes from `effect` only `Schema`, `Data`, `Option`, `Result` and `Struct` as values. Only the infra, entry, tooling and test layers do I/O (`fetch`, `process`, any `Bun` member but `Bun.Glob`). A file that no glob of the map matches fails the lint. The map and the rule belong to the Owner: fix a refused import by moving the I/O to the entry point or behind a port.
+`scripts/lint/layers.map.ts` places every linted file in a package and a layer, and the `local/layers` lint rule holds each file to what its layer may import and do. Under `factory/` the layer is read in the file's name: `x.ts` is pure logic, `x.live.ts` calls outside (a process, a model, a file), `x.port.ts` is the type through which logic takes such a call, `x.prompt.ts` and `x.actor.ts` are a Judge's text and settings, `x.test.ts` and `x.fixtures.ts` are tests, and a file of `bin/` or `hooks/` is a process's entry. Pure logic takes from `effect` only its data toolbox as values (`Schema`, `Data`, `Option`, `Result`, `Exit`, `Struct`). Only the infra, entry, tooling and test layers do I/O (`fetch`, `process`, any `Bun` member but `Bun.Glob`). The same rule holds the factory's zones: a directory imports only what lies below it (`land/shared/`, `install/`, `contract.ts`, `lib/`), a step of the Land loop never imports another step, except the Merge bot, which calls the routing and the review, the factory imports nothing outside `factory/`, and the tooling imports only `factory/lib/`. A file that no glob of the map matches fails the lint. The map and the rule belong to the Owner: fix a refused import by moving the I/O to the entry point or behind a port.
 
 ## Gates
 

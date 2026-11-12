@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { $ } from "bun";
 import { Schema } from "effect";
 
-import { decodeJson } from "../lib/json.ts";
+import { decodeJson } from "../../factory/lib/json.ts";
 import { guardGlobsOf, ruleGlobsOf, scriptsNamedIn, silentBreaks } from "./check-silent-breaks.ts";
 import type { Tree } from "./check-silent-breaks.ts";
 import { fixtureEnv } from "./fixture-env.ts";
@@ -42,15 +42,13 @@ describe("ruleGlobsOf", () => {
 
 describe("scriptsNamedIn", () => {
   test("finds the script of a hook's command, of a workflow's step and of a skill's permission, each once", () => {
-    expect(scriptsNamedIn(String.raw`"command": "bun \"$CLAUDE_PROJECT_DIR\"/scripts/hooks/role.ts"`)).toEqual([
-      "scripts/hooks/role.ts",
+    expect(scriptsNamedIn(String.raw`"command": "bun \"$CLAUDE_PROJECT_DIR\"/factory/hooks/role.ts"`)).toEqual([
+      "factory/hooks/role.ts",
     ]);
     expect(
       scriptsNamedIn("run: bun scripts/ci/mutation.ts github-output\nrun: bun ./scripts/ci/mutation.ts run"),
     ).toEqual(["scripts/ci/mutation.ts"]);
-    expect(scriptsNamedIn("allowed-tools: Bash(bun scripts/factory/dispatch.ts:*)")).toEqual([
-      "scripts/factory/dispatch.ts",
-    ]);
+    expect(scriptsNamedIn("allowed-tools: Bash(bun factory/bin/dispatch.ts:*)")).toEqual(["factory/bin/dispatch.ts"]);
     expect(scriptsNamedIn("# Runs the Merge bot (`.claude/plugins/land/hooks/land.tsx`)")).toEqual([
       ".claude/plugins/land/hooks/land.tsx",
     ]);

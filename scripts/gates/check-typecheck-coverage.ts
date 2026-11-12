@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { $ } from "bun";
 import { Schema } from "effect";
 
-import { decodeJson } from "../lib/json.ts";
+import { decodeJson } from "../../factory/lib/json.ts";
 
 /** What `tsconfig.json` leaves out on purpose; anything else tracked must be type-checked. */
 const LEFT_OUT = /^(?:scripts\/vendor\/anti-slop|\.claude\/plugins)\//u;

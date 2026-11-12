@@ -20,9 +20,9 @@ import { join } from "node:path";
 import { $ } from "bun";
 import { Schema } from "effect";
 
-import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../lib/checkout.ts";
-import type { Checkout } from "../lib/checkout.ts";
-import { decodeJson } from "../lib/json.ts";
+import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../../factory/lib/checkout.ts";
+import type { Checkout } from "../../factory/lib/checkout.ts";
+import { decodeJson } from "../../factory/lib/json.ts";
 
 /** The variable the Stop hook sets on the read-only forks it launches. */
 const STOP_FORK_FLAG = "LAB_STOP_FORK";

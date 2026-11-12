@@ -1,8 +1,16 @@
 {
   "land": {
     "routing": {
-      "ownerPaths": [".github/**", "bun.lock", "scripts/vendor/**", "REVIEW.md", "scripts/land-loop/**/*-prompt.ts"],
+      "ownerPaths": [
+        ".github/**",
+        "bun.lock",
+        "scripts/vendor/**",
+        "REVIEW.md",
+        "factory/**/*.prompt.ts",
+        "factory/install/logins.ts"
+      ],
       "factoryPaths": [
+        "factory/**",
         "scripts/**",
         ".claude/**",
         "AGENTS.md",

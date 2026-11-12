@@ -23,10 +23,10 @@ export interface Exception {
   readonly measured: number;
 }
 
-const MERGE_BOT_MAIN = "scripts/land-loop/merge-bot/main.ts";
+const MERGE_BOT_MAIN = "factory/land/merge-bot/main.live.ts";
 
 export const EXCEPTIONS: readonly Exception[] = [
-  { file: "scripts/land-loop/routing/routing-judge.ts", rule: "eslint/max-params", name: "routingJudge", measured: 5 },
+  { file: "factory/land/routing/routing-judge.ts", rule: "eslint/max-params", name: "routingJudge", measured: 5 },
   { file: MERGE_BOT_MAIN, rule: "eslint/max-params", name: "snapshotOf", measured: 5 },
   { file: MERGE_BOT_MAIN, rule: "eslint/max-params", name: "perform", measured: 7 },
 ];

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { isAuthor, isWorker } from "../lib/author-session.ts";
-import type { Json } from "../lib/plain-json.ts";
+import { isAuthor, isWorker } from "../../factory/lib/author-session.ts";
+import type { Json } from "../../factory/lib/plain-json.ts";
 import {
   argsOf,
   benchEnvOf,

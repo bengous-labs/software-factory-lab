@@ -19,10 +19,16 @@ import { basename, dirname, extname, isAbsolute, join, relative, sep } from "nod
 
 import { $ } from "bun";
 
-import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../lib/checkout.ts";
-import type { Checkout } from "../lib/checkout.ts";
-import type { Json } from "../lib/plain-json.ts";
-import { objectAt, optionalObjectAt, optionalStringAt, optionalStringsAt, parseJson } from "../lib/plain-json.ts";
+import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../../factory/lib/checkout.ts";
+import type { Checkout } from "../../factory/lib/checkout.ts";
+import type { Json } from "../../factory/lib/plain-json.ts";
+import {
+  objectAt,
+  optionalObjectAt,
+  optionalStringAt,
+  optionalStringsAt,
+  parseJson,
+} from "../../factory/lib/plain-json.ts";
 
 const LINTED = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"]);
 

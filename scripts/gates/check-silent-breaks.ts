@@ -15,8 +15,8 @@
 import { $ } from "bun";
 import { Schema } from "effect";
 
+import { decodeJson } from "../../factory/lib/json.ts";
 import { TESTS } from "../../stryker.config.ts";
-import { decodeJson } from "../lib/json.ts";
 
 const RULES = ".claude/rules/";
 
