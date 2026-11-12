@@ -461,39 +461,62 @@ export function parseArgs(args: readonly string[]): Args | null {
   return flag === "--base" && base !== undefined ? { command, base } : null;
 }
 
-/** Mutates each module the change reaches and prints its verdict; the number of failures. */
-async function runPasses(change: Change): Promise<number> {
+/** One module's passes, at the head and, when its tests changed, at the base, and its verdict. */
+async function passesVerdict(change: Change, module: string): Promise<ModuleVerdict> {
+  const testFiles = testFilesOf(module);
+  const testsChanged = change.hunks.some((hunk) => testFiles.includes(hunk.file));
+  const source = await Bun.file(join(REPO_ROOT, module)).text();
+  const head = await mutate(REPO_ROOT, module);
+
+  const base = testsChanged
+    ? await mutateAt(
+        REPO_ROOT,
+        change.since,
+        change.renamedFrom.get(module) ?? module,
+        testFiles.map((testFile) => change.renamedFrom.get(testFile) ?? testFile),
+      )
+    : null;
+
+  if (testsChanged && base === null) {
+    console.error(`mutation: ${module}: no base pass, it or its tests did not exist at ${change.since}`);
+  }
+
+  return moduleVerdict({ module, source, head, base, hunks: change.hunks.filter((hunk) => hunk.file === module) });
+}
+
+/**
+ * The verdict of a module whose pass threw `why`, as Stryker's dry run does on a module that cannot load:
+ * one failure, naming it.
+ */
+export function failedPassVerdict(module: string, why: string): ModuleVerdict {
+  return {
+    failures: [`${module}: not mutated, its pass failed: ${oneLine(why)}`],
+    summary: `mutation: ${module}: not mutated, its pass failed`,
+  };
+}
+
+/**
+ * Takes each module's verdict in turn and prints it as it comes; the number of failures. A module whose
+ * pass throws fails alone: the modules after it still run.
+ */
+export async function runPasses(
+  modules: readonly string[],
+  verdictOf: (module: string) => Promise<ModuleVerdict>,
+  print: (line: string) => void,
+): Promise<number> {
   let failed = 0;
 
-  for (const module of modulesOf(change.hunks)) {
-    const testFiles = testFilesOf(module);
-    const testsChanged = change.hunks.some((hunk) => testFiles.includes(hunk.file));
-    const source = await Bun.file(join(REPO_ROOT, module)).text();
-    const head = await mutate(REPO_ROOT, module);
+  for (const module of modules) {
+    let verdict: ModuleVerdict;
 
-    const base = testsChanged
-      ? await mutateAt(
-          REPO_ROOT,
-          change.since,
-          change.renamedFrom.get(module) ?? module,
-          testFiles.map((testFile) => change.renamedFrom.get(testFile) ?? testFile),
-        )
-      : null;
-
-    if (testsChanged && base === null) {
-      console.error(`mutation: ${module}: no base pass, it or its tests did not exist at ${change.since}`);
+    try {
+      verdict = await verdictOf(module);
+    } catch (error) {
+      verdict = failedPassVerdict(module, error instanceof Error ? error.message : String(error));
     }
 
-    const verdict = moduleVerdict({
-      module,
-      source,
-      head,
-      base,
-      hunks: change.hunks.filter((hunk) => hunk.file === module),
-    });
-
     for (const line of [...verdict.failures, verdict.summary]) {
-      console.error(line);
+      print(line);
     }
 
     failed += verdict.failures.length;
@@ -529,5 +552,14 @@ if (import.meta.main) {
   }
 
   console.error(`mutation: changed ${change.hunks.map((hunk) => rangeLabel(rangeOf(hunk))).join(", ")}`);
-  process.exit((await runPasses(change)) === 0 ? 0 : 1);
+
+  const failed = await runPasses(
+    modulesOf(change.hunks),
+    (module) => passesVerdict(change, module),
+    (line) => {
+      console.error(line);
+    },
+  );
+
+  process.exit(failed === 0 ? 0 : 1);
 }

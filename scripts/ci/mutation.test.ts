@@ -13,6 +13,7 @@ import {
   changedRanges,
   changeSince,
   describeSurvivor,
+  failedPassVerdict,
   githubOutput,
   hunksOf,
   modulesOf,
@@ -21,11 +22,12 @@ import {
   rangeLabel,
   rangeOf,
   runOptions,
+  runPasses,
   snapshotAt,
   testFilesOf,
   undetected,
 } from "./mutation.ts";
-import type { Hunk, LineRange, Mutant } from "./mutation.ts";
+import type { Hunk, LineRange, ModuleVerdict, Mutant } from "./mutation.ts";
 
 const FIXTURE_ENV = fixtureEnv(process.env);
 
@@ -219,6 +221,29 @@ test("every listed module and its test file exist, and Stryker mutates exactly t
   expect(config.mutate).toEqual(Object.keys(TESTS));
 });
 
+test("no test of the mutation set starts a process", () => {
+  const testFiles = [...new Set(Object.values(TESTS).flat())].map((file) => `./${file}`);
+
+  const ran = Bun.spawnSync(
+    [process.execPath, "test", "--preload", join(import.meta.dir, "no-process.ts"), ...testFiles],
+    { cwd: join(import.meta.dir, "..", ".."), stdout: "pipe", stderr: "pipe" },
+  );
+
+  // `bun test` names a file on a line of its own, then prints its failures and their errors.
+  let file = "";
+
+  const failed = ran.stderr
+    .toString()
+    .split("\n")
+    .flatMap((line) => {
+      file = /^(\S+\.test\.ts):$/u.exec(line)?.[1] ?? file;
+
+      return line.startsWith("(fail)") || line.startsWith("error: ") ? [`${file}: ${line}`] : [];
+    });
+
+  expect({ code: ran.exitCode, failed }).toEqual({ code: 0, failed: [] });
+}, 60_000);
+
 function mutant(fields: Partial<Mutant>): Mutant {
   return {
     fileName: "/repo/app/src/commands/add.ts",
@@ -395,6 +420,73 @@ describe("moduleVerdict", () => {
       "x/mod.ts:2:5 Survived EqualityOperator: a > 0 => a >= 0",
       "x/mod.ts:5:11 Survived ArithmeticOperator: a + 1 => a - 1 (killed at the base)",
     ]);
+  });
+});
+
+const passed = (module: string, failures: readonly string[] = []): ModuleVerdict => ({
+  failures,
+  summary: `mutation: ${module}: summary`,
+});
+
+/** A pass of `b.ts` that rejects as Stryker's does on a module that cannot load; the others pass. */
+const failingOnB = (module: string): Promise<ModuleVerdict> =>
+  module === "b.ts"
+    ? Promise.reject(new Error("There were failed tests\nin the initial test run."))
+    : Promise.resolve(passed(module));
+
+describe("runPasses", () => {
+  test("a module whose pass throws fails alone, named with the error, and the modules after it still run", async () => {
+    const lines: string[] = [];
+
+    expect(
+      await runPasses(["a.ts", "b.ts", "c.ts"], failingOnB, (line) => {
+        lines.push(line);
+      }),
+    ).toBe(1);
+    expect(lines).toEqual([
+      "mutation: a.ts: summary",
+      "b.ts: not mutated, its pass failed: There were failed tests in the initial test run.",
+      "mutation: b.ts: not mutated, its pass failed",
+      "mutation: c.ts: summary",
+    ]);
+  });
+
+  test("counts every failure of every module, each printed before its summary", async () => {
+    const lines: string[] = [];
+
+    const failed = await runPasses(
+      ["a.ts", "b.ts"],
+      (module) => Promise.resolve(passed(module, [`${module}:1:1 Survived`, `${module}:2:1 Survived`])),
+      (line) => {
+        lines.push(line);
+      },
+    );
+
+    expect(failed).toBe(4);
+    expect(lines).toEqual([
+      "a.ts:1:1 Survived",
+      "a.ts:2:1 Survived",
+      "mutation: a.ts: summary",
+      "b.ts:1:1 Survived",
+      "b.ts:2:1 Survived",
+      "mutation: b.ts: summary",
+    ]);
+  });
+
+  test("a pass that throws something other than an error is named by what it threw", async () => {
+    const lines: string[] = [];
+
+    await runPasses(
+      ["a.ts"],
+      // oxlint-disable-next-line prefer-promise-reject-errors -- the case is a rejection that is no Error.
+      () => Promise.reject("boom"),
+      (line) => {
+        lines.push(line);
+      },
+    );
+
+    expect(lines[0]).toBe("a.ts: not mutated, its pass failed: boom");
+    expect(failedPassVerdict("a.ts", "x\n  y").failures).toEqual(["a.ts: not mutated, its pass failed: x y"]);
   });
 });
 

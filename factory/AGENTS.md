@@ -26,7 +26,7 @@ The repository's tooling (`scripts/`) checks it, and the app (`app/`) is what it
 | `x.port.ts`                  | the type through which logic takes a call outside | no I/O                                                                                                   |
 | `x.prompt.ts`                | a Judge's text                                    | no I/O                                                                                                   |
 | `x.actor.ts`                 | a Judge's settings: tools, timeout, its own model | no I/O                                                                                                   |
-| `x.test.ts`, `x.fixtures.ts` | a test, and what tests share                      | anything                                                                                                 |
+| `x.test.ts`, `x.fixtures.ts` | a test, and what tests share                      | anything; a test the mutation job runs starts no process (see Mutation)                                  |
 | a file of `bin/` or `hooks/` | a process's entry                                 | I/O                                                                                                      |
 
 The `local/layers` lint rule reads the layer in the name and refuses the rest.
@@ -68,6 +68,8 @@ A name that says `lab` stays as it is.
 Every logic file is mutated against the tests of its directory that are no `x.live.test.ts`: no list to keep, a file joins when a `x.test.ts` sits in its directory (`stryker.config.ts`).
 A test of a shell is a `x.live.test.ts`: it does not count.
 A logic file with no such test in its directory fails the silent-breaks gate (`scripts/gates/check-silent-breaks.ts`).
+A test the mutation job runs starts no process: a process takes its time from the machine's load, and a test that times out under Stryker's parallel runs kills a mutant no assertion checked.
+`scripts/ci/mutation.test.ts` runs them all with each start refused (`scripts/ci/no-process.ts`): a test that starts one, through a fixture or a `x.live.ts` too, is a `x.live.test.ts`.
 
 ## Commands
 
