@@ -462,11 +462,7 @@ export function parseArgs(args: readonly string[]): Args | null {
 }
 
 /** What a module's verdict is drawn from: its source and hunks, and its passes, run in turn. */
-export interface ModuleRun {
-  readonly module: string;
-  readonly source: string;
-  /** The module's own hunks. */
-  readonly hunks: readonly Hunk[];
+export interface ModuleRun extends Omit<ModulePasses, "head" | "base"> {
   readonly head: () => Promise<readonly Mutant[]>;
   /** The pass at the base, `null` when the tests did not change; it answers `null` when it had nothing to run. */
   readonly base: (() => Promise<readonly Mutant[] | null>) | null;
@@ -479,16 +475,17 @@ export interface ModuleRun {
 export async function verdictOfPasses(run: ModuleRun): Promise<ModuleVerdict> {
   const { module, source, hunks } = run;
   const head = await run.head();
+  let base: readonly Mutant[] | null;
 
   try {
-    const base = run.base === null ? null : await run.base();
-
-    return moduleVerdict({ module, source, head, base, hunks });
+    base = run.base === null ? null : await run.base();
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
 
     return withFailedBase(moduleVerdict({ module, source, head, base: null, hunks }), module, why);
   }
+
+  return moduleVerdict({ module, source, head, base, hunks });
 }
 
 /** One module's passes, at the head and, when its tests changed, at the base, and its verdict. */

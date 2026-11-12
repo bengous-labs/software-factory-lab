@@ -132,8 +132,9 @@ describe("verdictOfPasses", () => {
     expect(await verdictOfPasses(run({ base: () => Promise.resolve(null) }))).toEqual(headAlone);
   });
 
-  test("a head pass that throws throws, and the base pass never runs", () => {
+  test("a head pass that throws throws, and the base pass never runs", async () => {
     let baseRan = false;
+    let thrown = "";
 
     const failing = run({
       head: () => Promise.reject(new Error("There were failed tests in the initial test run.")),
@@ -144,7 +145,13 @@ describe("verdictOfPasses", () => {
       },
     });
 
-    expect(verdictOfPasses(failing)).rejects.toThrow("There were failed tests in the initial test run.");
+    try {
+      await verdictOfPasses(failing);
+    } catch (error) {
+      thrown = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(thrown).toBe("There were failed tests in the initial test run.");
     expect(baseRan).toBe(false);
   });
 });
