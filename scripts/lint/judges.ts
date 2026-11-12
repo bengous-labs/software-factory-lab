@@ -1,18 +1,21 @@
 /**
  * `local/judges`: a Judge's settings live in its actor file (`factory/land/AGENTS.md`). A Judge reaches
  * Claude Code through one of the two doors to the Agent SDK, whose ports take its settings as one
- * field, `judgeSettings`, or as a print-mode fork of a session, as the Stop hook's Done judge runs. In
+ * field, `judgeSettings`, or as a fork of a session (`--fork-session`), as the Stop hook's Done judge runs. In
  * `factory/`, tests and fixtures aside, the rule reads the syntax tree, and what it refuses follows from a
  * Judge, never from a key's name alone:
  *
  * - in an object that holds a `judgeSettings`, the call to a Judge: a value that is not a constant
  *   imported from an actor file, whether written out, as a shorthand or under a quoted or constant
  *   computed key; a spread or a key computed at run time after it, which could override it; a model
- *   written as a string, which its actor file or its Review depth names;
- * - in a fork's command, an array that holds `-p` and `--fork-session`: no `--tools`; a tool or permission
+ *   written as a string, which its actor file or its Review depth names; and every other way to bind a
+ *   `judgeSettings`: a class field whose value is not such a constant, a getter or a method, a constructor
+ *   parameter property, an assignment to a member of that name;
+ * - in a fork's command, an array that holds `--fork-session`, itself or through the `const` arrays it
+ *   spreads, so a command split in pieces is one: no `--tools`; a tool or permission
  *   flag but `--tools` or `--permission-mode` followed by an actor file's constant, the flags that lift
- *   the permissions included; a spread of anything but an array or a ternary of arrays, which it checks
- *   the same way;
+ *   the permissions included; a spread of anything but an array, a `const` bound to one or a ternary of
+ *   them, which it checks the same way. A piece that holds `--fork-session` carries the fork's `--tools`;
  * - outside the two doors, any string that names the Agent SDK, an import's included: no other path
  *   reaches a model through it.
  *
@@ -157,15 +160,68 @@ function allowedFlag(context: Context, node: ESTree.StringLiteral | ESTree.Templ
   return root !== null && isActorImport(context, root);
 }
 
-/** The strings an array literal holds, element by element; null for an element that is not one. */
-const elementStrings = (context: Context, node: ESTree.ArrayExpression): ReadonlyArray<string | null> =>
-  node.elements.map((element) =>
-    element === null || element.type === "SpreadElement" ? null : constantString(context, element),
-  );
+/** The array literal a `const` binds `node` to, through other `const`s; null for anything else. */
+function constArrayOf(context: Context, node: ESTree.Node): ESTree.ArrayExpression | null {
+  if (node.type === "ArrayExpression") {
+    return node;
+  }
 
-/** Whether an array literal is a Judge's fork: a print-mode fork of a session, as the Stop hook's Done judge runs. */
-const isFork = (strings: ReadonlyArray<string | null>): boolean =>
-  strings.some((text) => text === "-p" || text === "--print") && strings.includes("--fork-session");
+  if (node.type !== "Identifier") {
+    return null;
+  }
+
+  const definition = variableOf(context, node)?.defs[0];
+  const declarator = definition?.type === "Variable" ? definition.node : null;
+
+  return declarator?.type === "VariableDeclarator" &&
+    definition?.parent?.type === "VariableDeclaration" &&
+    definition.parent.kind === "const" &&
+    declarator.init !== null
+    ? constArrayOf(context, declarator.init)
+    : null;
+}
+
+/** The arrays a spread may hold: an array, a `const` bound to one, either branch of a ternary. */
+function spreadArraysOf(context: Context, node: ESTree.Expression): readonly ESTree.ArrayExpression[] {
+  if (node.type === "ConditionalExpression") {
+    return [...spreadArraysOf(context, node.consequent), ...spreadArraysOf(context, node.alternate)];
+  }
+
+  if (node.type === "ParenthesizedExpression") {
+    return spreadArraysOf(context, node.expression);
+  }
+
+  const array = constArrayOf(context, node);
+
+  return array === null ? [] : [array];
+}
+
+/** The strings an array literal holds, those of the arrays it spreads included; null for an element that is not one. */
+const elementStrings = (context: Context, node: ESTree.ArrayExpression): ReadonlyArray<string | null> =>
+  node.elements.flatMap((element) => {
+    if (element === null) {
+      return [null];
+    }
+
+    return element.type === "SpreadElement"
+      ? spreadArraysOf(context, element.argument).flatMap((array) => elementStrings(context, array))
+      : [constantString(context, element)];
+  });
+
+/**
+ * Whether an array literal is a Judge's fork: it holds `--fork-session`, itself or through what it
+ * spreads, as the Stop hook's Done judge runs; where `-p` sits does not matter.
+ */
+const isFork = (strings: ReadonlyArray<string | null>): boolean => strings.includes("--fork-session");
+
+/** A class member's or an assignment's key as the source writes it; null when it is computed at run time. */
+function memberKeyOf(context: Context, key: ESTree.Node, computed: boolean): string | null {
+  if (!computed && key.type === "Identifier") {
+    return key.name;
+  }
+
+  return key.type === "PrivateIdentifier" ? null : constantString(context, key);
+}
 
 export const judgesRule = defineRule({
   meta: {
@@ -221,11 +277,13 @@ export const judgesRule = defineRule({
         checkForkSpread(spread.alternate);
       } else if (spread.type === "ParenthesizedExpression") {
         checkForkSpread(spread.expression);
-      } else {
+      } else if (constArrayOf(context, spread) === null) {
         report(
           spread,
-          "spreads into a Judge's fork what the rule cannot read: spread an array, or a ternary of arrays",
+          "spreads into a Judge's fork what the rule cannot read: spread an array, a `const` bound to one, or a ternary of them",
         );
+      } else {
+        checkForkSpread(constArrayOf(context, spread) ?? spread);
       }
     };
 
@@ -250,6 +308,35 @@ export const judgesRule = defineRule({
         }
 
         checkForkElements(node);
+      },
+      PropertyDefinition(node) {
+        if (
+          memberKeyOf(context, node.key, node.computed) === JUDGE &&
+          (node.value === null || !isActorImport(context, node.value))
+        ) {
+          report(node, "gives a class's `judgeSettings` a value that is not a constant imported from an actor file");
+        }
+      },
+      MethodDefinition(node) {
+        if (memberKeyOf(context, node.key, node.computed) === JUDGE) {
+          report(node, "computes a class's `judgeSettings` in a method, which the rule cannot read");
+        }
+      },
+      TSParameterProperty(node) {
+        if (node.parameter.type === "Identifier" && node.parameter.name === JUDGE) {
+          report(node, "takes a class's `judgeSettings` from its caller, which the rule cannot read");
+        }
+      },
+      AssignmentExpression(node) {
+        const { left } = node;
+
+        if (
+          left.type === "MemberExpression" &&
+          memberKeyOf(context, left.property, left.computed) === JUDGE &&
+          !isActorImport(context, node.right)
+        ) {
+          report(node, "assigns a `judgeSettings` that is not a constant imported from an actor file");
+        }
       },
       ObjectExpression(node) {
         const judgeAt = node.properties.findIndex((part) => part.type === "Property" && keyOf(context, part) === JUDGE);

@@ -43,6 +43,14 @@ const SOURCES = {
     'export const p = ["claude", "-p", "--fork-session", "--tools", ROUTING_JUDGE.tools.join(","), ...(x ? ["--allowedTools", "Edit"] : [])];',
     'export const q = ["claude", "-p", "--fork-session", "--tools", ROUTING_JUDGE.tools.join(","), ...EXTRA];',
     "export const r = SLOW; export type Q = Options;",
+    'export class X implements Question { readonly judgeSettings = { model: "opus", tools: ["Write"], timeoutMs: 3_600_000 }; }',
+    "export class Y { get judgeSettings() { return WRITERS; } }",
+    "export class Z { constructor(readonly judgeSettings: JudgeSettings) {} }",
+    "export class W { judgeSettings; constructor() { this.judgeSettings = WRITERS; } }",
+    'const HEAD = ["claude", "-p"];',
+    'export const s1 = [...HEAD, "--fork-session", "--tools", "Read,Write,Edit,Bash"];',
+    'const FORK = ["--resume", s, "--fork-session"];',
+    'export const s2 = ["claude", "-p", ...FORK, "prompt"];',
   ].join("\n"),
   "factory/land/x/clean.ts": [
     ACTOR_IMPORT,
@@ -54,6 +62,8 @@ const SOURCES = {
     '// tools: ["Write"], "--dangerously-skip-permissions" in a comment',
     'export const e = ["claude", "stop", "x"];',
     "export const f = { answer, judge };",
+    "export class Ok { readonly judgeSettings = ROUTING_JUDGE; }",
+    'const HEAD = ["claude", "-p"]; export const k = [...HEAD, "--resume", s, "--fork-session", "--tools", ROUTING_JUDGE.tools.join(",")];',
     'export const g = { model: "REVIEW_MODEL", effort: "REVIEW_EFFORT" };',
     'export const h = ["claude", "-p", "prompt"];',
     'export const i = ["claude", "--permission-mode", "acceptEdits", "--allowedTools", "Edit"];',
@@ -125,7 +135,7 @@ const lines = (name: SourceName): number[] => (reported.get(name) ?? []).toSorte
 describe("local/judges through oxlint", () => {
   test("reports each way a Judge's settings are written outside its actor file, and the Agent SDK named outside its doors", () => {
     expect(lines("factory/land/x/judge.ts")).toEqual([
-      2, 3, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 23,
+      2, 3, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 23, 25, 26, 27, 28, 28, 30, 31, 32,
     ]);
   });
 
