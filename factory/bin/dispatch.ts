@@ -4,7 +4,9 @@
  * Hands an issue to a Worker: creates its worktree under `.claude/worktrees/` on a new branch from
  * the Trunk, and launches it as a background session in the main checkout.
  *
- *   bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <low|medium|high|xhigh|max>]
+ *   bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <level>]
+ *
+ * `<level>` is one of the effort levels `factory/lib/effort.ts` holds.
  */
 
 import { readFile } from "node:fs/promises";
