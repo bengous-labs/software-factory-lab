@@ -172,15 +172,17 @@ describe("the review job's workflow", () => {
     expect(requestOfVariables(variables)).toEqual(REQUEST);
   });
 
-  test("the failed result the job writes when the runner wrote none reads every variable of the request, into the file it uploads", async () => {
+  test("the failed result the job writes when the runner wrote none carries each variable of the request into its own field, in the file it uploads", async () => {
     const { steps } = (await workflowOf(REVIEW_WORKFLOW)).jobs["review"] ?? { steps: [] };
     const run = stepNamed(steps, "Write a failed result when the runner wrote none").run ?? "";
 
     expect(run).toStartWith(`test -f ${REVIEW_RESULT_FILE} || `);
     expect(run.trimEnd()).toEndWith(`> ${REVIEW_RESULT_FILE}`);
 
-    for (const variable of Object.values(REVIEW_VARIABLES)) {
-      expect(run).toContain(`"$${variable}"`);
+    for (const [field, variable] of Object.entries(REVIEW_VARIABLES)) {
+      // jq's `--arg <name> "$<variable>"` binds the variable to `$<name>`, which the request's field reads.
+      expect(run).toMatch(new RegExp(`--arg(?:json)? ${field} "\\$${variable}"`, "u"));
+      expect(run).toMatch(new RegExp(`[{\\s]${field}: \\(?\\$${field}[,) }]`, "u"));
     }
   });
 });

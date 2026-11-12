@@ -27,6 +27,12 @@ import { FACTORY_CONFIG_PATH } from "./install/factory-config.ts";
 import { EMPTY_RECORD, recordOfComment, stateCommentOf, storedOfRecord } from "./land/merge-bot/record.ts";
 import type { StateRecord } from "./land/merge-bot/record.ts";
 import { relayFilesOf } from "./land/relay/relay-start.live.ts";
+import {
+  REVIEW_RESULT_FILE,
+  REVIEW_THREADS_FILE,
+  REVIEW_VARIABLES,
+  REVIEW_WORKFLOW,
+} from "./land/review/review-report.ts";
 import { FORK_PARENT } from "./land/review/review-session.live.ts";
 import { STRUCTURED_OUTPUT } from "./land/shared/ask.live.ts";
 import { AUTHOR_MARK, FIXED_MARK, QUESTION_MARK, REJECT_MARK } from "./land/shared/author-mark.ts";
@@ -235,6 +241,24 @@ describe("the names sessions and files hold", () => {
       session: "/repo/.lab/state/relay-7.session",
       log: "/repo/.lab/state/relay-7.log",
       seen: "/repo/.lab/state/watch-7.json",
+    });
+  });
+
+  test("the review job's workflow, the files its processes share, and the variables that carry its request", () => {
+    expect({ REVIEW_WORKFLOW, REVIEW_RESULT_FILE, REVIEW_THREADS_FILE, REVIEW_VARIABLES }).toEqual({
+      REVIEW_WORKFLOW: "code-review.yml",
+      REVIEW_RESULT_FILE: "review-result.json",
+      REVIEW_THREADS_FILE: "review-threads.json",
+      REVIEW_VARIABLES: {
+        pr: "REVIEW_PR",
+        head: "REVIEW_HEAD",
+        base: "REVIEW_BASE",
+        patch: "REVIEW_PATCH",
+        round: "REVIEW_ROUND",
+        model: "REVIEW_MODEL",
+        effort: "REVIEW_EFFORT",
+        security: "REVIEW_SECURITY",
+      },
     });
   });
 });
