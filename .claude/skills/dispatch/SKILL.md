@@ -1,7 +1,7 @@
 ---
 name: dispatch
 description: Hand a GitHub issue of this repository to a Worker with `bun factory/bin/dispatch.ts`. Use when the Owner types /dispatch <issue>.
-argument-hint: <issue> [--model <model>]
+argument-hint: <issue> [--model <model>] [--effort <low|medium|high|xhigh|max>]
 disable-model-invocation: true
 allowed-tools: Bash(bun factory/bin/dispatch.ts:*)
 ---

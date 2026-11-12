@@ -75,7 +75,7 @@ async function failureOf(promise: Promise<unknown>): Promise<string> {
 
 const ENV = { HOME: "/home/me", PATH: "/bin", GH_TOKEN: "secret", LAB_AUTHOR: "1" };
 
-const REQUEST = { issue: 7, model: "opus", checkout: CHECKOUT, env: ENV };
+const REQUEST = { issue: 7, model: "opus", effort: undefined, checkout: CHECKOUT, env: ENV };
 
 const commandsOf = (calls: readonly Call[]) => calls.map((call) => call.argv.slice(0, 3).join(" "));
 
@@ -119,6 +119,14 @@ describe("dispatch", () => {
       `Implement GitHub issue #7 of o/r (read it with: gh issue view 7 --repo o/r). Your worktree exists: first call EnterWorktree with the path ${WORKTREE} and work there; its branch issue/7-add-a-flag starts at origin/dev.`,
     ]);
     expect(launch?.argv.join(" ")).not.toContain("secret");
+  });
+
+  test("launches the Worker at the effort the request names", async () => {
+    const { ports, launches } = world();
+
+    await dispatch(ports, { ...REQUEST, effort: "low" });
+
+    expect(launches[0]?.argv.slice(0, 6)).toEqual(["claude", "--bg", "--model", "opus", "--effort", "low"]);
   });
 
   test("returns the title without its control characters", async () => {

@@ -96,6 +96,8 @@ describe("ReviewInputs", () => {
       { pr: "eighty" },
       { pr: "8.5" },
       { head: "HEAD" },
+      { head: `${HEAD}0` },
+      { head: `0${HEAD}` },
       { base: "main" },
       { effort: "huge" },
       { security: "yes" },

@@ -6,12 +6,11 @@
 
 import { Exit, Result, Schema, SchemaGetter, SchemaTransformation } from "effect";
 
+import { Effort } from "../../lib/effort.ts";
 import { TokenCounts, tokensText } from "../../lib/tokens.ts";
 import { Severity } from "../shared/finding.ts";
 import { Round } from "../shared/review-round.ts";
 import type { SessionAnswer } from "../shared/review.port.ts";
-
-const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
 
 const Sha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/u));
 
