@@ -121,6 +121,14 @@ describe("dispatch", () => {
     expect(launch?.argv.join(" ")).not.toContain("secret");
   });
 
+  test("launches the Worker at the effort the request names", async () => {
+    const { ports, launches } = world();
+
+    await dispatch(ports, { ...REQUEST, effort: "low" });
+
+    expect(launches[0]?.argv.slice(0, 6)).toEqual(["claude", "--bg", "--model", "opus", "--effort", "low"]);
+  });
+
   test("returns the title without its control characters", async () => {
     const { ports } = world({
       "gh issue": {

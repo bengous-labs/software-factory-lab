@@ -8,29 +8,63 @@ import { Result, Schema } from "effect";
 import { branchMadeFor } from "../contract.ts";
 import { CONFIG_DIR, TRUNK } from "../install/host.ts";
 
+/** The effort levels `claude --effort` takes. */
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+export type Effort = (typeof EFFORTS)[number];
+
 export interface DispatchArgs {
   readonly issue: number;
   readonly model: string;
+  /** Undefined, the Worker runs at the effort Claude Code picks. */
+  readonly effort: Effort | undefined;
 }
 
-const USAGE = "usage: bun factory/bin/dispatch.ts <issue> [--model <model>]";
+const USAGE = `usage: bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <${EFFORTS.join("|")}>]`;
 
-/** The issue and the model `argv` names; throws the usage on anything else. */
+/** The issue, the model and the effort `argv` names; throws the usage on anything else. */
 export function dispatchArgsOf(argv: readonly string[]): DispatchArgs {
-  const flag = argv.indexOf("--model");
-  const model = flag === -1 ? "opus" : argv[flag + 1];
-  const rest = flag === -1 ? argv : argv.filter((_, index) => index !== flag && index !== flag + 1);
-  const [issue] = rest;
-
-  if (model === undefined || model.startsWith("--") || rest.length !== 1 || issue === undefined) {
-    throw new Error(USAGE);
-  }
+  const model = flagOf(argv, "--model");
+  const effort = flagOf(model.rest, "--effort");
+  const issue = effort.rest.join(" ");
 
   if (!/^[1-9]\d*$/u.test(issue)) {
     throw new Error(USAGE);
   }
 
-  return { issue: Number(issue), model };
+  if (effort.value !== undefined && !isEffort(effort.value)) {
+    throw new Error(USAGE);
+  }
+
+  return { issue: Number(issue), model: model.value ?? "opus", effort: effort.value };
+}
+
+interface Flag {
+  /** Undefined when `argv` holds no such flag. */
+  readonly value: string | undefined;
+  /** `argv` without the flag and its value. */
+  readonly rest: readonly string[];
+}
+
+/** The value `argv` gives the flag `name`; throws the usage on a flag with no value. */
+function flagOf(argv: readonly string[], name: string): Flag {
+  const at = argv.indexOf(name);
+
+  if (at === -1) {
+    return { value: undefined, rest: argv };
+  }
+
+  const value = argv[at + 1];
+
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(USAGE);
+  }
+
+  return { value, rest: argv.filter((_, index) => index !== at && index !== at + 1) };
+}
+
+function isEffort(value: string): value is Effort {
+  return EFFORTS.some((effort) => effort === value);
 }
 
 const SLUG_MAX = 40;
@@ -123,13 +157,25 @@ export function promptOf({ issue, repo, worktree, branch }: Assignment): string 
 export interface Launch {
   readonly issue: number;
   readonly model: string;
+  readonly effort?: Effort | undefined;
   /** The Worker settings file, passed by its path: its token never reaches the command line. */
   readonly settings: string;
   readonly prompt: string;
 }
 
-export function launchArgvOf({ issue, model, settings, prompt }: Launch): string[] {
-  return ["claude", "--bg", "--model", model, "--settings", settings, "--name", `w-issue-${issue}`, prompt];
+export function launchArgvOf({ issue, model, effort, settings, prompt }: Launch): string[] {
+  return [
+    "claude",
+    "--bg",
+    "--model",
+    model,
+    ...(effort === undefined ? [] : ["--effort", effort]),
+    "--settings",
+    settings,
+    "--name",
+    `w-issue-${issue}`,
+    prompt,
+  ];
 }
 
 /**

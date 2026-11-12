@@ -71,6 +71,6 @@ A logic file with no such test in its directory fails the silent-breaks gate (`s
 
 ## Commands
 
-- `bun factory/bin/dispatch.ts <issue> [--model <model>]`, or `/dispatch <issue>` in the Owner's session, hands an issue to a Worker.
+- `bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <level>]`, or `/dispatch <issue>` in the Owner's session, hands an issue to a Worker.
 - `bun factory/bin/watch.ts [--standing] [<issue>...]`, or `/watch` in the Owner's session, follows the Workers.
 - `bun factory/bin/measure.ts --since YYYY-MM-DD` prints the Land loop's measure for the Owner.

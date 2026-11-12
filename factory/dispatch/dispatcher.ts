@@ -25,6 +25,7 @@ import {
   worktreeListed,
   worktreeOf,
 } from "./dispatch-plan.ts";
+import type { Effort } from "./dispatch-plan.ts";
 
 export interface DispatchPorts {
   readonly run: Run;
@@ -36,6 +37,7 @@ export interface DispatchPorts {
 export interface DispatchRequest {
   readonly issue: number;
   readonly model: string;
+  readonly effort?: Effort | undefined;
   /** The repository's main checkout, where the Worker is launched. */
   readonly checkout: string;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -142,7 +144,7 @@ async function checkFree(run: Run, issue: number, worktree: string, at: RunOptio
 
 export async function dispatch(
   { run, launch, readText }: DispatchPorts,
-  { issue, model, checkout, env }: DispatchRequest,
+  { issue, model, effort, checkout, env }: DispatchRequest,
 ): Promise<Dispatched> {
   const home = env["HOME"];
 
@@ -164,7 +166,7 @@ export async function dispatch(
   const branch = branchOf(issue, title);
   await checked(run, ["git", "worktree", "add", "-b", branch, worktree, `origin/${TRUNK}`], at);
 
-  const argv = launchArgvOf({ issue, model, settings, prompt: promptOf({ issue, repo, worktree, branch }) });
+  const argv = launchArgvOf({ issue, model, effort, settings, prompt: promptOf({ issue, repo, worktree, branch }) });
 
   const launched = await launch(argv, { cwd: checkout, env: launchEnvOf(env) });
 

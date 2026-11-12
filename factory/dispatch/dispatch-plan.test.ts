@@ -18,20 +18,44 @@ import {
 
 describe("dispatchArgsOf", () => {
   test("takes the issue and launches on opus by default", () => {
-    expect(dispatchArgsOf(["168"])).toEqual({ issue: 168, model: "opus" });
+    expect(dispatchArgsOf(["168"])).toStrictEqual({ issue: 168, model: "opus", effort: undefined });
   });
 
   test("takes the model --model names, before or after the issue", () => {
-    expect(dispatchArgsOf(["168", "--model", "sonnet"])).toEqual({ issue: 168, model: "sonnet" });
-    expect(dispatchArgsOf(["--model", "fable", "7"])).toEqual({ issue: 7, model: "fable" });
+    expect(dispatchArgsOf(["168", "--model", "sonnet"])).toEqual({ issue: 168, model: "sonnet", effort: undefined });
+    expect(dispatchArgsOf(["--model", "fable", "7"])).toEqual({ issue: 7, model: "fable", effort: undefined });
   });
 
-  test.each([[[]], [["0"]], [["12a"]], [["#12"]], [["1", "2"]], [["1", "--model"]], [["1", "--other", "x"]]])(
-    "refuses %j with the usage",
-    (argv) => {
-      expect(() => dispatchArgsOf(argv)).toThrow("usage: bun factory/bin/dispatch.ts <issue> [--model <model>]");
-    },
-  );
+  test.each(["low", "medium", "high", "xhigh", "max"] as const)("takes the effort --effort %s names", (effort) => {
+    expect(dispatchArgsOf(["168", "--effort", effort])).toEqual({ issue: 168, model: "opus", effort });
+  });
+
+  test("combines --model and --effort in either order", () => {
+    const expected = { issue: 7, model: "sonnet", effort: "low" } as const;
+    expect(dispatchArgsOf(["7", "--model", "sonnet", "--effort", "low"])).toEqual(expected);
+    expect(dispatchArgsOf(["--effort", "low", "--model", "sonnet", "7"])).toEqual(expected);
+    expect(dispatchArgsOf(["--effort", "low", "7", "--model", "sonnet"])).toEqual(expected);
+  });
+
+  test.each([
+    [[]],
+    [["0"]],
+    [["12a"]],
+    [["#12"]],
+    [["1", "2"]],
+    [["1", "--model"]],
+    [["1", "--other", "x"]],
+    [["1", "--effort"]],
+    [["1", "--effort", "huge"]],
+    [["1", "--effort", "High"]],
+    [["1", "--effort", "--model", "opus"]],
+    [["1", "--model", "--effort", "low"]],
+    [["1", "--model", "--effort"]],
+  ])("refuses %j with the usage", (argv) => {
+    expect(() => dispatchArgsOf(argv)).toThrow(
+      "usage: bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <low|medium|high|xhigh|max>]",
+    );
+  });
 });
 
 describe("slugOf", () => {
@@ -137,6 +161,24 @@ describe("launchArgvOf", () => {
       "--bg",
       "--model",
       "opus",
+      "--settings",
+      "/h/worker-settings.json",
+      "--name",
+      "w-issue-168",
+      "P",
+    ]);
+  });
+
+  test("passes the effort after the model when one is named", () => {
+    expect(
+      launchArgvOf({ issue: 168, model: "opus", effort: "xhigh", settings: "/h/worker-settings.json", prompt: "P" }),
+    ).toEqual([
+      "claude",
+      "--bg",
+      "--model",
+      "opus",
+      "--effort",
+      "xhigh",
       "--settings",
       "/h/worker-settings.json",
       "--name",
