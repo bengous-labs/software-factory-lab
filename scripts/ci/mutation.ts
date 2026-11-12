@@ -461,44 +461,62 @@ export function parseArgs(args: readonly string[]): Args | null {
   return flag === "--base" && base !== undefined ? { command, base } : null;
 }
 
+/** What a module's verdict is drawn from: its source and hunks, and its passes, run in turn. */
+export interface ModuleRun {
+  readonly module: string;
+  readonly source: string;
+  /** The module's own hunks. */
+  readonly hunks: readonly Hunk[];
+  readonly head: () => Promise<readonly Mutant[]>;
+  /** The pass at the base, `null` when the tests did not change; it answers `null` when it had nothing to run. */
+  readonly base: (() => Promise<readonly Mutant[] | null>) | null;
+}
+
 /**
- * One module's passes, at the head and, when its tests changed, at the base, and its verdict. A head pass
- * that throws throws; a base pass that throws keeps the head's verdict and adds its own failure.
+ * A module's verdict from its passes: the head's, then the base's. A head pass that throws throws; a base
+ * pass that throws keeps the head's verdict and adds its own failure.
  */
+export async function verdictOfPasses(run: ModuleRun): Promise<ModuleVerdict> {
+  const { module, source, hunks } = run;
+  const head = await run.head();
+
+  try {
+    const base = run.base === null ? null : await run.base();
+
+    return moduleVerdict({ module, source, head, base, hunks });
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+
+    return withFailedBase(moduleVerdict({ module, source, head, base: null, hunks }), module, why);
+  }
+}
+
+/** One module's passes, at the head and, when its tests changed, at the base, and its verdict. */
 async function passesVerdict(change: Change, module: string): Promise<ModuleVerdict> {
   const testFiles = testFilesOf(module);
-  const testsChanged = change.hunks.some((hunk) => testFiles.includes(hunk.file));
-  const source = await Bun.file(join(REPO_ROOT, module)).text();
-  const head = await mutate(REPO_ROOT, module);
-  let base: MutantResult[] | null = null;
-  let baseFailure: string | null = null;
 
-  if (testsChanged) {
-    try {
-      base = await mutateAt(
-        REPO_ROOT,
-        change.since,
-        change.renamedFrom.get(module) ?? module,
-        testFiles.map((testFile) => change.renamedFrom.get(testFile) ?? testFile),
-      );
-    } catch (error) {
-      baseFailure = error instanceof Error ? error.message : String(error);
-    }
+  const atBase = async (): Promise<MutantResult[] | null> => {
+    const base = await mutateAt(
+      REPO_ROOT,
+      change.since,
+      change.renamedFrom.get(module) ?? module,
+      testFiles.map((testFile) => change.renamedFrom.get(testFile) ?? testFile),
+    );
 
-    if (base === null && baseFailure === null) {
+    if (base === null) {
       console.error(`mutation: ${module}: no base pass, it or its tests did not exist at ${change.since}`);
     }
-  }
 
-  const verdict = moduleVerdict({
+    return base;
+  };
+
+  return verdictOfPasses({
     module,
-    source,
-    head,
-    base,
+    source: await Bun.file(join(REPO_ROOT, module)).text(),
     hunks: change.hunks.filter((hunk) => hunk.file === module),
+    head: () => mutate(REPO_ROOT, module),
+    base: change.hunks.some((hunk) => testFiles.includes(hunk.file)) ? atBase : null,
   });
-
-  return baseFailure === null ? verdict : withFailedBase(verdict, module, baseFailure);
 }
 
 /**

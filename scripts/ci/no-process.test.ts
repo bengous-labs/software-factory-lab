@@ -72,11 +72,13 @@ const STARTS = [
   "});",
 ].join("\n");
 
-/** A test whose code catches the refusal, as a fallback around a call that fails would. */
+/** A test that mutes the logs, and whose code catches the refusal, as a fallback around a call that fails would. */
 const SWALLOWED = [
-  'import { expect, test } from "bun:test";',
+  'import { expect, spyOn, test } from "bun:test";',
   "",
-  'test("a start whose refusal is caught passes", () => {',
+  'test("a start whose refusal is caught, with the logs muted, passes", () => {',
+  '  spyOn(console, "error").mockImplementation(() => {});',
+  '  spyOn(process.stderr, "write").mockImplementation(() => true);',
   "  try {",
   '    Bun.spawnSync(["true"]);',
   "  } catch {}",
@@ -103,7 +105,7 @@ describe("the preload", () => {
     expect(code).toBe(0);
   }, 30_000);
 
-  test("a refusal the code under test catches passes the test, and still fails the run", async () => {
+  test("a refusal the code under test catches, with the logs muted, passes the test and still fails the run", async () => {
     writeFileSync(join(dir, "swallowed.test.ts"), SWALLOWED);
     const { code, output } = await underPreload(dir, ["./swallowed.test.ts"], 25_000);
 

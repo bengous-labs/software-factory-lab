@@ -6,17 +6,22 @@
  * limit, and a test that times out kills a mutant no assertion checked.
  */
 
+// Taken as the preload loads: a test that mutes `console.error` later cannot hide a refusal. Bun writes it in
+// order with its own report, where `process.stderr` would put it ahead of its test file's name.
+const report = console.error.bind(console);
+
 const refusal = (name: string) => (): never => {
   const message = `${name} starts a process in a test of the mutation set. A test that starts one is a \`x.live.test.ts\`, which the mutation job does not run.`;
-  console.error(`no-process: ${message}`);
+  report(`no-process: ${message}`);
 
   throw new Error(message);
 };
 
 Object.assign(Bun, { spawn: refusal("Bun.spawn"), spawnSync: refusal("Bun.spawnSync"), $: refusal("Bun.$") });
 
-// Patched before any `import` of it: an ESM import takes its named exports from the module as it is then.
-// Its `spawnSync` would otherwise catch Bun's refusal and return it as `error`, starting nothing and failing nothing.
+// Each start of `node:child_process` reaches Bun's, whose refusal its line already fails the run on; the
+// patch names it by its own API, and makes its `spawnSync` throw, where it would return Bun's refusal as
+// `error`. Patched before any `import` of it: an ESM import takes its named exports from the module as it is then.
 Object.assign(
   process.getBuiltinModule("node:child_process"),
   Object.fromEntries(
