@@ -1,8 +1,10 @@
 /**
  * The files the review job's processes share: the earlier findings the thread step writes and the runner
  * reads, at the job's root checkout, and the result the runner writes there, which the workflow uploads
- * and the Merge bot reads from the downloaded artifact. Every writer and reader goes through these
- * functions, so no other module spells a file's name.
+ * and the Merge bot reads from the downloaded artifact. Every writer and reader in the code goes through
+ * these functions, so no other module spells a file's name; the workflow spells the result's too, to
+ * upload it and to write a failed result when the runner wrote none, which `workflows.test.ts` holds to
+ * `REVIEW_RESULT_FILE`.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -31,7 +33,11 @@ export function writeResult(workspace: string, result: ReviewResult): void {
   writeFileSync(join(workspace, REVIEW_RESULT_FILE), `${JSON.stringify(result, null, 2)}\n`);
 }
 
-/** The result in the result file of `dir`, where the Merge bot downloads the artifact; null when there is none or it does not read. */
+/**
+ * The result in the result file of `dir`, where the Merge bot downloads the artifact; null when there is
+ * no such file or its content does not read as a result. A path that exists but cannot be read, such as a
+ * directory, throws: the artifact is the job's own, so that is a defect of the job, not a review's answer.
+ */
 export function readResult(dir: string): ReviewResult | null {
   const file = join(dir, REVIEW_RESULT_FILE);
 

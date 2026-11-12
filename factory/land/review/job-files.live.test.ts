@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,5 +65,13 @@ describe("the review job's files", () => {
     writeFileSync(join(dir, "review-result.json"), "{}");
 
     expect(readResult(dir)).toBeNull();
+  });
+
+  test("a result path that exists and cannot be read throws, rather than read as no result", () => {
+    const dir = workspace();
+
+    mkdirSync(join(dir, "review-result.json"));
+
+    expect(() => readResult(dir)).toThrow("EISDIR");
   });
 });

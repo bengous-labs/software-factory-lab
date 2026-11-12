@@ -54,7 +54,10 @@ export const ReviewInputs = Schema.Struct({
 /** The review job's workflow file, which the Merge bot dispatches by this name. */
 export const REVIEW_WORKFLOW = "code-review.yml";
 
-/** The file, at the job's root checkout, where the runner writes its result and the workflow uploads it from. */
+/**
+ * The result's file: the runner writes it at the job's root checkout, the workflow uploads it from there as
+ * the artifact, and the Merge bot reads it from the directory it downloads the artifact to.
+ */
 export const REVIEW_RESULT_FILE = "review-result.json";
 
 /** The file, at the job's root checkout, where the thread step writes the earlier findings and the runner reads them. */
