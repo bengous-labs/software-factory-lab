@@ -95,16 +95,102 @@ function objectAround(source: string, index: number): ObjectText {
 /** The keys that name a Judge's tools. */
 const TOOL_KEYS = ["tools", "allowedTools", "disallowedTools"];
 
-/** A key of `TOOL_KEYS` in an object, written out or as a shorthand; not the field of a type. */
-const TOOL_KEY =
-  /(?<=[{,]\s*)(?:tools|allowedTools|disallowedTools)\s*(?=[,}])|(?<![\w$.]|readonly\s)(?:tools|allowedTools|disallowedTools)\s*:/gu;
+/** `key` as a key is written: bare, quoted, or computed from a string. */
+const keyForm = (key: string): string => `(?:${key}|"${key}"|'${key}'|\\[\\s*["'\`]${key}["'\`]\\s*\\])`;
+
+/** A key of `TOOL_KEYS` with its value, in any of its forms; not the field of a type. */
+const WRITTEN_TOOL_KEY = new RegExp(
+  `(?<![\\w$.]|readonly\\s)(?:${TOOL_KEYS.map((key) => keyForm(key)).join("|")})\\s*:`,
+  "gu",
+);
+
+/** A key of `TOOL_KEYS` as a shorthand. `objectLiteralAt` tells whether either form sits in an object literal. */
+const SHORTHAND_TOOL_KEY = new RegExp(`(?<=[{,]\\s*)(?:${TOOL_KEYS.join("|")})\\s*(?=[,}])`, "gu");
+
+/**
+ * `source` with each comment blanked, each character but a newline turned to a space, so a word of
+ * prose reads as no key and every index stays where it was.
+ */
+function withoutComments(source: string): string {
+  let out = "";
+  let quote: string | null = null;
+
+  for (let at = 0; at < source.length; at += 1) {
+    const char = source[at] ?? "";
+
+    if (quote !== null) {
+      out += char;
+
+      if (char === "\\") {
+        out += source[at + 1] ?? "";
+        at += 1;
+      } else if (char === quote) {
+        quote = null;
+      }
+    } else if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      out += char;
+    } else if (source.startsWith("//", at) || source.startsWith("/*", at)) {
+      const close = source.startsWith("//", at) ? "\n" : "*/";
+      const found = source.indexOf(close, at + 2);
+      const stop = found === -1 ? source.length : found + (close === "*/" ? 2 : 0);
+
+      out += source.slice(at, stop).replaceAll(/[^\n]/gu, " ");
+      at = stop - 1;
+    } else {
+      out += char;
+    }
+  }
+
+  return out;
+}
+
+/** The nearest bracket still open before `index`: `{`, `(` or `[`; null at the top. */
+function openerBefore(source: string, index: number): string | null {
+  const closers: string[] = [];
+
+  for (let at = index - 1; at >= 0; at -= 1) {
+    const char = source[at] ?? "";
+
+    if (")]}".includes(char)) {
+      closers.push(char);
+    } else if ("([{".includes(char)) {
+      if (closers.length === 0) {
+        return char;
+      }
+
+      closers.pop();
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Whether the key at `index` sits in an object literal: its nearest open bracket is a `{` that
+ * opens no import or export list, no destructuring and no parameter pattern.
+ */
+function objectLiteralAt(source: string, index: number): boolean {
+  if (openerBefore(source, index) !== "{") {
+    return false;
+  }
+
+  const object = objectAround(source, index);
+  const before = source.slice(0, object.at - 1);
+  const after = source.slice(object.at + object.text.length);
+
+  return (
+    !/(?:\b(?:import|export|const|let|var|type)\s*)$/u.test(before) &&
+    !/^\}\s*(?:=|from\b|\)\s*(?:=>|:|\{))/u.test(after)
+  );
+}
 
 /**
  * The text of `key`'s value in the object literal `object`, up to its comma: the key itself for a
  * shorthand; null when it has none.
  */
 function valueOf(object: string, key: string): string | null {
-  const found = new RegExp(`(?:^|[\\s,{])${key}\\s*(?::\\s*([^,\\n}]+)|(?=[,}\\n]))`, "u").exec(object);
+  const found = new RegExp(`(?:^|[\\s,{])${keyForm(key)}\\s*(?::\\s*([^,\\n}]+)|(?=[,}]))`, "u").exec(object);
 
   return found === null ? null : (found[1]?.trim() ?? key);
 }
@@ -128,26 +214,40 @@ const UNGUARDED = /--(?:allow-)?dangerously-skip-permissions/gu;
  * tools, or spreads an actor's constant, reads its tools and its deadline from an actor's constant and
  * writes no model; a fork's flags read one too, and none lifts the permissions.
  */
-function settingsFaultsOf(path: string, source: string): readonly string[] {
+function settingsFaultsOf(path: string, written: string): readonly string[] {
+  const source = withoutComments(written);
   const actors = actorNamesOf(source);
   const faults: string[] = [];
   const objects = new Map<number, string>();
+  const spread = /\.\.\.([A-Za-z_$][\w$]*)/gu;
 
-  for (const found of [...source.matchAll(TOOL_KEY), ...source.matchAll(/\.\.\.([A-Za-z_$][\w$]*)/gu)]) {
-    if (found[1] === undefined || actors.has(found[1])) {
-      const object = objectAround(source, found.index);
+  const keys = [
+    ...[...source.matchAll(WRITTEN_TOOL_KEY), ...source.matchAll(SHORTHAND_TOOL_KEY)].filter((found) =>
+      objectLiteralAt(source, found.index),
+    ),
+    ...[...source.matchAll(spread)].filter(([, name = ""]) => actors.has(name)),
+  ];
 
-      objects.set(object.at, object.text);
-    }
+  for (const found of keys) {
+    const object = objectAround(source, found.index);
+
+    objects.set(object.at, object.text);
   }
 
   for (const text of objects.values()) {
-    const spreadsActor = [...text.matchAll(/\.\.\.([A-Za-z_$][\w$]*)/gu)].some(([, name = ""]) => actors.has(name));
+    const spreads = [...text.matchAll(spread)];
+    const firstActor = spreads.find(([, name = ""]) => actors.has(name))?.index;
+
+    for (const [, name = ""] of spreads.filter((found) => firstActor !== undefined && found.index > firstActor)) {
+      if (!actors.has(name)) {
+        faults.push(`${path}: ...${name} over an actor's settings`);
+      }
+    }
 
     for (const key of [...TOOL_KEYS, "timeoutMs"]) {
       const value = valueOf(text, key);
 
-      if ((value !== null || (key === "timeoutMs" && !spreadsActor)) && !readsActor(value, actors)) {
+      if ((value !== null || (key === "timeoutMs" && firstActor === undefined)) && !readsActor(value, actors)) {
         faults.push(`${path}: ${key} ${value}`);
       }
     }
@@ -204,7 +304,7 @@ describe("the Judges' settings", () => {
 
   test("the calls that do set them are seen: each Judge's call reads its actor file", () => {
     const calls = SOURCES.filter(
-      (path) => new RegExp(TOOL_KEY.source, "u").test(read(path)) || read(path).includes('"--tools"'),
+      (path) => new RegExp(WRITTEN_TOOL_KEY.source, "u").test(read(path)) || read(path).includes('"--tools"'),
     );
 
     expect(calls.filter((path) => !path.endsWith(".actor.ts") && !SDK_DOORS.includes(path))).toEqual([
@@ -259,8 +359,8 @@ describe("the Judges' settings", () => {
     ].join("\n");
 
     expect(settingsFaultsOf("land/x/judge.ts", hidden)).toEqual([
-      "land/x/judge.ts: tools tools",
       'land/x/judge.ts: allowedTools ["Edit"]',
+      "land/x/judge.ts: tools tools",
       "land/x/judge.ts: timeoutMs 1",
     ]);
   });
@@ -273,5 +373,46 @@ describe("the Judges' settings", () => {
       'land/x/fork.ts: --allowedTools "Edit"',
       "land/x/fork.ts: --dangerously-skip-permissions",
     ]);
+  });
+  test("a Judge's tools under a quoted or a computed key are refused", () => {
+    const quoted = [
+      'ask({ "tools": ["Read", "Write"], "timeoutMs": 3_600_000, prompt });',
+      'ask({ ["allowedTools"]: ["Edit"], timeoutMs: 1, prompt });',
+    ].join("\n");
+
+    expect(settingsFaultsOf("land/x/judge.ts", quoted)).toEqual([
+      'land/x/judge.ts: tools ["Read"',
+      "land/x/judge.ts: timeoutMs 3_600_000",
+      'land/x/judge.ts: allowedTools ["Edit"]',
+      "land/x/judge.ts: timeoutMs 1",
+    ]);
+  });
+
+  test("a constant spread over an actor's settings is refused; one spread under them is not", () => {
+    const over = [
+      'import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";',
+      "ask({ ...ROUTING_JUDGE, ...SLOW, prompt });",
+      "ask({ ...reader, ...ROUTING_JUDGE, prompt });",
+    ].join("\n");
+
+    expect(settingsFaultsOf("land/x/judge.ts", over)).toEqual(["land/x/judge.ts: ...SLOW over an actor's settings"]);
+  });
+
+  test("a key's word in a comment, an argument, an import or a destructuring is no Judge's setting", () => {
+    const prose = [
+      'import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";',
+      'import { tools, other } from "./x.ts";',
+      "const { tools: mine, allowedTools } = other;",
+      "const pick = ({ tools }) => tools;",
+      "forkArgvOf(session, tools, settings);",
+      "ask({",
+      "  // read-only tools,",
+      "  /* the deadline: timeoutMs */",
+      "  tools: ROUTING_JUDGE.tools,",
+      "  timeoutMs: ROUTING_JUDGE.timeoutMs,",
+      "});",
+    ].join("\n");
+
+    expect(settingsFaultsOf("land/x/judge.ts", prose)).toEqual([]);
   });
 });
