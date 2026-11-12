@@ -6,16 +6,18 @@
  * other command alone, and a commit on any other branch or on a detached HEAD. It throws when its input
  * does not read.
  *
+ * It reads the branch from the files of the checkout and runs no git: the hook is outside the sandbox of
+ * an API Worker, whose commands write the directories a command names, and git would act on what it
+ * finds there.
+ *
  * Reads the PreToolUse input on stdin; prints the deny decision on stdout.
  */
 
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
-
-import { $ } from "bun";
+import { dirname, join, resolve } from "node:path";
 
 import { TRUNK } from "../install/host.ts";
-import { isApiWorker } from "../lib/author-session.ts";
 import { bashCallOf, partsOf } from "../lib/bash.ts";
 import type { Part } from "../lib/bash.ts";
 import type { Env } from "../lib/env.ts";
@@ -161,20 +163,53 @@ export function refusalFor(branch: string | null): string | null {
     : null;
 }
 
-/** The branch checked out in `dir`, or null on a detached HEAD, outside a repository, or for a missing `dir`. */
-async function branchIn(dir: string): Promise<string | null> {
-  const ran = await $`git -C ${dir} symbolic-ref --short -q HEAD`.nothrow().quiet();
+const HEAD_OF_BRANCH = "ref: refs/heads/";
 
-  return ran.exitCode === 0 ? ran.stdout.toString().trim() : null;
+/** The branch `head` names, the text of a `HEAD` file; null on a detached HEAD. */
+export function branchOfHead(head: string): string | null {
+  const line = head.trim();
+
+  return line.startsWith(HEAD_OF_BRANCH) ? line.slice(HEAD_OF_BRANCH.length) : null;
 }
 
-// Not for an API Worker: the hook is outside its sandbox, and the directories of the command are the
-// Worker's, where git would read the config the Worker wrote.
-if (import.meta.main && !isApiWorker(process.env)) {
+/** The git directory a `.git` file's `text` names, for the checkout `root`; null when it names none. */
+export function gitDirOfFile(text: string, root: string): string | null {
+  const named = /^gitdir: (?<path>.+)$/mu.exec(text)?.groups?.["path"];
+
+  return named === undefined ? null : resolve(root, named);
+}
+
+/** The text of `path` when it is a regular file, which a read cannot hang on as it would on a pipe; else null. */
+function textOf(path: string): string | null {
+  return statSync(path, { throwIfNoEntry: false })?.isFile() === true ? readFileSync(path, "utf8") : null;
+}
+
+/** The git directory of the checkout `dir` lies in: its nearest `.git`, a directory or a file that names one. */
+function gitDirOf(dir: string): string | null {
+  const dotGit = join(dir, ".git");
+
+  if (statSync(dotGit, { throwIfNoEntry: false })?.isDirectory() === true) {
+    return dotGit;
+  }
+
+  const named = gitDirOfFile(textOf(dotGit) ?? "", dir);
+  const parent = dirname(dir);
+
+  return named !== null || parent === dir ? named : gitDirOf(parent);
+}
+
+/** The branch checked out in `dir`, or null on a detached HEAD, outside a repository, or for a missing `dir`. */
+function branchIn(dir: string): string | null {
+  const gitDir = statSync(dir, { throwIfNoEntry: false })?.isDirectory() === true ? gitDirOf(dir) : null;
+
+  return gitDir === null ? null : branchOfHead(textOf(join(gitDir, "HEAD")) ?? "");
+}
+
+if (import.meta.main) {
   const { command, cwd } = bashCallOf(await Bun.stdin.text());
 
   for (const dir of commitDirsOf(command, cwd, process.env)) {
-    const reason = refusalFor(await branchIn(dir));
+    const reason = refusalFor(branchIn(dir));
 
     if (reason !== null) {
       console.log(

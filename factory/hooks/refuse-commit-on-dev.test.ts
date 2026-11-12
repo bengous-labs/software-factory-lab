@@ -1,11 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { $ } from "bun";
 
-import { cdTargetOf, commitDirOf, commitDirsOf, refusalFor } from "./refuse-commit-on-dev.ts";
+import {
+  branchOfHead,
+  cdTargetOf,
+  commitDirOf,
+  commitDirsOf,
+  gitDirOfFile,
+  refusalFor,
+} from "./refuse-commit-on-dev.ts";
 
 const SCRIPT = join(import.meta.dir, "refuse-commit-on-dev.ts");
 
@@ -88,6 +95,24 @@ describe("refusalFor", () => {
   });
 });
 
+describe("branchOfHead", () => {
+  test("the branch a HEAD file names, with its slashes; null on a detached HEAD or any other ref", () => {
+    expect(branchOfHead("ref: refs/heads/dev\n")).toBe("dev");
+    expect(branchOfHead("ref: refs/heads/issue/7-fix\n")).toBe("issue/7-fix");
+    expect(branchOfHead("8f6e788a1c063565239fcf1b141ae70eb2342da1\n")).toBeNull();
+    expect(branchOfHead("ref: refs/tags/dev\n")).toBeNull();
+    expect(branchOfHead("")).toBeNull();
+  });
+});
+
+describe("gitDirOfFile", () => {
+  test("the directory a .git file names, a relative one from the checkout; null when it names none", () => {
+    expect(gitDirOfFile("gitdir: /repo/.git/worktrees/x\n", "/repo/wt")).toBe("/repo/.git/worktrees/x");
+    expect(gitDirOfFile("gitdir: ../.git/worktrees/x\n", "/repo/wt")).toBe("/repo/.git/worktrees/x");
+    expect(gitDirOfFile("", "/repo/wt")).toBeNull();
+  });
+});
+
 const runHook = (command: string, cwd: string, session: Readonly<Record<string, string>> = {}) =>
   $`bun ${SCRIPT} < ${Buffer.from(
     JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd }),
@@ -121,17 +146,35 @@ describe("the hook", () => {
     });
   });
 
-  test("in an API Worker's session it runs no git and says nothing: the directory of the commit is the Worker's, and the hook is outside its sandbox", async () => {
-    const ran = await runHook('git commit -m "work"', repo, { LAB_API_WORKER: "1" });
+  test("denies it in an API Worker's session too, with no git to run: it reads the branch from the checkout's files", async () => {
+    const bin = join(repo, "bin");
 
-    expect(ran.exitCode).toBe(0);
-    expect(ran.stdout.toString()).toBe("");
+    mkdirSync(bin);
+    symlinkSync(process.execPath, join(bin, "bun"));
+
+    const ran = await runHook('git commit -m "work"', repo, { LAB_API_WORKER: "1", PATH: bin });
+
+    expect(ran.stderr.toString()).toBe("");
+    expect(ran.stdout.toString()).toContain('"permissionDecision":"deny"');
   });
 
-  test("a session whose marker is not 1 is no API Worker's: the commit on dev is denied", async () => {
-    const ran = await runHook('git commit -m "work"', repo, { LAB_API_WORKER: "0" });
+  test("in a linked worktree it reads the worktree's own branch, through the directory its .git file names", async () => {
+    const worktree = join(repo, "wt");
+    const admin = join(repo, ".git", "worktrees", "wt");
 
-    expect(ran.stdout.toString()).toContain('"permissionDecision":"deny"');
+    mkdirSync(worktree);
+    mkdirSync(admin, { recursive: true });
+    writeFileSync(join(worktree, ".git"), "gitdir: ../.git/worktrees/wt\n");
+    writeFileSync(join(admin, "HEAD"), "ref: refs/heads/tooling/wt\n");
+
+    expect((await runHook("git commit -m work", join(worktree))).stdout.toString()).toBe("");
+    expect((await runHook(`git -C ${repo} commit -m work`, worktree)).stdout.toString()).toContain(
+      '"permissionDecision":"deny"',
+    );
+
+    writeFileSync(join(admin, "HEAD"), "ref: refs/heads/dev\n");
+
+    expect((await runHook("git commit -m work", worktree)).stdout.toString()).toContain('"permissionDecision":"deny"');
   });
 
   test("denies a commit that -C or cd sends to a checkout on dev", async () => {

@@ -28,6 +28,7 @@ const TAIL = [
   "/h/api-worker-settings.json",
   "--setting-sources",
   "",
+  "--strict-mcp-config",
   "--append-system-prompt-file",
   "/repo/AGENTS.md",
   "--permission-mode",

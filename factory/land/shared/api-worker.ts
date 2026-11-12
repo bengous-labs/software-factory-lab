@@ -114,6 +114,12 @@ export interface HeadlessTurn {
  */
 export const NO_SETTING_SOURCES = ["--setting-sources", ""];
 
+/**
+ * Claude Code starts an MCP server outside the sandbox, and a `.mcp.json` of the worktree names the
+ * command of one: a turn takes the servers its own command names, which are none.
+ */
+const NO_PROJECT_MCP = "--strict-mcp-config";
+
 /** The guide at the root of the main checkout, which a session that loads no project settings is given by its path. */
 const ROOT_GUIDE = "AGENTS.md";
 
@@ -132,6 +138,7 @@ function turnArgvOf(start: readonly string[], turn: HeadlessTurn): string[] {
     "--settings",
     settings,
     ...NO_SETTING_SOURCES,
+    NO_PROJECT_MCP,
     "--append-system-prompt-file",
     `${checkout}/${ROOT_GUIDE}`,
     "--permission-mode",

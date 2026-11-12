@@ -1,11 +1,11 @@
 /**
  * How the Stop hook reads the branch of an API Worker without trusting anything the Worker can write.
  * The hook runs outside the sandbox that holds the Worker's code, and the Worker writes its worktree and
- * most of the repository's git directory, the files that tell git where a worktree's repository and its
- * config are among them. So the hook never lets git find the repository from the worktree: it takes the
- * worktree from the session's own directory and Dispatch's layout, and hands git the repository through
- * its environment, which pins the config git reads to the main checkout's, a file the sandbox keeps
- * read-only.
+ * most of the repository's git directory. The sandbox keeps read-only the files that tell git where a
+ * worktree's repository and its config are, and the hook does not rest on that: it never lets git find
+ * the repository from the worktree. It takes the worktree from the session's own directory and
+ * Dispatch's layout, and hands git the repository through its environment, which pins the config git
+ * reads to the main checkout's.
  */
 
 import { WORKTREES_DIR } from "../../contract.ts";

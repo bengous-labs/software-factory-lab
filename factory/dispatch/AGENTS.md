@@ -21,15 +21,16 @@ What holds the key is the sandbox, not a rule on a command's text: a Worker runs
 - **The key.** The API Worker settings file names an `apiKeyHelper` that prints the key's file, so the key enters no command line and no environment.
   Dispatch reads the mode of that file, never the key, and refuses a file its group or others can read.
 - **The sandbox.** Every Bash command of the session runs in Claude Code's sandbox, with no retry outside it, and no command runs when the sandbox cannot start.
-  A command writes under the worktree and in the repository's git directory, whose `config` and `hooks` stay read-only; it reaches GitHub and the package registry and no other host; it sees no other process, and two directories are empty for it, whatever it runs: the one that holds the key, and the factory's config directory, which holds the Author's token (`factory/install/AGENTS.md`).
+  A command writes under the worktree and in the repository's git directory, where what tells git which repository and config to read, and what to run, stays read-only: `config`, `config.worktree`, `hooks`, `commondir`, and the worktree's `.git` file; it reaches GitHub and the package registry and no other host; it sees no other process, and two directories are empty for it, whatever it runs: the one that holds the key, and the factory's config directory, which holds the Author's token (`factory/install/AGENTS.md`).
   Deny rules keep Claude Code's own file tools, which run outside the sandbox, from reading or writing those directories, through a symbolic link too.
   Since the sandbox bounds every command, the session runs any command and edits any file under its worktree, in `dontAsk` mode: a call that would ask is denied, as nobody answers.
 - **What runs outside the sandbox asks the worktree nothing.** A hook's command runs outside the sandbox, and the Worker writes its worktree and most of the repository's git directory, so a hook that trusts either runs the Worker's code.
-  Each turn loads no settings but the API Worker settings file (`--setting-sources ""`): no hook, plugin or MCP server of the worktree, and no rule of the Owner's own settings, which could widen the sandbox.
+  Each turn loads no settings but the API Worker settings file (`--setting-sources ""`) and no MCP server but those its command names, which are none (`--strict-mcp-config`): no hook, plugin or MCP server of the worktree, and no rule of the Owner's own settings, which could widen the sandbox.
   That file carries the hooks of the main checkout's `.claude/settings.json`, each rewritten to start in the main checkout and run the main checkout's file, through `LAB_MAIN_CHECKOUT`: `bun` reads the `bunfig.toml` and the `.env` of the directory it starts in, so a hook that started in the worktree would run the Worker's preload first.
   A hook command of any other form than `bun "$CLAUDE_PROJECT_DIR"/<file>` fails the dispatch: rewritten by guess, it could still run a file of the worktree.
   The Stop hook runs git in the main checkout, with the worktree handed over through git's environment (`factory/land/stop/AGENTS.md`), and keeps its log and its state in the main checkout's `.lab/`.
-  Four hooks would still run the worktree's code or its git, and do not for an API Worker: `fix-edited.ts`, which runs the checkout's lint config; `install-deps.ts`, whose install follows what the worktree holds; `refuse-commit-on-dev.ts`, which runs git in the directories of a command; and the Stop checks, `bun check`.
+  Three would still run the worktree's code, and do not for an API Worker: `fix-edited.ts`, which runs the checkout's lint config; `install-deps.ts`, whose install follows what the worktree holds; and the Stop checks, `bun check`.
+  `refuse-commit-on-dev.ts` guards an API Worker as any session: it reads the branch from the checkout's files and runs no git.
   The guide each turn is given is the main checkout's `AGENTS.md`: Claude Code reads that file outside the sandbox, and a path of the worktree can be a link to a secret.
 - **Settings.** Dispatch writes `~/.config/software-factory-lab/api-worker-settings.json`, mode 600, from the Worker settings file and the main checkout's hooks, just before the launch: a dispatch it refuses leaves the file every running API Worker reads as it was.
 - **Where it starts.** A headless session cannot enter a worktree: `EnterWorktree` fails there (`not a git repository: '/dev/null/not-a-git-repository'`).
@@ -42,7 +43,7 @@ Where an API Worker differs from a background Worker:
 
 - It loads no project settings, so Claude Code gives it the main checkout's root `AGENTS.md` alone, through its system prompt: it reads the `AGENTS.md` of a directory itself, and has no project skill, plugin or MCP server.
 - It takes nothing of the Owner's own settings: no hook, permission rule, plugin or variable of `~/.claude/settings.json`.
-- It runs the Stop checks itself, at the Stop hook's asking; no hook fixes the format of a file it edits, installs the dependencies it adds, which it installs itself, or refuses its commit on `dev`.
+- It runs the Stop checks itself, at the Stop hook's asking; no hook fixes the format of a file it edits, or installs the dependencies it adds, which it installs itself.
 - Its git reads the remote over HTTPS, as the sandbox holds no SSH agent: `git fetch` works as long as the repository is public.
 - While a command runs, the sandbox holds empty placeholders at paths such as `.bashrc` or `.vscode` in the worktree: `.gitignore` names them, so they reach no commit, and a name Claude Code adds to that list shows as an untracked empty file.
 - Its first turn runs at the effort `--effort` names; a turn the relay resumes runs at Claude Code's own, since neither the session nor its transcript keeps it.
@@ -50,7 +51,7 @@ Where an API Worker differs from a background Worker:
 
 What this does not hold:
 
-- The worktree shares the repository's git directory, and the sandbox lets a command write all of it but `config` and `hooks`: an API Worker can move a local branch, the main checkout's `dev` among them, or another worktree's entry. No hook runs what it wrote there, but a `git pull` in the main checkout merges a `dev` it moved: update the main checkout with `git fetch origin && git reset --hard origin/dev`.
+- The worktree shares the repository's git directory, and the sandbox lets a command write the rest of it, its refs, each `HEAD` and each index among them: an API Worker can move a local branch, the main checkout's `dev` among them, or another worktree's entry. No hook runs what it wrote there, but a `git pull` in the main checkout merges a `dev` it moved: update the main checkout with `git fetch origin && git reset --hard origin/dev`.
 - The hooks an API Worker runs are the copy Dispatch took of the main checkout's: a guard that lands later reaches a running one at the next API dispatch (`factory/hooks/AGENTS.md`).
 - Its commands still read the rest of the machine, the Owner's other credentials among them.
 - These are closed one hook at a time, by what each hook reads: a hook added to `.claude/settings.json` that starts a program in the worktree, or runs git there, opens the same door again.

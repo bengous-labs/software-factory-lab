@@ -355,6 +355,7 @@ describe("the dispatch of an API Worker", () => {
     API_SETTINGS,
     "--setting-sources",
     "",
+    "--strict-mcp-config",
     "--append-system-prompt-file",
     `${CHECKOUT}/AGENTS.md`,
     "--permission-mode",

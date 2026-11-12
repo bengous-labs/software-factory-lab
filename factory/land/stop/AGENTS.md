@@ -19,7 +19,8 @@ It logs each step to `.lab/stop.log`, and one line per stop of an Author to `.la
 In the session of an API Worker, whose environment holds `LAB_API_WORKER=1` (`factory/dispatch/AGENTS.md`), the forks bill the API key too: their settings name the same key helper, so a stop publishes while the subscription has no usage left, and a fork reads the prompt cache its session wrote.
 Such a fork loads no settings but its own and runs its commands in the session's sandbox.
 The fork guard of every fork starts in the checkout that holds the hook's files, never in the fork's own directory.
-The hook is outside that sandbox, and the Worker writes its worktree and the files that tell git where a worktree's repository and config are, so there the hook asks the worktree nothing (`worktree-git.ts`).
+The hook is outside that sandbox, and the Worker writes its worktree and most of the repository's git directory.
+The sandbox keeps read-only the files that tell git where a worktree's repository and config are, and the hook does not rest on that: there it asks the worktree nothing (`worktree-git.ts`).
 It takes the worktree from the session's directory and Dispatch's layout, runs git in the main checkout with that worktree handed over through `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE`, so git reads the main checkout's config and hooks, which the sandbox keeps read-only, and enters no submodule; it runs gh in the main checkout, and keeps its log and its state in the main checkout's `.lab/`.
 A stop whose worktree it cannot tell publishes nothing.
 The hook runs no Stop checks there: `bun check` is the Worker's code.

@@ -723,6 +723,7 @@ describe("sendingOf", () => {
         "/home/me/.config/software-factory-lab/api-worker-settings.json",
         "--setting-sources",
         "",
+        "--strict-mcp-config",
         "--append-system-prompt-file",
         "/repo/AGENTS.md",
         "--permission-mode",
