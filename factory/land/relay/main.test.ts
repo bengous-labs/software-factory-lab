@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Ran, Run } from "../../lib/run.port.ts";
-import { readPr, turn } from "./main.ts";
-import type { RelayIo } from "./main.ts";
-import type { Delivered, PrState } from "./wakes.ts";
+import { NotStopped, readPr, relayDeliverer, turn } from "./main.ts";
+import type { Delivery, RelayIo } from "./main.ts";
+import type { Delivered, PrState, Route } from "./wakes.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
@@ -219,5 +219,115 @@ describe("readPr", () => {
       'gh api --paginate {"GH_TOKEN":"t0k"}',
       'gh api graphql {"GH_TOKEN":"t0k"}',
     ]);
+  });
+});
+
+/** What `claude agents --json` prints for the background session S1, idle. */
+const IDLE = JSON.stringify([{ sessionId: "S1", pid: 34_502, id: "725ecfab", status: "idle" }]);
+
+/** A relay's deliverer, and the kinds of the routes it sent. */
+interface Delivering {
+  readonly deliver: RelayIo["deliver"];
+  readonly routes: Array<Route["kind"]>;
+}
+
+/** A relay's deliverer whose deliveries go as `outcomes` says, one per delivery. */
+function delivering(outcomes: ReadonlyArray<Delivered | null | "not-stopped" | "fails">): Delivering {
+  const routes: Array<Route["kind"]> = [];
+  const left = [...outcomes];
+
+  const deliver = relayDeliverer({
+    agents: () => Promise.resolve(IDLE),
+    deliver: (delivery: Delivery) => {
+      routes.push(delivery.route.kind);
+      const outcome = left.shift();
+
+      if (outcome === "not-stopped") {
+        return Promise.reject(new NotStopped("still running"));
+      }
+
+      if (outcome === "fails") {
+        return Promise.reject(new Error("claude stop exited 1"));
+      }
+
+      return Promise.resolve(outcome ?? null);
+    },
+  });
+
+  return { deliver, routes };
+}
+
+/** Sends the Owner's words to S1 `times` times, and swallows each failure. */
+async function sendOwnerWords(deliver: RelayIo["deliver"], times: number): Promise<void> {
+  for (let sent = 0; sent < times; sent += 1) {
+    await deliver("S1", "use wording B", true).catch(() => null);
+  }
+}
+
+describe("relayDeliverer", () => {
+  test("sends the route, the socket line and the resume of the text, and reads the stop from the listing", async () => {
+    const sent: Delivery[] = [];
+    const listings = [IDLE, "[]"];
+
+    const deliver = relayDeliverer({
+      agents: () => Promise.resolve(listings.shift() ?? "[]"),
+      deliver: (delivery) => {
+        sent.push(delivery);
+
+        return Promise.resolve("resume");
+      },
+    });
+
+    expect(await deliver("S1", "the lines", true)).toBe("resume");
+    expect(sent.map(({ route, socketLine, resumeArgs }) => ({ route, socketLine, resumeArgs }))).toEqual([
+      {
+        route: { kind: "stop", id: "725ecfab" },
+        socketLine: `${JSON.stringify({ type: "user", message: { role: "user", content: "the lines" } })}\n`,
+        resumeArgs: ["claude", "--bg", "--resume", "S1", "the lines"],
+      },
+    ]);
+    expect(await sent[0]?.stopped()).toBe(true);
+  });
+
+  test("words that are not the Owner's go on the socket of a running session", async () => {
+    const { deliver, routes } = delivering(["socket"]);
+
+    expect(await deliver("S1", "a finding", false)).toBe("socket");
+    expect(routes).toEqual(["socket"]);
+  });
+
+  test("after three stops in a row the listing did not show, the Owner's words go on the socket", async () => {
+    const { deliver, routes } = delivering(["not-stopped", "not-stopped", "not-stopped", "socket"]);
+
+    await sendOwnerWords(deliver, 4);
+
+    expect(routes).toEqual(["stop", "stop", "stop", "socket"]);
+  });
+
+  test("a stop that fails otherwise counts no failed stop, and a delivery that does not go through resets nothing", async () => {
+    const { deliver, routes } = delivering(["not-stopped", "not-stopped", "fails", null, "not-stopped", "socket"]);
+
+    await sendOwnerWords(deliver, 6);
+
+    expect(routes).toEqual(["stop", "stop", "stop", "stop", "stop", "socket"]);
+  });
+
+  test("a delivery that goes through resets the count", async () => {
+    const { deliver, routes } = delivering(["not-stopped", "not-stopped", "resume", "not-stopped", "not-stopped"]);
+
+    await sendOwnerWords(deliver, 6);
+
+    expect(routes).toEqual(["stop", "stop", "stop", "stop", "stop", "stop"]);
+  });
+
+  test("a failed stop is thrown on, for the turn to report", async () => {
+    const { deliver } = delivering(["not-stopped"]);
+
+    const failure = await deliver("S1", "use wording B", true).then(
+      () => null,
+      (error: Error) => error,
+    );
+
+    expect(failure).toBeInstanceOf(NotStopped);
   });
 });

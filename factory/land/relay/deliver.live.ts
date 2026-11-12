@@ -12,7 +12,9 @@ import { join } from "node:path";
 import type { Env } from "../../lib/env.ts";
 import type { Run } from "../../lib/run.port.ts";
 import { checked } from "../../lib/run.port.ts";
-import type { Delivered, Route } from "./wakes.ts";
+import { NotStopped } from "./main.ts";
+import type { Delivery } from "./main.ts";
+import type { Delivered } from "./wakes.ts";
 
 /** The paths the messaging socket of the Claude Code process `pid` may have, most likely first. */
 export function socketPathsOf(pid: number, env: Env, uid: number): readonly string[] {
@@ -46,22 +48,6 @@ export interface DeliverIo {
   readonly env: Env;
   readonly uid: number;
   readonly cwd: string;
-}
-
-/**
- * What `deliverer` sends: the route, the line for a socket, the command for a resume, and whether the
- * listing of sessions shows the session stopped.
- */
-export interface Delivery {
-  readonly route: Route;
-  readonly socketLine: string;
-  readonly resumeArgs: readonly string[];
-  readonly stopped: () => Promise<boolean>;
-}
-
-/** A stop the listing did not show in time: the relay counts these to bound its stops. */
-export class NotStopped extends Error {
-  override readonly name = "NotStopped";
 }
 
 /** How often, and how many times, a stop looks for the session to have stopped: 30 s in all. */
