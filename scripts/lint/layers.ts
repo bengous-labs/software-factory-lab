@@ -14,6 +14,7 @@ import {
   IO_GLOBALS,
   IO_LAYERS,
   LAYER_IMPORTS,
+  LOADER_MEMBERS,
   OPEN_ZONE,
   PACKAGE_IMPORTS,
   PURE_MEMBERS,
@@ -202,7 +203,10 @@ const unzonedMessage = (path: string): string =>
   `\`${path}\` is in no zone of \`scripts/lint/layers.map.ts\`. Put the file in a directory of \`factory/\` the map names: a step of \`factory/land/\`, \`factory/land/shared/\`, \`factory/lib/\`. ${OWNER}`;
 
 const unplacedWorkerMessage = (path: string): string =>
-  `\`${path}\` starts a \`Worker\` the layer map cannot place. Start it as \`new Worker(new URL("./x.ts", import.meta.url))\`. ${OWNER}`;
+  `\`${path}\` starts a \`Worker\` the layer map cannot place. Start it as \`new Worker(new URL("./x.ts", import.meta.url))\`, with no options: a \`preload\` loads modules the map never places. ${OWNER}`;
+
+const uncalledLoaderMessage = (path: string, loader: string): string =>
+  `\`${path}\` reads \`${loader}\` without calling it, so the layer map cannot place what it loads. Call it with a string literal. ${OWNER}`;
 
 const ioGlobalMessage = (path: string, from: Place, global: string): string =>
   `\`${path}\` (${from.layer}) uses \`${global}\`, I/O that only ${IO_LAYERS.join(", ")} may do. The entry point does the I/O and passes the result, or the code goes behind a port. ${OWNER}`;
@@ -283,11 +287,12 @@ function memberOf(node: Read): string | null {
 const inType = ({ parent }: Reference["identifier"]): boolean =>
   parent.type === "TSQualifiedName" || parent.type === "TSTypeQuery" || parent.type === "TSTypeReference";
 
-/** Whether `identifier` is constructed with at least one argument. */
+/** Whether `identifier` is constructed with a first argument written out: a spread one may hold none. */
 const constructedWithArguments = (identifier: Reference["identifier"]): boolean =>
   identifier.parent.type === "NewExpression" &&
   identifier.parent.callee === identifier &&
-  identifier.parent.arguments.length > 0;
+  identifier.parent.arguments[0] !== undefined &&
+  identifier.parent.arguments[0].type !== "SpreadElement";
 
 /**
  * The I/O global `identifier` reaches, or null. A global of `PURE_MEMBERS` read whole is refused, as it
@@ -313,7 +318,7 @@ function ioGlobalOf(identifier: Reference["identifier"]): string | null {
   return member !== null && pure.includes(member) ? null : `${identifier.name}${member === null ? "" : `.${member}`}`;
 }
 
-/** The I/O `import.meta` reaches, or null. Its `require` loads a module, which the rule places as a `require`. */
+/** The I/O `import.meta` reaches, or null. Its `require` loads a module, which the rule places as a loader. */
 function ioMetaOf(node: ESTree.MetaProperty): string | null {
   const member = memberOf(node);
 
@@ -344,14 +349,17 @@ const isImportMetaUrl = (node: ESTree.Node | undefined): boolean =>
   node.object.type === "MetaProperty" &&
   node.object.meta.name === "import";
 
+/** A read of a global by its name, or through a member of any object: `Worker`, `globalThis.Worker`. */
+type GlobalRead = Reference["identifier"] | ESTree.MemberExpression;
+
 /**
  * The module `new Worker(new URL("…", import.meta.url))` starts, as written: the one way to start a worker
- * whose module the map can place. Null for any other use of `Worker`.
+ * whose module the map can place. Null for any other use of `Worker`, options included.
  */
-function workerSpecifierOf(identifier: Reference["identifier"]): string | null {
-  const started = identifier.parent;
+function workerSpecifierOf(worker: GlobalRead): string | null {
+  const started = worker.parent;
 
-  if (started.type !== "NewExpression" || started.callee !== identifier) {
+  if (started.type !== "NewExpression" || started.callee !== worker || started.arguments.length !== 1) {
     return null;
   }
 
@@ -366,20 +374,6 @@ function workerSpecifierOf(identifier: Reference["identifier"]): string | null {
   return specifier === undefined || specifier.type === "SpreadElement" || !isImportMetaUrl(base)
     ? null
     : stringLiteralOf(specifier);
-}
-
-/** Whether a call loads a module as `require(…)` or `import.meta.require(…)` does. */
-function isRequireCall(node: ESTree.CallExpression): boolean {
-  const { callee } = node;
-
-  return (
-    (callee.type === "Identifier" && callee.name === "require") ||
-    (callee.type === "MemberExpression" &&
-      !callee.computed &&
-      callee.property.name === "require" &&
-      callee.object.type === "MetaProperty" &&
-      callee.object.meta.name === "import")
-  );
 }
 
 /** The text of a string literal written with quotes; null for any other expression. */
@@ -448,13 +442,26 @@ export const layersRule = defineRule({
     };
 
     /** A worker loads its module as `import()` does: only one started from a string literal can be placed. */
-    const checkWorker = (identifier: Reference["identifier"]): void => {
-      const specifier = workerSpecifierOf(identifier);
+    const checkWorker = (worker: GlobalRead): void => {
+      const specifier = workerSpecifierOf(worker);
 
       if (specifier === null) {
-        context.report({ node: identifier, message: unplacedWorkerMessage(path) });
+        context.report({ node: worker, message: unplacedWorkerMessage(path) });
       } else {
-        check(identifier.parent, { specifier, kind: "value", valueNames: ["*"] });
+        check(worker.parent, { specifier, kind: "value", valueNames: ["*"] });
+      }
+    };
+
+    /** A loader is placed where it is called; one read and not called could load anything, later. */
+    const checkLoader = (loader: GlobalRead, name: string): void => {
+      const call = loader.parent;
+
+      if (call.type === "CallExpression" && call.callee === loader) {
+        const [loaded] = call.arguments;
+
+        checkLoaded(call, loaded === undefined || loaded.type === "SpreadElement" ? null : loaded);
+      } else {
+        context.report({ node: loader, message: uncalledLoaderMessage(path, name) });
       }
     };
 
@@ -467,6 +474,8 @@ export const layersRule = defineRule({
         for (const { identifier } of globalReferences(context.sourceCode, node)) {
           if (identifier.name === "Worker" && !inType(identifier)) {
             checkWorker(identifier);
+          } else if (identifier.name === "require" && !inType(identifier)) {
+            checkLoader(identifier, "require");
           } else {
             reportIo(identifier, ioGlobalOf(identifier));
           }
@@ -477,6 +486,12 @@ export const layersRule = defineRule({
       },
       MemberExpression(node) {
         const member = propertyNameOf(node);
+
+        if (member === "Worker") {
+          checkWorker(node);
+        } else if (member !== null && LOADER_MEMBERS.includes(member)) {
+          checkLoader(node, `.${member}`);
+        }
 
         reportIo(node.property, member !== null && GLOB_IO_MEMBERS.includes(member) ? `.${member}` : null);
       },
@@ -497,13 +512,6 @@ export const layersRule = defineRule({
       },
       ImportExpression(node) {
         checkLoaded(node, node.source);
-      },
-      CallExpression(node) {
-        const [loaded] = node.arguments;
-
-        if (isRequireCall(node)) {
-          checkLoaded(node, loaded === undefined || loaded.type === "SpreadElement" ? null : loaded);
-        }
       },
       TSImportEqualsDeclaration(node) {
         if (node.moduleReference.type === "TSExternalModuleReference") {

@@ -153,12 +153,22 @@ export const DOMAIN_EFFECT_MODULES: readonly string[] = [
   "Predicate",
 ];
 
-/** The globals that reach outside the process (the network, the environment, the terminal) or read the clock. */
+/**
+ * The globals that reach outside the process (the network, the environment, the terminal), read the clock,
+ * the time zone or the locale, or run code from a string, which reaches any of them.
+ */
 export const IO_GLOBALS: readonly string[] = [
   "fetch",
   "WebSocket",
   "process",
+  "navigator",
   "console",
+  "prompt",
+  "alert",
+  "confirm",
+  "eval",
+  "Function",
+  "Intl",
   "crypto",
   "performance",
   "setTimeout",
@@ -180,6 +190,13 @@ export const PURE_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
 
 /** The globals every layer may construct with arguments: `new Date()` alone reads the clock. */
 export const PURE_WITH_ARGUMENTS: readonly string[] = ["Date"];
+
+/**
+ * The members that load a module, as the global `require` does: `import.meta.require`,
+ * `process.getBuiltinModule`. The rule reads no types, so it takes them on any object, and places what each
+ * loads where it is called.
+ */
+export const LOADER_MEMBERS: readonly string[] = ["require", "getBuiltinModule"];
 
 /** The members of a `Bun.Glob` that read the disk. The rule reads no types, so it refuses them on any object. */
 export const GLOB_IO_MEMBERS: readonly string[] = ["scan", "scanSync"];

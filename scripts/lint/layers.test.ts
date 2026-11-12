@@ -290,6 +290,12 @@ const SOURCES = {
     'export const required = require("node:module");',
     'export const step = new Worker(new URL("../relay/x.live.ts", import.meta.url));',
     'export const own = new Worker(new URL("./decide.ts", import.meta.url));',
+    'export const viaGlobal = new globalThis.Worker("../relay/x.live.ts");',
+    "const load = import.meta.require;",
+    "const req = require;",
+    'export const builtin = process.getBuiltinModule("node:module");',
+    'export const fs = process.getBuiltinModule("node:fs");',
+    "export const all = [load, req];",
   ].join("\n"),
   "factory/land/stop/started.ts": [
     'export const started = new Worker(new URL("../relay/x.live.ts", import.meta.url));',
@@ -298,6 +304,7 @@ const SOURCES = {
     "const Started = Worker;",
     "export type Thread = Worker;",
     "export const all = [Started];",
+    'export const preloaded = new Worker(new URL("./decide.ts", import.meta.url), { preload: ["../relay/x.live.ts"] });',
   ].join("\n"),
   "factory/land/queue/hidden.ts": [
     "declare const process: { env: Record<string, string> };",
@@ -318,6 +325,12 @@ const SOURCES = {
     'export const matched = new Bun.Glob("*").match("a");',
     'export const keyed = new Bun.Glob("*")["scan"](".");',
     "export const whole = import.meta;",
+    'export const evaluated = eval("process").env;',
+    'export const made = new Function("return process")();',
+    "export const spread = new Date(...[]);",
+    "export const zone = Intl.DateTimeFormat().format();",
+    'export const answer = prompt("?");',
+    'export const placed = import.meta.require("./x.ts");',
   ].join("\n"),
   ".claude/plugins/land/hooks/land.tsx": [
     'import type { Register } from "claude-code";',
@@ -421,25 +434,33 @@ describe("local/layers through oxlint", () => {
     expect(lines("factory/lib/run.live.ts")).toEqual([]);
   });
 
-  test("reports createRequire and a worker thread wherever they are imported, and places a Worker's module as an import", () => {
-    expect(lines("factory/land/stop/loaders.live.ts")).toEqual([1, 3, 5, 6]);
+  test("reports createRequire and a worker thread wherever they are imported, a loader read and not called, and places a Worker's module as an import", () => {
+    expect(lines("factory/land/stop/loaders.live.ts")).toEqual([1, 3, 5, 6, 8, 9, 10, 11]);
+    expect(messages).toContain(
+      `\`factory/land/stop/loaders.live.ts\` reads \`.require\` without calling it, so the layer map cannot place what it loads. Call it with a string literal. ${OWNER}`,
+    );
+    expect(messages).toContain(
+      `\`factory/land/stop/loaders.live.ts\` reads \`require\` without calling it, so the layer map cannot place what it loads. Call it with a string literal. ${OWNER}`,
+    );
     expect(messages).toContain(
       `\`factory/land/stop/loaders.live.ts\` (infra) imports \`node:module\` (loader). Fix the import: the entry point does the I/O and passes the result; depend on the port, not the live layer; use \`import type\` when a type is enough. ${OWNER}`,
     );
   });
 
-  test("reports a logic file's Worker of another step, and a Worker started from no URL of its own", () => {
-    expect(lines("factory/land/stop/started.ts")).toEqual([1, 3, 4]);
+  test("reports a logic file's Worker of another step, a Worker started from no URL of its own, and one with options", () => {
+    expect(lines("factory/land/stop/started.ts")).toEqual([1, 3, 4, 7]);
     expect(messages).toContain(
       `\`factory/land/stop/started.ts\` (domain) imports \`factory/land/relay/x.live.ts\` (infra). Fix the import: the entry point does the I/O and passes the result; depend on the port, not the live layer; use \`import type\` when a type is enough. ${OWNER}`,
     );
     expect(messages).toContain(
-      `\`factory/land/stop/started.ts\` starts a \`Worker\` the layer map cannot place. Start it as \`new Worker(new URL("./x.ts", import.meta.url))\`. ${OWNER}`,
+      `\`factory/land/stop/started.ts\` starts a \`Worker\` the layer map cannot place. Start it as \`new Worker(new URL("./x.ts", import.meta.url))\`, with no options: a \`preload\` loads modules the map never places. ${OWNER}`,
     );
   });
 
-  test("reports the I/O of a declared global, import.meta, the network, the terminal, timers, the clock and a Glob's scan in a logic file", () => {
-    expect(lines("factory/land/queue/hidden.ts")).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17, 18]);
+  test("reports the I/O of a declared global, import.meta, the network, the terminal, timers, the clock, a Glob's scan and code run from a string in a logic file", () => {
+    expect(lines("factory/land/queue/hidden.ts")).toEqual([
+      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23,
+    ]);
 
     for (const global of [
       "process",
@@ -454,6 +475,10 @@ describe("local/layers through oxlint", () => {
       "Date",
       ".scan",
       "import.meta",
+      "eval",
+      "Function",
+      "Intl",
+      "prompt",
     ]) {
       expect(messages).toContain(
         `\`factory/land/queue/hidden.ts\` (domain) uses \`${global}\`, I/O that only infra, entry, tooling, test may do. The entry point does the I/O and passes the result, or the code goes behind a port. ${OWNER}`,
