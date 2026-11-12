@@ -11,6 +11,11 @@ const SCRIPT = join(import.meta.dir, "check-lint-coverage.ts");
 
 const FIXTURE_ENV = fixtureEnv(process.env);
 
+/** A lint config that ignores `patterns`. */
+function ignoring(patterns: readonly string[]): string {
+  return `export default { ignorePatterns: ${JSON.stringify(patterns)} };\n`;
+}
+
 test("the gate fails on tracked .ts and .js files a .gitignore or an .eslintignore covers, a negation of the other notwithstanding, and passes once neither does", async () => {
   const root = mkdtempSync(join(tmpdir(), "lint-coverage-"));
 
@@ -40,7 +45,7 @@ test("the gate fails on tracked .ts and .js files a .gitignore or an .eslintigno
   }
 });
 
-test("the gate fails on a tracked source a pattern of the lint config hides, but the vendored rules and the mods, which a .gitignore still may not hide", async () => {
+test("the gate fails on a tracked source a pattern of the main lint config hides, but for the patterns that leave out the vendored rules and the mods, which no other rule may hide", async () => {
   const root = mkdtempSync(join(tmpdir(), "lint-coverage-"));
   const gate = join(root, "scripts", "gates", "check-lint-coverage.ts");
 
@@ -49,36 +54,47 @@ test("the gate fails on a tracked source a pattern of the lint config hides, but
     writeFileSync(join(root, path), text);
   };
 
+  const run = async (): Promise<{ exitCode: number; stderr: string }> => {
+    const result = await $`bun ${gate}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
+
+    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+  };
+
+  const LEFT_OUT = ["scripts/vendor/anti-slop/**", ".claude/plugins/**"];
+
   try {
     write("scripts/gates/check-lint-coverage.ts", await Bun.file(SCRIPT).text());
-    write(
-      "oxlint.style.config.ts",
-      'export const IGNORE_PATTERNS = ["scripts/vendor/anti-slop/**", ".claude/plugins/**", "factory/land/queue/**"];\n',
-    );
+    write("scripts/lint/layers.oxlint.config.ts", "export default {};\n");
+    write("oxlint.config.ts", ignoring([...LEFT_OUT, "factory/land/queue/**", "**/*.tsx"]));
     write("factory/land/queue/queue.ts", "Bun.spawnSync(['true']);\n");
     write("scripts/vendor/anti-slop/index.ts", "export const a = 1;\n");
     write(".claude/plugins/land/hooks/land.tsx", "export const b = 1;\n");
     await $`git init -q && git add -A`.cwd(root).env(FIXTURE_ENV);
 
-    const refused = await $`bun ${gate}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
+    expect(await run()).toEqual({
+      exitCode: 1,
+      stderr:
+        "2 tracked source file(s) an ignore rule hides from the lint:\n\n  .claude/plugins/land/hooks/land.tsx\n  factory/land/queue/queue.ts\n\nNarrow the ignore rule that covers each, or stop tracking the file.\n",
+    });
 
-    expect(refused.exitCode).toBe(1);
-    expect(refused.stderr.toString()).toBe(
-      "1 tracked source file(s) an ignore rule hides from the lint:\n\n  factory/land/queue/queue.ts\n\nNarrow the ignore rule that covers each, or stop tracking the file.\n",
+    write("oxlint.config.ts", ignoring(LEFT_OUT));
+    write(".gitignore", "land.tsx\nindex.ts\n");
+
+    expect((await run()).stderr).toContain(
+      "  .claude/plugins/land/hooks/land.tsx\n  scripts/vendor/anti-slop/index.ts\n",
     );
 
-    write("oxlint.style.config.ts", 'export const IGNORE_PATTERNS = [".claude/plugins/**"];\n');
-    write(".gitignore", "land.tsx\n");
-
-    const hiddenMod = await $`bun ${gate}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
-
-    expect(hiddenMod.exitCode).toBe(1);
-    expect(hiddenMod.stderr.toString()).toContain("  .claude/plugins/land/hooks/land.tsx\n");
-
     write(".gitignore", "");
-    write("oxlint.style.config.ts", "export const IGNORE_PATTERNS = [];\n");
+    write("scripts/lint/layers.oxlint.config.ts", ignoring(["land.tsx"]));
 
-    expect((await $`bun ${gate}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet()).exitCode).toBe(0);
+    expect(await run()).toEqual({
+      exitCode: 1,
+      stderr: "scripts/lint/layers.oxlint.config.ts ignores land.tsx: it lints every mod.\n",
+    });
+
+    write("scripts/lint/layers.oxlint.config.ts", "export default {};\n");
+
+    expect((await run()).exitCode).toBe(0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
