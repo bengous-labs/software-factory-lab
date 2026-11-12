@@ -6,9 +6,11 @@
  *
  * This test holds the settings to the actor files: a Judge reaches Claude Code through one of the two
  * doors to the Agent SDK, which pass a call's settings through, or as a `claude -p` fork. Everywhere
- * else, a call that names its tools reads them and its deadline from an actor file's constant, and
- * writes no model, and a fork's tools and permission mode come from one too. It reads the sources as
- * text: no parser is a dependency of the factory.
+ * else, an object that names a Judge's tools, written out or as a shorthand, or that spreads an actor
+ * file's constant, reads its tools and its deadline from such a constant and writes no model; a fork's
+ * tool and permission flags read one too, and none lifts the permissions. It reads the sources as text:
+ * no parser is a dependency the layers allow a test, so a value it cannot follow, such as a function's
+ * result spread into a call, stays out of its sight.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -47,8 +49,14 @@ function actorNamesOf(source: string): ReadonlySet<string> {
   return names;
 }
 
-/** The text of the object literal that holds the character at `index`: from its `{` to its `}`. */
-function objectAround(source: string, index: number): string {
+/** An object literal of a source: where its `{` sits, and its text up to its `}`. */
+interface ObjectText {
+  readonly at: number;
+  readonly text: string;
+}
+
+/** The object literal that holds the character at `index`. */
+function objectAround(source: string, index: number): ObjectText {
   let start = index;
 
   for (let depth = 0; start > 0; start -= 1) {
@@ -81,12 +89,25 @@ function objectAround(source: string, index: number): string {
     }
   }
 
-  return source.slice(start, end);
+  return { at: start, text: source.slice(start, end) };
 }
 
-/** The text of `key`'s value in the object literal `object`, up to its comma; null when it has none. */
-const valueOf = (object: string, key: string): string | null =>
-  new RegExp(`(?:^|[\\s,{])${key}\\s*:\\s*([^,\\n}]+)`, "u").exec(object)?.[1]?.trim() ?? null;
+/** The keys that name a Judge's tools. */
+const TOOL_KEYS = ["tools", "allowedTools", "disallowedTools"];
+
+/** A key of `TOOL_KEYS` in an object, written out or as a shorthand; not the field of a type. */
+const TOOL_KEY =
+  /(?<=[{,]\s*)(?:tools|allowedTools|disallowedTools)\s*(?=[,}])|(?<![\w$.]|readonly\s)(?:tools|allowedTools|disallowedTools)\s*:/gu;
+
+/**
+ * The text of `key`'s value in the object literal `object`, up to its comma: the key itself for a
+ * shorthand; null when it has none.
+ */
+function valueOf(object: string, key: string): string | null {
+  const found = new RegExp(`(?:^|[\\s,{])${key}\\s*(?::\\s*([^,\\n}]+)|(?=[,}\\n]))`, "u").exec(object);
+
+  return found === null ? null : (found[1]?.trim() ?? key);
+}
 
 /** Whether `value` reads a member of a constant imported from an actor file. */
 const readsActor = (value: string | null, actors: ReadonlySet<string>): boolean => {
@@ -95,34 +116,60 @@ const readsActor = (value: string | null, actors: ReadonlySet<string>): boolean 
   return name !== undefined && actors.has(name);
 };
 
-/** What in `source`, at `path`, sets a Judge's settings outside an actor file. */
+/** The flags of a `claude` command that set a fork's tools or its permissions. */
+const FORK_FLAG =
+  /["'`](--(?:tools|allowedTools|allowed-tools|disallowedTools|disallowed-tools|permission-mode))(=[^"'`]*)?["'`]/gu;
+
+/** The flags that lift every permission: no Judge runs with them. */
+const UNGUARDED = /--(?:allow-)?dangerously-skip-permissions/gu;
+
+/**
+ * What in `source`, at `path`, sets a Judge's settings outside an actor file: an object that names its
+ * tools, or spreads an actor's constant, reads its tools and its deadline from an actor's constant and
+ * writes no model; a fork's flags read one too, and none lifts the permissions.
+ */
 function settingsFaultsOf(path: string, source: string): readonly string[] {
   const actors = actorNamesOf(source);
   const faults: string[] = [];
+  const objects = new Map<number, string>();
 
-  for (const found of source.matchAll(/(?<![\w$.]|readonly\s)tools\s*:/gu)) {
-    const object = objectAround(source, found.index);
-    const tools = valueOf(object, "tools");
-    const timeoutMs = valueOf(object, "timeoutMs");
-    const model = valueOf(object, "model");
+  for (const found of [...source.matchAll(TOOL_KEY), ...source.matchAll(/\.\.\.([A-Za-z_$][\w$]*)/gu)]) {
+    if (found[1] === undefined || actors.has(found[1])) {
+      const object = objectAround(source, found.index);
 
-    if (!readsActor(tools, actors)) {
-      faults.push(`${path}: tools ${tools}`);
+      objects.set(object.at, object.text);
+    }
+  }
+
+  for (const text of objects.values()) {
+    const spreadsActor = [...text.matchAll(/\.\.\.([A-Za-z_$][\w$]*)/gu)].some(([, name = ""]) => actors.has(name));
+
+    for (const key of [...TOOL_KEYS, "timeoutMs"]) {
+      const value = valueOf(text, key);
+
+      if ((value !== null || (key === "timeoutMs" && !spreadsActor)) && !readsActor(value, actors)) {
+        faults.push(`${path}: ${key} ${value}`);
+      }
     }
 
-    if (!readsActor(timeoutMs, actors)) {
-      faults.push(`${path}: timeoutMs ${timeoutMs}`);
-    }
+    const model = valueOf(text, "model");
 
     if (model !== null && /^["'`]/u.test(model)) {
       faults.push(`${path}: model ${model}`);
     }
   }
 
-  for (const [, flag = "", value = ""] of source.matchAll(/"(--tools|--permission-mode)",\s*([^,\n]+)/gu)) {
-    if (!readsActor(value.trim(), actors)) {
-      faults.push(`${path}: ${flag} ${value.trim()}`);
+  for (const found of source.matchAll(FORK_FLAG)) {
+    const [whole, flag = "", inline] = found;
+    const value = inline ?? /^,\s*([^,\n]+)/u.exec(source.slice(found.index + whole.length))?.[1]?.trim() ?? null;
+
+    if (inline !== undefined || !readsActor(value, actors)) {
+      faults.push(`${path}: ${flag} ${value}`);
     }
+  }
+
+  for (const [flag] of source.matchAll(UNGUARDED)) {
+    faults.push(`${path}: ${flag}`);
   }
 
   return faults;
@@ -145,8 +192,8 @@ describe("the Judges' settings", () => {
     }
   });
 
-  test("the Agent SDK is imported by its two doors alone", () => {
-    expect(SOURCES.filter((path) => read(path).includes('"@anthropic-ai/claude-agent-sdk"'))).toEqual(SDK_DOORS);
+  test("the Agent SDK is named by its two doors alone, in any import of it", () => {
+    expect(SOURCES.filter((path) => read(path).includes("@anthropic-ai/claude-agent-sdk"))).toEqual(SDK_DOORS);
   });
 
   test("outside the actor files and the SDK's doors, no source sets a Judge's tools, deadline or model", () => {
@@ -156,7 +203,9 @@ describe("the Judges' settings", () => {
   });
 
   test("the calls that do set them are seen: each Judge's call reads its actor file", () => {
-    const calls = SOURCES.filter((path) => /(?<![\w$.]|readonly\s)tools\s*:|"--tools"/u.test(read(path)));
+    const calls = SOURCES.filter(
+      (path) => new RegExp(TOOL_KEY.source, "u").test(read(path)) || read(path).includes('"--tools"'),
+    );
 
     expect(calls.filter((path) => !path.endsWith(".actor.ts") && !SDK_DOORS.includes(path))).toEqual([
       "bin/code-review.ts",
@@ -198,6 +247,31 @@ describe("the Judges' settings", () => {
     expect(settingsFaultsOf("land/x/fork.ts", fork)).toEqual([
       'land/x/fork.ts: --tools "Read',
       'land/x/fork.ts: --permission-mode "bypassPermissions"',
+    ]);
+  });
+  test("a Judge's tools in a shorthand or a spread, or under another key, are refused", () => {
+    const hidden = [
+      'import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";',
+      'const tools = ["Read", "Write"];',
+      "ask({ ...ROUTING_JUDGE, tools, prompt });",
+      "ask({ ...ROUTING_JUDGE, timeoutMs: 1, prompt });",
+      'const WRITERS = { allowedTools: ["Edit"], timeoutMs: ROUTING_JUDGE.timeoutMs };',
+    ].join("\n");
+
+    expect(settingsFaultsOf("land/x/judge.ts", hidden)).toEqual([
+      "land/x/judge.ts: tools tools",
+      'land/x/judge.ts: allowedTools ["Edit"]',
+      "land/x/judge.ts: timeoutMs 1",
+    ]);
+  });
+
+  test("a fork's flags written with `=`, under another name, or lifting the permissions are refused", () => {
+    const fork = '["claude", "-p", "--tools=Read,Edit", "--allowedTools", "Edit", "--dangerously-skip-permissions"]';
+
+    expect(settingsFaultsOf("land/x/fork.ts", fork)).toEqual([
+      "land/x/fork.ts: --tools =Read,Edit",
+      'land/x/fork.ts: --allowedTools "Edit"',
+      "land/x/fork.ts: --dangerously-skip-permissions",
     ]);
   });
 });
