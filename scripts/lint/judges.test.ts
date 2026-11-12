@@ -33,26 +33,31 @@ const SOURCES = {
     "export const f = ask({ judgeSettings: ROUTING_JUDGE, [key]: WRITERS });",
     "const judgeSettings = WRITERS;",
     "export const g = ask({ judgeSettings });",
-    'export const h = { "allowedTools": ROUTING_JUDGE.tools, ["permissionMode"]: "x" };',
-    'export const i = { model: "opus" };',
-    String.raw`export const re = /a\//u; export const j = { tools: ROUTING_JUDGE.tools };`,
-    'export const k = ["claude", "-p", "prompt"];',
-    'export const l = ["claude", "-p", "--tools", "Read,Edit"];',
-    'export const m = ["claude", "-p", "--tools=Read", "x"];',
-    "export const n = `--permission-mode ${mode}`;",
-    'export const o = ["claude", "-p", "--tools", ROUTING_JUDGE.tools.join(","), "--dangerously-skip-permissions"];',
-    "export const p = SLOW; export type Q = Options;",
+    'export const h = review({ judgeSettings: ROUTING_JUDGE, model: "opus" });',
+    "export const re = /a\\//u; export const i = review({ judgeSettings: ROUTING_JUDGE, model: `opus` });",
+    'export const k = ["claude", "-p", "--resume", s, "--fork-session", "prompt"];',
+    'export const l = ["claude", "-p", "--fork-session", "--tools", "Read,Edit"];',
+    'export const m = ["claude", "-p", "--fork-session", "--tools=Read", "x"];',
+    'export const n = ["claude", "-p", "--fork-session", "--tools", ROUTING_JUDGE.tools.join(","), `--permission-mode ${mode}`];',
+    'export const o = ["claude", "-p", "--fork-session", "--tools", ROUTING_JUDGE.tools.join(","), "--dangerously-skip-permissions"];',
+    'export const p = ["claude", "-p", "--fork-session", "--tools", ROUTING_JUDGE.tools.join(","), ...(x ? ["--allowedTools", "Edit"] : [])];',
+    'export const q = ["claude", "-p", "--fork-session", "--tools", ROUTING_JUDGE.tools.join(","), ...EXTRA];',
+    "export const r = SLOW; export type Q = Options;",
   ].join("\n"),
   "factory/land/x/clean.ts": [
     ACTOR_IMPORT,
     'export const a = ask({ ...reader, judgeSettings: ROUTING_JUDGE, prompt: "p" });',
-    'export const b = ["claude", "-p", "--tools", ROUTING_JUDGE.tools.join(","), "--permission-mode", ROUTING_JUDGE.permissionMode];',
+    'export const b = ["claude", "-p", "--resume", s, "--fork-session", "--tools", ROUTING_JUDGE.tools.join(","), "--permission-mode", ROUTING_JUDGE.permissionMode, ...(m === null ? [] : ["--model", m])];',
     "export const { tools } = ROUTING_JUDGE;",
     "export const c = { ...record.triage, [step.patch]: 1 };",
-    'export const d = { model: picked ?? "opus" };',
+    "export const d = review({ judgeSettings: ROUTING_JUDGE, model: request.model });",
     '// tools: ["Write"], "--dangerously-skip-permissions" in a comment',
     'export const e = ["claude", "stop", "x"];',
     "export const f = { answer, judge };",
+    'export const g = { model: "REVIEW_MODEL", effort: "REVIEW_EFFORT" };',
+    'export const h = ["claude", "-p", "prompt"];',
+    'export const i = ["claude", "--permission-mode", "acceptEdits", "--allowedTools", "Edit"];',
+    'export const j = { tools: ["Read", "Write"], permissionMode: "dontAsk" };',
   ].join("\n"),
   "factory/land/x/routing-judge.actor.ts":
     'export const ROUTING_JUDGE = { model: "haiku", tools: ["Read"], timeoutMs: 1, permissionMode: "dontAsk" } as const;\n',
@@ -120,7 +125,7 @@ const lines = (name: SourceName): number[] => (reported.get(name) ?? []).toSorte
 describe("local/judges through oxlint", () => {
   test("reports each way a Judge's settings are written outside its actor file, and the Agent SDK named outside its doors", () => {
     expect(lines("factory/land/x/judge.ts")).toEqual([
-      2, 3, 5, 6, 7, 8, 10, 11, 12, 14, 15, 15, 16, 17, 18, 19, 20, 20, 21, 22,
+      2, 3, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 23,
     ]);
   });
 
@@ -129,11 +134,11 @@ describe("local/judges through oxlint", () => {
       "`factory/land/x/judge.ts` passes a Judge's settings that are not a constant imported from an actor file. A Judge's settings live in its actor file (`factory/land/AGENTS.md`).",
     );
     expect(messages).toContain(
-      "`factory/land/x/judge.ts` runs `claude -p` with no `--tools`, so the fork has every tool. A Judge's settings live in its actor file (`factory/land/AGENTS.md`).",
+      "`factory/land/x/judge.ts` forks a session with no `--tools`, so the Judge has every tool. A Judge's settings live in its actor file (`factory/land/AGENTS.md`).",
     );
   });
 
-  test("leaves an actor file's constant passed whole, a fork's flags that read it, a destructuring, a comment and other keys", () => {
+  test("leaves what is no Judge's call: a model named by a variable's name (#197), a `claude -p` launcher, and tools and flags no Judge reads; and a Judge's call done right", () => {
     expect(lines("factory/land/x/clean.ts")).toEqual([]);
   });
 

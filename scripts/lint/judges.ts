@@ -1,22 +1,26 @@
 /**
  * `local/judges`: a Judge's settings live in its actor file (`factory/land/AGENTS.md`). A Judge reaches
  * Claude Code through one of the two doors to the Agent SDK, whose ports take its settings as one
- * field, `judgeSettings`, or as a `claude -p` fork. In `factory/`, tests and fixtures aside, the rule reads the
- * syntax tree and refuses:
+ * field, `judgeSettings`, or as a print-mode fork of a session, as the Stop hook's Done judge runs. In
+ * `factory/`, tests and fixtures aside, the rule reads the syntax tree, and what it refuses follows from a
+ * Judge, never from a key's name alone:
  *
- * - a `judgeSettings` property whose value is not a constant imported from an actor file, whether written out,
- *   as a shorthand or under a quoted or constant computed key, and a spread or a key computed at run time
- *   after it in the same object, which could override it;
- * - outside the actor files and the doors, a key that names a Judge's tools or permissions, and a model
- *   written as a string;
- * - a fork's tool or permission flag in a string, but `--tools` or `--permission-mode` as an element of a
- *   command whose next element reads an actor file's constant; a `claude -p` command without `--tools`;
- *   and a flag that lifts the permissions;
- * - outside the doors, any string that names the Agent SDK, an import's included.
+ * - in an object that holds a `judgeSettings`, the call to a Judge: a value that is not a constant
+ *   imported from an actor file, whether written out, as a shorthand or under a quoted or constant
+ *   computed key; a spread or a key computed at run time after it, which could override it; a model
+ *   written as a string, which its actor file or its Review depth names;
+ * - in a fork's command, an array that holds `-p` and `--fork-session`: no `--tools`; a tool or permission
+ *   flag but `--tools` or `--permission-mode` followed by an actor file's constant, the flags that lift
+ *   the permissions included; a spread of anything but an array or a ternary of arrays, which it checks
+ *   the same way;
+ * - outside the two doors, any string that names the Agent SDK, an import's included: no other path
+ *   reaches a model through it.
  *
- * It reads what the source writes: a value built at run time, such as an object passed through
- * `Object.assign` or a key computed from a variable in an object that holds no `judgeSettings`, is out of its
- * sight. The typecheck holds the ports' shape, and the tool guard denies a write at call time.
+ * Code that is no Judge's call keeps its keys and its flags: a `tools` or a `model` elsewhere reaches no
+ * Judge, since only `judgeSettings` does. A value built at run time, such as an object passed through
+ * `Object.assign`, a key computed from a variable in an object without `judgeSettings`, or a fork's
+ * command assembled step by step, is out of the rule's sight. The typecheck holds the ports' shape, and
+ * the tool guard denies a write at call time.
  */
 
 import { posix } from "node:path";
@@ -31,9 +35,6 @@ const SDK = "@anthropic-ai/claude-agent-sdk";
 
 /** The field of a Judge's port that carries its settings. */
 const JUDGE = "judgeSettings";
-
-/** The keys of a Judge's tools and permissions, which only its actor file and the doors write. */
-const SETTING_KEYS = ["tools", "allowedTools", "disallowedTools", "permissionMode"];
 
 /** A flag of `claude` that sets a fork's tools or permissions. */
 const SETTING_FLAG =
@@ -162,6 +163,10 @@ const elementStrings = (context: Context, node: ESTree.ArrayExpression): Readonl
     element === null || element.type === "SpreadElement" ? null : constantString(context, element),
   );
 
+/** Whether an array literal is a Judge's fork: a print-mode fork of a session, as the Stop hook's Done judge runs. */
+const isFork = (strings: ReadonlyArray<string | null>): boolean =>
+  strings.some((text) => text === "-p" || text === "--print") && strings.includes("--fork-session");
+
 export const judgesRule = defineRule({
   meta: {
     type: "problem",
@@ -175,23 +180,51 @@ export const judgesRule = defineRule({
     }
 
     const door = SDK_DOORS.includes(path);
-    const actor = path.endsWith(".actor.ts");
 
     const report = (node: ESTree.Node, what: string): void => {
       context.report({ node, message: `\`${path}\` ${what}. ${WHY}` });
     };
 
-    const checkStrings = (node: ESTree.StringLiteral | ESTree.TemplateLiteral): void => {
-      const strings = stringsOf(node);
-
-      if (!door && strings.some((text) => text.startsWith(SDK))) {
+    const checkSdk = (node: ESTree.StringLiteral | ESTree.TemplateLiteral): void => {
+      if (!door && stringsOf(node).some((text) => text.startsWith(SDK))) {
         report(node, "names the Agent SDK, which only its two doors call");
       }
+    };
 
-      if (!actor && strings.some((text) => SETTING_FLAG.test(text)) && !allowedFlag(context, node)) {
+    /** Checks the elements of a fork's command, and of each array it spreads, which a ternary may choose. */
+    const checkForkElements = (node: ESTree.ArrayExpression): void => {
+      for (const element of node.elements) {
+        if (element === null) {
+          continue;
+        }
+
+        if (element.type === "SpreadElement") {
+          checkForkSpread(element.argument);
+        } else if (
+          (isStringLiteral(element) || element.type === "TemplateLiteral") &&
+          stringsOf(element).some((text) => SETTING_FLAG.test(text)) &&
+          !allowedFlag(context, element)
+        ) {
+          report(
+            element,
+            "writes a flag that sets a fork's tools or permissions: pass `--tools` or `--permission-mode` followed by an actor file's constant",
+          );
+        }
+      }
+    };
+
+    const checkForkSpread = (spread: ESTree.Expression): void => {
+      if (spread.type === "ArrayExpression") {
+        checkForkElements(spread);
+      } else if (spread.type === "ConditionalExpression") {
+        checkForkSpread(spread.consequent);
+        checkForkSpread(spread.alternate);
+      } else if (spread.type === "ParenthesizedExpression") {
+        checkForkSpread(spread.expression);
+      } else {
         report(
-          node,
-          "writes a flag that sets a fork's tools or permissions: pass `--tools` or `--permission-mode` followed by an actor file's constant",
+          spread,
+          "spreads into a Judge's fork what the rule cannot read: spread an array, or a ternary of arrays",
         );
       }
     };
@@ -199,29 +232,34 @@ export const judgesRule = defineRule({
     return {
       Literal(node) {
         if (isStringLiteral(node)) {
-          checkStrings(node);
+          checkSdk(node);
         }
       },
       TemplateLiteral(node) {
-        checkStrings(node);
+        checkSdk(node);
       },
       ArrayExpression(node) {
         const strings = elementStrings(context, node);
 
-        if (
-          !actor &&
-          strings[0] === "claude" &&
-          strings.some((text) => text === "-p" || text === "--print") &&
-          !strings.includes("--tools")
-        ) {
-          report(node, "runs `claude -p` with no `--tools`, so the fork has every tool");
+        if (!isFork(strings)) {
+          return;
         }
+
+        if (!strings.includes("--tools")) {
+          report(node, "forks a session with no `--tools`, so the Judge has every tool");
+        }
+
+        checkForkElements(node);
       },
       ObjectExpression(node) {
         const judgeAt = node.properties.findIndex((part) => part.type === "Property" && keyOf(context, part) === JUDGE);
 
+        if (judgeAt === -1) {
+          return;
+        }
+
         for (const [index, part] of node.properties.entries()) {
-          if (judgeAt !== -1 && index > judgeAt && (part.type === "SpreadElement" || runTimeKey(context, part))) {
+          if (index > judgeAt && (part.type === "SpreadElement" || runTimeKey(context, part))) {
             report(part, "spreads or computes a key after a Judge's `judgeSettings`, which could override it");
           }
 
@@ -233,10 +271,8 @@ export const judgesRule = defineRule({
 
           if (key === JUDGE && !isActorImport(context, part.value)) {
             report(part, "passes a Judge's settings that are not a constant imported from an actor file");
-          } else if (!actor && !door && key !== null && SETTING_KEYS.includes(key)) {
-            report(part, `writes a Judge's \`${key}\` outside an actor file`);
-          } else if (!actor && key === "model" && constantString(context, part.value) !== null) {
-            report(part, "writes a model as a string outside an actor file");
+          } else if (key === "model" && constantString(context, part.value) !== null) {
+            report(part, "writes a Judge's model as a string, where its actor file or its Review depth names it");
           }
         }
       },
