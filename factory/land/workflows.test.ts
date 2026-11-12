@@ -179,9 +179,14 @@ describe("the review job's workflow", () => {
     expect(run).toStartWith(`test -f ${REVIEW_RESULT_FILE} || `);
     expect(run.trimEnd()).toEndWith(`> ${REVIEW_RESULT_FILE}`);
 
+    // The fields `ReviewRequest` holds as numbers.
+    const numbers = new Set(["pr", "round"]);
+
     for (const [field, variable] of Object.entries(REVIEW_VARIABLES)) {
-      // jq's `--arg <name> "$<variable>"` binds the variable to `$<name>`, which the request's field reads.
-      expect(run).toMatch(new RegExp(`--arg(?:json)? ${field} "\\$${variable}"`, "u"));
+      // jq's `--arg <name> "$<variable>"` binds the variable to `$<name>`, which the request's field reads;
+      // a number field needs `--argjson`, since `--arg` writes a string the Merge bot's decode refuses.
+      const flag = numbers.has(field) ? "--argjson" : "--arg";
+      expect(run).toMatch(new RegExp(`${flag} ${field} "\\$${variable}"`, "u"));
       expect(run).toMatch(new RegExp(`[{\\s]${field}: \\(?\\$${field}[,) }]`, "u"));
     }
   });
