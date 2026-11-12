@@ -7,6 +7,7 @@ import {
   inputsOf,
   mergedResultOf,
   OUTPUT_SCHEMA,
+  requestOfVariables,
   resultOf,
   resultOfJson,
   ReviewInputs,
@@ -132,6 +133,29 @@ describe("inputsOf", () => {
 
   test("a head that is not a SHA is refused before it is dispatched", () => {
     expect(() => inputsOf({ ...REQUEST, head: "HEAD" })).toThrow('["head"]');
+  });
+});
+
+describe("requestOfVariables", () => {
+  const VARIABLES = {
+    REVIEW_PR: "80",
+    REVIEW_HEAD: HEAD,
+    REVIEW_BASE: BASE,
+    REVIEW_PATCH: "p1",
+    REVIEW_ROUND: "2",
+    REVIEW_MODEL: "sonnet",
+    REVIEW_EFFORT: "medium",
+    REVIEW_SECURITY: "true",
+    PATH: "/usr/bin",
+  };
+
+  test("the job's variables read as the request, each field from its own variable, whatever else the job holds", () => {
+    expect(requestOfVariables(VARIABLES)).toEqual({ ...REQUEST, round: 2, security: true });
+  });
+
+  test("a variable that is missing or does not read is refused, naming its field", () => {
+    expect(() => requestOfVariables({ ...VARIABLES, REVIEW_BASE: undefined })).toThrow('["base"]');
+    expect(() => requestOfVariables({ ...VARIABLES, REVIEW_ROUND: "five" })).toThrow('["round"]');
   });
 });
 

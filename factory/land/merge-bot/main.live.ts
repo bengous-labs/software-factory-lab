@@ -24,7 +24,7 @@ import { decodeJson } from "../../lib/json.ts";
 import type { Run } from "../../lib/run.port.ts";
 import { CODE_REVIEW } from "../review/code-review.actor.ts";
 import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewOf } from "../review/post-plan.ts";
-import { inputsOf, resultOfJson, summaryOf } from "../review/review-report.ts";
+import { inputsOf, resultOfJson, REVIEW_RESULT_FILE, REVIEW_WORKFLOW, summaryOf } from "../review/review-report.ts";
 import {
   graphqlLogin,
   ledgerFindingsOf,
@@ -69,9 +69,7 @@ import {
   devRedOf,
   Dispatched,
   humanLabelByOf,
-  landApprovalByOwnerOf,
-  landApprovalPutByOwnerOf,
-  latestReviewAtOf,
+  landApprovalOf,
   ListedPrs,
   openedByFactoryOf,
   Pull,
@@ -100,9 +98,6 @@ import type { Step } from "./steps.ts";
 /** Decisions per Merge bot run. */
 const MAX_DECISIONS = 4;
 
-/** The review job's workflow file. An external name: the Merge bot dispatches it by this name. */
-const REVIEW_WORKFLOW = "code-review.yml";
-
 /** The PR from the single-PR endpoint, read again up to three times while GitHub has not computed its mergeability yet. */
 async function pullOf(env: Env, number: number): Promise<Pull> {
   let pr = await api(env, Pull, `repos/${env.repo}/pulls/${number}`);
@@ -128,7 +123,7 @@ async function artifactOf(runner: Run, where: Pick<Env, "repo" | "cwd">, runId: 
     { cwd: where.cwd },
   );
 
-  const file = join(dir, "review-result.json");
+  const file = join(dir, REVIEW_RESULT_FILE);
 
   return downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null;
 }
@@ -196,20 +191,15 @@ async function snapshotOf(
       ? await labelEventsReader(env.run)(env, pr.number)
       : [];
 
-  let landApprovalByOwner = false;
-  let landApprovalPutByOwner = false;
+  let landApproval = { landApprovalByOwner: false, landApprovalPutByOwner: false };
 
   if (labels.includes(LAND_APPROVAL_LABEL)) {
-    // The head's first check suite is created when it is pushed: a Land approval put before that was given for another head.
     const [suites, reviews] = await Promise.all([
       api(env, CheckSuites, `repos/${env.repo}/commits/${pr.head.sha}/check-suites?per_page=100`),
       reviewsReader(env.run)(env, pr.number),
     ]);
 
-    const headPushedAt = suites.check_suites.map((suite) => suite.created_at).toSorted()[0] ?? null;
-    const reviewedAt = latestReviewAtOf(reviews, env.appLogin);
-    landApprovalByOwner = landApprovalByOwnerOf(events, env.owner, { headPushedAt, reviewedAt });
-    landApprovalPutByOwner = landApprovalPutByOwnerOf(events, env.owner);
+    landApproval = landApprovalOf({ events, suites, reviews }, env);
   }
 
   return {
@@ -225,8 +215,7 @@ async function snapshotOf(
     ci: ciOfRuns(ciRuns),
     labels,
     humanLabelBy: humanLabelByOf(events, labels, env),
-    landApprovalByOwner,
-    landApprovalPutByOwner,
+    ...landApproval,
     openImportant: openImportantOf(graphqlLogin(env.appLogin), threads),
     rejectedImportant: rejectedImportantOf(threadLoginsOf(env), threads),
     devRed: devRedOf(devRuns),

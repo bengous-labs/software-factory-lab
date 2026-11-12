@@ -13,16 +13,19 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../install/logins.ts";
+import { REVIEW_THREADS_FILE, REVIEW_VARIABLES } from "../land/review/review-report.ts";
 import { graphqlLogin, ReviewThreads, shownThreadsOf, threadsQueryOf } from "../land/shared/findings.ts";
 import { requiredOf } from "../lib/env.ts";
 import { decodeJson } from "../lib/json.ts";
 import { run } from "../lib/run.live.ts";
 import { checked } from "../lib/run.port.ts";
 
-const pr = Number(requiredOf(process.env, "REVIEW_PR"));
+const pr = Number(requiredOf(process.env, REVIEW_VARIABLES.pr));
 
 if (!Number.isInteger(pr)) {
-  throw new TypeError(`REVIEW_PR is not a pull request number: ${requiredOf(process.env, "REVIEW_PR")}`);
+  throw new TypeError(
+    `${REVIEW_VARIABLES.pr} is not a pull request number: ${requiredOf(process.env, REVIEW_VARIABLES.pr)}`,
+  );
 }
 
 const [owner = "", name = ""] = requiredOf(process.env, "GITHUB_REPOSITORY").split("/");
@@ -38,10 +41,10 @@ const threads = decodeJson(ReviewThreads, "the review threads query", answer).da
 
 const earlier = shownThreadsOf(
   { app: graphqlLogin(requiredOf(process.env, "APP_LOGIN")), author: AUTHOR_LOGIN, owner: OWNER_LOGIN },
-  Number(requiredOf(process.env, "REVIEW_ROUND")),
+  Number(requiredOf(process.env, REVIEW_VARIABLES.round)),
   threads,
 );
 
-writeFileSync(join(process.cwd(), "review-threads.json"), `${JSON.stringify(earlier, null, 2)}\n`);
+writeFileSync(join(process.cwd(), REVIEW_THREADS_FILE), `${JSON.stringify(earlier, null, 2)}\n`);
 
 console.log(`review threads pr=${pr}: ${earlier.length} earlier finding(s)`);

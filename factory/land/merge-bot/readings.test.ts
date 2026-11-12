@@ -21,6 +21,7 @@ import {
   IssueComments,
   IssueEvents,
   landApprovalByOwnerOf,
+  landApprovalOf,
   landApprovalPutByOwnerOf,
   latestReviewAtOf,
   ListedPrs,
@@ -340,8 +341,30 @@ describe("a Land approval and the App's reviews", () => {
 /** A `gh api` read that exited 1 with `stderr`. */
 const failedRead = (stderr: string) => ({ code: 1, stdout: "", stderr });
 
+/** The App's login in the Owner and Author's tests. */
+const APP_LOGIN = "bengous-labs-agents[bot]";
+
+/** The label events of a PR on which `login` put the Land approval. */
+const landOkBy = (login: string) =>
+  decodeJson(
+    IssueEvents,
+    "events",
+    JSON.stringify([
+      { event: "labeled", label: { name: "land-ok" }, actor: { login }, created_at: "2026-11-05T11:00:00Z" },
+    ]),
+  );
+
+/** The check suites of a head, created at `times`. */
+const suitesAt = (...times: string[]) => ({
+  check_suites: times.map((created_at, id) => ({ id, head_branch: "x", created_at })),
+});
+
+/** A Land approval the Owner put that counts. */
+const COUNTED = { landApprovalByOwner: true, landApprovalPutByOwner: true };
+
 describe("the Owner and the Author", () => {
   const logins = { owner: "bengous", authorLogin: "bengous-labs-author" };
+  const env = { ...logins, appLogin: APP_LOGIN };
 
   test("a PR the Author's machine account opened is served as one the Owner opened; any other login's is not", () => {
     expect(openedByFactoryOf("bengous", logins)).toBe(true);
@@ -365,6 +388,40 @@ describe("the Owner and the Author", () => {
     );
 
     expect(landApprovalByOwnerOf(events, "bengous", pushedAt("2026-11-05T10:00:00Z"))).toBe(false);
+  });
+
+  test("a snapshot's Land approval is the Owner's alone: one the Author's machine account or the App put counts for nothing", () => {
+    const suites = suitesAt("2026-11-05T10:00:00Z");
+    const reviews = [reviewBy(APP_LOGIN, "2026-11-05T10:30:00Z")];
+
+    expect(landApprovalOf({ events: landOkBy("bengous"), suites, reviews }, env)).toEqual(COUNTED);
+
+    for (const login of ["bengous-labs-author", APP_LOGIN]) {
+      expect(landApprovalOf({ events: landOkBy(login), suites, reviews }, env)).toEqual({
+        landApprovalByOwner: false,
+        landApprovalPutByOwner: false,
+      });
+    }
+  });
+
+  test("a snapshot's Land approval put before the head's first check suite, or before the App's latest review, is put but does not count", () => {
+    const events = landOkBy("bengous");
+    const putOnly = { landApprovalByOwner: false, landApprovalPutByOwner: true };
+    const latePush = suitesAt("2026-11-05T12:00:00Z");
+
+    expect(landApprovalOf({ events, suites: latePush, reviews: [] }, env)).toEqual(putOnly);
+    expect(
+      landApprovalOf({ events, suites: suitesAt("2026-11-05T12:00:00Z", "2026-11-05T10:00:00Z"), reviews: [] }, env),
+    ).toEqual(COUNTED);
+    expect(
+      landApprovalOf({ events, suites: suitesAt(), reviews: [reviewBy(APP_LOGIN, "2026-11-05T11:30:00Z")] }, env),
+    ).toEqual(putOnly);
+    expect(
+      landApprovalOf(
+        { events, suites: suitesAt(), reviews: [reviewBy("bengous-labs-author", "2026-11-05T11:30:00Z")] },
+        env,
+      ),
+    ).toEqual(COUNTED);
   });
 });
 
