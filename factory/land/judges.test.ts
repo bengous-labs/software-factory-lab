@@ -5,12 +5,12 @@
  * `review/review-session.live.test.ts`, `stop/fork-guard.test.ts`).
  *
  * This test holds the settings to the actor files: a Judge reaches Claude Code through one of the two
- * doors to the Agent SDK, which pass a call's settings through, or as a `claude -p` fork. Everywhere
- * else, an object that names a Judge's tools, written out or as a shorthand, or that spreads an actor
- * file's constant, reads its tools and its deadline from such a constant and writes no model; a fork's
- * tool and permission flags read one too, and none lifts the permissions. It reads the sources as text:
- * no parser is a dependency the layers allow a test, so a value it cannot follow, such as a function's
- * result spread into a call, stays out of its sight.
+ * doors to the Agent SDK, which pass a call's settings through, or as a `claude -p` fork. It reads the
+ * sources as text, since no parser is a dependency the layers allow a test, and so it fails closed:
+ * outside the actor files and the doors, each word that names a Judge's tools or permissions, in code or
+ * in a string, sits on a line of one of the few forms that read an actor file's constant, or the test
+ * fails. A file that sets a Judge's tools reads every deadline from an actor's constant and spreads only
+ * what the test lists, no source spreads an actor's constant whole, and none writes a model as a literal.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -28,6 +28,9 @@ const SOURCES = [...new Bun.Glob("**/*.ts").scanSync({ cwd: FACTORY })]
   .toSorted();
 
 const read = (path: string): string => readFileSync(join(FACTORY, path), "utf8");
+
+/** The sources a Judge's settings may not be written in: all but the actor files and the SDK's doors. */
+const OUTSIDE = SOURCES.filter((path) => !path.endsWith(".actor.ts") && !SDK_DOORS.includes(path));
 
 /** The names a source imports from an actor file, under the name it gives them. */
 function actorNamesOf(source: string): ReadonlySet<string> {
@@ -49,231 +52,79 @@ function actorNamesOf(source: string): ReadonlySet<string> {
   return names;
 }
 
-/** An object literal of a source: where its `{` sits, and its text up to its `}`. */
-interface ObjectText {
-  readonly at: number;
-  readonly text: string;
-}
+/** A word that names a Judge's tools or permissions, as a key, an identifier, a string or a flag. */
+const SETTING_WORD =
+  /(?<![\w$-])(?:--)?(?:tools|allowedTools|disallowedTools|allowed-tools|disallowed-tools|permissionMode|permission-mode|dangerously-skip-permissions|allow-dangerously-skip-permissions)(?![\w$-])/u;
 
-/** The object literal that holds the character at `index`. */
-function objectAround(source: string, index: number): ObjectText {
-  let start = index;
+/** Whether a trimmed line is a comment's alone: a `//` line, or a line of a block comment with no code after it. */
+const commentLine = (line: string): boolean =>
+  line.startsWith("//") || (/^(?:\/\*|\*)/u.test(line) && !/\*\/\s*\S/u.test(line));
 
-  for (let depth = 0; start > 0; start -= 1) {
-    const char = source[start - 1];
+/** Whether `pattern` captures, in `line`, the name of a constant imported from an actor file. */
+const readsActor = (pattern: RegExp, line: string, actors: ReadonlySet<string>): boolean =>
+  actors.has(pattern.exec(line)?.[1] ?? "");
 
-    if (char === "}") {
-      depth += 1;
-    } else if (char === "{") {
-      if (depth === 0) {
-        break;
-      }
+const TOOLS_JOINED = /^([\w$]+)\.tools\.join\(","\),?$/u;
 
-      depth -= 1;
-    }
-  }
-
-  let end = index;
-
-  for (let depth = 0; end < source.length; end += 1) {
-    const char = source[end];
-
-    if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      if (depth === 0) {
-        break;
-      }
-
-      depth -= 1;
-    }
-  }
-
-  return { at: start, text: source.slice(start, end) };
-}
-
-/** The keys that name a Judge's tools. */
-const TOOL_KEYS = ["tools", "allowedTools", "disallowedTools"];
-
-/** `key` as a key is written: bare, quoted, or computed from a string. */
-const keyForm = (key: string): string => `(?:${key}|"${key}"|'${key}'|\\[\\s*["'\`]${key}["'\`]\\s*\\])`;
-
-/** A key of `TOOL_KEYS` with its value, in any of its forms; not the field of a type. */
-const WRITTEN_TOOL_KEY = new RegExp(
-  `(?<![\\w$.]|readonly\\s)(?:${TOOL_KEYS.map((key) => keyForm(key)).join("|")})\\s*:`,
-  "gu",
-);
-
-/** A key of `TOOL_KEYS` as a shorthand. `objectLiteralAt` tells whether either form sits in an object literal. */
-const SHORTHAND_TOOL_KEY = new RegExp(`(?<=[{,]\\s*)(?:${TOOL_KEYS.join("|")})\\s*(?=[,}])`, "gu");
+const PERMISSION_MODE = /^([\w$]+)\.permissionMode,?$/u;
 
 /**
- * `source` with each comment blanked, each character but a newline turned to a space, so a word of
- * prose reads as no key and every index stays where it was.
+ * The forms a trimmed line that names a Judge's tools or permissions may take: a key or a fork's flag
+ * that reads an actor file's constant, and the field of a port's type. `next` is the line after it.
  */
-function withoutComments(source: string): string {
-  let out = "";
-  let quote: string | null = null;
-
-  for (let at = 0; at < source.length; at += 1) {
-    const char = source[at] ?? "";
-
-    if (quote !== null) {
-      out += char;
-
-      if (char === "\\") {
-        out += source[at + 1] ?? "";
-        at += 1;
-      } else if (char === quote) {
-        quote = null;
-      }
-    } else if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      out += char;
-    } else if (source.startsWith("//", at) || source.startsWith("/*", at)) {
-      const close = source.startsWith("//", at) ? "\n" : "*/";
-      const found = source.indexOf(close, at + 2);
-      const stop = found === -1 ? source.length : found + (close === "*/" ? 2 : 0);
-
-      out += source.slice(at, stop).replaceAll(/[^\n]/gu, " ");
-      at = stop - 1;
-    } else {
-      out += char;
-    }
-  }
-
-  return out;
-}
-
-/** The nearest bracket still open before `index`: `{`, `(` or `[`; null at the top. */
-function openerBefore(source: string, index: number): string | null {
-  const closers: string[] = [];
-
-  for (let at = index - 1; at >= 0; at -= 1) {
-    const char = source[at] ?? "";
-
-    if (")]}".includes(char)) {
-      closers.push(char);
-    } else if ("([{".includes(char)) {
-      if (closers.length === 0) {
-        return char;
-      }
-
-      closers.pop();
-    }
-  }
-
-  return null;
-}
-
-/**
- * Whether the key at `index` sits in an object literal: its nearest open bracket is a `{` that
- * opens no import or export list, no destructuring and no parameter pattern.
- */
-function objectLiteralAt(source: string, index: number): boolean {
-  if (openerBefore(source, index) !== "{") {
-    return false;
-  }
-
-  const object = objectAround(source, index);
-  const before = source.slice(0, object.at - 1);
-  const after = source.slice(object.at + object.text.length);
-
+function allowedLine(path: string, line: string, next: string, actors: ReadonlySet<string>): boolean {
   return (
-    !/(?:\b(?:import|export|const|let|var|type)\s*)$/u.test(before) &&
-    !/^\}\s*(?:=|from\b|\)\s*(?:=>|:|\{))/u.test(after)
+    readsActor(/^tools: ([\w$]+)\.tools,?$/u, line, actors) ||
+    readsActor(TOOLS_JOINED, line, actors) ||
+    readsActor(PERMISSION_MODE, line, actors) ||
+    (line === '"--tools",' && readsActor(TOOLS_JOINED, next, actors)) ||
+    (line === '"--permission-mode",' && readsActor(PERMISSION_MODE, next, actors)) ||
+    (path.endsWith(".port.ts") && line === "readonly tools: readonly string[];")
   );
 }
 
-/**
- * The text of `key`'s value in the object literal `object`, up to its comma: the key itself for a
- * shorthand; null when it has none.
- */
-function valueOf(object: string, key: string): string | null {
-  const found = new RegExp(`(?:^|[\\s,{])${keyForm(key)}\\s*(?::\\s*([^,\\n}]+)|(?=[,}]))`, "u").exec(object);
+/** Whether `source` sets a Judge's tools: a line of it hands them on from an actor file's constant. */
+const judgeFile = (path: string, source: string): boolean =>
+  !path.endsWith(".port.ts") && /^\s*(?:tools: [\w$]+\.tools|"--tools",)/mu.test(source);
 
-  return found === null ? null : (found[1]?.trim() ?? key);
+/** Whether `line` sets a fault: a setting word in no allowed form, a deadline not an actor's in a Judge's file, a model literal, an actor's constant spread whole. */
+function faultyLine(
+  line: string,
+  next: string,
+  at: { path: string; judge: boolean; actors: ReadonlySet<string> },
+): boolean {
+  const { path, judge, actors } = at;
+
+  if (SETTING_WORD.test(line)) {
+    return !allowedLine(path, line, next, actors);
+  }
+
+  if (judge && /(?<![\w$])timeoutMs(?![\w$])/u.test(line)) {
+    return !readsActor(/^timeoutMs: ([\w$]+)\.timeoutMs,?$/u, line, actors);
+  }
+
+  return (
+    /(?<![\w$.])["']?model["']?\s*:\s*["'`]/u.test(line) ||
+    [...line.matchAll(/\.\.\.([\w$]+)(?![\w$.[])/gu)].some(([, name = ""]) => actors.has(name))
+  );
 }
 
-/** Whether `value` reads a member of a constant imported from an actor file. */
-const readsActor = (value: string | null, actors: ReadonlySet<string>): boolean => {
-  const name = value === null ? undefined : /^([A-Za-z_$][\w$]*)\./u.exec(value)?.[1];
+/** What in `source`, at `path`, sets a Judge's settings outside an actor file: one entry per line. */
+function settingsFaultsOf(path: string, source: string): readonly string[] {
+  const at = { path, judge: judgeFile(path, source), actors: actorNamesOf(source) };
+  const lines = source.split("\n").map((line) => line.trim());
 
-  return name !== undefined && actors.has(name);
-};
-
-/** The flags of a `claude` command that set a fork's tools or its permissions. */
-const FORK_FLAG =
-  /["'`](--(?:tools|allowedTools|allowed-tools|disallowedTools|disallowed-tools|permission-mode))(=[^"'`]*)?["'`]/gu;
-
-/** The flags that lift every permission: no Judge runs with them. */
-const UNGUARDED = /--(?:allow-)?dangerously-skip-permissions/gu;
-
-/**
- * What in `source`, at `path`, sets a Judge's settings outside an actor file: an object that names its
- * tools, or spreads an actor's constant, reads its tools and its deadline from an actor's constant and
- * writes no model; a fork's flags read one too, and none lifts the permissions.
- */
-function settingsFaultsOf(path: string, written: string): readonly string[] {
-  const source = withoutComments(written);
-  const actors = actorNamesOf(source);
-  const faults: string[] = [];
-  const objects = new Map<number, string>();
-  const spread = /\.\.\.([A-Za-z_$][\w$]*)/gu;
-
-  const keys = [
-    ...[...source.matchAll(WRITTEN_TOOL_KEY), ...source.matchAll(SHORTHAND_TOOL_KEY)].filter((found) =>
-      objectLiteralAt(source, found.index),
-    ),
-    ...[...source.matchAll(spread)].filter(([, name = ""]) => actors.has(name)),
-  ];
-
-  for (const found of keys) {
-    const object = objectAround(source, found.index);
-
-    objects.set(object.at, object.text);
-  }
-
-  for (const text of objects.values()) {
-    const spreads = [...text.matchAll(spread)];
-    const firstActor = spreads.find(([, name = ""]) => actors.has(name))?.index;
-
-    for (const [, name = ""] of spreads.filter((found) => firstActor !== undefined && found.index > firstActor)) {
-      if (!actors.has(name)) {
-        faults.push(`${path}: ...${name} over an actor's settings`);
-      }
-    }
-
-    for (const key of [...TOOL_KEYS, "timeoutMs"]) {
-      const value = valueOf(text, key);
-
-      if ((value !== null || (key === "timeoutMs" && firstActor === undefined)) && !readsActor(value, actors)) {
-        faults.push(`${path}: ${key} ${value}`);
-      }
-    }
-
-    const model = valueOf(text, "model");
-
-    if (model !== null && /^["'`]/u.test(model)) {
-      faults.push(`${path}: model ${model}`);
-    }
-  }
-
-  for (const found of source.matchAll(FORK_FLAG)) {
-    const [whole, flag = "", inline] = found;
-    const value = inline ?? /^,\s*([^,\n]+)/u.exec(source.slice(found.index + whole.length))?.[1]?.trim() ?? null;
-
-    if (inline !== undefined || !readsActor(value, actors)) {
-      faults.push(`${path}: ${flag} ${value}`);
-    }
-  }
-
-  for (const [flag] of source.matchAll(UNGUARDED)) {
-    faults.push(`${path}: ${flag}`);
-  }
-
-  return faults;
+  return lines.flatMap((line, index) =>
+    !commentLine(line) && faultyLine(line, lines[index + 1] ?? "", at) ? [`${path}:${index + 1}: ${line}`] : [],
+  );
 }
+
+/** The trimmed lines of a source that spread something. */
+const spreadsOf = (source: string): readonly string[] =>
+  source
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes("..."));
 
 describe("the Judges' settings", () => {
   test("the factory holds three, each in an actor file beside its Judge, with a test beside it", () => {
@@ -296,123 +147,104 @@ describe("the Judges' settings", () => {
     expect(SOURCES.filter((path) => read(path).includes("@anthropic-ai/claude-agent-sdk"))).toEqual(SDK_DOORS);
   });
 
-  test("outside the actor files and the SDK's doors, no source sets a Judge's tools, deadline or model", () => {
-    const outside = SOURCES.filter((path) => !path.endsWith(".actor.ts") && !SDK_DOORS.includes(path));
-
-    expect(outside.flatMap((path) => settingsFaultsOf(path, read(path)))).toEqual([]);
+  test("outside the actor files and the SDK's doors, no source sets a Judge's tools, permissions, deadline or model", () => {
+    expect(OUTSIDE.flatMap((path) => settingsFaultsOf(path, read(path)))).toEqual([]);
   });
 
-  test("the calls that do set them are seen: each Judge's call reads its actor file", () => {
-    const calls = SOURCES.filter(
-      (path) => new RegExp(WRITTEN_TOOL_KEY.source, "u").test(read(path)) || read(path).includes('"--tools"'),
-    );
+  test("the files that set a Judge's tools are seen, and what they spread is listed: a spread can override a setting", () => {
+    const judges = OUTSIDE.filter((path) => judgeFile(path, read(path)));
 
-    expect(calls.filter((path) => !path.endsWith(".actor.ts") && !SDK_DOORS.includes(path))).toEqual([
-      "bin/code-review.ts",
-      "land/routing/routing-judge.ts",
-      "land/stop/fork.ts",
+    expect(judges.map((path) => [path, spreadsOf(read(path))])).toEqual([
+      ["bin/code-review.ts", []],
+      ["land/routing/routing-judge.ts", ["...reader,"]],
+      [
+        "land/stop/fork.ts",
+        [
+          String.raw`const [first = "", ...rest] = text.trim().split("\n");`,
+          '...(ask.schema === null ? [] : ["--json-schema", JSON.stringify(ask.schema)]),',
+          '...(ask.model === null ? [] : ["--model", ask.model]),',
+        ],
+      ],
     ]);
   });
 
-  test("a Judge whose settings are written inline is refused", () => {
-    const inline = [
-      'import { ask } from "../shared/ask.live.ts";',
+  test("a Judge whose settings are written inline is refused, in whatever form or place", () => {
+    const sources = [
       'export const judged = ask({ model: "opus", tools: ["Read", "Edit", "Write"], prompt: "p", timeoutMs: 3_600_000 });',
-    ].join("\n");
+      'const tools = ["Read", "Write"];',
+      'ask({ "tools": ["Read", "Write"], prompt });',
+      'const K = "tools";',
+      'const judged = fast ? ask({ tools: ["Read", "Write"], timeoutMs: 1, prompt }) : other;',
+      'ask({ prompt: "Steps: 1) read 2) report", tools: ["Edit"], timeoutMs: 1 });',
+      String.raw`const re = /a\//u; ask({ tools: ["Write"], timeoutMs: 1 });`,
+      String.raw`const glob = /src\/*.ts/u; ask({ tools: ["Edit"] }); /* end */`,
+      "/* a */ ask({ allowedTools: WRITERS });",
+    ];
 
-    expect(settingsFaultsOf("land/x/judge.ts", inline)).toEqual([
-      'land/x/judge.ts: tools ["Read"',
-      "land/x/judge.ts: timeoutMs 3_600_000",
-      'land/x/judge.ts: model "opus"',
-    ]);
+    expect(sources.flatMap((source) => settingsFaultsOf("land/x/judge.ts", source))).toEqual(
+      sources.map((source) => `land/x/judge.ts:1: ${source}`),
+    );
   });
 
-  test("a deadline, or a constant, that is not an actor file's is refused", () => {
+  test("in a file that sets a Judge's tools, a deadline that is not an actor file's is refused", () => {
     const halfway = [
       'import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";',
-      'import { WRITERS } from "./writers.ts";',
-      "ask({ model: ROUTING_JUDGE.model, tools: ROUTING_JUDGE.tools, timeoutMs: 3_600_000 });",
-      "ask({ model: ROUTING_JUDGE.model, tools: WRITERS.tools, timeoutMs: ROUTING_JUDGE.timeoutMs });",
+      "ask({",
+      "  tools: ROUTING_JUDGE.tools,",
+      "  timeoutMs: 3_600_000,",
+      "});",
+      "run(argv, { timeoutMs: SLOW });",
     ].join("\n");
 
     expect(settingsFaultsOf("land/x/judge.ts", halfway)).toEqual([
-      "land/x/judge.ts: timeoutMs 3_600_000",
-      "land/x/judge.ts: tools WRITERS.tools",
+      "land/x/judge.ts:4: timeoutMs: 3_600_000,",
+      "land/x/judge.ts:6: run(argv, { timeoutMs: SLOW });",
     ]);
   });
 
-  test("a fork whose tools or permission mode are written inline is refused", () => {
-    const fork = '["claude", "-p", "--tools", "Read,Edit", "--permission-mode", "bypassPermissions", "prompt"]';
-
-    expect(settingsFaultsOf("land/x/fork.ts", fork)).toEqual([
-      'land/x/fork.ts: --tools "Read',
-      'land/x/fork.ts: --permission-mode "bypassPermissions"',
-    ]);
-  });
-  test("a Judge's tools in a shorthand or a spread, or under another key, are refused", () => {
-    const hidden = [
-      'import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";',
-      'const tools = ["Read", "Write"];',
-      "ask({ ...ROUTING_JUDGE, tools, prompt });",
-      "ask({ ...ROUTING_JUDGE, timeoutMs: 1, prompt });",
-      'const WRITERS = { allowedTools: ["Edit"], timeoutMs: ROUTING_JUDGE.timeoutMs };',
-    ].join("\n");
-
-    expect(settingsFaultsOf("land/x/judge.ts", hidden)).toEqual([
-      'land/x/judge.ts: allowedTools ["Edit"]',
-      "land/x/judge.ts: tools tools",
-      "land/x/judge.ts: timeoutMs 1",
-    ]);
-  });
-
-  test("a fork's flags written with `=`, under another name, or lifting the permissions are refused", () => {
-    const fork = '["claude", "-p", "--tools=Read,Edit", "--allowedTools", "Edit", "--dangerously-skip-permissions"]';
-
-    expect(settingsFaultsOf("land/x/fork.ts", fork)).toEqual([
-      "land/x/fork.ts: --tools =Read,Edit",
-      'land/x/fork.ts: --allowedTools "Edit"',
-      "land/x/fork.ts: --dangerously-skip-permissions",
-    ]);
-  });
-  test("a Judge's tools under a quoted or a computed key are refused", () => {
-    const quoted = [
-      'ask({ "tools": ["Read", "Write"], "timeoutMs": 3_600_000, prompt });',
-      'ask({ ["allowedTools"]: ["Edit"], timeoutMs: 1, prompt });',
-    ].join("\n");
-
-    expect(settingsFaultsOf("land/x/judge.ts", quoted)).toEqual([
-      'land/x/judge.ts: tools ["Read"',
-      "land/x/judge.ts: timeoutMs 3_600_000",
-      'land/x/judge.ts: allowedTools ["Edit"]',
-      "land/x/judge.ts: timeoutMs 1",
-    ]);
-  });
-
-  test("a constant spread over an actor's settings is refused; one spread under them is not", () => {
+  test("an actor file's constant spread whole is refused: what is spread after it overrides it", () => {
     const over = [
       'import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";',
       "ask({ ...ROUTING_JUDGE, ...SLOW, prompt });",
-      "ask({ ...reader, ...ROUTING_JUDGE, prompt });",
+      "ask({ ...ROUTING_JUDGE.depths[depth], prompt });",
     ].join("\n");
 
-    expect(settingsFaultsOf("land/x/judge.ts", over)).toEqual(["land/x/judge.ts: ...SLOW over an actor's settings"]);
+    expect(settingsFaultsOf("land/x/judge.ts", over)).toEqual([
+      "land/x/judge.ts:2: ask({ ...ROUTING_JUDGE, ...SLOW, prompt });",
+    ]);
   });
 
-  test("a key's word in a comment, an argument, an import or a destructuring is no Judge's setting", () => {
-    const prose = [
-      'import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";',
-      'import { tools, other } from "./x.ts";',
-      "const { tools: mine, allowedTools } = other;",
-      "const pick = ({ tools }) => tools;",
-      "forkArgvOf(session, tools, settings);",
-      "ask({",
-      "  // read-only tools,",
-      "  /* the deadline: timeoutMs */",
-      "  tools: ROUTING_JUDGE.tools,",
-      "  timeoutMs: ROUTING_JUDGE.timeoutMs,",
-      "});",
+  test("a fork whose tools or permissions are not an actor file's is refused", () => {
+    const fork = [
+      'import { DONE_JUDGE } from "./done-judge.actor.ts";',
+      '"--tools",',
+      '"Read,Edit",',
+      '"--tools=Read,Edit",',
+      '"--allowedTools",',
+      '"--permission-mode",',
+      "MODE,",
+      '"--dangerously-skip-permissions",',
+      '"--tools",',
+      'DONE_JUDGE.tools.join(","),',
     ].join("\n");
 
-    expect(settingsFaultsOf("land/x/judge.ts", prose)).toEqual([]);
+    expect(settingsFaultsOf("land/x/fork.ts", fork)).toEqual([
+      'land/x/fork.ts:2: "--tools",',
+      'land/x/fork.ts:4: "--tools=Read,Edit",',
+      'land/x/fork.ts:5: "--allowedTools",',
+      'land/x/fork.ts:6: "--permission-mode",',
+      'land/x/fork.ts:8: "--dangerously-skip-permissions",',
+    ]);
+  });
+
+  test("a comment's words, and the field of a port's type, are no Judge's setting", () => {
+    const prose = [
+      "/** The tools of the session, read-only ones: `guard` decides each call. */",
+      "readonly tools: readonly string[];",
+      "// read-only tools, with permissionMode dontAsk",
+      " * the deadline: timeoutMs",
+    ].join("\n");
+
+    expect(settingsFaultsOf("land/shared/x.port.ts", prose)).toEqual([]);
   });
 });
