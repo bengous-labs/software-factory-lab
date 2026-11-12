@@ -7,11 +7,7 @@ import { Result, Schema } from "effect";
 
 import { branchMadeFor } from "../contract.ts";
 import { CONFIG_DIR, TRUNK } from "../install/host.ts";
-
-/** The effort levels `claude --effort` takes. */
-const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-
-export type Effort = (typeof EFFORTS)[number];
+import { Effort } from "../lib/effort.ts";
 
 export interface DispatchArgs {
   readonly issue: number;
@@ -20,7 +16,7 @@ export interface DispatchArgs {
   readonly effort: Effort | undefined;
 }
 
-const USAGE = `usage: bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <${EFFORTS.join("|")}>]`;
+const USAGE = `usage: bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <${Effort.literals.join("|")}>]`;
 
 /** The issue, the model and the effort `argv` names; throws the usage on anything else. */
 export function dispatchArgsOf(argv: readonly string[]): DispatchArgs {
@@ -32,7 +28,7 @@ export function dispatchArgsOf(argv: readonly string[]): DispatchArgs {
     throw new Error(USAGE);
   }
 
-  if (effort.value !== undefined && !isEffort(effort.value)) {
+  if (effort.value !== undefined && !Schema.is(Effort)(effort.value)) {
     throw new Error(USAGE);
   }
 
@@ -61,10 +57,6 @@ function flagOf(argv: readonly string[], name: string): Flag {
   }
 
   return { value, rest: argv.filter((_, index) => index !== at && index !== at + 1) };
-}
-
-function isEffort(value: string): value is Effort {
-  return EFFORTS.some((effort) => effort === value);
 }
 
 const SLUG_MAX = 40;
@@ -157,7 +149,7 @@ export function promptOf({ issue, repo, worktree, branch }: Assignment): string 
 export interface Launch {
   readonly issue: number;
   readonly model: string;
-  readonly effort?: Effort | undefined;
+  readonly effort: Effort | undefined;
   /** The Worker settings file, passed by its path: its token never reaches the command line. */
   readonly settings: string;
   readonly prompt: string;

@@ -25,7 +25,7 @@ import {
   worktreeListed,
   worktreeOf,
 } from "./dispatch-plan.ts";
-import type { Effort } from "./dispatch-plan.ts";
+import type { DispatchArgs } from "./dispatch-plan.ts";
 
 export interface DispatchPorts {
   readonly run: Run;
@@ -34,10 +34,7 @@ export interface DispatchPorts {
   readonly readText: (path: string) => Promise<string>;
 }
 
-export interface DispatchRequest {
-  readonly issue: number;
-  readonly model: string;
-  readonly effort?: Effort | undefined;
+export interface DispatchRequest extends DispatchArgs {
   /** The repository's main checkout, where the Worker is launched. */
   readonly checkout: string;
   readonly env: Readonly<Record<string, string | undefined>>;

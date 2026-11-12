@@ -1,8 +1,7 @@
 import type { Schema } from "effect";
 
+import type { Effort } from "../../lib/effort.ts";
 import type { TokenCounts } from "../../lib/tokens.ts";
-
-type ReviewEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** The guard's answer to one tool call: allow it, or deny it with a reason the reviewer reads. */
 export type ToolDecision = { readonly kind: "allow" } | { readonly kind: "deny"; readonly reason: string };
@@ -15,7 +14,7 @@ export interface ReviewCall {
   /** The checkout of the pull request's head, where the reviewer reads. */
   readonly cwd: string;
   readonly model: string;
-  readonly effort: ReviewEffort;
+  readonly effort: Effort;
   /** The tools of the session: `guard` decides each call. */
   readonly tools: readonly string[];
   /** The JSON Schema the forked review's StructuredOutput call must follow. */

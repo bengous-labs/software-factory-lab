@@ -156,7 +156,9 @@ describe("promptOf", () => {
 
 describe("launchArgvOf", () => {
   test("launches a named background session with the Worker settings passed by path", () => {
-    expect(launchArgvOf({ issue: 168, model: "opus", settings: "/h/worker-settings.json", prompt: "P" })).toEqual([
+    expect(
+      launchArgvOf({ issue: 168, model: "opus", effort: undefined, settings: "/h/worker-settings.json", prompt: "P" }),
+    ).toEqual([
       "claude",
       "--bg",
       "--model",

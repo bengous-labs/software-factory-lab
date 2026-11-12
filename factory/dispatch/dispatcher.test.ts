@@ -75,7 +75,7 @@ async function failureOf(promise: Promise<unknown>): Promise<string> {
 
 const ENV = { HOME: "/home/me", PATH: "/bin", GH_TOKEN: "secret", LAB_AUTHOR: "1" };
 
-const REQUEST = { issue: 7, model: "opus", checkout: CHECKOUT, env: ENV };
+const REQUEST = { issue: 7, model: "opus", effort: undefined, checkout: CHECKOUT, env: ENV };
 
 const commandsOf = (calls: readonly Call[]) => calls.map((call) => call.argv.slice(0, 3).join(" "));
 
