@@ -6,7 +6,7 @@
  *
  *   // oxlint-disable-next-line some-rule -- the reason this one is unavoidable
  *
- * A suppression of a rule in `UNSUPPRESSIBLE` (`local/layers` and the budget rules), in any spelling
+ * A suppression of a rule in `UNSUPPRESSIBLE` (`local/layers`, `local/judges` and the budget rules), in any spelling
  * oxlint reads, or of every rule, is refused whatever its reason.
  *
  * Reads every file of the working tree under the current directory: the tracked ones, and the
@@ -27,8 +27,8 @@ const DIRECTIVE = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b/u;
 // The reason counts only after the directive: a ` -- ` before it is code, such as a decrement.
 const JUSTIFIED = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b.*\s--\s+\S/u;
 
-// The layer map and the budget exceptions belong to the Owner: a violation is fixed, never silenced.
-const UNSUPPRESSIBLE = ["local/layers", ...Object.keys(BUDGETS), ...Object.keys(FILE_BUDGETS)];
+// The layer map, the Judges' settings and the budget exceptions belong to the Owner: a violation is fixed, never silenced.
+const UNSUPPRESSIBLE = ["local/layers", "local/judges", ...Object.keys(BUDGETS), ...Object.keys(FILE_BUDGETS)];
 
 // The rule list runs from the directive to its reason, the end of a block comment, or the end of the line.
 const RULE_LIST = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b(?<rules>.*?)(?:\s--(?:\s|$)|\*\/|$)/u;

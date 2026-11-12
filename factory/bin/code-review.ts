@@ -69,8 +69,7 @@ const sessionOf = (prompt: string): Promise<SessionAnswer> =>
     effort: request.effort,
     outputSchema: OUTPUT_SCHEMA,
     guard: guardOf({ root, resolve: resolverOf(root) }),
-    tools: CODE_REVIEW.tools,
-    timeoutMs: CODE_REVIEW.timeoutMs,
+    judgeSettings: CODE_REVIEW,
     env,
   });
 

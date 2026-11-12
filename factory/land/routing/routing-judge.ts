@@ -65,12 +65,10 @@ export async function routingJudge(
   patchDelta: boolean,
 ): Promise<RoutingVerdict> {
   const answer = await ask({
-    model: ROUTING_JUDGE.model,
-    tools: ROUTING_JUDGE.tools,
+    ...reader,
+    judgeSettings: ROUTING_JUDGE,
     prompt: routingPromptOf(stat, diff, patchDelta),
     schema: SCHEMA,
-    ...reader,
-    timeoutMs: ROUTING_JUDGE.timeoutMs,
   });
 
   const { tokens } = answer;

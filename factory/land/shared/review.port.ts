@@ -2,6 +2,7 @@ import type { Schema } from "effect";
 
 import type { Effort } from "../../lib/effort.ts";
 import type { TokenCounts } from "../../lib/tokens.ts";
+import type { JudgeSettings } from "./ask.port.ts";
 
 /** The guard's answer to one tool call: allow it, or deny it with a reason the reviewer reads. */
 export type ToolDecision = { readonly kind: "allow" } | { readonly kind: "deny"; readonly reason: string };
@@ -15,12 +16,11 @@ export interface ReviewCall {
   readonly cwd: string;
   readonly model: string;
   readonly effort: Effort;
-  /** The tools of the session: `guard` decides each call. */
-  readonly tools: readonly string[];
+  /** The Code review's actor constant, passed whole: its tools and its deadline. Its model is the depth's, above. */
+  readonly judgeSettings: Omit<JudgeSettings, "model">;
   /** The JSON Schema the forked review's StructuredOutput call must follow. */
   readonly outputSchema: Schema.JsonObject;
   readonly guard: ToolGuard;
-  readonly timeoutMs: number;
   /** The whole environment of the Claude Code process: nothing else of the runner's reaches it. */
   readonly env: Readonly<Record<string, string>>;
 }

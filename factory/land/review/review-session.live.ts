@@ -25,7 +25,7 @@ export function optionsOf(call: ReviewCall, abortController: AbortController): O
     effort: call.effort,
     cwd: call.cwd,
     abortController,
-    tools: [...call.tools],
+    tools: [...call.judgeSettings.tools],
     permissionMode: "dontAsk",
     hooks: { PreToolUse: [{ hooks: [guardHook(call.guard)], onFailure: "block" }] },
     skills: ["code-review"],
@@ -125,7 +125,7 @@ export function sessionWith(stream: Stream): ReviewSession {
 
     const timer = setTimeout(() => {
       abortController.abort();
-    }, call.timeoutMs);
+    }, call.judgeSettings.timeoutMs);
 
     let reading = NOTHING_READ;
     let thrown: string | null = null;
@@ -140,7 +140,10 @@ export function sessionWith(stream: Stream): ReviewSession {
       clearTimeout(timer);
     }
 
-    return answerOf(reading, abortController.signal.aborted ? `timed out after ${call.timeoutMs} ms` : thrown);
+    return answerOf(
+      reading,
+      abortController.signal.aborted ? `timed out after ${call.judgeSettings.timeoutMs} ms` : thrown,
+    );
   };
 }
 
