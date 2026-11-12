@@ -51,6 +51,36 @@ export const ReviewInputs = Schema.Struct({
   ),
 });
 
+/** The review job's workflow file, which the Merge bot dispatches by this name. */
+export const REVIEW_WORKFLOW = "code-review.yml";
+
+/** The file, at the job's root checkout, where the runner writes its result and the workflow uploads it from. */
+export const REVIEW_RESULT_FILE = "review-result.json";
+
+/** The file, at the job's root checkout, where the thread step writes the earlier findings and the runner reads them. */
+export const REVIEW_THREADS_FILE = "review-threads.json";
+
+/** The variable of the job that carries each field of the request: the workflow sets each from its input of the same name. */
+export const REVIEW_VARIABLES = {
+  pr: "REVIEW_PR",
+  head: "REVIEW_HEAD",
+  base: "REVIEW_BASE",
+  patch: "REVIEW_PATCH",
+  round: "REVIEW_ROUND",
+  model: "REVIEW_MODEL",
+  effort: "REVIEW_EFFORT",
+  security: "REVIEW_SECURITY",
+} as const satisfies Record<keyof ReviewRequest, string>;
+
+const decodeInputs = Schema.decodeUnknownSync(ReviewInputs);
+
+/** The request the job's `variables` carry (`REVIEW_VARIABLES`); throws, naming the field, when one is missing or does not read. */
+export function requestOfVariables(variables: Readonly<Record<string, string | undefined>>): ReviewRequest {
+  return decodeInputs(
+    Object.fromEntries(Object.entries(REVIEW_VARIABLES).map(([field, variable]) => [field, variables[variable]])),
+  );
+}
+
 const Location = Schema.Struct({ file: Schema.String, line: Schema.NullOr(Schema.Int) });
 
 const ReportedFinding = Schema.Struct({

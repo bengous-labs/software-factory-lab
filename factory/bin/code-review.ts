@@ -14,12 +14,16 @@ import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Schema } from "effect";
-
 import { CODE_REVIEW } from "../land/review/code-review.actor.ts";
 import { projectGuideOf } from "../land/review/code-review.prompt.ts";
 import { readGuide, readRules } from "../land/review/guide.live.ts";
-import { OUTPUT_SCHEMA, ReviewInputs, summaryOf } from "../land/review/review-report.ts";
+import {
+  OUTPUT_SCHEMA,
+  requestOfVariables,
+  REVIEW_RESULT_FILE,
+  REVIEW_THREADS_FILE,
+  summaryOf,
+} from "../land/review/review-report.ts";
 import { reviewRunOf } from "../land/review/review-run.ts";
 import { reviewSession } from "../land/review/review-session.live.ts";
 import { EarlierThreads } from "../land/shared/findings.ts";
@@ -31,16 +35,7 @@ import { decodeJson } from "../lib/json.ts";
 
 const workspace = process.cwd();
 
-const request = Schema.decodeUnknownSync(ReviewInputs)({
-  pr: process.env.REVIEW_PR,
-  head: process.env.REVIEW_HEAD,
-  base: process.env.REVIEW_BASE,
-  patch: process.env.REVIEW_PATCH,
-  round: process.env.REVIEW_ROUND,
-  model: process.env.REVIEW_MODEL,
-  effort: process.env.REVIEW_EFFORT,
-  security: process.env.REVIEW_SECURITY,
-});
+const request = requestOfVariables(process.env);
 
 const root = realpathSync(join(workspace, "pr"));
 
@@ -49,7 +44,7 @@ const guides = {
   project: projectGuideOf(readGuide(workspace, "AGENTS.md"), readRules(workspace)),
 };
 
-const threadsFile = join(workspace, "review-threads.json");
+const threadsFile = join(workspace, REVIEW_THREADS_FILE);
 
 const threads = decodeJson(EarlierThreads, threadsFile, readFileSync(threadsFile, "utf8"));
 
@@ -81,7 +76,7 @@ const result = await reviewRunOf(
   `${requiredOf(process.env, "GITHUB_SERVER_URL")}/${requiredOf(process.env, "GITHUB_REPOSITORY")}/actions/runs/${requiredOf(process.env, "GITHUB_RUN_ID")}`,
 );
 
-writeFileSync(join(workspace, "review-result.json"), `${JSON.stringify(result, null, 2)}\n`);
+writeFileSync(join(workspace, REVIEW_RESULT_FILE), `${JSON.stringify(result, null, 2)}\n`);
 
 console.log(summaryOf(result));
 

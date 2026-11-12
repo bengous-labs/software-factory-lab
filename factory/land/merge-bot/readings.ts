@@ -100,6 +100,29 @@ export function landApprovalByOwnerOf(
 }
 
 /**
+ * The PR's Land approval, as a snapshot holds it, from the PR's label events, its head's check suites and
+ * its reviews: only the Owner's counts, since a `land-ok` the Author's machine account put is an agent's.
+ * The head's first check suite is created when it is pushed: a Land approval put before that was given
+ * for another head.
+ */
+export function landApprovalOf(
+  read: {
+    readonly events: typeof IssueEvents.Type;
+    readonly suites: typeof CheckSuites.Type;
+    readonly reviews: typeof PullReviews.Type;
+  },
+  { owner, appLogin }: Pick<Env, "owner" | "appLogin">,
+): Pick<Snapshot, "landApprovalByOwner" | "landApprovalPutByOwner"> {
+  const headPushedAt = read.suites.check_suites.map((suite) => suite.created_at).toSorted()[0] ?? null;
+  const reviewedAt = latestReviewAtOf(read.reviews, appLogin);
+
+  return {
+    landApprovalByOwner: landApprovalByOwnerOf(read.events, owner, { headPushedAt, reviewedAt }),
+    landApprovalPutByOwner: landApprovalPutByOwnerOf(read.events, owner),
+  };
+}
+
+/**
  * When the App posted its latest review of a round or a Delta read on the PR, the one whose body carries
  * the review's marker, as `reviews` give them; null when it posted none. GitHub lists each reply the App
  * posts in a thread as a review of its own, with no marker: one is no new read, and counts none.

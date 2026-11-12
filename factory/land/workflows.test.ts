@@ -5,6 +5,28 @@ import { Schema } from "effect";
 
 import { CI_CHECKS } from "../contract.ts";
 import { APP_LOGIN, AUTHOR_LOGIN, OWNER_LOGIN } from "../install/logins.ts";
+import {
+  inputsOf,
+  requestOfVariables,
+  REVIEW_RESULT_FILE,
+  REVIEW_VARIABLES,
+  REVIEW_WORKFLOW,
+} from "./review/review-report.ts";
+import type { ReviewRequest } from "./review/review-report.ts";
+
+/** A request whose every field differs from the others, so an input carried into another field's variable shows. */
+const REQUEST: ReviewRequest = {
+  pr: 7,
+  head: "a".repeat(40),
+  base: "b".repeat(40),
+  patch: "p1",
+  round: 2,
+  model: "sonnet",
+  effort: "medium",
+  security: true,
+};
+
+const Dispatch = Schema.Struct({ workflow_dispatch: Schema.Struct({ inputs: Schema.JsonObject }) });
 
 const Step = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
@@ -53,7 +75,7 @@ const stepNamed = (steps: (typeof Workflow.Type.jobs)[string]["steps"], name: st
 
 describe("the review job's workflow", () => {
   test("only a dispatch starts it, titled with the PR's number alone, and no concurrency group ever cancels a run", async () => {
-    const workflow = await workflowOf("code-review.yml");
+    const workflow = await workflowOf(REVIEW_WORKFLOW);
 
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
     expect(workflow["run-name"]).toBe("${{ inputs.pr }}");
@@ -61,16 +83,16 @@ describe("the review job's workflow", () => {
   });
 
   test("it reads the contents and the pull requests, and holds no secret but the OAuth token", async () => {
-    const workflow = await workflowOf("code-review.yml");
+    const workflow = await workflowOf(REVIEW_WORKFLOW);
 
     expect(workflow.permissions).toEqual({ contents: "read", "pull-requests": "read" });
-    expect(new Set((await sourceOf("code-review.yml")).match(/secrets\.\w+/gu))).toEqual(
+    expect(new Set((await sourceOf(REVIEW_WORKFLOW)).match(/secrets\.\w+/gu))).toEqual(
       new Set(["secrets.CLAUDE_CODE_OAUTH_TOKEN"]),
     );
   });
 
   test("every checkout leaves no credential behind, and the Review step gets no GitHub token", async () => {
-    const { steps, env } = (await workflowOf("code-review.yml")).jobs["review"] ?? { steps: [] };
+    const { steps, env } = (await workflowOf(REVIEW_WORKFLOW)).jobs["review"] ?? { steps: [] };
     const checkouts = steps.filter((step) => step.uses?.startsWith("actions/checkout@") === true);
 
     expect(checkouts).toHaveLength(2);
@@ -86,7 +108,7 @@ describe("the review job's workflow", () => {
   });
 
   test("only the thread step, at every round, gets the job's token, before the Review step", async () => {
-    const { steps } = (await workflowOf("code-review.yml")).jobs["review"] ?? { steps: [] };
+    const { steps } = (await workflowOf(REVIEW_WORKFLOW)).jobs["review"] ?? { steps: [] };
     const tokened = steps.filter((step) => step.env?.["GH_TOKEN"] !== undefined);
 
     expect(tokened.map((step) => step.name)).toEqual(["Read the earlier review threads"]);
@@ -101,7 +123,7 @@ describe("the review job's workflow", () => {
   });
 
   test("the security flag is a required input that reaches the runner through env, and the job's timeout leaves room for two passes", async () => {
-    const workflow = await workflowOf("code-review.yml");
+    const workflow = await workflowOf(REVIEW_WORKFLOW);
     const { steps, env } = workflow.jobs["review"] ?? { steps: [] };
 
     expect(workflow.on).toMatchObject({
@@ -122,21 +144,60 @@ describe("the review job's workflow", () => {
   });
 
   test("the result is uploaded whatever happened, under the name the Merge bot reads", async () => {
-    const { steps } = (await workflowOf("code-review.yml")).jobs["review"] ?? { steps: [] };
+    const { steps } = (await workflowOf(REVIEW_WORKFLOW)).jobs["review"] ?? { steps: [] };
 
     expect(stepNamed(steps, "Upload the result")).toMatchObject({
       if: "always()",
-      with: { name: "review-${{ inputs.pr }}-${{ inputs.round }}", path: "review-result.json", overwrite: true },
+      with: { name: "review-${{ inputs.pr }}-${{ inputs.round }}", path: REVIEW_RESULT_FILE, overwrite: true },
     });
+  });
+
+  test("the request the Merge bot dispatches reaches the runner whole: each input, the job's variable that carries it, the runner's read", async () => {
+    const workflow = await workflowOf(REVIEW_WORKFLOW);
+    const { env } = workflow.jobs["review"] ?? { steps: [] };
+    const inputs = inputsOf(REQUEST);
+
+    expect(Object.keys(Schema.decodeUnknownSync(Dispatch)(workflow.on).workflow_dispatch.inputs).toSorted()).toEqual(
+      Object.keys(inputs).toSorted(),
+    );
+
+    // The job's env as the runner sees it: each `${{ inputs.<name> }}` holds the dispatched input of that name.
+    const variables = Object.fromEntries(
+      Object.entries(env ?? {}).map(([name, value]) => [
+        name,
+        value.replace(/^\$\{\{ inputs\.(\w+) \}\}$/u, (_, input: string) => inputs[input] ?? value),
+      ]),
+    );
+
+    expect(requestOfVariables(variables)).toEqual(REQUEST);
+  });
+
+  test("the failed result the job writes when the runner wrote none carries each variable of the request into its own field, in the file it uploads", async () => {
+    const { steps } = (await workflowOf(REVIEW_WORKFLOW)).jobs["review"] ?? { steps: [] };
+    const run = stepNamed(steps, "Write a failed result when the runner wrote none").run ?? "";
+
+    expect(run).toStartWith(`test -f ${REVIEW_RESULT_FILE} || `);
+    expect(run.trimEnd()).toEndWith(`> ${REVIEW_RESULT_FILE}`);
+
+    // The fields `ReviewRequest` holds as numbers.
+    const numbers = new Set(["pr", "round"]);
+
+    for (const [field, variable] of Object.entries(REVIEW_VARIABLES)) {
+      // jq's `--arg <name> "$<variable>"` binds the variable to `$<name>`, which the request's field reads;
+      // a number field needs `--argjson`, since `--arg` writes a string the Merge bot's decode refuses.
+      const flag = numbers.has(field) ? "--argjson" : "--arg";
+      expect(run).toMatch(new RegExp(`${flag} ${field} "\\$${variable}"`, "u"));
+      expect(run).toMatch(new RegExp(`[{\\s]${field}: \\(?\\$${field}[,) }]`, "u"));
+    }
   });
 });
 
 describe("the Merge bot's workflow", () => {
   test("a completed review job wakes the Merge bot for the PR its title names", async () => {
     const workflow = await workflowOf("merge-bot.yml");
-    const review = await workflowOf("code-review.yml");
+    const review = await workflowOf(REVIEW_WORKFLOW);
     // A review run's `workflow_run.name` is its run-name, the PR's number: only its path names the workflow.
-    const isReview = "github.event.workflow_run.path == '.github/workflows/code-review.yml'";
+    const isReview = `github.event.workflow_run.path == '.github/workflows/${REVIEW_WORKFLOW}'`;
     const title = `(${isReview} && github.event.workflow_run.display_title)`;
     const job = workflow.jobs["merge-bot"];
 
@@ -183,7 +244,7 @@ describe("CI's workflow", () => {
 describe("the lab's logins", () => {
   test("the workflows and logins.ts name the same Owner, Author and App, so the Merge bot, the review job, the Stop hook and the relay trust the same logins", async () => {
     const mergeBot = (await workflowOf("merge-bot.yml")).jobs["merge-bot"]?.steps ?? [];
-    const review = (await workflowOf("code-review.yml")).jobs["review"]?.steps ?? [];
+    const review = (await workflowOf(REVIEW_WORKFLOW)).jobs["review"]?.steps ?? [];
     const named = stepNamed(mergeBot, "Run the Merge bot").env ?? {};
 
     expect({ OWNER: named["OWNER"], AUTHOR_LOGIN: named["AUTHOR_LOGIN"], APP_LOGIN: named["APP_LOGIN"] }).toEqual({

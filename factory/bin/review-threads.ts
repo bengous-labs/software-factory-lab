@@ -6,24 +6,21 @@
  * author's answers (`shownThreadsOf`), to `review-threads.json` at the root checkout, outside `pr/`, for
  * `code-review.ts` to put in the prompt. The review session itself never gets a GitHub token.
  *
- * Reads GITHUB_REPOSITORY, REVIEW_PR, REVIEW_ROUND and APP_LOGIN; calls gh with GH_TOKEN.
+ * Reads GITHUB_REPOSITORY, the request's variables (`REVIEW_VARIABLES`) and APP_LOGIN; calls gh with GH_TOKEN.
  */
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../install/logins.ts";
+import { requestOfVariables, REVIEW_THREADS_FILE } from "../land/review/review-report.ts";
 import { graphqlLogin, ReviewThreads, shownThreadsOf, threadsQueryOf } from "../land/shared/findings.ts";
 import { requiredOf } from "../lib/env.ts";
 import { decodeJson } from "../lib/json.ts";
 import { run } from "../lib/run.live.ts";
 import { checked } from "../lib/run.port.ts";
 
-const pr = Number(requiredOf(process.env, "REVIEW_PR"));
-
-if (!Number.isInteger(pr)) {
-  throw new TypeError(`REVIEW_PR is not a pull request number: ${requiredOf(process.env, "REVIEW_PR")}`);
-}
+const { pr, round } = requestOfVariables(process.env);
 
 const [owner = "", name = ""] = requiredOf(process.env, "GITHUB_REPOSITORY").split("/");
 
@@ -38,10 +35,10 @@ const threads = decodeJson(ReviewThreads, "the review threads query", answer).da
 
 const earlier = shownThreadsOf(
   { app: graphqlLogin(requiredOf(process.env, "APP_LOGIN")), author: AUTHOR_LOGIN, owner: OWNER_LOGIN },
-  Number(requiredOf(process.env, "REVIEW_ROUND")),
+  round,
   threads,
 );
 
-writeFileSync(join(process.cwd(), "review-threads.json"), `${JSON.stringify(earlier, null, 2)}\n`);
+writeFileSync(join(process.cwd(), REVIEW_THREADS_FILE), `${JSON.stringify(earlier, null, 2)}\n`);
 
 console.log(`review threads pr=${pr}: ${earlier.length} earlier finding(s)`);
