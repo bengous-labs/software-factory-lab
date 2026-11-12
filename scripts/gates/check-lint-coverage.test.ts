@@ -39,3 +39,47 @@ test("the gate fails on tracked .ts and .js files a .gitignore or an .eslintigno
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the gate fails on a tracked source a pattern of the lint config hides, but the vendored rules and the mods, which a .gitignore still may not hide", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lint-coverage-"));
+  const gate = join(root, "scripts", "gates", "check-lint-coverage.ts");
+
+  const write = (path: string, text: string): void => {
+    mkdirSync(join(root, path, ".."), { recursive: true });
+    writeFileSync(join(root, path), text);
+  };
+
+  try {
+    write("scripts/gates/check-lint-coverage.ts", await Bun.file(SCRIPT).text());
+    write(
+      "oxlint.style.config.ts",
+      'export const IGNORE_PATTERNS = ["scripts/vendor/anti-slop/**", ".claude/plugins/**", "factory/land/queue/**"];\n',
+    );
+    write("factory/land/queue/queue.ts", "Bun.spawnSync(['true']);\n");
+    write("scripts/vendor/anti-slop/index.ts", "export const a = 1;\n");
+    write(".claude/plugins/land/hooks/land.tsx", "export const b = 1;\n");
+    await $`git init -q && git add -A`.cwd(root).env(FIXTURE_ENV);
+
+    const refused = await $`bun ${gate}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
+
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr.toString()).toBe(
+      "1 tracked source file(s) an ignore rule hides from the lint:\n\n  factory/land/queue/queue.ts\n\nNarrow the ignore rule that covers each, or stop tracking the file.\n",
+    );
+
+    write("oxlint.style.config.ts", 'export const IGNORE_PATTERNS = [".claude/plugins/**"];\n');
+    write(".gitignore", "land.tsx\n");
+
+    const hiddenMod = await $`bun ${gate}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
+
+    expect(hiddenMod.exitCode).toBe(1);
+    expect(hiddenMod.stderr.toString()).toContain("  .claude/plugins/land/hooks/land.tsx\n");
+
+    write(".gitignore", "");
+    write("oxlint.style.config.ts", "export const IGNORE_PATTERNS = [];\n");
+
+    expect((await $`bun ${gate}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet()).exitCode).toBe(0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
