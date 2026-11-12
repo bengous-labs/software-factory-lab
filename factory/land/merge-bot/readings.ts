@@ -11,7 +11,7 @@ import { escapeHtml } from "../../lib/markdown.ts";
 import type { Ran } from "../../lib/run.port.ts";
 import { fixedListOf } from "../shared/author-mark.ts";
 import { reviewOfBody } from "../shared/findings.ts";
-import type { Env } from "./github.ts";
+import type { Env } from "./env.ts";
 import type { StateRead } from "./ledger.ts";
 import { EMPTY_RECORD, recordOfComment } from "./record.ts";
 import { ciOf, landApprovalCounts } from "./snapshot.ts";

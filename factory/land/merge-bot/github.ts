@@ -7,15 +7,14 @@
 import { Schema } from "effect";
 
 import { TRUNK } from "../../install/host.ts";
-import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
 import type { Run } from "../../lib/run.port.ts";
 import type { AgainReply } from "../review/post-plan.ts";
-import type { Ask } from "../shared/ask.port.ts";
 import { graphqlLogin, ReviewThreads, threadsQueryOf } from "../shared/findings.ts";
 import type { ReviewThread, ThreadLogins } from "../shared/findings.ts";
 import { replyInThread, resolveThread } from "../shared/threads.ts";
+import type { Env } from "./env.ts";
 import type { Issue } from "./ledger.ts";
 import {
   checkRunBodyOf,
@@ -31,41 +30,6 @@ import {
   pushRunsOf,
 } from "./readings.ts";
 import type { CheckState } from "./steps.ts";
-
-/** What one start of the Merge bot works with: the job it runs in, the logins it trusts, and the ports its door passes. */
-export interface Env {
-  readonly repo: string;
-  readonly owner: string;
-  readonly authorLogin: string;
-  readonly appLogin: string;
-  readonly cwd: string;
-  readonly runUrl: string;
-  readonly run: Run;
-  readonly ask: Ask;
-}
-
-/**
- * The Env of one start, from the job's `variables`, the `ports` its door gives it and the directory it
- * runs in: OWNER is the only login whose Land approval counts, AUTHOR_LOGIN the Author's machine account,
- * APP_LOGIN the App's. Throws, naming the variable, when one is unset.
- */
-export function envOf(
-  variables: Readonly<Record<string, string | undefined>>,
-  ports: Pick<Env, "run" | "ask">,
-  cwd: string,
-): Env {
-  const repo = requiredOf(variables, "GITHUB_REPOSITORY");
-
-  return {
-    ...ports,
-    repo,
-    owner: requiredOf(variables, "OWNER"),
-    authorLogin: requiredOf(variables, "AUTHOR_LOGIN"),
-    appLogin: requiredOf(variables, "APP_LOGIN"),
-    cwd,
-    runUrl: `${requiredOf(variables, "GITHUB_SERVER_URL")}/${repo}/actions/runs/${requiredOf(variables, "GITHUB_RUN_ID")}`,
-  };
-}
 
 /** The endpoint at `path`, read through `runner` and decoded by `schema`. */
 const apiWith = async <S extends Schema.ConstraintDecoder<unknown>>(

@@ -12,7 +12,7 @@
  * job, `.github/workflows/code-review.yml`, which the Merge bot dispatches and whose artifact it reads.
  */
 
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,8 +23,9 @@ import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import type { Run } from "../../lib/run.port.ts";
 import { CODE_REVIEW } from "../review/code-review.actor.ts";
+import { readResult } from "../review/job-files.live.ts";
 import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewOf } from "../review/post-plan.ts";
-import { inputsOf, resultOfJson, REVIEW_RESULT_FILE, REVIEW_WORKFLOW, summaryOf } from "../review/review-report.ts";
+import { inputsOf, REVIEW_WORKFLOW, summaryOf } from "../review/review-report.ts";
 import {
   graphqlLogin,
   ledgerFindingsOf,
@@ -35,7 +36,8 @@ import {
 } from "../shared/findings.ts";
 import type { ReviewThread } from "../shared/findings.ts";
 import { decide } from "./decide.ts";
-import type { Env } from "./github.ts";
+import { envOf } from "./env.ts";
+import type { Env } from "./env.ts";
 import {
   againPoster,
   api,
@@ -44,7 +46,6 @@ import {
   conversationReader,
   devRunsReader,
   draftConverter,
-  envOf,
   gh,
   git,
   issueOpener,
@@ -124,9 +125,7 @@ async function artifactOf(runner: Run, where: Pick<Env, "repo" | "cwd">, runId: 
     { cwd: where.cwd },
   );
 
-  const file = join(dir, REVIEW_RESULT_FILE);
-
-  return downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null;
+  return downloaded.code === 0 ? readResult(dir) : null;
 }
 
 /**

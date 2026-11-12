@@ -14,7 +14,7 @@ import type { ReportedFinding, ReportedResult, ReviewResult } from "../review/re
 import type { RoutingAnswer } from "../routing/routing-rules.ts";
 import type { LedgerFinding } from "../shared/finding.ts";
 import { decide } from "./decide.ts";
-import type { Env } from "./github.ts";
+import type { Env } from "./env.ts";
 import type { CheckRuns, IssueEvents } from "./readings.ts";
 import { EMPTY_RECORD } from "./record.ts";
 import type { StateRecord } from "./record.ts";
@@ -195,6 +195,16 @@ export const page = (from: number, count: number) =>
 export const WHERE = { repo: "o/r", cwd: "/tmp" };
 
 export const ok = (stdout: string): Ran => ({ code: 0, stdout, stderr: "" });
+
+/** The variables `merge-bot.yml` gives the Merge bot's job, each login its own, as `envOf` reads them. */
+export const JOB_VARIABLES = {
+  GITHUB_REPOSITORY: "o/r",
+  GITHUB_SERVER_URL: "https://github.example",
+  GITHUB_RUN_ID: "5",
+  OWNER: "the-owner",
+  AUTHOR_LOGIN: "the-author",
+  APP_LOGIN: "the-app[bot]",
+};
 
 interface Call {
   readonly argv: readonly string[];

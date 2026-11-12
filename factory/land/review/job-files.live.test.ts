@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readEarlierThreads, writeEarlierThreads, writeResult } from "./job-files.live.ts";
+import { readEarlierThreads, readResult, writeEarlierThreads, writeResult } from "./job-files.live.ts";
 import { resultOfJson } from "./review-report.ts";
 import type { ReviewResult } from "./review-report.ts";
 
@@ -48,11 +48,22 @@ describe("the review job's files", () => {
     expect(() => readEarlierThreads(dir)).toThrow(join(dir, "review-threads.json"));
   });
 
-  test("the runner's result lands in review-result.json, the file the workflow uploads and the Merge bot reads", () => {
+  test("the runner's result lands in review-result.json, the file the workflow uploads and the Merge bot reads back", () => {
     const dir = workspace();
 
     writeResult(dir, FAILED);
 
     expect(resultOfJson(readFileSync(join(dir, "review-result.json"), "utf8"))).toEqual(FAILED);
+    expect(readResult(dir)).toEqual(FAILED);
+  });
+
+  test("an artifact with no result file, or one that does not read, gives no result", () => {
+    const dir = workspace();
+
+    expect(readResult(dir)).toBeNull();
+
+    writeFileSync(join(dir, "review-result.json"), "{}");
+
+    expect(readResult(dir)).toBeNull();
   });
 });

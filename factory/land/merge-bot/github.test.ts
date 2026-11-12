@@ -6,6 +6,7 @@ import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../../lib/run.port.ts";
 import { threadsQueryOf } from "../shared/findings.ts";
 import { fixedRecordBodyOf } from "../stop/decide.ts";
+import type { Env } from "./env.ts";
 import {
   againPoster,
   api,
@@ -14,7 +15,6 @@ import {
   conversationReader,
   devRunsReader,
   draftConverter,
-  envOf,
   gh,
   issueOpener,
   labelEventsReader,
@@ -28,41 +28,10 @@ import {
   threadsOf,
   threadsResolver,
 } from "./github.ts";
-import type { Env } from "./github.ts";
 import { commandsAnswering, labeled, ok, page, runIn, WHERE } from "./merge-bot.fixtures.ts";
 import type { CheckRun, LabelEvent } from "./merge-bot.fixtures.ts";
 import { checkRunBodyOf, ciRunsPathsOf, devRedOf, humanLabelByOf, PostedComment, stateCommentIn } from "./readings.ts";
 import { rangeRefspecsOf } from "./routing-inputs.ts";
-
-describe("envOf", () => {
-  const VARIABLES = {
-    GITHUB_REPOSITORY: "o/r",
-    GITHUB_SERVER_URL: "https://github.example",
-    GITHUB_RUN_ID: "5",
-    OWNER: "the-owner",
-    AUTHOR_LOGIN: "the-author",
-    APP_LOGIN: "the-app[bot]",
-  };
-
-  const ports = { run: () => Promise.resolve(ok("")), ask: () => Promise.reject(new Error("no model")) };
-
-  test("each login comes from its own variable, and the run's link from the server, the repository and the run", () => {
-    expect(envOf(VARIABLES, ports, "/work")).toEqual({
-      ...ports,
-      repo: "o/r",
-      owner: "the-owner",
-      authorLogin: "the-author",
-      appLogin: "the-app[bot]",
-      cwd: "/work",
-      runUrl: "https://github.example/o/r/actions/runs/5",
-    });
-  });
-
-  test("a variable that is unset or empty is refused, by its name", () => {
-    expect(() => envOf({ ...VARIABLES, OWNER: undefined }, ports, "/work")).toThrow("OWNER is unset");
-    expect(() => envOf({ ...VARIABLES, AUTHOR_LOGIN: "" }, ports, "/work")).toThrow("AUTHOR_LOGIN is unset");
-  });
-});
 
 describe("conversationReader", () => {
   test("reads every page of the PR's conversation, so the Author's record past the first 100 comments is found", async () => {

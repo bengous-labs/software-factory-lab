@@ -8,7 +8,7 @@ import { tokensText } from "../../lib/tokens.ts";
 import type { RoutingVerdict } from "../routing/routing-judge.ts";
 import type { RoutingAnswer } from "../routing/routing-rules.ts";
 import type { ReviewRound } from "../shared/review-round.ts";
-import type { Env } from "./github.ts";
+import type { Env } from "./env.ts";
 import { git } from "./github.ts";
 import type { Pull } from "./readings.ts";
 import type { StateRecord } from "./record.ts";

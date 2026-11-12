@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import type { Ran, Run } from "../../lib/run.port.ts";
 import { resultOf } from "../review/review-report.ts";
-import { envOf } from "./github.ts";
+import { envOf } from "./env.ts";
 import { reviewJobReader, snapshotOf } from "./main.live.ts";
-import { labeled, ok, WHERE } from "./merge-bot.fixtures.ts";
+import { JOB_VARIABLES, labeled, ok, WHERE } from "./merge-bot.fixtures.ts";
 import type { Pull } from "./readings.ts";
 import { EMPTY_RECORD } from "./record.ts";
 import type { ReviewState } from "./record.ts";
@@ -58,16 +58,6 @@ const downloaded = (dir: string): Ran => {
   return ok("");
 };
 
-/** The job's variables, each login its own, as `merge-bot.yml` sets them. */
-const VARIABLES = {
-  GITHUB_REPOSITORY: "o/r",
-  GITHUB_SERVER_URL: "https://github.com",
-  GITHUB_RUN_ID: "5",
-  OWNER: "the-owner",
-  AUTHOR_LOGIN: "the-author",
-  APP_LOGIN: "the-app[bot]",
-};
-
 const HEAD = "a".repeat(40);
 
 const PULL: Pull = {
@@ -109,7 +99,7 @@ const landOkRunner =
         [
           [
             {
-              user: { login: VARIABLES.APP_LOGIN },
+              user: { login: JOB_VARIABLES.APP_LOGIN },
               body: "Round 1: 0 Important.\n\n<!-- lab-review patch=p1 round=1 -->",
               submitted_at: "2026-11-05T10:30:00Z",
             },
@@ -128,7 +118,7 @@ const landOkRunner =
 /** The snapshot of `PULL` when `login` put its Land approval, over the Env the job's variables give. */
 const snapshotBy = (login: string) =>
   snapshotOf(
-    envOf(VARIABLES, { run: landOkRunner(login), ask: () => Promise.reject(new Error("no model")) }, "/tmp"),
+    envOf(JOB_VARIABLES, { run: landOkRunner(login), ask: () => Promise.reject(new Error("no model")) }, "/tmp"),
     PULL,
     { base: "b".repeat(40), head: HEAD },
     EMPTY_RECORD,
@@ -137,14 +127,14 @@ const snapshotBy = (login: string) =>
 
 describe("snapshotOf", () => {
   test("a Land approval the Owner put after the head's push and the App's review counts", async () => {
-    expect(await snapshotBy(VARIABLES.OWNER)).toMatchObject({
+    expect(await snapshotBy(JOB_VARIABLES.OWNER)).toMatchObject({
       landApprovalByOwner: true,
       landApprovalPutByOwner: true,
     });
   });
 
   test("a Land approval the Author's machine account or the App put counts for nothing, whatever the job's variables name", async () => {
-    for (const login of [VARIABLES.AUTHOR_LOGIN, VARIABLES.APP_LOGIN]) {
+    for (const login of [JOB_VARIABLES.AUTHOR_LOGIN, JOB_VARIABLES.APP_LOGIN]) {
       expect(await snapshotBy(login)).toMatchObject({ landApprovalByOwner: false, landApprovalPutByOwner: false });
     }
   });

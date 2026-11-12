@@ -1,16 +1,17 @@
 /**
- * The files the review job's processes share at its root checkout: the earlier findings the thread step
- * writes and the runner reads, and the result the runner writes and the workflow uploads. The doors of
- * `factory/bin/` read and write them through these functions, so none spells a file's name.
+ * The files the review job's processes share: the earlier findings the thread step writes and the runner
+ * reads, at the job's root checkout, and the result the runner writes there, which the workflow uploads
+ * and the Merge bot reads from the downloaded artifact. Every writer and reader goes through these
+ * functions, so no other module spells a file's name.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { decodeJson } from "../../lib/json.ts";
 import { EarlierThreads } from "../shared/findings.ts";
 import type { EarlierThread } from "../shared/findings.ts";
-import { REVIEW_RESULT_FILE, REVIEW_THREADS_FILE } from "./review-report.ts";
+import { resultOfJson, REVIEW_RESULT_FILE, REVIEW_THREADS_FILE } from "./review-report.ts";
 import type { ReviewResult } from "./review-report.ts";
 
 /** Writes the earlier findings `threads` to the threads file of `workspace`. */
@@ -28,4 +29,11 @@ export function readEarlierThreads(workspace: string): readonly EarlierThread[] 
 /** Writes the job's `result` to the result file of `workspace`, which the workflow uploads. */
 export function writeResult(workspace: string, result: ReviewResult): void {
   writeFileSync(join(workspace, REVIEW_RESULT_FILE), `${JSON.stringify(result, null, 2)}\n`);
+}
+
+/** The result in the result file of `dir`, where the Merge bot downloads the artifact; null when there is none or it does not read. */
+export function readResult(dir: string): ReviewResult | null {
+  const file = join(dir, REVIEW_RESULT_FILE);
+
+  return existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null;
 }
