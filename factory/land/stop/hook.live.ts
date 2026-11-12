@@ -1,0 +1,316 @@
+/**
+ * The Stop hook. It does nothing for a session that is not an Author, whose environment holds no
+ * `LAB_AUTHOR=1`, nor for a fork it launched. For an Author it reads git and the branch's PR, decides with
+ * `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the session whether
+ * the change is finished and which findings the Author rejects or fixed, then publishes (`publish.live.ts`):
+ * posts the rejections, records the fixed findings on the PR, pushes the branch, opens or readies the PR,
+ * resolves the App's open Nit threads, and leaves the PR's relay. A stop that leaves a question to the Owner
+ * pushes the branch to a PR in draft, posts the question there once, and leaves the relay that brings the
+ * answer back. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's latency and
+ * tokens, and every stop of an Author leaves one line in `.lab/outcomes.log` of the main checkout.
+ *
+ * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
+ */
+
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+import { OUTCOMES_LOG } from "../../contract.ts";
+import { TRUNK } from "../../install/host.ts";
+import { isAuthor } from "../../lib/author-session.ts";
+import { decodeJson } from "../../lib/json.ts";
+import { checked } from "../../lib/run.port.ts";
+import { questionOpen } from "../shared/author-mark.ts";
+import { authorTokenOf } from "../shared/author.live.ts";
+import { conversationArgsOf, conversationOf } from "../shared/conversation.ts";
+import type { OpenFinding } from "../shared/findings.ts";
+import {
+  admit,
+  afterClosed,
+  afterStopChecks,
+  bystanderOf,
+  chainOf,
+  checkoutOf,
+  DONE_SCHEMA,
+  doneAnswerOf,
+  fixedRecordIn,
+  noAuthorToken,
+  noDoneAnswer,
+  outcomeLineOf,
+  quotedQuestionOf,
+} from "./decide.ts";
+import type { Refusal, Snapshot, StopChecks, StopFacts } from "./decide.ts";
+import { doneQuestionOf } from "./done-judge.prompt.ts";
+import { hasForkMarker, modelOf, transcriptLinesOf } from "./fork.ts";
+import type { ForkResult, TranscriptLine } from "./fork.ts";
+import {
+  ALLOW,
+  askFork,
+  closedPrsOf,
+  closeNits,
+  FORK_FLAG,
+  ghOptions,
+  gitOut,
+  notPublished,
+  openFindings,
+  prOf,
+  publish,
+  StopInput,
+} from "./publish.live.ts";
+import type { Answer, AuthorStop, Deps, Log, StopLogRecord, Stopped } from "./publish.live.ts";
+
+const STOP_CHECKS_TIMEOUT_MS = 300_000;
+
+/** The lines of the transcript at `path`; a missing transcript has none. */
+export function linesOf(path: string): TranscriptLine[] {
+  return existsSync(path) ? transcriptLinesOf(readFileSync(path, "utf8"), path) : [];
+}
+
+async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: string): Promise<StopChecks> {
+  // An on-disk name: existing state files carry it, so it stays.
+  const record = join(stateDir, `gates-${head}`);
+
+  if (existsSync(record)) {
+    return { kind: "green" };
+  }
+
+  const ran = await deps.run(["bun", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
+
+  if (ran.code !== 0) {
+    return { kind: "red", report: `${ran.stdout}\n${ran.stderr}`.trim().slice(-3000) };
+  }
+
+  writeFileSync(record, "green\n");
+
+  return { kind: "green" };
+}
+
+/** The stop of a decision that publishes nothing: blocked with its reason, or let go. */
+const stoppedOf = (next: Refusal, why: string): Stopped =>
+  next.kind === "block" ? notPublished(why, next) : notPublished(next.reason);
+
+/** The Done judge: a fork of the session answers whether the change is finished and which findings the Author rejects or fixed. */
+function askDoneJudge(stopping: AuthorStop, findings: readonly OpenFinding[]): Promise<ForkResult> {
+  const question = doneQuestionOf(
+    findings.map((finding) => ({
+      thread: finding.thread,
+      where: finding.line === null ? finding.path : `${finding.path}:${finding.line}`,
+      severity: finding.severity,
+      summary: finding.summary,
+    })),
+  );
+
+  return askFork(stopping.deps, stopping.input, {
+    model: stopping.model,
+    prompt: question,
+    schema: DONE_SCHEMA,
+  });
+}
+
+/** The stop of an Author whose branch may be published: admission, the Stop checks, the Done judge, the Publication. */
+async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopped> {
+  const { deps, input, log, branch, head } = stopping;
+  const { cwd } = input;
+  // Left by the stop that asked for the commit, and read once by the next one.
+  const commitAsked = join(stateDir, `commit-asked-${input.session_id}`);
+  const chain = chainOf(input.stop_hook_active === true, existsSync(commitAsked));
+  rmSync(commitAsked, { force: true });
+
+  await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
+
+  // Read before the PR list, which the Author's credential reads too; only publishing needs the token.
+  const token = authorTokenOf(deps.env);
+  const gh = ghOptions(cwd, token);
+
+  const snapshot: Snapshot = {
+    branch,
+    head,
+    treeClean: (await gitOut(deps, cwd, ["status", "--porcelain"])) === "",
+    ahead: Number(await gitOut(deps, cwd, ["rev-list", "--count", `origin/${TRUNK}..HEAD`])),
+    pr: await prOf(deps, gh, branch),
+  };
+
+  const first = admit(snapshot, chain.blocked);
+
+  const admission = first.kind === "read-closed" ? afterClosed(head, await closedPrsOf(deps, gh, branch)) : first;
+
+  log({ step: "admit", branch, head, pr: snapshot.pr?.number ?? null, ...admission });
+
+  if (admission.kind === "none") {
+    return notPublished(admission.reason);
+  }
+
+  if (admission.kind === "block") {
+    writeFileSync(commitAsked, "asked\n");
+
+    return notPublished(admission.outcome, { kind: "block", reason: admission.reason });
+  }
+
+  if (admission.kind === "ready") {
+    if (token.kind === "found") {
+      await closeNits(stopping, gh, await openFindings(deps, gh, admission.pr));
+    }
+
+    return notPublished(admission.reason);
+  }
+
+  log({ step: "author-token", found: token.kind === "found", path: token.path });
+
+  if (token.kind === "missing") {
+    return stoppedOf(noAuthorToken(token.path, chain.reported), `no Author token at ${token.path}`);
+  }
+
+  const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), chain.reported);
+  log({ step: "stop-checks", next: next.kind });
+
+  if (next.kind !== "ask-done-judge") {
+    return stoppedOf(next, `the Stop checks are red on ${head}`);
+  }
+
+  const findings = snapshot.pr === null ? [] : await openFindings(deps, gh, snapshot.pr.number);
+  const doneJudge = await askDoneJudge(stopping, findings);
+  const answer = doneAnswerOf(doneJudge);
+  log({
+    step: "done-judge",
+    model: stopping.model,
+    answer: answer === null ? "none" : answer.finished ? "finished" : "not-finished",
+    question: answer === null ? null : quotedQuestionOf(answer.question),
+    reason: answer?.reason.slice(0, 300) ?? null,
+    rejections: answer?.rejections.length ?? null,
+    fixed: answer?.fixed.length ?? null,
+    ms: doneJudge.ms,
+    tokens: doneJudge.tokens,
+    code: doneJudge.code,
+    unreadable: doneJudge.unreadable,
+  });
+
+  if (answer === null) {
+    return stoppedOf(noDoneAnswer(doneJudge.code, chain.reported), "the Done judge gave no answer");
+  }
+
+  const conversation =
+    snapshot.pr === null ? [] : conversationOf(await checked(deps.run, conversationArgsOf(snapshot.pr.number), gh));
+
+  return publish(
+    stopping,
+    { token: token.token, gh },
+    { pr: snapshot.pr, findings, answer, asked: questionOpen(conversation), fixed: fixedRecordIn(conversation) },
+  );
+}
+
+/** Where a session stops: its worktree, the repository's main checkout, and whether they are the same. */
+interface Place {
+  readonly worktree: string;
+  readonly checkout: string;
+  readonly mainCheckout: boolean;
+}
+
+async function placeOf(deps: Deps, cwd: string): Promise<Place> {
+  const worktree = await gitOut(deps, cwd, ["rev-parse", "--show-toplevel"]);
+  const gitDir = await gitOut(deps, cwd, ["rev-parse", "--absolute-git-dir"]);
+  const commonDir = await gitOut(deps, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+
+  return { worktree, checkout: dirname(commonDir), mainCheckout: gitDir === commonDir };
+}
+
+/** The stop of an Author in `place`, on `branch` at `head`: what git alone refuses, then `authorStop`. */
+function stopIn(
+  place: Place,
+  { branch, head }: { readonly branch: string | null; readonly head: string },
+  stopping: Pick<AuthorStop, "deps" | "input" | "log" | "model">,
+): Promise<Stopped> {
+  const checkout = checkoutOf({ mainCheckout: place.mainCheckout, branch });
+
+  if (checkout.kind === "refused") {
+    stopping.log({ step: "admit", kind: "none", reason: checkout.reason });
+
+    return Promise.resolve(notPublished(checkout.reason));
+  }
+
+  const stateDir = join(place.worktree, ".lab", "state");
+  mkdirSync(stateDir, { recursive: true });
+
+  return authorStop({ ...stopping, branch: checkout.branch, head, checkout: place.checkout }, stateDir);
+}
+
+/** Appends `line` to `.lab/outcomes.log` of the main checkout `checkout`. */
+function appendOutcome(checkout: string, line: string): void {
+  mkdirSync(join(checkout, ".lab"), { recursive: true });
+  appendFileSync(join(checkout, OUTCOMES_LOG), `${line}\n`);
+}
+
+/** Reads, decides and acts; returns what Claude Code is told. `log` gets one record per step. */
+export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answer> {
+  const { cwd } = input;
+  const author = isAuthor(deps.env);
+  const forkFlag = deps.env[FORK_FLAG] === "1";
+  // Only an Author's own session has its transcript read: any other session's stop costs nothing.
+  const transcript = author && !forkFlag ? linesOf(input.transcript_path) : [];
+  const bystander = bystanderOf({ author, forkFlag, forkMarker: hasForkMarker(transcript) });
+
+  if (bystander !== null) {
+    log({ step: "admit", kind: "none", reason: bystander });
+
+    return ALLOW;
+  }
+
+  const place = await placeOf(deps, cwd);
+
+  let facts: StopFacts = {
+    at: new Date(deps.now()).toISOString(),
+    session: input.session_id,
+    worktree: place.worktree,
+    branch: null,
+    head: null,
+  };
+
+  let stopped: Stopped;
+  let failure: { readonly error: unknown } | null = null;
+
+  try {
+    const branch = (await deps.run(["git", "symbolic-ref", "--short", "-q", "HEAD"], { cwd })).stdout.trim() || null;
+    const head = await gitOut(deps, cwd, ["rev-parse", "HEAD"]);
+    facts = { ...facts, branch, head };
+    stopped = await stopIn(place, { branch, head }, { deps, input, log, model: modelOf(transcript) });
+  } catch (error) {
+    failure = { error };
+    stopped = notPublished(`the Stop hook failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  deps.recordOutcome(place.checkout, outcomeLineOf(facts, stopped.outcome));
+
+  if (failure !== null) {
+    throw failure.error;
+  }
+
+  return stopped.answer;
+}
+
+/**
+ * One stop, over the `ports` its door gives it: reads the Stop input on stdin, and prints the block when
+ * the hook blocks the stop.
+ */
+export async function main(ports: Pick<Deps, "run" | "startRelay">): Promise<void> {
+  const input = decodeJson(StopInput, "the Stop input", await Bun.stdin.text());
+  const logFile = join(input.cwd, ".lab", "stop.log");
+  mkdirSync(join(input.cwd, ".lab"), { recursive: true });
+
+  const log = (record: StopLogRecord): void => {
+    appendFileSync(
+      logFile,
+      `${JSON.stringify({ at: new Date().toISOString(), session: input.session_id, ...record })}\n`,
+    );
+  };
+
+  try {
+    const answer = await stop(input, { ...ports, env: process.env, now: Date.now, recordOutcome: appendOutcome }, log);
+
+    if (answer.kind === "block") {
+      console.log(JSON.stringify({ decision: "block", reason: answer.reason }));
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log({ step: "error", message });
+    console.error(`stop hook: ${message}`);
+  }
+}

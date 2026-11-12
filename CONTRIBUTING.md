@@ -16,9 +16,9 @@ Run the checks before you commit:
 bun check
 ```
 
-`check` runs the typecheck (`bun run typecheck`), the lint (`bun run lint`), the format check (`bun run format:check`), the gates on lint suppressions, typecheck coverage and budget exceptions (`bun run gates`), the dead code check (`bun run knip`: unused files, exports and dependencies), then the tests with their coverage (`bun test --coverage`), and last the coverage floor (`scripts/gates/check-coverage-floor.ts`), which fails when the suite's total line or function coverage falls under the floor it sets. It must pass. `bun fmt` formats the files the format check reads.
+`check` runs the typecheck (`bun run typecheck`), the lint (`bun run lint`), the format check (`bun run format:check`), the gates on lint suppressions, typecheck coverage, budget exceptions and paths that name no file (`bun run gates`), the dead code check (`bun run knip`: unused files, exports and dependencies), then the tests with their coverage (`bun test --coverage`), and last the coverage floor (`scripts/gates/check-coverage-floor.ts`), which fails when the suite's total line or function coverage falls under the floor it sets. It must pass. `bun fmt` formats the files the format check reads.
 
-CI's `mutation` job mutates each module `stryker.config.ts` lists whose lines or tests your branch changes, and fails on a mutant that survives on a changed line, or one the tests killed on `origin/dev` that survives now. Run it before you push:
+CI's `mutation` job mutates each module `stryker.config.ts` names (the app's listed ones, and every logic file of `factory/` with a test in its directory) whose lines or tests your branch changes, and fails on a mutant that survives on a changed line, or one the tests killed on `origin/dev` that survives now. Run it before you push:
 
 ```bash
 bun scripts/ci/mutation.ts run
@@ -31,3 +31,5 @@ bun scripts/ci/mutation.ts run
 - `app/src/store/`: the task file format. A change here can make existing task files unreadable.
 - `app/test/`: `bun test` suites. Add a test for each behaviour you add or change.
 - `docs/usage.md`: how to use the CLI.
+- `factory/`: the factory's code, one directory per step. `factory/AGENTS.md` maps it, and a directory with a design of its own holds an `AGENTS.md`.
+- `scripts/`: the tooling that checks both, the gates, the lint rules and CI's passes.

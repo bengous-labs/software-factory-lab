@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { isAuthor, isWorker } from "../lib/author-session.ts";
-import type { Json } from "../lib/plain-json.ts";
+import { isAuthor, isWorker } from "../../factory/lib/author-session.ts";
+import type { Json } from "../../factory/lib/plain-json.ts";
 import {
   argsOf,
   benchEnvOf,
@@ -208,6 +208,28 @@ describe("readingOf", () => {
     ]);
   });
 
+  test("the AGENTS.md of a directory under factory/ counts when Claude Code loads it beside a file the session read", () => {
+    const loaded = (...paths: string[]) =>
+      attachment({
+        type: "hook_additional_context",
+        content: paths.map((path) => `Contents of ${path}:\n\n# A guide\n`),
+        hookName: "tool.call",
+      });
+
+    const transcript = [
+      loaded("/b/run-1/factory/AGENTS.md", "/b/run-1/factory/land/AGENTS.md", "/b/run-1/factory/land/stop/AGENTS.md"),
+      loaded("/b/run-1/factory/land/stop/AGENTS.md"),
+      loaded("/b/run-1/AGENTS.md", "/b/run-1/app/AGENTS.md", "/b/run-1/docs/factory/NOTES.md"),
+      attachment({ type: "hook_additional_context", content: ["a hook's own words about factory/AGENTS.md"] }),
+    ].join("\n");
+
+    expect(readingOf(transcript).rules).toEqual([
+      "factory/AGENTS.md",
+      "factory/land/AGENTS.md",
+      "factory/land/stop/AGENTS.md",
+    ]);
+  });
+
   test("an output style other than the Worker's is named, once", () => {
     const transcript = [
       attachment({ type: "output_style_instructions", style: { name: "Proactive", prompt: "…" } }),
@@ -263,13 +285,13 @@ test("the report gives each session its closing messages, its rules and its outp
       "Bench: 2 runs of i.md on haiku, clones under /b",
       "",
       "## Run 1, session s1, in /b/run-1",
-      "Rules loaded: .claude/rules/land-loop/code.md",
+      "Guides loaded: .claude/rules/land-loop/code.md",
       "Output style: the Worker's alone",
       "Closing message:",
       "Committed the fix.",
       "",
       "## Run 2, session s2, in /b/run-2",
-      "Rules loaded: none",
+      "Guides loaded: none",
       "Output style: a reminder of Explanatory",
       "Closing message:",
       "Committed.",

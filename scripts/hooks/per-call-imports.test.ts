@@ -3,10 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-const HOOKS = import.meta.dir;
+const ROOT = join(import.meta.dir, "..", "..");
 
 /** The tool-call hooks of `.claude/settings.json` that fire on one rare tool, so may load any package. */
-const RARE_TOOL_HOOKS = new Set(["install-deps.ts"]);
+const RARE_TOOL_HOOKS = new Set(["scripts/hooks/install-deps.ts"]);
 
 /** The part of `.claude/settings.json` this test reads. */
 interface Settings {
@@ -21,13 +21,13 @@ interface Settings {
  */
 async function perCallHooks(): Promise<readonly string[]> {
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- SAFETY: the repository's own settings file, whose shape Claude Code defines.
-  const settings = (await Bun.file(join(HOOKS, "..", "..", ".claude", "settings.json")).json()) as Settings;
+  const settings = (await Bun.file(join(ROOT, ".claude", "settings.json")).json()) as Settings;
   const entries = [...settings.hooks.PreToolUse, ...settings.hooks.PostToolUse];
 
   return entries
     .flatMap((entry) =>
       entry.hooks.map(
-        (hook) => /scripts\/hooks\/(?<file>[\w-]+\.ts)/u.exec(hook.command)?.groups?.["file"] ?? hook.command,
+        (hook) => /\$CLAUDE_PROJECT_DIR"\/(?<file>[\w./-]+\.ts)/u.exec(hook.command)?.groups?.["file"] ?? hook.command,
       ),
     )
     .filter((file) => !RARE_TOOL_HOOKS.has(file));
@@ -62,12 +62,16 @@ async function packagesOf(file: string, seen = new Set<string>()): Promise<Reado
 
 describe("the per-call hooks", () => {
   test("are the ones .claude/settings.json wires on tool calls", async () => {
-    expect(await perCallHooks()).toEqual(["refuse-commit-on-dev.ts", "refuse-author-publish.ts", "fix-edited.ts"]);
+    expect(await perCallHooks()).toEqual([
+      "factory/hooks/refuse-commit-on-dev.ts",
+      "factory/hooks/refuse-author-publish.ts",
+      "scripts/hooks/fix-edited.ts",
+    ]);
   });
 
   test("load only bun and node: modules, never effect", async () => {
     for (const hook of await perCallHooks()) {
-      const packages = [...(await packagesOf(join(HOOKS, hook)))];
+      const packages = [...(await packagesOf(join(ROOT, hook)))];
 
       expect({ hook, packages: packages.filter((name) => name !== "bun" && !name.startsWith("node:")) }).toEqual({
         hook,

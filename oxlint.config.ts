@@ -1,7 +1,7 @@
 import { defineConfig } from "oxlint";
 
 import styleConfig, { IGNORE_PATTERNS } from "./oxlint.style.config.ts";
-import { BUDGETS, EXCEPTIONS } from "./scripts/lint/exceptions.ts";
+import { BUDGETS, EXCEPTIONS, FILE_BUDGETS } from "./scripts/lint/exceptions.ts";
 
 export default defineConfig({
   extends: [styleConfig],
@@ -13,8 +13,8 @@ export default defineConfig({
     "local/layers": "error",
 
     ...BUDGETS,
-    // Owner decision: no size limit; complexity is limited instead.
-    "eslint/max-lines": "off",
+    ...FILE_BUDGETS,
+    // A file's length and a function's complexity are limited; these other sizes are not.
     "eslint/max-lines-per-function": "off",
     "eslint/max-depth": "off",
     "eslint/max-nested-callbacks": "off",

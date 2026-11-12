@@ -102,6 +102,8 @@ describe("findUnsuppressible", () => {
       "eslint(max-params)",
       "complexity/complexity",
       "complexity(complexity)",
+      "eslint/max-lines",
+      "max-lines",
       "no-console, local/layers",
     ]) {
       const text = `// ${OX}lint-disable-next-line ${rules} -- the reason`;

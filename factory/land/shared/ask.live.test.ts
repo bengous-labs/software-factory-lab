@@ -1,0 +1,293 @@
+import { describe, expect, test } from "bun:test";
+
+import type {
+  HookCallback,
+  Options,
+  PreToolUseHookInput,
+  SDKMessage,
+  SDKResultMessage,
+} from "@anthropic-ai/claude-agent-sdk";
+import type { Schema } from "effect";
+
+import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";
+import { answerOf, askWith, guardHook, modelOf, optionsOf } from "./ask.live.ts";
+import type { Stream } from "./ask.live.ts";
+import type { Answer, Question } from "./ask.port.ts";
+import type { ToolGuard } from "./review.port.ts";
+
+const HAIKU = "claude-haiku-5-5";
+
+const allowReads: ToolGuard = (toolName) =>
+  toolName === "Read" ? { kind: "allow" } : { kind: "deny", reason: `no ${toolName}` };
+
+const QUESTION: Question = {
+  model: "haiku",
+  tools: ROUTING_JUDGE.tools,
+  prompt: "p",
+  schema: { type: "object" },
+  cwd: "/repo",
+  guard: allowReads,
+  env: { PATH: "/usr/bin", HOME: "/home/runner", CLAUDE_CONFIG_DIR: "/tmp/fresh" },
+  timeoutMs: 1000,
+};
+
+const preToolUse = (toolName: string, toolInput: Schema.Json): PreToolUseHookInput => ({
+  hook_event_name: "PreToolUse",
+  tool_name: toolName,
+  tool_input: toolInput,
+  tool_use_id: "t1",
+  session_id: "s",
+  transcript_path: "/t.jsonl",
+  cwd: "/repo",
+});
+
+const HAIKU_USAGE = { inputTokens: 2, outputTokens: 4, cacheReadInputTokens: 1568, cacheCreationInputTokens: 6770 };
+
+const TOKENS = { input: 2, output: 4, cacheRead: 1568, cacheCreation: 6770 };
+
+const noHook: HookCallback = () => Promise.resolve({});
+
+const hookOf = (hook: HookCallback, input: PreToolUseHookInput): ReturnType<HookCallback> =>
+  hook(input, "t1", { signal: new AbortController().signal });
+
+function result(fields: Readonly<Record<string, Schema.Json>>): SDKResultMessage {
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions, typescript/no-unsafe-type-assertion -- SAFETY: a test fixture holding only the fields answerOf reads.
+  return {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: "",
+    modelUsage: { [HAIKU]: HAIKU_USAGE },
+    ...fields,
+  } as unknown as SDKResultMessage;
+}
+
+const failedWith = (error: string): Answer => ({ kind: "failed", error, tokens: TOKENS, model: HAIKU });
+
+const untilAborted = (options: Options): Promise<never> =>
+  new Promise((_, reject) => {
+    options.abortController?.signal.addEventListener("abort", () => {
+      reject(new Error("aborted by the caller"));
+    });
+  });
+
+interface RecordedStream {
+  readonly stream: Stream;
+  readonly calls: ReadonlyArray<{ readonly prompt: string; readonly options: Options }>;
+}
+
+function streamOf(body: (options: Options) => AsyncGenerator<SDKMessage>): RecordedStream {
+  const calls: Array<{ prompt: string; options: Options }> = [];
+
+  return {
+    stream: (call) => {
+      calls.push(call);
+
+      return body(call.options);
+    },
+    calls,
+  };
+}
+
+describe("guardHook", () => {
+  test("the guard's decision becomes the PreToolUse permission decision, allow included", async () => {
+    const hook = guardHook(allowReads);
+
+    expect(await hookOf(hook, preToolUse("Read", { file_path: "/repo/a.ts" }))).toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+    });
+    expect(await hookOf(hook, preToolUse("Write", { file_path: "/repo/a.ts" }))).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "no Write",
+      },
+    });
+  });
+
+  test("a tool input that is not a JSON object is denied before the guard sees it", async () => {
+    expect(
+      await hookOf(
+        guardHook(() => ({ kind: "allow" })),
+        preToolUse("Read", "a.ts"),
+      ),
+    ).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "the tool input is not a JSON object",
+      },
+    });
+  });
+});
+
+describe("optionsOf", () => {
+  test("the read-only tools under the question's guard, no setting or hook loaded, the question's env alone, every prompt denied", async () => {
+    const options = optionsOf(QUESTION, new AbortController());
+
+    expect(options).toMatchObject({
+      model: "haiku",
+      cwd: "/repo",
+      tools: ["Read", "Grep", "Glob", "Bash"],
+      strictMcpConfig: true,
+      settingSources: [],
+      settings: { disableAllHooks: true },
+      persistSession: false,
+      permissionMode: "dontAsk",
+    });
+    expect(options.env).toEqual(QUESTION.env);
+    expect(options.env).not.toBe(QUESTION.env);
+    expect(options.outputFormat).toEqual({ type: "json_schema", schema: { type: "object" } });
+    expect(options.canUseTool).toBeUndefined();
+    expect(options.allowedTools).toBeUndefined();
+
+    const preToolUseHooks = options.hooks?.PreToolUse ?? [];
+
+    expect(preToolUseHooks).toHaveLength(1);
+    expect(preToolUseHooks[0]?.onFailure).toBe("block");
+
+    const [hook = noHook] = preToolUseHooks[0]?.hooks ?? [];
+
+    expect(await hookOf(hook, preToolUse("Write", {}))).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "no Write" },
+    });
+  });
+});
+
+const out = (outputTokens: number) => ({ outputTokens });
+
+describe("modelOf", () => {
+  test("the exact model is the one with the most output tokens; a tie goes to the first", () => {
+    expect(modelOf({ [HAIKU]: out(4), "claude-opus-5-5": out(90), "claude-sonnet-5-5": out(10) })).toBe(
+      "claude-opus-5-5",
+    );
+    expect(modelOf({ [HAIKU]: out(7), "claude-opus-5-5": out(7) })).toBe(HAIKU);
+    expect(modelOf({})).toBeNull();
+  });
+});
+
+describe("answerOf", () => {
+  test("a success with structured output is an answer, with its tokens and its model", () => {
+    expect(answerOf(result({ structured_output: { findings: [] } }), null)).toEqual({
+      kind: "answered",
+      structured: { findings: [] },
+      tokens: TOKENS,
+      model: HAIKU,
+    });
+  });
+
+  test("an error result fails with its subtype and errors, and keeps its tokens and its model", () => {
+    const failed = result({ subtype: "error_max_structured_output_retries", errors: ["no valid output"] });
+
+    expect(answerOf(failed, "Claude Code returned an error result")).toEqual({
+      kind: "failed",
+      error: "error_max_structured_output_retries: no valid output",
+      tokens: TOKENS,
+      model: HAIKU,
+    });
+  });
+
+  test("a success flagged as an error, or with no structured output, fails", () => {
+    expect(answerOf(result({ is_error: true, result: "API Error: 529" }), null)).toEqual(failedWith("API Error: 529"));
+    expect(answerOf(result({ is_error: true }), null)).toEqual(failedWith("the result is flagged as an error"));
+    expect(answerOf(result({}), null)).toEqual(failedWith("the result carries no structured output"));
+  });
+
+  test("a call that ends without a result fails with what it threw, and names no model", () => {
+    expect(answerOf(undefined, "timed out after 1000 ms")).toEqual({
+      kind: "failed",
+      error: "timed out after 1000 ms",
+      tokens: null,
+      model: null,
+    });
+    expect(answerOf(undefined, null)).toEqual({
+      kind: "failed",
+      error: "the call ended without a result",
+      tokens: null,
+      model: null,
+    });
+  });
+});
+
+describe("askWith", () => {
+  test("the stream gets the question's prompt and options, and its result is the answer", async () => {
+    const { stream, calls } = streamOf(async function* () {
+      yield result({ structured_output: { ok: true } });
+    });
+
+    expect(await askWith(stream)(QUESTION)).toEqual({
+      kind: "answered",
+      structured: { ok: true },
+      tokens: TOKENS,
+      model: HAIKU,
+    });
+    expect(calls[0]?.prompt).toBe("p");
+    expect(calls[0]?.options).toMatchObject({ model: "haiku", cwd: "/repo", permissionMode: "dontAsk" });
+  });
+
+  test("an error result followed by a throw answers with the result's error, not the throw", async () => {
+    const { stream } = streamOf(async function* () {
+      yield result({ subtype: "error_during_execution", errors: ["overloaded"] });
+      throw new Error("Claude Code returned an error result");
+    });
+
+    expect(await askWith(stream)(QUESTION)).toMatchObject({
+      kind: "failed",
+      error: "error_during_execution: overloaded",
+    });
+  });
+
+  test("a throw with no result answers with the thrown message", async () => {
+    const { stream } = streamOf(async function* () {
+      yield* [];
+      throw new Error("Native CLI binary not found");
+    });
+
+    expect(await askWith(stream)(QUESTION)).toEqual({
+      kind: "failed",
+      error: "Native CLI binary not found",
+      tokens: null,
+      model: null,
+    });
+  });
+
+  test("a call that outlives its timeout is aborted and reads as timed out", async () => {
+    const { stream } = streamOf(async function* (options) {
+      yield* [];
+      await untilAborted(options);
+    });
+
+    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toEqual({
+      kind: "failed",
+      error: "timed out after 10 ms",
+      tokens: null,
+      model: null,
+    });
+  });
+
+  test("a result read before the timeout still answers when the call is aborted after it", async () => {
+    const { stream } = streamOf(async function* (options) {
+      yield result({ structured_output: { ok: true } });
+      await untilAborted(options);
+    });
+
+    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toMatchObject({
+      kind: "answered",
+      structured: { ok: true },
+    });
+  });
+
+  test("a call that ends in time is not aborted", async () => {
+    let signal: AbortSignal | undefined;
+
+    const { stream } = streamOf(async function* (options) {
+      signal = options.abortController?.signal;
+      yield result({ structured_output: {} });
+    });
+
+    await askWith(stream)({ ...QUESTION, timeoutMs: 20 });
+    await Bun.sleep(40);
+
+    expect(signal?.aborted).toBe(false);
+  });
+});

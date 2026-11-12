@@ -1,7 +1,7 @@
 name: code-review
 
 # The Code review of one pull request: Claude Code's native `/code-review`, run through the Agent SDK by
-# `scripts/land-loop/review/run-review.ts`. The Merge bot dispatches it with the request as inputs and
+# `factory/bin/code-review.ts`. The Merge bot dispatches it with the request as inputs and
 # reads the result from the run's artifact. The job holds no App token and writes nothing to GitHub:
 # the pull request's head is checked out under `pr/` as files to read, and nothing of it runs. The
 # inputs reach the steps through `env`, never inside a script. Only the thread step, run on every Review
@@ -84,13 +84,13 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Read the earlier review threads
-        run: bun scripts/land-loop/review/read-threads.ts
+        run: bun factory/bin/review-threads.ts
         env:
           GH_TOKEN: ${{ github.token }}
           APP_LOGIN: bengous-labs-agents[bot]
 
       - name: Review
-        run: bun scripts/land-loop/review/run-review.ts
+        run: bun factory/bin/code-review.ts
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 

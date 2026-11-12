@@ -7,14 +7,15 @@ import { parseArgs } from "node:util";
 
 import { Schema } from "effect";
 
-import { ROLE_VARIABLE } from "../lib/author-session.ts";
-import { decodeJson } from "../lib/json.ts";
+import { ROLE_VARIABLE } from "../../factory/lib/author-session.ts";
+import { decodeJson } from "../../factory/lib/json.ts";
 
 export const HELP = `usage: bun scripts/lab/bench.ts --issue <file> --runs <n> [--model <model>] [--wake <file>]
 
 Launches <n> headless Worker sessions, each in a throwaway clone of the current commit, on a fake issue,
-then prints per session its closing message, the rules under .claude/rules/ it loaded, and whether its
-transcript holds an output style reminder other than the Worker's.
+then prints per session its closing message, the guides it loaded beside the code (the AGENTS.md of the
+directories under factory/, the rules under .claude/rules/), and whether its transcript holds an output
+style reminder other than the Worker's.
 
 The sessions run with the Worker's settings, but LAB_ROLE=worker in place of LAB_AUTHOR=1: they read
 the Worker's role and the guard refuses a git push written plainly, but they are no Author, so the Stop
@@ -85,7 +86,7 @@ export function argsOf(argv: readonly string[]): Parsed {
 const WORKER_STYLE = "Proactive";
 
 /**
- * The settings of a Worker (`.claude/rules/identities.md`), but its `env` holds `LAB_ROLE=worker` in place
+ * The settings of a Worker (`factory/install/AGENTS.md`), but its `env` holds `LAB_ROLE=worker` in place
  * of `LAB_AUTHOR=1` and `GH_TOKEN`: the Worker's role and guards, no Author, no token.
  */
 export function workerSettings(ownerClaudeMd: string) {
@@ -250,6 +251,11 @@ const OutputStyle = lineWith({ style: Schema.String });
 
 const OutputStyleInstructions = lineWith({ style: Schema.Struct({ name: Schema.String }) });
 
+const HookContext = lineWith({ content: Schema.Array(Schema.String) });
+
+/** How Claude Code opens the text of a directory's `AGENTS.md` it loads when a file beside it is read. */
+const LOADED_FILE = /^Contents of (?<path>\S+):/u;
+
 /**
  * What the attachment of one transcript line loaded; an attachment of a type the bench does not read loaded
  * nothing. The line is decoded once for its type, then once more, only when the bench reads that type, for its fields.
@@ -264,6 +270,12 @@ function loadedBy(text: string, source: string): Loaded {
 
     case "nested_memory": {
       return { paths: [decodeJson(NestedMemory, source, text).attachment.path], styles: [] };
+    }
+
+    case "hook_additional_context": {
+      const { content } = decodeJson(HookContext, source, text).attachment;
+
+      return { paths: content.flatMap((each) => LOADED_FILE.exec(each)?.groups?.["path"] ?? []), styles: [] };
     }
 
     case "output_style": {
@@ -287,6 +299,18 @@ export interface Reading {
 
 const RULES = ".claude/rules/";
 
+/** A directory's guide under `factory/`: its `AGENTS.md`. */
+const DIRECTORY_GUIDE = /\/(?<guide>factory\/(?:[\w.-]+\/)*AGENTS\.md)$/u;
+
+/** The guide a loaded `path` is, from the checkout's root: a rule, or a directory's `AGENTS.md` under `factory/`; null for any other file. */
+function guideOf(path: string): string | null {
+  if (path.includes(`/${RULES}`)) {
+    return path.slice(path.indexOf(RULES));
+  }
+
+  return DIRECTORY_GUIDE.exec(path)?.groups?.["guide"] ?? null;
+}
+
 const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].toSorted();
 
 /**
@@ -300,9 +324,7 @@ export function readingOf(transcript: string): Reading {
     .filter(({ text }) => text.trim() !== "")
     .map(({ text, source }) => loadedBy(text, source));
 
-  const rules = loaded
-    .flatMap((each) => each.paths)
-    .flatMap((path) => (path.includes(`/${RULES}`) ? [path.slice(path.indexOf(RULES))] : []));
+  const rules = loaded.flatMap((each) => each.paths).flatMap((path) => guideOf(path) ?? []);
 
   const styles = loaded.flatMap((each) => each.styles);
 
@@ -341,7 +363,7 @@ function sessionLines(session: SessionReport): string[] {
 
   return [
     `## Run ${run}, session ${launch?.session}, in ${dir}`,
-    `Rules loaded: ${reading.rules.length === 0 ? "none" : reading.rules.join(", ")}`,
+    `Guides loaded: ${reading.rules.length === 0 ? "none" : reading.rules.join(", ")}`,
     `Output style: ${styles.length === 0 ? "the Worker's alone" : `a reminder of ${styles.join(", ")}`}`,
     "Closing message:",
     launch?.message ?? "",

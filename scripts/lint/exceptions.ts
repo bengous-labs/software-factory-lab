@@ -15,6 +15,14 @@ export const BUDGETS = {
 
 export type BudgetRule = keyof typeof BUDGETS;
 
+/**
+ * The budget of a file: an agent reads a file whole, so a file that grows past it is cut where its rules
+ * part. No exception lists a file: every line counts, comments and blank lines included.
+ */
+export const FILE_BUDGETS = {
+  "eslint/max-lines": ["error", { max: 800 }],
+} satisfies DummyRuleMap;
+
 export interface Exception {
   readonly file: string;
   readonly rule: BudgetRule;
@@ -23,10 +31,10 @@ export interface Exception {
   readonly measured: number;
 }
 
-const MERGE_BOT_MAIN = "scripts/land-loop/merge-bot/main.ts";
+const MERGE_BOT_MAIN = "factory/land/merge-bot/main.live.ts";
 
 export const EXCEPTIONS: readonly Exception[] = [
-  { file: "scripts/land-loop/routing/routing-judge.ts", rule: "eslint/max-params", name: "routingJudge", measured: 5 },
+  { file: "factory/land/routing/routing-judge.ts", rule: "eslint/max-params", name: "routingJudge", measured: 5 },
   { file: MERGE_BOT_MAIN, rule: "eslint/max-params", name: "snapshotOf", measured: 5 },
   { file: MERGE_BOT_MAIN, rule: "eslint/max-params", name: "perform", measured: 7 },
 ];

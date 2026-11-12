@@ -1,27 +1,53 @@
+import { dirname } from "node:path";
+
 import type { Stryker } from "@stryker-mutator/core";
 
 type StrykerOptions = ConstructorParameters<typeof Stryker>[0];
 
+/** A pure module of the factory: no test, no test fixture, nothing that calls outside (`x.live.ts`), no port, no door of a process. */
+const NOT_MUTATED = /\.(?:test|fixtures|live|port)\.ts$|^factory\/(?:bin|hooks)\//u;
+
+/** Whether `file` is a logic file of the factory: one the mutation job must reach. */
+export const isFactoryLogic = (file: string): boolean =>
+  file.startsWith("factory/") && file.endsWith(".ts") && !NOT_MUTATED.test(file);
+
+/** A test of pure logic: one that runs no process and reads no file takes no time under Stryker's parallel runs. */
+const PURE_TEST = /(?<!\.live)\.test\.ts$/u;
+
 /**
- * The modules `scripts/ci/mutation.ts` mutates, each with the one test file a pass runs against it.
- * A module joins once a run of it kills by assertion alone: a test that times out under Stryker's
- * parallel runs kills a mutant without checking anything.
+ * The pure modules of the factory, each with the pure tests of its directory: no list to keep, a module
+ * joins when a test sits beside it. A directory's modules share its tests, since a rule is tested through
+ * the decision that calls it. Sorted, so the passes run in one order on every machine.
+ */
+function factoryModules(): Record<string, readonly string[]> {
+  const files = [...new Bun.Glob("factory/**/*.ts").scanSync({ cwd: import.meta.dirname })].toSorted();
+
+  return Object.fromEntries(
+    files.flatMap((module) => {
+      const tests = files.filter((file) => dirname(file) === dirname(module) && PURE_TEST.test(file));
+
+      return isFactoryLogic(module) && tests.length > 0 ? [[module, tests] as const] : [];
+    }),
+  );
+}
+
+/**
+ * The modules `scripts/ci/mutation.ts` mutates, each with the test files a pass runs against it: every
+ * pure module of the factory whose directory holds a pure test, and the app's commands. A test that times
+ * out under Stryker's parallel runs kills a mutant without checking anything: a module's tests kill by
+ * assertion alone.
  */
 export const TESTS = {
-  "scripts/land-loop/merge-bot/decide.ts": "scripts/land-loop/merge-bot/decide.test.ts",
-  "scripts/land-loop/stop/decide.ts": "scripts/land-loop/stop/decide.test.ts",
-  "scripts/land-loop/routing/routing-rules.ts": "scripts/land-loop/routing/routing-rules.test.ts",
-  "scripts/land-loop/review/tool-guard.ts": "scripts/land-loop/review/tool-guard.test.ts",
-  "scripts/land-loop/review/post-plan.ts": "scripts/land-loop/review/post-plan.test.ts",
-  "app/src/commands/add.ts": "app/test/commands.test.ts",
-  "app/src/commands/clear.ts": "app/test/store.test.ts",
-  "app/src/commands/count.ts": "app/test/commands.test.ts",
-  "app/src/commands/done.ts": "app/test/commands.test.ts",
-  "app/src/commands/list.ts": "app/test/commands.test.ts",
-  "app/src/commands/remove.ts": "app/test/commands.test.ts",
-  "app/src/commands/rename.ts": "app/test/rename.test.ts",
-  "app/src/commands/search.ts": "app/test/search.test.ts",
-} satisfies Readonly<Record<string, string>>;
+  ...factoryModules(),
+  "app/src/commands/add.ts": ["app/test/commands.test.ts"],
+  "app/src/commands/clear.ts": ["app/test/store.test.ts"],
+  "app/src/commands/count.ts": ["app/test/commands.test.ts"],
+  "app/src/commands/done.ts": ["app/test/commands.test.ts"],
+  "app/src/commands/list.ts": ["app/test/commands.test.ts"],
+  "app/src/commands/remove.ts": ["app/test/commands.test.ts"],
+  "app/src/commands/rename.ts": ["app/test/rename.test.ts"],
+  "app/src/commands/search.ts": ["app/test/search.test.ts"],
+} satisfies Readonly<Record<string, readonly string[]>>;
 
 /**
  * Read by `scripts/ci/mutation.ts`, which mutates each `mutate` module a change reaches, through its
