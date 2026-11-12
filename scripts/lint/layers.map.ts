@@ -192,17 +192,13 @@ export const PURE_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
 export const PURE_WITH_ARGUMENTS: readonly string[] = ["Date"];
 
 /**
- * The members that load a module on any object: `process.getBuiltinModule`. The rule reads no types, so it
- * takes the name alone, and places what each loads where it is called. `require` and `Worker` load a module
- * too, as globals: read off `import.meta` or a global object, as `GLOBAL_LOADERS`.
+ * The members that load a module, refused or placed on any object: `import.meta.require`,
+ * `module.require`, `process.getBuiltinModule`, and on an alias of any of them. The rule reads no types, so
+ * it takes the name alone, and places what each loads where it is called. A member `Worker` is a loader
+ * too, on any object: `globalThis.Worker`, `(globalThis as any).Worker`. A plain field of that name is
+ * refused with them.
  */
-export const LOADER_MEMBERS: readonly string[] = ["getBuiltinModule"];
-
-/**
- * The globals that load a module, read by their name or off `import.meta` and the global objects. An I/O
- * layer reads those objects by a named member alone, so no alias of one hides these.
- */
-export const GLOBAL_LOADERS: readonly string[] = ["require", "Worker"];
+export const LOADER_MEMBERS: readonly string[] = ["require", "getBuiltinModule"];
 
 /**
  * The members refused on any object outside the I/O layers, as the rule reads no types: those of a
@@ -216,7 +212,8 @@ export const IMPORT_META_PURE_MEMBERS: readonly string[] = ["url"];
 
 /**
  * The global objects, refused whatever member follows outside the I/O layers: each reaches every global,
- * the I/O ones included. An I/O layer reads them, and `import.meta`, by a named member alone.
+ * the I/O ones included. An I/O layer reads them, and `import.meta`, by a named member alone, so that no
+ * computed key reaches a loader off them.
  */
 export const GLOBAL_OBJECTS: readonly string[] = ["globalThis", "self", "global", "window"];
 

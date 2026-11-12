@@ -8,7 +8,6 @@ import {
   EXTERNAL_IMPORTS,
   EXTERNALS,
   FILES,
-  GLOBAL_LOADERS,
   GLOBAL_OBJECTS,
   IMPORT_META_PURE_MEMBERS,
   IO_GLOBALS,
@@ -375,10 +374,6 @@ function holdsGlobals(node: ESTree.Node): boolean {
   );
 }
 
-/** Whether reading `key` off `object` reaches a loader. */
-const isLoaderMember = (key: string, object: ESTree.Node): boolean =>
-  LOADER_MEMBERS.includes(key) || (GLOBAL_LOADERS.includes(key) && holdsGlobals(object));
-
 /** Whether `node` is read through a member the rule can name, `globalThis.fetch`, not whole or by a computed key. */
 const readByName = (node: ESTree.MetaProperty | GlobalRead): boolean =>
   node.parent.type === "MemberExpression" && node.parent.object === node && propertyNameOf(node.parent) !== null;
@@ -550,9 +545,9 @@ export const layersRule = defineRule({
           return;
         }
 
-        if (member === "Worker" && holdsGlobals(node.object)) {
+        if (member === "Worker") {
           checkWorker(node);
-        } else if (isLoaderMember(member, node.object)) {
+        } else if (LOADER_MEMBERS.includes(member)) {
           checkLoader(node, `.${member}`);
         } else if (holdsGlobals(node)) {
           checkWhole(node);
@@ -567,9 +562,10 @@ export const layersRule = defineRule({
           return;
         }
 
-        // A loader taken by a destructuring is read, never called where the rule can place it. A global
-        // one comes off a global object read whole, which `checkWhole` refuses.
-        if (LOADER_MEMBERS.includes(key)) {
+        // A loader taken by a destructuring is read, never called or started where the rule can place it.
+        if (key === "Worker") {
+          context.report({ node, message: unplacedWorkerMessage(path) });
+        } else if (LOADER_MEMBERS.includes(key)) {
           context.report({ node, message: uncalledLoaderMessage(path, key) });
         }
 

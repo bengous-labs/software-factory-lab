@@ -299,8 +299,8 @@ const SOURCES = {
     "const { getBuiltinModule: builtinLoader } = process;",
     "const { require: metaRequire } = import.meta;",
     "const { Worker: Thread2 } = globalThis;",
-    'export const roles = { Worker: "worker.md", require: "x" };',
-    "export const role = roles.Worker + roles.require;",
+    'export const fromModule = module.require("../relay/wakes.ts");',
+    'export const cast = (globalThis as any).Worker("../relay/x.live.ts");',
     "export const more = [builtinLoader, metaRequire, Thread2];",
     "const meta = import.meta;",
     'export const chained = new globalThis.self.Worker("../relay/x.live.ts");',
@@ -309,6 +309,8 @@ const SOURCES = {
     'const name = "fetch";',
     "export const keyed = globalThis[name];",
     "export const named = [meta, hidden, globalThis.fetch, import.meta.dir];",
+    "export const aliased = meta.require(name);",
+    'export const aliasedThread = new hidden.Worker("../relay/x.live.ts");',
   ].join("\n"),
   "factory/land/stop/started.ts": [
     'export const started = new Worker(new URL("../relay/x.live.ts", import.meta.url));',
@@ -451,12 +453,12 @@ describe("local/layers through oxlint", () => {
     expect(lines("factory/lib/run.live.ts")).toEqual([]);
   });
 
-  test("reports createRequire and a worker thread wherever they are imported, a loader read or destructured and not called, the global objects read whole, and places a Worker's module as an import", () => {
+  test("reports createRequire and a worker thread wherever they are imported, a loader read or destructured and not called on any object or alias, the global objects read whole, and places a Worker's module as an import", () => {
     expect(messages).toContain(
       `\`factory/land/stop/loaders.live.ts\` reads \`import.meta\` whole or by a key the rule cannot read: it hands out every global, the loaders among them, past the layer map. Read a member by its name, as \`globalThis.fetch\`. ${OWNER}`,
     );
     expect(lines("factory/land/stop/loaders.live.ts")).toEqual([
-      1, 3, 5, 6, 8, 9, 10, 11, 14, 15, 16, 20, 21, 22, 23, 25,
+      1, 3, 5, 6, 8, 9, 10, 11, 14, 15, 15, 16, 16, 17, 18, 18, 20, 21, 22, 23, 23, 25, 27, 28,
     ]);
     expect(messages).toContain(
       `\`factory/land/stop/loaders.live.ts\` reads \`.require\` without calling it, so the layer map cannot place what it loads. Call it with a string literal. ${OWNER}`,
