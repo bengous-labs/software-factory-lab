@@ -116,7 +116,10 @@ async function stateOf(env: Env, pr: number): Promise<StateComment> {
   return stateCommentIn(await conversationReader(env.run)(env, pr), env);
 }
 
-/** The result in the artifact `name` of run `runId`, or null when there is none or it does not read. */
+/**
+ * The result in the artifact `name` of run `runId`: null when the run has no such artifact, or its result
+ * file is missing or does not read as a result; a result path that cannot be read throws (`readResult`).
+ */
 async function artifactOf(runner: Run, where: Pick<Env, "repo" | "cwd">, runId: number, name: string) {
   const dir = mkdtempSync(join(tmpdir(), "review-result-"));
 
