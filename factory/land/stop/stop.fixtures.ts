@@ -33,6 +33,9 @@ export const TOKEN_FILE = tokenFile();
 /** The environment of an Author's session: the marker the launcher's settings file gives, and the token's file. */
 export const AUTHOR_ENV = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: TOKEN_FILE };
 
+/** The environment of an API Worker's session: an Author's, the marker of its settings file, and the home its key lies under. */
+export const API_WORKER_ENV = { ...AUTHOR_ENV, LAB_API_WORKER: "1", HOME: "/home/me" };
+
 export interface Call {
   readonly argv: readonly string[];
   readonly options: RunOptions;
@@ -50,6 +53,7 @@ const MODEL_USAGE = {
 export const OutcomeLine = Schema.Struct({
   at: Schema.String,
   session: Schema.String,
+  api: Schema.Boolean,
   worktree: Schema.String,
   branch: Schema.NullOr(Schema.String),
   head: Schema.NullOr(Schema.String),

@@ -206,7 +206,7 @@ describe("the checkout a stop comes from, as git reads it", () => {
       expect(found.outcomes).toMatchObject([
         { checkout: main, line: { worktree, branch: "feat/in-a-worktree", outcome: "published", pr: 12 } },
       ]);
-      expect(found.relays).toEqual([{ pr: 12, session: "S1", checkout: main }]);
+      expect(found.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: main }]);
     }
   });
 });
@@ -251,13 +251,23 @@ describe("the stop of an Author", () => {
     const opened = world();
 
     expect(await stopIn(opened)).toEqual({ kind: "allow" });
-    expect(opened.relays).toEqual([{ pr: 12, session: "S1", checkout: opened.checkout }]);
+    expect(opened.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: opened.checkout }]);
     expect(opened.records).toContainEqual({ step: "relay", pr: 12, relay: "started" });
 
     const pushed = world({ listed: readyPr("e".repeat(40)) });
 
     expect(await stopIn(pushed)).toEqual({ kind: "allow" });
-    expect(pushed.relays).toEqual([{ pr: 12, session: "S1", checkout: pushed.checkout }]);
+    expect(pushed.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: pushed.checkout }]);
+  });
+
+  test("the stop of any other Author: its forks name no key helper, its relay no headless resume, its outcome no API Worker", async () => {
+    const found = world();
+
+    await stopIn(found);
+
+    expect(found.calls.find((call) => call.argv[0] === "claude")?.argv).toContain(FORK_SETTINGS);
+    expect(found.relays[0]?.headless).toBeNull();
+    expect(found.outcomes[0]?.line.api).toBe(false);
   });
 
   test("a stop that publishes nothing leaves no relay", async () => {
@@ -624,6 +634,7 @@ describe("the outcome of each stop", () => {
     expect(Object.keys((await outcomeOf({})) ?? {})).toEqual([
       "at",
       "session",
+      "api",
       "worktree",
       "branch",
       "head",
@@ -673,7 +684,16 @@ describe("the outcome of each stop", () => {
       const line = await outcomeOf(fake, stopHookActive);
 
       expect(line).toMatchObject({ outcome: "not-published", reason });
-      expect(Object.keys(line ?? {})).toEqual(["at", "session", "worktree", "branch", "head", "outcome", "reason"]);
+      expect(Object.keys(line ?? {})).toEqual([
+        "at",
+        "session",
+        "api",
+        "worktree",
+        "branch",
+        "head",
+        "outcome",
+        "reason",
+      ]);
     }
   });
 

@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
 import { TRUNK } from "../../install/host.ts";
-import { isAuthor } from "../../lib/author-session.ts";
+import { isApiWorker, isAuthor } from "../../lib/author-session.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
 import { questionOpen } from "../shared/author-mark.ts";
@@ -38,6 +38,7 @@ import {
   noDoneAnswer,
   outcomeLineOf,
   quotedQuestionOf,
+  stopChecksOutcomeOf,
 } from "./decide.ts";
 import type { Refusal, Snapshot, StopChecks, StopFacts } from "./decide.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
@@ -66,12 +67,17 @@ export function linesOf(path: string): TranscriptLine[] {
   return existsSync(path) ? transcriptLinesOf(readFileSync(path, "utf8"), path) : [];
 }
 
-async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: string): Promise<StopChecks> {
-  // An on-disk name: existing state files carry it, so it stays.
-  const record = join(stateDir, `gates-${head}`);
-
+/**
+ * The Stop checks on the head whose record is the file `record`: green when the record is there, left to
+ * an API Worker, whose code the hook does not run, else what `bun check` gives.
+ */
+async function stopChecks(deps: Deps, cwd: string, record: string, api: boolean): Promise<StopChecks> {
   if (existsSync(record)) {
     return { kind: "green" };
+  }
+
+  if (api) {
+    return { kind: "left" };
   }
 
   const ran = await deps.run(["bun", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
@@ -160,11 +166,19 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     return stoppedOf(noAuthorToken(token.path, chain.reported), `no Author token at ${token.path}`);
   }
 
-  const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), chain.reported);
-  log({ step: "stop-checks", next: next.kind });
+  // An on-disk name: existing state files carry it, so it stays.
+  const record = join(stateDir, `gates-${head}`);
+  const checks = await stopChecks(deps, cwd, record, stopping.api);
+  const next = afterStopChecks(checks, chain.reported);
+  log({ step: "stop-checks", checks: checks.kind, next: next.kind });
 
   if (next.kind !== "ask-done-judge") {
-    return stoppedOf(next, `the Stop checks are red on ${head}`);
+    return stoppedOf(next, stopChecksOutcomeOf(checks, head));
+  }
+
+  if (checks.kind === "left") {
+    // The Worker was asked on this head: a later stop on it is not asked again.
+    writeFileSync(record, "left\n");
   }
 
   const findings = snapshot.pr === null ? [] : await openFindings(deps, gh, snapshot.pr.number);
@@ -217,7 +231,7 @@ async function placeOf(deps: Deps, cwd: string): Promise<Place> {
 function stopIn(
   place: Place,
   { branch, head }: { readonly branch: string | null; readonly head: string },
-  stopping: Pick<AuthorStop, "deps" | "input" | "log" | "model">,
+  stopping: Pick<AuthorStop, "deps" | "input" | "log" | "model" | "api">,
 ): Promise<Stopped> {
   const checkout = checkoutOf({ mainCheckout: place.mainCheckout, branch });
 
@@ -230,7 +244,10 @@ function stopIn(
   const stateDir = join(place.worktree, ".lab", "state");
   mkdirSync(stateDir, { recursive: true });
 
-  return authorStop({ ...stopping, branch: checkout.branch, head, checkout: place.checkout }, stateDir);
+  return authorStop(
+    { ...stopping, branch: checkout.branch, head, checkout: place.checkout, worktree: place.worktree },
+    stateDir,
+  );
 }
 
 /** Appends `line` to `.lab/outcomes.log` of the main checkout `checkout`. */
@@ -255,10 +272,12 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
   }
 
   const place = await placeOf(deps, cwd);
+  const api = isApiWorker(deps.env);
 
   let facts: StopFacts = {
     at: new Date(deps.now()).toISOString(),
     session: input.session_id,
+    api,
     worktree: place.worktree,
     branch: null,
     head: null,
@@ -271,7 +290,7 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
     const branch = (await deps.run(["git", "symbolic-ref", "--short", "-q", "HEAD"], { cwd })).stdout.trim() || null;
     const head = await gitOut(deps, cwd, ["rev-parse", "HEAD"]);
     facts = { ...facts, branch, head };
-    stopped = await stopIn(place, { branch, head }, { deps, input, log, model: modelOf(transcript) });
+    stopped = await stopIn(place, { branch, head }, { deps, input, log, model: modelOf(transcript), api });
   } catch (error) {
     failure = { error };
     stopped = notPublished(`the Stop hook failed: ${error instanceof Error ? error.message : String(error)}`);

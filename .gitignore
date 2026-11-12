@@ -5,3 +5,22 @@ todo.json
 .stryker-tmp/
 coverage/
 .claude/settings.local.json
+
+# The placeholders Claude Code's sandbox holds in a checkout while a command of an API Worker runs
+# (factory/dispatch/AGENTS.md): empty files the Worker must never commit.
+.bash_profile
+.bashrc
+.gitconfig
+.idea
+.profile
+.ripgreprc
+.vscode
+.zprofile
+.zshrc
+.claude/hooks
+.claude/launch.json
+.claude/loop.md
+.claude/output-styles
+.claude/routines
+.claude/scheduled_tasks.json
+.claude/workflows

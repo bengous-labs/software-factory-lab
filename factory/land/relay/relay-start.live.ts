@@ -2,28 +2,34 @@
  * How a Publication leaves the relay of its PR: one detached process that outlives the Author's
  * session, with none of the session's environment but what the relay needs. Its state lives under
  * `.lab/state/` of the main checkout: `relay-<pr>.pid`, the process that watches the PR, which the relay writes;
- * `relay-<pr>.session`, the session of the PR's latest Publication, where its Wakes go; `relay-<pr>.log`.
+ * `relay-<pr>.session`, the session of the PR's latest Publication, where its Wakes go, with what a headless
+ * resume needs when it is an API Worker's; `relay-<pr>.log`.
  */
 
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { Env } from "../../lib/env.ts";
+import { leave } from "../../lib/run.live.ts";
+import type { Leave } from "../../lib/run.port.ts";
+import { keptOf, SESSION_VARIABLES } from "../../lib/session-env.ts";
 import type { RelayStart, StartRelay } from "../shared/relay.port.ts";
+import { targetTextOf } from "./wakes.ts";
 
 const RELAY = resolve(import.meta.dir, "..", "..", "bin", "relay.ts");
 
 /**
  * The variables the relay keeps of the hook's environment. It resumes sessions with `claude --bg`, and a
  * launch that starts Claude Code's background service gives its environment to every session started
- * after it: the Author's marker, its token and the fork flag never reach the relay.
+ * after it; an API Worker's headless turn takes from the relay what a session needs to start and to reach
+ * the API. So the relay keeps that, and where the Author's token lies. The Author's marker, its token and
+ * the fork flag never reach the relay.
  */
-const KEPT = ["HOME", "PATH", "USER", "SHELL", "LANG", "XDG_RUNTIME_DIR", "CLAUDE_CONFIG_DIR", "LAB_AUTHOR_TOKEN_FILE"];
+const KEPT = [...SESSION_VARIABLES, "LAB_AUTHOR_TOKEN_FILE"];
 
 /** The relay's whole environment, from the hook's. */
 export function relayEnvOf(env: Env): Record<string, string> {
-  return Object.fromEntries(KEPT.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
+  return keptOf(env, KEPT);
 }
 
 /** The files of the relay of PR `pr` under the main checkout `checkout`. */
@@ -43,11 +49,7 @@ export function relayFilesOf(checkout: string, pr: number) {
 export interface RelayStartIo {
   /** Whether process `pid` is the relay of PR `pr`. */
   readonly watches: (pid: number, pr: number) => boolean;
-  /** Leaves `argv` running detached in `cwd`, its output appended to `log`; returns its pid. */
-  readonly leave: (
-    argv: readonly string[],
-    options: { cwd: string; env: Record<string, string>; log: string },
-  ) => number;
+  readonly leave: Leave;
 }
 
 /**
@@ -55,10 +57,10 @@ export interface RelayStartIo {
  * a relay unless the one `relay-<pr>.pid` names still watches the PR.
  */
 export function relayStarter(io: RelayStartIo, env: Env): StartRelay {
-  return ({ pr, session, checkout }: RelayStart) => {
+  return ({ pr, session, headless, checkout }: RelayStart) => {
     const files = relayFilesOf(checkout, pr);
     mkdirSync(files.stateDir, { recursive: true });
-    writeFileSync(files.session, `${session}\n`);
+    writeFileSync(files.session, targetTextOf({ session, headless }));
 
     const pid = existsSync(files.pid) ? readFileSync(files.pid, "utf8").trim() : "";
 
@@ -86,25 +88,7 @@ const IO: RelayStartIo = {
 
     return ps.exitCode === 0 && watchesOf(ps.stdout.toString(), pr);
   },
-  leave: (argv, options) => {
-    const log = openSync(options.log, "a");
-    const [command = "", ...args] = argv;
-
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      detached: true,
-      stdio: ["ignore", log, log],
-    });
-
-    child.unref();
-
-    if (child.pid === undefined) {
-      throw new Error(`the relay did not start: ${argv.join(" ")}`);
-    }
-
-    return child.pid;
-  },
+  leave,
 };
 
 export const startRelay: StartRelay = relayStarter(IO, process.env);

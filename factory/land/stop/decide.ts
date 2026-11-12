@@ -127,7 +127,12 @@ export type Admission =
   | { readonly kind: "ready"; readonly pr: number; readonly reason: string }
   | { readonly kind: "stop-checks" };
 
-export type StopChecks = { readonly kind: "green" } | { readonly kind: "red"; readonly report: string };
+/**
+ * The Stop checks' result. `left`: the hook ran none and leaves them to the Author, an API Worker, whose
+ * code the hook never runs: a hook's command is outside the session's sandbox.
+ */
+export type StopChecks =
+  { readonly kind: "green" } | { readonly kind: "red"; readonly report: string } | { readonly kind: "left" };
 
 /** A stop that publishes nothing: let go, or blocked once with a reason the Author reads. */
 export type Refusal =
@@ -233,13 +238,29 @@ export function noAuthorToken(path: string, reported: boolean): Refusal {
   };
 }
 
+/** What an API Worker reads when the hook leaves the Stop checks to it. */
+const LEFT_STOP_CHECKS =
+  "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your worktree now, fix what it reports and commit, then stop.";
+
+/** Why a stop the Stop checks block publishes nothing, on the head `head`. */
+export function stopChecksOutcomeOf(stopChecks: StopChecks, head: string): string {
+  return stopChecks.kind === "left"
+    ? `the Stop checks on ${head} are left to the API Worker`
+    : `the Stop checks are red on ${head}`;
+}
+
 /**
  * Red Stop checks block once, with their report; red again after a block that reported a failure
- * (`Chain.reported`), they let the session end.
+ * (`Chain.reported`), they let the session end. Stop checks left to the Author block once, asking for
+ * them; after that block the stop goes on, and CI's own run of the checks is what holds the change.
  */
 export function afterStopChecks(stopChecks: StopChecks, reported: boolean): Next {
   if (stopChecks.kind === "green") {
     return { kind: "ask-done-judge" };
+  }
+
+  if (stopChecks.kind === "left") {
+    return reported ? { kind: "ask-done-judge" } : { kind: "block", reason: LEFT_STOP_CHECKS };
   }
 
   if (reported) {
@@ -495,6 +516,8 @@ export type Outcome =
 export interface StopFacts {
   readonly at: string;
   readonly session: string;
+  /** The session is an API Worker's: the watch tells how such a Worker gets its turn. */
+  readonly api: boolean;
   readonly worktree: string;
   readonly branch: string | null;
   readonly head: string | null;

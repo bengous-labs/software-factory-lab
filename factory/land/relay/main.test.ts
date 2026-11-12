@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Ran, Run } from "../../lib/run.port.ts";
-import { NotStopped, readPr, relayDeliverer, turn } from "./main.ts";
+import { NotStopped, readPr, relayDeliverer, turn, TurnFailed } from "./main.ts";
 import type { Delivery, RelayIo } from "./main.ts";
-import type { Delivered, PrState, Route } from "./wakes.ts";
+import type { Delivered, PrState, Route, Target } from "./wakes.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
@@ -27,8 +27,11 @@ const NIT = {
   replies: [],
 };
 
+/** The session of the PR's latest Publication, an API Worker's, so a turn is seen to hand it on whole. */
+const TARGET: Target = { session: "S1", headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7" } };
+
 interface Sent {
-  readonly session: string;
+  readonly session: Target;
   readonly text: string;
   readonly ownerWords: boolean;
 }
@@ -47,7 +50,7 @@ function relay(state: PrState, through: Delivered | null = "socket"): Relay {
     sent,
     io: {
       read: () => Promise.resolve(state),
-      session: () => "S1",
+      session: () => TARGET,
       deliver: (session, text, ownerWords) => {
         sent.push({ session, text, ownerWords });
 
@@ -76,7 +79,7 @@ describe("turn", () => {
     });
     expect(sent).toEqual([
       {
-        session: "S1",
+        session: TARGET,
         text: [
           "The Land loop, about your pull request #7:",
           "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n <!-- lab-finding severity=nit -->",
@@ -159,7 +162,7 @@ describe("turn", () => {
 
     expect(conflicting.sent).toEqual([
       {
-        session: "S1",
+        session: TARGET,
         text: "The Land loop, about your pull request #7:\nPR #7 conflicts with dev: run `git fetch origin dev`, then rebase onto origin/dev.\nFix it with a commit, then stop.",
         ownerWords: false,
       },
@@ -225,25 +228,40 @@ describe("readPr", () => {
 /** What `claude agents --json` prints for the background session S1, idle. */
 const IDLE = JSON.stringify([{ sessionId: "S1", pid: 34_502, id: "725ecfab", status: "idle" }]);
 
-/** A relay's deliverer, and the kinds of the routes it sent. */
+/** The background session S1, as the relay's session file names it. */
+const BACKGROUND: Target = { session: "S1", headless: null };
+
+const PLACE = { checkout: "/repo", home: "/home/me" };
+
+/** A relay's deliverer, the kinds of the routes it sent, and its clock. */
 interface Delivering {
   readonly deliver: RelayIo["deliver"];
   readonly routes: Array<Route["kind"]>;
+  readonly clock: { now: number };
 }
 
-/** A relay's deliverer whose deliveries go as `outcomes` says, one per delivery. */
-function delivering(outcomes: ReadonlyArray<Delivered | null | "not-stopped" | "fails">): Delivering {
+type Outcome = Delivered | null | "not-stopped" | "turn-failed" | "fails";
+
+/** A relay's deliverer whose deliveries go as `outcomes` says, one per delivery, over the listing `agents`. */
+function delivering(outcomes: readonly Outcome[], agents = IDLE): Delivering {
   const routes: Array<Route["kind"]> = [];
   const left = [...outcomes];
+  const clock = { now: 0 };
 
   const deliver = relayDeliverer({
-    agents: () => Promise.resolve(IDLE),
+    agents: () => Promise.resolve(agents),
+    place: PLACE,
+    now: () => clock.now,
     deliver: (delivery: Delivery) => {
       routes.push(delivery.route.kind);
       const outcome = left.shift();
 
       if (outcome === "not-stopped") {
         return Promise.reject(new NotStopped("still running"));
+      }
+
+      if (outcome === "turn-failed") {
+        return Promise.reject(new TurnFailed("the headless turn ended with exit 1 at its start"));
       }
 
       if (outcome === "fails") {
@@ -254,13 +272,13 @@ function delivering(outcomes: ReadonlyArray<Delivered | null | "not-stopped" | "
     },
   });
 
-  return { deliver, routes };
+  return { deliver, routes, clock };
 }
 
 /** Sends the Owner's words to S1 `times` times, and swallows each failure. */
 async function sendOwnerWords(deliver: RelayIo["deliver"], times: number): Promise<void> {
   for (let sent = 0; sent < times; sent += 1) {
-    await deliver("S1", "use wording B", true).catch(() => null);
+    await deliver(BACKGROUND, "use wording B", true).catch(() => null);
   }
 }
 
@@ -271,6 +289,8 @@ describe("relayDeliverer", () => {
 
     const deliver = relayDeliverer({
       agents: () => Promise.resolve(listings.shift() ?? "[]"),
+      place: PLACE,
+      now: () => 0,
       deliver: (delivery) => {
         sent.push(delivery);
 
@@ -278,7 +298,7 @@ describe("relayDeliverer", () => {
       },
     });
 
-    expect(await deliver("S1", "the lines", true)).toBe("resume");
+    expect(await deliver(BACKGROUND, "the lines", true)).toBe("resume");
     expect(sent.map(({ route, socketLine, resumeArgs }) => ({ route, socketLine, resumeArgs }))).toEqual([
       {
         route: { kind: "stop", id: "725ecfab" },
@@ -292,7 +312,7 @@ describe("relayDeliverer", () => {
   test("words that are not the Owner's go on the socket of a running session", async () => {
     const { deliver, routes } = delivering(["socket"]);
 
-    expect(await deliver("S1", "a finding", false)).toBe("socket");
+    expect(await deliver(BACKGROUND, "a finding", false)).toBe("socket");
     expect(routes).toEqual(["socket"]);
   });
 
@@ -323,11 +343,114 @@ describe("relayDeliverer", () => {
   test("a failed stop is thrown on, for the turn to report", async () => {
     const { deliver } = delivering(["not-stopped"]);
 
-    const failure = await deliver("S1", "use wording B", true).then(
+    const failure = await deliver(BACKGROUND, "use wording B", true).then(
       () => null,
       (error: Error) => error,
     );
 
     expect(failure).toBeInstanceOf(NotStopped);
+  });
+});
+
+describe("relayDeliverer, to an API Worker's session", () => {
+  /** An API Worker's session that no longer runs: the listing holds none. */
+  const API: Target = { session: "S9", headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7" } };
+  const MINUTE = 60_000;
+
+  /** Sends a Wake to the API Worker's session at `at`, and swallows a failure. */
+  function sendAt({ deliver, clock }: Delivering, at: number): Promise<Delivered | null> {
+    clock.now = at;
+
+    return deliver(API, "the lines", false).catch(() => null);
+  }
+
+  test("resumes it headless, on the API Worker settings file of the relay's home and the log of its checkout", async () => {
+    const sent: Delivery[] = [];
+
+    const deliver = relayDeliverer({
+      agents: () => Promise.resolve("[]"),
+      place: PLACE,
+      now: () => 0,
+      deliver: (delivery) => {
+        sent.push(delivery);
+
+        return Promise.resolve("headless");
+      },
+    });
+
+    expect(await deliver(API, "the lines", true)).toBe("headless");
+    expect(sent[0]?.route).toEqual({
+      kind: "headless",
+      worktree: "/repo/.claude/worktrees/issue-7",
+      log: "/repo/.lab/state/api-worker-S9.log",
+    });
+    expect(sent[0]?.resumeArgs.slice(0, 4)).toEqual(["claude", "-p", "--resume", "S9"]);
+    expect(sent[0]?.resumeArgs).toContain("/home/me/.config/software-factory-lab/api-worker-settings.json");
+  });
+
+  test("a turn that failed at its start holds the next one back for a minute, then it is tried again", async () => {
+    const found = delivering(["turn-failed", null, "headless"], "[]");
+
+    await sendAt(found, 0);
+    await sendAt(found, MINUTE - 1);
+
+    expect(await sendAt(found, MINUTE)).toBe("headless");
+    expect(found.routes).toEqual(["headless", "wait", "headless"]);
+  });
+
+  test("each failed start in a row doubles the wait", async () => {
+    const found = delivering(["turn-failed", "turn-failed", null, "turn-failed", null, "headless"], "[]");
+
+    await sendAt(found, 0);
+    await sendAt(found, MINUTE);
+    await sendAt(found, 3 * MINUTE - 1);
+    await sendAt(found, 3 * MINUTE);
+    await sendAt(found, 7 * MINUTE - 1);
+    await sendAt(found, 7 * MINUTE);
+
+    expect(found.routes).toEqual(["headless", "headless", "wait", "headless", "wait", "headless"]);
+  });
+
+  test("a turn that starts resets the count: the next failed start holds for a minute again", async () => {
+    const found = delivering(["turn-failed", "turn-failed", "headless", "turn-failed", null, "headless"], "[]");
+
+    await sendAt(found, 0);
+    await sendAt(found, MINUTE);
+    await sendAt(found, 3 * MINUTE);
+    await sendAt(found, 10 * MINUTE);
+    await sendAt(found, 11 * MINUTE - 1);
+    await sendAt(found, 11 * MINUTE);
+
+    expect(found.routes).toEqual(["headless", "headless", "headless", "headless", "wait", "headless"]);
+  });
+
+  test("a delivery that fails otherwise, or does not go through, holds nothing back", async () => {
+    const found = delivering(["fails", null, "headless"], "[]");
+
+    await sendAt(found, 0);
+    await sendAt(found, 1);
+    await sendAt(found, 2);
+
+    expect(found.routes).toEqual(["headless", "headless", "headless"]);
+  });
+
+  test("a failed start is thrown on, for the turn to report, and holds no background session back", async () => {
+    const found = delivering(["turn-failed", "socket"], "[]");
+
+    found.clock.now = 0;
+
+    const failure = await found.deliver(API, "the lines", false).then(
+      () => null,
+      (error: Error) => error,
+    );
+
+    expect(failure).toBeInstanceOf(TurnFailed);
+
+    const background = delivering(["turn-failed", "socket"]);
+
+    await background.deliver(BACKGROUND, "a finding", false).catch(() => null);
+
+    expect(await background.deliver(BACKGROUND, "a finding", false)).toBe("socket");
+    expect(background.routes).toEqual(["socket", "socket"]);
   });
 });

@@ -21,3 +21,14 @@ export const ROLE_VARIABLE = "LAB_ROLE";
 export function isWorker(env: Env): boolean {
   return isAuthor(env) || env[ROLE_VARIABLE] === "worker";
 }
+
+/**
+ * The variable that makes a Worker an API Worker: a headless session whose turns bill the Owner's Console
+ * API key. Dispatch gives it through the `env` of the API Worker settings file; the Stop hook reads it,
+ * and so does every hook that would run the Worker's code outside its sandbox.
+ */
+export const API_WORKER_VARIABLE = "LAB_API_WORKER";
+
+export function isApiWorker(env: Env): boolean {
+  return env[API_WORKER_VARIABLE] === "1";
+}

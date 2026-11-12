@@ -11,15 +11,19 @@ import {
   readingOf,
   relayLineOf,
   resumeArgsOf,
+  retryDelayOf,
   routeOf,
   SeenKeys,
+  sendingOf,
   socketLineOf,
   stoppedIn,
   stopWanted,
+  targetOf,
+  targetTextOf,
   wakesOf,
   wakeTextOf,
 } from "./wakes.ts";
-import type { PrState } from "./wakes.ts";
+import type { PrState, Target } from "./wakes.ts";
 
 const HEAD = "c0ffee1234567890c0ffee1234567890c0ffee12";
 
@@ -647,6 +651,125 @@ describe("routeOf", () => {
 
   test("a listing that does not read throws, naming the command", () => {
     expect(() => routeOf("{}", "S-running", others)).toThrow("claude agents --json: ");
+  });
+});
+
+describe("targetOf", () => {
+  const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7" };
+
+  test("a session file of one line names a session the relay reaches as any other", () => {
+    expect(targetOf("S1\n")).toEqual({ session: "S1", headless: null });
+    expect(targetOf("S1")).toEqual({ session: "S1", headless: null });
+    expect(targetTextOf({ session: "S1", headless: null })).toBe("S1\n");
+  });
+
+  test("a second line holds what the headless resume of an API Worker's session needs, and reads back", () => {
+    const text = targetTextOf({ session: "S1", headless });
+
+    expect(text).toBe(`S1\n${JSON.stringify(headless)}\n`);
+    expect(targetOf(text)).toEqual({ session: "S1", headless });
+    expect(
+      targetOf(targetTextOf({ session: "S1", headless: { ...headless, model: null } })).headless?.model,
+    ).toBeNull();
+  });
+
+  test("a second line that does not read throws, naming the file: the Wake stays pending rather than going the wrong way", () => {
+    expect(() => targetOf("S1\nnot json\n")).toThrow("the second line of the relay's session file: ");
+    expect(() => targetOf('S1\n{"model":"opus"}\n')).toThrow("the second line of the relay's session file: ");
+  });
+});
+
+describe("sendingOf", () => {
+  const agents = JSON.stringify([
+    { pid: 34_502, id: "725ecfab", kind: "background", sessionId: "S-background", status: "idle", state: "done" },
+    { pid: 40_001, kind: "interactive", sessionId: "S-api-busy", status: "busy" },
+    { pid: 40_002, kind: "interactive", sessionId: "S-api-ending", status: "idle" },
+  ]);
+
+  const place = { checkout: "/repo", home: "/home/me" };
+  const worktree = "/repo/.claude/worktrees/issue-7";
+  const api = (session: string): Target => ({ session, headless: { model: "claude-opus-5-5", worktree } });
+  const wake = { text: "the lines", stop: false, held: false };
+
+  test("a session that is no API Worker's takes the socket, the stop or the background resume", () => {
+    const target = { session: "S-background", headless: null };
+
+    expect(sendingOf(agents, target, wake, place)).toEqual({
+      route: { kind: "socket", pid: 34_502 },
+      socketLine: socketLineOf("the lines"),
+      resumeArgs: ["claude", "--bg", "--resume", "S-background", "the lines"],
+    });
+    expect(sendingOf(agents, target, { ...wake, stop: true }, place).route).toEqual({ kind: "stop", id: "725ecfab" });
+  });
+
+  test("a failed start of a headless turn holds no other session back", () => {
+    const target = { session: "S-background", headless: null };
+
+    expect(sendingOf(agents, target, { ...wake, held: true }, place).route).toEqual({ kind: "socket", pid: 34_502 });
+  });
+
+  test("an API Worker's session that no longer runs is resumed headless in its worktree, on the API Worker settings file alone, its guide and its model", () => {
+    expect(sendingOf(agents, api("S-api-gone"), wake, place)).toEqual({
+      route: { kind: "headless", worktree, log: "/repo/.lab/state/api-worker-S-api-gone.log" },
+      socketLine: socketLineOf("the lines"),
+      resumeArgs: [
+        "claude",
+        "-p",
+        "--resume",
+        "S-api-gone",
+        "--model",
+        "claude-opus-5-5",
+        "--settings",
+        "/home/me/.config/software-factory-lab/api-worker-settings.json",
+        "--setting-sources",
+        "",
+        "--append-system-prompt-file",
+        `${worktree}/AGENTS.md`,
+        "--permission-mode",
+        "dontAsk",
+        "--output-format",
+        "json",
+        "the lines",
+      ],
+    });
+  });
+
+  test("an API Worker's session waits while the listing shows its turn running, busy or ending: a second resume would start a copy", () => {
+    for (const session of ["S-api-busy", "S-api-ending"]) {
+      expect(sendingOf(agents, api(session), wake, place).route).toEqual({ kind: "wait" });
+    }
+  });
+
+  test("an API Worker's session waits while a failed start holds its next turn back", () => {
+    expect(sendingOf(agents, api("S-api-gone"), { ...wake, held: true }, place).route).toEqual({ kind: "wait" });
+  });
+
+  test("the Owner's words reach an API Worker's session the same way: its resume is a turn of its user, and nothing is stopped", () => {
+    const owners = { ...wake, stop: true };
+
+    expect(sendingOf(agents, api("S-api-gone"), owners, place).route.kind).toBe("headless");
+    expect(sendingOf(agents, api("S-api-busy"), owners, place).route).toEqual({ kind: "wait" });
+  });
+
+  test("an API Worker's session is never resumed in the background, nor written to on a socket", () => {
+    for (const session of ["S-api-gone", "S-api-busy"]) {
+      const { route, resumeArgs } = sendingOf(agents, api(session), wake, place);
+
+      expect(resumeArgs).not.toContain("--bg");
+      expect(["headless", "wait"]).toContain(route.kind);
+    }
+  });
+});
+
+describe("retryDelayOf", () => {
+  test("the relay waits a minute after a first failed start, then twice as long each time, and never more than half an hour", () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 20].map((failures) => retryDelayOf(failures) / 60_000)).toEqual([
+      1, 2, 4, 8, 16, 30, 30, 30,
+    ]);
+  });
+
+  test("no failure is no shorter a wait than one", () => {
+    expect(retryDelayOf(0)).toBe(60_000);
   });
 });
 

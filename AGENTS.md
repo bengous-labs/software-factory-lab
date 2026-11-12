@@ -24,7 +24,7 @@ The factory is young and its design moves: a rule serves the goal, it is not the
 
 ## Where things are
 
-- `factory/`: the factory's own code. `factory/AGENTS.md` is its map, and a directory with a design of its own holds an `AGENTS.md` (each step of `land/` and `land/shared/`, `dispatch/`, `watch/`, `hooks/`, `install/`): Claude Code loads one when you read a file of that directory with the Read tool.
+- `factory/`: the factory's own code. `factory/AGENTS.md` is its map, and a directory with a design of its own holds an `AGENTS.md` (each step of `land/` and `land/shared/`, `dispatch/`, `watch/`, `hooks/`, `install/`): Claude Code loads one when you read a file of that directory with the Read tool; an API Worker's session, which loads no project settings, reads it itself before it changes a file there.
 - `app/`: a small task CLI that gives the agents something to change; `docs/usage.md` documents it.
 - `scripts/`: the tooling that checks both: the gates, the lint rules, the CI scripts, the Worker bench, and two hooks of this repository's own toolchain.
 - `.claude/` and `.github/`: what plugs the factory into this repository: the hooks' wiring, the skills, the workflows, the factory config.

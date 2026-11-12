@@ -11,5 +11,12 @@ Claude Code hands a socket message to the session as another session's, never as
 It waits while the status reads `busy`; a turn that starts between that listing and the stop is cut, since Claude Code offers no stop that holds off a busy session.
 A session still listed running 30 s after the stop gets nothing: the Wakes stay pending, and the next poll resumes it once it shows stopped, or, while it is still listed idle, runs `claude stop` on it again; after three such stops in a row, the Owner's words go on the socket.
 A session with any other status or none, and an interactive one, which Claude Code cannot stop, get the lines on the socket.
+An API Worker's session (`factory/dispatch/AGENTS.md`) has no socket, and a background resume would not bill its key: the Stop hook names it in `relay-<pr>.session`, on a second line that holds its model and its worktree.
+The relay waits while `claude agents --json` lists that session, which it does for as long as a headless turn runs, since a second resume would start a copy of the conversation; once it is no longer listed, the relay leaves the headless resume of `factory/land/shared/api-worker.ts` running detached in that worktree: `claude -p --resume <session-id>` with the session's model, the API Worker settings file as its only settings, the worktree's root guide and the `dontAsk` mode, then the lines.
+Every Wake reaches such a session as a turn of its user, the Owner's words included, so nothing is stopped first.
+The turn takes from the relay's environment what a session needs to start and to reach the API, no credential, and its key, its identity and its rules from the settings file; its output goes to the session's log.
+The relay looks at that turn for a minute: one that ends with an error in that time, its key refused or its credits spent, delivered nothing, and the session is resumed with the same Wakes after a wait that doubles from one minute to half an hour, for as long as the PR is open.
+A turn that still runs after that minute is delivered, whatever its end: one that fails late is not given the same Wakes twice, and one that hangs does not hold the relay, which goes back to its PR.
+A background session the relay resumes takes the lines as its prompt too: a Wake of the App reaches a stopped Worker of either kind as a turn of its user.
 It ends when the PR lands or closes, which starts no turn, and writes its start and its end to `.lab/outcomes.log`.
 A relay that dies is not restarted: the log shows a start with no end.

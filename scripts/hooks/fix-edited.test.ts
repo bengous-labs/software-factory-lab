@@ -71,8 +71,11 @@ describe("candidateOf", () => {
   });
 });
 
-/** Runs the hook on a Write of `filePath`, as Claude Code does for the project at `project`. */
-const runHook = (filePath: string, project = ROOT) =>
+/**
+ * Runs the hook on a Write of `filePath`, as Claude Code does for the project at `project`, in a session
+ * whose environment also holds `session`.
+ */
+const runHook = (filePath: string, project = ROOT, session: Readonly<Record<string, string>> = {}) =>
   $`bun ${SCRIPT} < ${Buffer.from(
     JSON.stringify({
       hook_event_name: "PostToolUse",
@@ -81,7 +84,7 @@ const runHook = (filePath: string, project = ROOT) =>
       cwd: project,
     }),
   )}`
-    .env({ ...fixtureEnv(process.env), CLAUDE_PROJECT_DIR: project })
+    .env({ ...fixtureEnv(process.env), CLAUDE_PROJECT_DIR: project, ...session })
     .nothrow()
     .quiet();
 
@@ -105,6 +108,30 @@ describe("the hook", () => {
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout.toString()).toBe("");
     expect(ran.stderr.toString()).toBe("");
+    expect(await Bun.file(path).text()).toBe(FIXED);
+  });
+
+  test("in an API Worker's session it leaves the file as it is: the fix would run the checkout's lint config outside the sandbox", async () => {
+    const path = join(import.meta.dir, `.fix-edited-fixture-api-${process.pid}.ts`);
+
+    fixtures.push(path);
+    writeFileSync(path, UNFORMATTED);
+
+    const ran = await runHook(path, ROOT, { LAB_API_WORKER: "1" });
+
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout.toString()).toBe("");
+    expect(await Bun.file(path).text()).toBe(UNFORMATTED);
+  });
+
+  test("a session whose marker is not 1 is no API Worker's: the file is fixed", async () => {
+    const path = join(import.meta.dir, `.fix-edited-fixture-bg-${process.pid}.ts`);
+
+    fixtures.push(path);
+    writeFileSync(path, UNFORMATTED);
+
+    await runHook(path, ROOT, { LAB_API_WORKER: "0" });
+
     expect(await Bun.file(path).text()).toBe(FIXED);
   });
 

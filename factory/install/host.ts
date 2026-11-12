@@ -12,5 +12,8 @@ export const TRUNK = "dev";
 /** The release branch, which no agent publishes. */
 export const RELEASE_BRANCH = "main";
 
-/** The directory under `~/.config/` that holds the Author's token and the Worker settings file. */
+/** The directory under `~/.config/` that holds the Author's token and the Worker settings files. */
 export const CONFIG_DIR = "software-factory-lab";
+
+/** The file under the Owner's home that holds the Console API key an API Worker bills, by its path from that home. */
+export const API_KEY_FILE = ".api-agent/key";

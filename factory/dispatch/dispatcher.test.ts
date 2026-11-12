@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Ran, RunOptions } from "../lib/run.port.ts";
+import type { LeaveOptions, Ran, RunOptions } from "../lib/run.port.ts";
 import { dispatch } from "./dispatcher.ts";
 import type { DispatchPorts } from "./dispatcher.ts";
 
@@ -9,6 +9,14 @@ const CHECKOUT = "/repo";
 const WORKTREE = "/repo/.claude/worktrees/issue-7";
 
 const SETTINGS = "/home/me/.config/software-factory-lab/worker-settings.json";
+
+const API_SETTINGS = "/home/me/.config/software-factory-lab/api-worker-settings.json";
+
+const KEY = "/home/me/.api-agent/key";
+
+const SESSION = "0b1c2d3e-0000-4000-8000-000000000007";
+
+const LOG = `/repo/.lab/state/api-worker-${SESSION}.log`;
 
 interface Call {
   readonly argv: readonly string[];
@@ -19,8 +27,36 @@ const ISSUE = '{"title":"Add a flag","url":"https://github.com/o/r/issues/7","au
 
 const PROVISIONED = '{"env":{"LAB_AUTHOR":"1","GH_TOKEN":"ghp_worker"}}';
 
-function world(answers: Partial<Record<string, Ran>> = {}, settings: string | null = PROVISIONED) {
+const PROJECT_SETTINGS = "/repo/.claude/settings.json";
+
+const PROJECT = JSON.stringify({
+  hooks: { Stop: [{ hooks: [{ type: "command", command: 'bun "$CLAUDE_PROJECT_DIR"/factory/bin/stop-hook.ts' }] }] },
+});
+
+interface Left {
+  readonly argv: readonly string[];
+  readonly options: LeaveOptions;
+}
+
+/** What the fake's machine holds besides its commands: the Worker settings file, the key file's mode, whether a detached launch starts. */
+interface Machine {
+  readonly settings: string | null;
+  readonly keyMode: number | null;
+  readonly starts: boolean;
+  /** The exit code the first turn ends with while Dispatch looks; null when it still runs after the look. */
+  readonly firstTurn: number | null;
+  /** The main checkout's settings file; null when there is none. */
+  readonly project: string | null;
+  /** Whether the API Worker settings file can be written. */
+  readonly writable: boolean;
+}
+
+function world(answers: Partial<Record<string, Ran>> = {}, machine: Partial<Machine> = {}) {
+  const { settings = PROVISIONED, keyMode = 0o600, starts = true, firstTurn = null } = machine;
+  const { project = PROJECT, writable = true } = machine;
   const calls: Call[] = [];
+  /** What the dispatch did, in its order: each command, the settings written, the turn left. */
+  const order: string[] = [];
 
   const defaults: ReadonlyArray<readonly [prefix: string, ran: Ran]> = [
     ["gh issue", { code: 0, stdout: ISSUE, stderr: "" }],
@@ -35,6 +71,7 @@ function world(answers: Partial<Record<string, Ran>> = {}, settings: string | nu
 
   const answer = (argv: readonly string[], options: RunOptions): Promise<Ran> => {
     calls.push({ argv, options });
+    order.push(argv.slice(0, 3).join(" "));
     const found = defaults.find(([prefix]) => argv.join(" ").startsWith(prefix));
 
     if (found === undefined) {
@@ -45,6 +82,10 @@ function world(answers: Partial<Record<string, Ran>> = {}, settings: string | nu
   };
 
   const launches: Call[] = [];
+  const left: Left[] = [];
+  const written: Array<{ path: string; text: string }> = [];
+  const stats: string[] = [];
+  const sleeps: number[] = [];
 
   const ports: DispatchPorts = {
     run: answer,
@@ -53,13 +94,50 @@ function world(answers: Partial<Record<string, Ran>> = {}, settings: string | nu
 
       return answer(argv, options);
     },
-    readText: (path) =>
-      path === SETTINGS && settings !== null
-        ? Promise.resolve(settings)
-        : Promise.reject(new Error("ENOENT: no such file")),
+    leave: (argv, options) => {
+      if (!starts) {
+        throw new Error(`the process did not start: ${argv.join(" ")}`);
+      }
+
+      left.push({ argv, options });
+      order.push("leave");
+
+      return { pid: 4242, exited: firstTurn === null ? new Promise<number>(() => {}) : Promise.resolve(firstTurn) };
+    },
+    readText: (path) => {
+      const text = new Map([
+        [SETTINGS, settings],
+        [PROJECT_SETTINGS, project],
+      ]).get(path);
+
+      return text === undefined || text === null
+        ? Promise.reject(new Error(`ENOENT: no such file, open '${path}'`))
+        : Promise.resolve(text);
+    },
+    writeSecret: (path, text) => {
+      if (!writable) {
+        return Promise.reject(new Error(`EACCES: permission denied, open '${path}'`));
+      }
+
+      written.push({ path, text });
+      order.push("write");
+
+      return Promise.resolve();
+    },
+    modeOf: (path) => {
+      stats.push(path);
+
+      return Promise.resolve(keyMode);
+    },
+    newSession: () => SESSION,
+    sleep: async (ms) => {
+      // The fake's first turn ends, when it does, before the look is over.
+      await Promise.resolve();
+      sleeps.push(ms);
+    },
   };
 
-  return { ports, calls, launches };
+  return { ports, calls, launches, left, written, stats, sleeps, order };
 }
 
 /** The message a dispatch rejects with; it fails the test when the dispatch resolves. */
@@ -75,7 +153,11 @@ async function failureOf(promise: Promise<unknown>): Promise<string> {
 
 const ENV = { HOME: "/home/me", PATH: "/bin", GH_TOKEN: "secret", LAB_AUTHOR: "1" };
 
-const REQUEST = { issue: 7, model: "opus", effort: undefined, checkout: CHECKOUT, env: ENV };
+const STRANGERS_ISSUE = '{"title":"x","url":"https://github.com/o/r/issues/7","author":{"login":"someone"}}';
+
+const REQUEST = { issue: 7, model: "opus", effort: undefined, api: false, checkout: CHECKOUT, env: ENV };
+
+const API_REQUEST = { ...REQUEST, api: true };
 
 const commandsOf = (calls: readonly Call[]) => calls.map((call) => call.argv.slice(0, 3).join(" "));
 
@@ -91,6 +173,7 @@ describe("dispatch", () => {
       worktree: WORKTREE,
       branch: "issue/7-add-a-flag",
       session: "s-123",
+      log: null,
     });
     expect(commandsOf(calls)).toEqual([
       "gh issue view",
@@ -157,7 +240,7 @@ describe("dispatch", () => {
   });
 
   test("refuses Worker settings that do not make an Author, before it reads the issue, without quoting them", async () => {
-    const { ports, calls } = world({}, '{"env":{"GH_TOKEN":"ghp_worker"}}');
+    const { ports, calls } = world({}, { settings: '{"env":{"GH_TOKEN":"ghp_worker"}}' });
 
     const failure = await failureOf(dispatch(ports, REQUEST));
 
@@ -166,10 +249,10 @@ describe("dispatch", () => {
   });
 
   test("refuses a missing Worker settings file", async () => {
-    const { ports, calls } = world({}, null);
+    const { ports, calls } = world({}, { settings: null });
 
     expect(await failureOf(dispatch(ports, REQUEST))).toBe(
-      `the Worker settings file ${SETTINGS} cannot be read: ENOENT: no such file`,
+      `the Worker settings file ${SETTINGS} cannot be read: ENOENT: no such file, open '${SETTINGS}'`,
     );
     expect(calls).toEqual([]);
   });
@@ -206,6 +289,21 @@ describe("dispatch", () => {
     ]);
   });
 
+  test("the failure of a launch carries the launch's own error as its cause", async () => {
+    const { ports } = world(
+      { "claude --bg": { code: 1, stdout: "", stderr: "no such model" } },
+      { settings: PROVISIONED },
+    );
+
+    const failure = await dispatch(ports, REQUEST).then(
+      () => null,
+      (error: Error) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toHaveProperty("cause.message", "claude --bg exited 1: no such model");
+  });
+
   test("keeps the launch's error and tries both removals when the cleanup fails", async () => {
     const { ports, calls } = world({
       "claude --bg": { code: 1, stdout: "", stderr: "no such model" },
@@ -222,6 +320,21 @@ describe("dispatch", () => {
     ]);
   });
 
+  test("a background session whose id is not read keeps its worktree: the Worker runs", async () => {
+    const { ports, calls } = world({ "claude --bg": { code: 0, stdout: "started\n", stderr: "" } });
+
+    expect(await failureOf(dispatch(ports, REQUEST))).toBe("claude --bg printed no session id: started");
+    expect(commandsOf(calls).at(-1)).toBe("claude --bg --model");
+  });
+
+  test("a background Worker writes no API Worker settings, reads no key file, and is left no headless turn", async () => {
+    const { ports, left, written, stats } = world();
+
+    await dispatch(ports, REQUEST);
+
+    expect({ left, written, stats }).toEqual({ left: [], written: [], stats: [] });
+  });
+
   test("fails with what gh printed when the issue cannot be read", async () => {
     const { ports } = world({ "gh issue": { code: 1, stdout: "", stderr: "could not find issue" } });
 
@@ -232,5 +345,190 @@ describe("dispatch", () => {
     const { ports } = world();
 
     expect(await failureOf(dispatch(ports, { ...REQUEST, env: {} }))).toContain("HOME is not set");
+  });
+});
+
+describe("the dispatch of an API Worker", () => {
+  const TAIL = [
+    "--settings",
+    API_SETTINGS,
+    "--setting-sources",
+    "",
+    "--append-system-prompt-file",
+    `${WORKTREE}/AGENTS.md`,
+    "--permission-mode",
+    "dontAsk",
+    "--output-format",
+    "json",
+    `Implement GitHub issue #7 of o/r (read it with: gh issue view 7 --repo o/r). You are in your worktree ${WORKTREE}: work there; its branch issue/7-add-a-flag starts at origin/dev.`,
+  ];
+
+  test("creates the worktree, writes the API Worker settings file just before the launch, and leaves the first turn running headless in the worktree", async () => {
+    const { ports, launches, left, written, stats, order } = world();
+
+    expect(await dispatch(ports, API_REQUEST)).toEqual({
+      issue: 7,
+      title: "Add a flag",
+      worktree: WORKTREE,
+      branch: "issue/7-add-a-flag",
+      session: SESSION,
+      log: LOG,
+    });
+    expect(stats).toEqual([KEY]);
+    expect(written.map((file) => file.path)).toEqual([API_SETTINGS]);
+    expect(order).toEqual([
+      "gh issue view",
+      "git fetch --prune",
+      "git worktree list",
+      "git for-each-ref --format=%(refname:short)",
+      "git worktree add",
+      "write",
+      "leave",
+    ]);
+    expect(launches).toEqual([]);
+    expect(left).toEqual([
+      {
+        argv: ["claude", "-p", "--session-id", SESSION, "--name", "w-issue-7", "--model", "opus", ...TAIL],
+        options: { cwd: WORKTREE, env: { HOME: "/home/me", PATH: "/bin" }, log: LOG },
+      },
+    ]);
+  });
+
+  test("the first turn runs at the effort the dispatch names", async () => {
+    const { ports, left } = world();
+
+    await dispatch(ports, { ...API_REQUEST, effort: "high" });
+
+    expect(left[0]?.argv.slice(6, 10)).toEqual(["--model", "opus", "--effort", "high"]);
+  });
+
+  test("the settings file it writes makes the Worker an Author and an API Worker, sandboxed, on the main checkout's hooks, and names the key's file, never a key", async () => {
+    const { ports, written } = world();
+
+    await dispatch(ports, API_REQUEST);
+
+    expect(JSON.parse(written[0]?.text ?? "")).toMatchObject({
+      env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: CHECKOUT },
+      apiKeyHelper: `cat '${KEY}'`,
+      hooks: { Stop: [{ hooks: [{ command: 'bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts' }] }] },
+      sandbox: {
+        enabled: true,
+        credentials: {
+          files: [
+            { path: "/home/me/.api-agent", mode: "deny" },
+            { path: "/home/me/.config/software-factory-lab", mode: "deny" },
+          ],
+        },
+      },
+      permissions: { deny: ["Read(//home/me/.api-agent/**)", "Read(//home/me/.config/software-factory-lab/**)"] },
+    });
+  });
+
+  test("neither the launch nor its environment holds a token: the settings go by their path", async () => {
+    const { ports, left } = world();
+
+    await dispatch(ports, API_REQUEST);
+
+    expect(JSON.stringify(left)).not.toContain("ghp_worker");
+    expect(JSON.stringify(left)).not.toContain("secret");
+  });
+
+  test.each([
+    [null, `the API key file ${KEY} is missing`],
+    [0o644, `the API key file ${KEY} is readable by its group or by others: set its mode to 600`],
+  ])("refuses a key file of mode %p before it writes or creates anything", async (keyMode, failure) => {
+    const { ports, calls, written, left } = world({}, { keyMode });
+
+    expect(await failureOf(dispatch(ports, API_REQUEST))).toBe(failure);
+    expect({ calls, written, left }).toEqual({ calls: [], written: [], left: [] });
+  });
+
+  test("refuses Worker settings that do not make an Author before it looks at the key", async () => {
+    const { ports, stats, written } = world({}, { settings: '{"env":{"GH_TOKEN":"ghp_worker"}}' });
+
+    expect(await failureOf(dispatch(ports, API_REQUEST))).toBe(
+      `the Worker settings file ${SETTINGS}: env.LAB_AUTHOR is not "1"`,
+    );
+    expect({ stats, written }).toEqual({ stats: [], written: [] });
+  });
+
+  test("refuses a main checkout whose settings cannot be read, or hold no hooks, before it creates anything", async () => {
+    const missing = world({}, { project: null });
+
+    expect(await failureOf(dispatch(missing.ports, API_REQUEST))).toBe(
+      `ENOENT: no such file, open '${PROJECT_SETTINGS}'`,
+    );
+    expect({ calls: missing.calls, written: missing.written }).toEqual({ calls: [], written: [] });
+
+    const hookless = world({}, { project: "{}" });
+
+    expect(await failureOf(dispatch(hookless.ports, API_REQUEST))).toStartWith(
+      "the main checkout's .claude/settings.json: ",
+    );
+    expect({ calls: hookless.calls, written: hookless.written }).toEqual({ calls: [], written: [] });
+  });
+
+  test.each([
+    ["an issue the Owner did not write", { "gh issue": { code: 0, stdout: STRANGERS_ISSUE, stderr: "" } }],
+    ["an issue that already has a branch", { "git for-each-ref": { code: 0, stdout: "fix/7-old\n", stderr: "" } }],
+    ["a worktree that cannot be created", { "git worktree add": { code: 128, stdout: "", stderr: "locked" } }],
+  ])(
+    "a dispatch refused for %s leaves the settings file every running API Worker reads as it was",
+    async (_, answers) => {
+      const { ports, written, left } = world(answers);
+
+      await failureOf(dispatch(ports, API_REQUEST));
+
+      expect({ written, left }).toEqual({ written: [], left: [] });
+    },
+  );
+
+  test("removes the worktree and the branch when the settings file cannot be written, and leaves no turn", async () => {
+    const { ports, calls, left } = world({}, { writable: false });
+
+    expect(await failureOf(dispatch(ports, API_REQUEST))).toBe(`EACCES: permission denied, open '${API_SETTINGS}'`);
+    expect(left).toEqual([]);
+    expect(calls.slice(-2).map((call) => call.argv)).toEqual([
+      ["git", "worktree", "remove", WORKTREE],
+      ["git", "branch", "-D", "issue/7-add-a-flag"],
+    ]);
+  });
+
+  test("looks at the first turn for 10 s: one that still runs, or that ended well, is a launched Worker", async () => {
+    const running = world();
+
+    expect((await dispatch(running.ports, API_REQUEST)).session).toBe(SESSION);
+    expect(running.sleeps).toEqual([10_000]);
+    expect((await dispatch(world({}, { firstTurn: 0 }).ports, API_REQUEST)).session).toBe(SESSION);
+  });
+
+  test("a first turn that ends at once with an error, its key refused, fails the dispatch, names the log and removes the worktree and the branch", async () => {
+    const { ports, calls } = world({}, { firstTurn: 1 });
+
+    expect(await failureOf(dispatch(ports, API_REQUEST))).toBe(
+      `the API Worker's first turn ended at once with exit 1: ${LOG} holds what it printed`,
+    );
+    expect(calls.slice(-2).map((call) => call.argv)).toEqual([
+      ["git", "worktree", "remove", WORKTREE],
+      ["git", "branch", "-D", "issue/7-add-a-flag"],
+    ]);
+  });
+
+  test("removes the worktree and the branch when the first turn does not start, and says what is left when it cannot", async () => {
+    const { ports, calls } = world(
+      { "git worktree remove": { code: 128, stdout: "", stderr: "contains untracked files" } },
+      { starts: false },
+    );
+
+    const failure = await failureOf(dispatch(ports, API_REQUEST));
+
+    expect(failure).toStartWith("the process did not start: claude -p --session-id");
+    expect(failure).toEndWith(
+      `. Its worktree and branch are left (git worktree remove ${WORKTREE} exited 128: contains untracked files): remove them with git worktree remove --force ${WORKTREE} && git branch -D issue/7-add-a-flag`,
+    );
+    expect(calls.slice(-2).map((call) => call.argv.slice(0, 3).join(" "))).toEqual([
+      "git worktree remove",
+      "git branch -D",
+    ]);
   });
 });

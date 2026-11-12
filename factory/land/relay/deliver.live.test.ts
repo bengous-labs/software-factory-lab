@@ -4,9 +4,9 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Ran, Run } from "../../lib/run.port.ts";
+import type { LeaveOptions, Ran, Run } from "../../lib/run.port.ts";
 import { deliverer, postToSocket, socketPathsOf } from "./deliver.live.ts";
-import { NotStopped } from "./main.ts";
+import { NotStopped, TurnFailed } from "./main.ts";
 import type { Delivery } from "./main.ts";
 
 const RESUME = ["claude", "--bg", "--resume", "S1", "the lines"];
@@ -29,6 +29,12 @@ const delivery = (route: Delivery["route"], stoppedAt: number | null = 1): Deliv
 
 const STOP = { kind: "stop", id: "725ecfab" } as const;
 
+const HEADLESS = {
+  kind: "headless",
+  worktree: "/main/.claude/worktrees/issue-7",
+  log: "/main/.lab/state/s.log",
+} as const;
+
 /** The message a delivery rejects with; null when it resolves. */
 const failureOf = (delivered: Promise<unknown>): Promise<string | null> =>
   delivered.then(
@@ -39,14 +45,20 @@ const failureOf = (delivered: Promise<unknown>): Promise<string | null> =>
 interface World {
   readonly posts: string[];
   readonly runs: Array<{ argv: readonly string[]; env: unknown }>;
+  readonly left: Array<{ argv: readonly string[]; options: LeaveOptions }>;
   readonly sleeps: number[];
 }
 
-/** A deliverer whose sockets take a line only at the paths `open`, and whose resume exits `code`. */
-function world(open: readonly string[], code = 0): World & { deliver: ReturnType<typeof deliverer> } {
+/**
+ * A deliverer whose sockets take a line only at the paths `open`, and whose resume exits `code`; a
+ * headless turn it leaves ends with `code` at once, or still runs after the relay's look when `turnRuns`.
+ */
+function world(open: readonly string[], code = 0, turnRuns = false): World & { deliver: ReturnType<typeof deliverer> } {
   const posts: string[] = [];
   const runs: World["runs"] = [];
   const sleeps: number[] = [];
+  const left: World["left"] = [];
+  const exited = turnRuns ? new Promise<number>(() => {}) : Promise.resolve(code);
 
   const run: Run = (argv, options): Promise<Ran> => {
     runs.push({ argv, env: options.env });
@@ -56,6 +68,11 @@ function world(open: readonly string[], code = 0): World & { deliver: ReturnType
 
   const deliver = deliverer({
     run,
+    leave: (argv, options) => {
+      left.push({ argv, options });
+
+      return { pid: 4242, exited };
+    },
     post: (path, line) => {
       posts.push(`${path} ${line}`);
 
@@ -66,12 +83,12 @@ function world(open: readonly string[], code = 0): World & { deliver: ReturnType
 
       return Promise.resolve();
     },
-    env: { XDG_RUNTIME_DIR: "/run/user/1000" },
+    env: { XDG_RUNTIME_DIR: "/run/user/1000", HOME: "/home/me", LAB_AUTHOR_TOKEN_FILE: "/h/token", UNSET: undefined },
     uid: 1000,
     cwd: "/main",
   });
 
-  return { posts, runs, sleeps, deliver };
+  return { posts, runs, left, sleeps, deliver };
 }
 
 describe("socketPathsOf", () => {
@@ -167,7 +184,51 @@ describe("deliverer", () => {
 
     expect(await found.deliver(delivery({ kind: "wait" }))).toBeNull();
     expect(found.runs).toEqual([]);
+    expect(found.left).toEqual([]);
     expect(found.posts).toEqual([]);
+  });
+
+  test("an API Worker's session is resumed headless: the command is left running in its worktree, with what a session needs of the relay's environment and the session's log", async () => {
+    const found = world(["/run/user/1000/cc-socks/34502.sock"]);
+
+    expect(await found.deliver(delivery(HEADLESS))).toBe("headless");
+    expect(found.left).toEqual([
+      {
+        argv: RESUME,
+        options: {
+          cwd: "/main/.claude/worktrees/issue-7",
+          env: { HOME: "/home/me", XDG_RUNTIME_DIR: "/run/user/1000" },
+          log: "/main/.lab/state/s.log",
+        },
+      },
+    ]);
+    expect(found.runs).toEqual([]);
+    expect(found.posts).toEqual([]);
+  });
+
+  test("a headless turn that still runs after the relay's one-minute look is delivered: the relay goes back to its PR, and a turn that hangs or fails late is not given the same Wakes again", async () => {
+    const found = world([], 0, true);
+
+    expect(await found.deliver(delivery(HEADLESS))).toBe("headless");
+    expect(found.sleeps).toEqual([60_000]);
+  });
+
+  test("a headless turn that ends well within the look is delivered", async () => {
+    expect(await world([], 0).deliver(delivery(HEADLESS))).toBe("headless");
+  });
+
+  test("a headless turn that ends with an error within the look failed at its start: the delivery throws, naming its log, and delivered nothing", async () => {
+    const failure = await world([], 1)
+      .deliver(delivery(HEADLESS))
+      .then(
+        () => null,
+        (error: Error) => error,
+      );
+
+    expect(failure).toBeInstanceOf(TurnFailed);
+    expect(failure?.message).toBe(
+      "the headless turn ended with exit 1 at its start: /main/.lab/state/s.log holds what it printed",
+    );
   });
 });
 

@@ -66,6 +66,7 @@ const PR: Pr = {
 const STOP: Stop = {
   at: before(30 * 60_000),
   session: "s-worker",
+  api: false,
   branch: PR.branch,
   outcome: "published",
   reason: null,
@@ -283,10 +284,26 @@ describe("a Worker idle on the Author's turn", () => {
     ]);
   });
 
+  test("an API Worker is named so, with how it gets its turn: it rests not running, and no `claude --resume` wakes it", () => {
+    const stops = [{ ...unfinished, api: true }];
+
+    expect(linesOf(draft, IDLE_MS, { sessions: [], stops })).toEqual([
+      `PR #9 (issue #7) is in draft, the Author's turn, and its API Worker (session s-worker, which only its PR's relay resumes, at a Wake such as a comment of the Owner on the PR: never \`claude --resume\`) is not running; its last stop at ${STOP.at} published nothing, for a reason the log quotes, not an instruction: "the Done judge says the change is not finished". Give the Worker its turn, or look at the PR: ${URL}`,
+    ]);
+  });
+
+  test("an API Worker whose headless turn runs is listed busy, and is not told as idle", () => {
+    const stops = [{ ...unfinished, api: true }];
+    const sessions = [{ id: "s-worker", running: true, status: "busy" }];
+
+    expect(linesOf(draft, IDLE_MS, { sessions, stops })).toEqual([]);
+  });
+
   test("what the log gives is cut: a stop's time at 40 characters, its session at 64, its reason at 300", () => {
     const long: Stop = {
       at: `${"t".repeat(40)}AT`,
       session: `${"s".repeat(64)}ID`,
+      api: false,
       branch: PR.branch,
       outcome: "not-published",
       reason: `${"r".repeat(300)}WHY`,
@@ -405,6 +422,17 @@ describe("a Worker idle on the Author's turn", () => {
     expect(
       stepOf([7], { ...reading, stops: [{ ...stop, branch: "issue/70-other" }] }, EMPTY_MEMORY, NOW).lines,
     ).toEqual([]);
+  });
+
+  test("an API Worker with no PR is told with what the reader can do: no relay resumes it", () => {
+    const stop: Stop = { ...unfinished, api: true, branch: "issue/7-add-a-flag" };
+    const reading: Reading = { prs: [], issues: [{ number: 7, state: "OPEN", prs: [] }], sessions: [], stops: [stop] };
+
+    expect(stepOf([7], reading, EMPTY_MEMORY, NOW).lines).toEqual([
+      expect.stringMatching(
+        /^Issue #7 has no open PR, and its API Worker \(session s-worker, .*\) is not running; .*"\. No relay resumes it without a PR: look at its worktree and at the log of its turns, or remove its worktree and its branch and dispatch the issue again\.$/u,
+      ),
+    ]);
   });
 });
 
@@ -675,10 +703,20 @@ describe("stopsOf", () => {
     ].join("\n");
 
     expect(stopsOf(log)).toEqual([
-      { at: "t1", session: "s1", branch: "issue/7-x", outcome: "published", reason: null },
-      { at: "t3", session: "s1", branch: null, outcome: "not-published", reason: "why" },
+      { at: "t1", session: "s1", api: false, branch: "issue/7-x", outcome: "published", reason: null },
+      { at: "t3", session: "s1", api: false, branch: null, outcome: "not-published", reason: "why" },
     ]);
     expect(stopsOf("")).toEqual([]);
+  });
+
+  test("a stop says whether its session is an API Worker's; one that does not say is none", () => {
+    const log = [
+      '{"at":"t1","session":"s1","api":true,"worktree":"/w","branch":"issue/7-x","head":"h","outcome":"published","pr":9}',
+      '{"at":"t2","session":"s2","api":false,"worktree":"/w","branch":"issue/8-x","head":"h","outcome":"published","pr":10}',
+      '{"at":"t3","session":"s3","worktree":"/w","branch":"issue/9-x","head":"h","outcome":"published","pr":11}',
+    ].join("\n");
+
+    expect(stopsOf(log).map((stop) => stop.api)).toEqual([true, false, false]);
   });
 
   test("a line that does not read is passed over, and an outcome the watch does not know is kept", () => {
@@ -687,6 +725,8 @@ describe("stopsOf", () => {
       '{"at":"t2","session":"s1","branch":"issue/7-x","outcome":"held"}',
     ].join("\n");
 
-    expect(stopsOf(log)).toEqual([{ at: "t2", session: "s1", branch: "issue/7-x", outcome: "held", reason: null }]);
+    expect(stopsOf(log)).toEqual([
+      { at: "t2", session: "s1", api: false, branch: "issue/7-x", outcome: "held", reason: null },
+    ]);
   });
 });

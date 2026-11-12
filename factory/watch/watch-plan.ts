@@ -135,6 +135,8 @@ export interface Session {
 export interface Stop {
   readonly at: string;
   readonly session: string;
+  /** The session is an API Worker's, which takes a turn only when its PR's relay resumes it headless. */
+  readonly api: boolean;
   readonly branch: string | null;
   /** `published`, `asked` or `not-published`, as the Stop hook's `Outcome` names them. */
   readonly outcome: string;
@@ -209,7 +211,8 @@ export function markOf(pr: Pr): string {
 /**
  * How a Worker's session stands: running `busy` or `idle`, as `claude agents --json` says during a turn
  * and between turns; `gone`, not running; `unread`, running with another status or none, which, like
- * the relay, the watch does not read as idle.
+ * the relay, the watch does not read as idle. The listing holds an API Worker's headless session while
+ * its turn runs and drops it at the end of the turn, so `gone` is how such a Worker rests.
  */
 type WorkerState = "busy" | "idle" | "gone" | "unread";
 
@@ -261,8 +264,19 @@ const STATE_TEXT: Readonly<Record<Exclude<WorkerState, "unread">, string>> = {
   gone: "is not running",
 };
 
+/**
+ * How an API Worker gets its turn, said with its session: it is listed while a turn runs and not running
+ * between two, and a reader that resumed it with `claude` would start it on the subscription, as no Worker.
+ */
+const API_TURN =
+  ", which only its PR's relay resumes, at a Wake such as a comment of the Owner on the PR: never `claude --resume`";
+
+/** What the reader can do for an API Worker with no PR, which no relay resumes. */
+const NO_PR_API_ACT =
+  "No relay resumes it without a PR: look at its worktree and at the log of its turns, or remove its worktree and its branch and dispatch the issue again.";
+
 const workerTextOf = (worker: Worker): string =>
-  `its Worker (session ${flatTo(worker.session, 64)}) ${worker.state === "unread" ? `runs with the status ${worker.status ?? "none"}` : STATE_TEXT[worker.state]}`;
+  `its ${worker.lastStop.api ? "API Worker" : "Worker"} (session ${flatTo(worker.session, 64)}${worker.lastStop.api ? API_TURN : ""}) ${worker.state === "unread" ? `runs with the status ${worker.status ?? "none"}` : STATE_TEXT[worker.state]}`;
 
 /**
  * A stop's outcome in the watch's own words. `.lab/outcomes.log` can be written by any process of the
@@ -461,7 +475,7 @@ function issueEventOf(issue: Issue, reading: Reading): WatchEvent | null {
 
   return {
     key: `idle:issue:${issue.number}:${worker.lastStop.at}`,
-    line: `Issue #${issue.number} has no open PR, and ${workerTextOf(worker)}; ${lastStopTextOf(worker)}. Give the Worker its turn, or look at its worktree.`,
+    line: `Issue #${issue.number} has no open PR, and ${workerTextOf(worker)}; ${lastStopTextOf(worker)}. ${worker.lastStop.api ? NO_PR_API_ACT : "Give the Worker its turn, or look at its worktree."}`,
     standing: true,
   };
 }
@@ -720,6 +734,8 @@ const decodeStopLine = Schema.decodeResult(
     Schema.Struct({
       at: Schema.String,
       session: Schema.String,
+      // The log holds stops written without it.
+      api: Schema.optionalKey(Schema.Boolean),
       branch: Schema.NullOr(Schema.String),
       outcome: Schema.String,
       reason: Schema.optionalKey(Schema.String),
@@ -735,6 +751,6 @@ export function stopsOf(log: string): readonly Stop[] {
   return log.split("\n").flatMap((line) => {
     const read = Result.getOrNull(decodeStopLine(line));
 
-    return read === null ? [] : [{ ...read, reason: read.reason ?? null }];
+    return read === null ? [] : [{ ...read, api: read.api ?? false, reason: read.reason ?? null }];
   });
 }

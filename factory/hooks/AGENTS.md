@@ -12,9 +12,12 @@ Two serve this repository's own toolchain and live in `scripts/hooks/`: `fix-edi
 
 - A session started with `claude --worktree` has `$CLAUDE_PROJECT_DIR` in the worktree, so it runs its own branch's hooks, the Stop hook included.
   A Worker starts in the main checkout and enters its worktree with `EnterWorktree`, so it runs the hooks of whatever the main checkout has checked out, which need not be the Trunk's latest.
+  An API Worker starts in its worktree, where a headless session cannot enter one, and still runs the main checkout's hooks: it loads no project settings, and its settings file carries the main checkout's hooks, each named through `LAB_MAIN_CHECKOUT` where `.claude/settings.json` says `$CLAUDE_PROJECT_DIR` (`factory/dispatch/AGENTS.md`).
+  A hook's command runs outside the sandbox that holds such a Worker's code, so a hook that would run a file of the worktree does not for it: `fix-edited.ts` does nothing in its session, and the Stop hook runs no `bun check`.
+  A hook added to `.claude/settings.json` that runs the checkout's own code needs the same care.
 
 - `fix-edited.ts` and `install-deps.ts` act only on a checkout of the project's repository, found by its git common directory.
-  The Stop hook runs `bun check` in whatever checkout `cwd` is in.
+  The Stop hook runs `bun check` in whatever checkout `cwd` is in, except for an API Worker, which it asks to run it.
 
 - A subagent fires `SubagentStop` with `cwd` in its worktree, never `Stop`: the Stop hook does not run for it.
 
@@ -32,8 +35,10 @@ Two serve this repository's own toolchain and live in `scripts/hooks/`: `fix-edi
   A running session reads that file again when it changes: an entry the file drops stops firing.
   An entry with `"onFailure": "block"` blocks every call only when its own checkout lacks its file.
   A guard a change adds or moves reaches the Workers once the main checkout is pulled, since they run its hooks.
+  An API Worker is the one session whose entries and files come from two places: it reads no `.claude/settings.json`, its entries are the copy of the main checkout's that Dispatch put in the API Worker settings file, and each runs its file from the main checkout.
+  That copy changes when an API dispatch writes the file again, and each turn reads it at its start: after a pull that adds or moves a guard, a running API Worker keeps the entries of its last dispatch, and one of them with `"onFailure": "block"` whose file the pull moved blocks every call of its later turns until an API dispatch rewrites the file.
 
-- Each worktree gets its own `node_modules`: `install-deps.ts` installs it at SessionStart, SubagentStart and after EnterWorktree, the three events whose `cwd` is a new worktree, and does nothing in a Stop hook fork.
+- Each worktree gets its own `node_modules`: `install-deps.ts` installs it at SessionStart, SubagentStart and after EnterWorktree, the three events whose `cwd` is a new worktree, and does nothing in a Stop hook fork; an API Worker's fork loads no hook but the fork guard.
   The packages it places are copies, not hardlinks into bun's cache, so a write to them cannot reach the main checkout's `node_modules`, from which the hooks load.
   An install a session runs itself uses bun's default, which hardlinks on Linux.
 

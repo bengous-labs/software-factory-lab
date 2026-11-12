@@ -32,7 +32,7 @@ import {
 import type { Action, ClosedPullRequest, DoneAnswer, FixedRecord, Outcome, PullRequest, Rejection } from "./decide.ts";
 import { DONE_JUDGE } from "./done-judge.actor.ts";
 import { BODY_REQUEST } from "./done-judge.prompt.ts";
-import { forkArgvOf, forkResultOf, prTextOf } from "./fork.ts";
+import { apiForkOf, forkArgvOf, forkResultOf, forkSettingsOf, prTextOf } from "./fork.ts";
 import type { ForkAsk, ForkResult } from "./fork.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
@@ -40,22 +40,7 @@ export const FORK_FLAG = "LAB_STOP_FORK";
 /** The repository of the hook's own files, where the fork guard lives; the Author's cwd may be another checkout. */
 const REPO = resolve(import.meta.dir, "..", "..", "..");
 
-const FORK_SETTINGS = JSON.stringify({
-  hooks: {
-    PreToolUse: [
-      {
-        matcher: "*",
-        hooks: [
-          {
-            type: "command",
-            command: `bun "${join(REPO, "factory", "bin", "fork-guard.ts")}"`,
-            timeout: 30,
-          },
-        ],
-      },
-    ],
-  },
-});
+const FORK_GUARD = join(REPO, "factory", "bin", "fork-guard.ts");
 
 export const StopInput = Schema.Struct({
   session_id: Schema.String,
@@ -78,7 +63,10 @@ export interface Deps {
 export async function askFork(deps: Deps, input: StopInput, ask: ForkAsk): Promise<ForkResult> {
   const started = deps.now();
 
-  const ran = await deps.run(forkArgvOf(input.session_id, ask, FORK_SETTINGS), {
+  const api = apiForkOf(deps.env);
+  const settings = forkSettingsOf(FORK_GUARD, api);
+
+  const ran = await deps.run(forkArgvOf(input.session_id, ask, settings, api !== null), {
     cwd: input.cwd,
     env: { [FORK_FLAG]: "1" },
     timeoutMs: DONE_JUDGE.timeoutMs,
@@ -223,7 +211,11 @@ export interface AuthorStop {
   readonly head: string;
   /** The main checkout, where the relay runs. */
   readonly checkout: string;
+  /** The worktree the stop comes from. */
+  readonly worktree: string;
   readonly model: string | null;
+  /** The session is an API Worker's: the relay resumes it headless. */
+  readonly api: boolean;
 }
 
 /** The Author's credential, found. */
@@ -257,8 +249,9 @@ export async function closeNits(stopping: AuthorStop, gh: RunOptions, findings: 
 /** Leaves the PR's relay, when none watches it. A failure is logged: the PR is published either way. */
 function leaveRelay(stopping: AuthorStop, pr: number): void {
   try {
-    const { input, checkout } = stopping;
-    const started = stopping.deps.startRelay({ pr, session: input.session_id, checkout });
+    const { input, checkout, worktree, model, api } = stopping;
+    const headless = api ? { model, worktree } : null;
+    const started = stopping.deps.startRelay({ pr, session: input.session_id, headless, checkout });
     stopping.log({ step: "relay", pr, relay: started });
   } catch (error) {
     stopping.log({
