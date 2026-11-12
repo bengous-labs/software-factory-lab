@@ -44,7 +44,16 @@ async function bodyOf(branch: string, forkBody: string): Promise<string | undefi
 
 const REPO = resolve(import.meta.dir, "..", "..", "..");
 
-const FORK_SETTINGS = `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"bun \\"${REPO}/factory/bin/fork-guard.ts\\"","timeout":30}]}]}}`;
+const FORK_SETTINGS = JSON.stringify({
+  hooks: {
+    PreToolUse: [
+      {
+        matcher: "*",
+        hooks: [{ type: "command", command: `cd "${REPO}" && bun "${REPO}/factory/bin/fork-guard.ts"`, timeout: 30 }],
+      },
+    ],
+  },
+});
 
 /** The command line of a fork asked `prompt` on the session's model, with the JSON Schema of its answer, if any. */
 const forkArgv = (prompt: string, schema: string | null): readonly string[] => [

@@ -154,14 +154,18 @@ export function apiForkOf(env: Env): ApiFork | null {
   return isApiWorker(env) ? apiForkOfHome(requiredOf(env, "HOME")) : null;
 }
 
+/** The fork guard's door, by its path from the checkout that holds the hook's own files. */
+const FORK_GUARD = "factory/bin/fork-guard.ts";
+
 /**
- * The settings of a fork, as the JSON its command passes: every tool call under the fork guard, the
- * script at `guard`, and what an API Worker's fork adds. The helper names the key's file, never the key.
+ * The settings of a fork, as the JSON its command passes: every tool call under the fork guard of
+ * `checkout`, the checkout that holds the hook's own files, and what an API Worker's fork adds. The
+ * guard starts in that checkout: a fork runs in the Author's worktree, and `bun` reads the `bunfig.toml`
+ * of the directory it starts in. The helper names the key's file, never the key.
  */
-export function forkSettingsOf(guard: string, api: ApiFork | null): string {
-  const hooks = {
-    PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `bun "${guard}"`, timeout: 30 }] }],
-  };
+export function forkSettingsOf(checkout: string, api: ApiFork | null): string {
+  const command = `cd "${checkout}" && bun "${checkout}/${FORK_GUARD}"`;
+  const hooks = { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }] };
 
   return JSON.stringify({ ...api, hooks });
 }

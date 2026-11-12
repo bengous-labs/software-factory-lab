@@ -7,6 +7,7 @@ import {
   CHECKOUT_VARIABLE,
   dispatchArgsOf,
   firstTurnProblemOf,
+  INSTALL_ARGV,
   issueBranchesIn,
   launchArgvOf,
   projectSettingsOf,
@@ -215,6 +216,14 @@ const PROJECT = JSON.stringify({
 
 const PLACE = { home: "/home/me", checkout: "/repo" };
 
+/** The deny rules an API Worker's settings add: the two hidden directories, to read and to write. */
+const DENY = [
+  "Read(//home/me/.api-agent/**)",
+  "Edit(//home/me/.api-agent/**)",
+  "Read(//home/me/.config/software-factory-lab/**)",
+  "Edit(//home/me/.config/software-factory-lab/**)",
+];
+
 /** The API Worker settings text made from the Worker settings `json`, for the home `/home/me` and the checkout `/repo`. */
 const textOf = (json: string): string => apiWorkerSettingsTextOf(json, PROJECT, PLACE);
 
@@ -226,75 +235,113 @@ describe("apiWorkerSettingsTextOf", () => {
   };
 
   test("keeps the Worker settings whole, and adds the key helper, the marker, the main checkout's hooks, the sandbox and the rules", () => {
-    expect(textOf(JSON.stringify(worker))).toBe(
-      `${JSON.stringify(
-        {
-          env: {
-            LAB_AUTHOR: "1",
-            GH_TOKEN: "ghp_worker",
-            LAB_API_WORKER: "1",
-            LAB_MAIN_CHECKOUT: "/repo",
-            GIT_CONFIG_COUNT: "1",
-            GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf",
-            GIT_CONFIG_VALUE_0: "git@github.com:",
-          },
-          outputStyle: "Proactive",
-          claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"],
-          verbose: false,
-          apiKeyHelper: "cat '/home/me/.api-agent/key'",
-          hooks: {
-            Stop: [
+    const text = textOf(JSON.stringify(worker));
+
+    expect(text).toEndWith("}\n");
+    expect(JSON.parse(text)).toEqual({
+      env: {
+        LAB_AUTHOR: "1",
+        GH_TOKEN: "ghp_worker",
+        LAB_API_WORKER: "1",
+        LAB_MAIN_CHECKOUT: "/repo",
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf",
+        GIT_CONFIG_VALUE_0: "git@github.com:",
+      },
+      outputStyle: "Proactive",
+      claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"],
+      verbose: false,
+      apiKeyHelper: "cat '/home/me/.api-agent/key'",
+      hooks: {
+        Stop: [
+          {
+            hooks: [
               {
-                hooks: [
-                  { type: "command", command: 'bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts', timeout: 900 },
-                ],
-              },
-            ],
-            PreToolUse: [
-              {
-                matcher: "Bash",
-                hooks: [
-                  {
-                    type: "command",
-                    command: 'bun "$LAB_MAIN_CHECKOUT"/factory/hooks/refuse-author-publish.ts',
-                    timeout: 30,
-                    onFailure: "block",
-                  },
-                ],
+                type: "command",
+                command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts',
+                timeout: 900,
               },
             ],
           },
-          sandbox: {
-            enabled: true,
-            failIfUnavailable: true,
-            allowUnsandboxedCommands: false,
-            autoAllowBashIfSandboxed: true,
-            credentials: {
-              files: [
-                { path: "/home/me/.api-agent", mode: "deny" },
-                { path: "/home/me/.config/software-factory-lab", mode: "deny" },
-              ],
-            },
-            network: {
-              allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"],
-            },
+        ],
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [
+              {
+                type: "command",
+                command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/hooks/refuse-author-publish.ts',
+                timeout: 30,
+                onFailure: "block",
+              },
+            ],
           },
-          permissions: {
-            allow: ["Edit(./**)", "Bash"],
-            deny: ["Read(//home/me/.api-agent/**)", "Read(//home/me/.config/software-factory-lab/**)"],
-          },
+        ],
+      },
+      sandbox: {
+        enabled: true,
+        failIfUnavailable: true,
+        allowUnsandboxedCommands: false,
+        autoAllowBashIfSandboxed: true,
+        credentials: {
+          files: [
+            { path: "/home/me/.api-agent", mode: "deny" },
+            { path: "/home/me/.config/software-factory-lab", mode: "deny" },
+          ],
         },
-        null,
-        2,
-      )}\n`,
-    );
+        network: {
+          allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"],
+        },
+      },
+      permissions: { allow: ["Edit(./**)", "Bash"], deny: DENY },
+    });
   });
 
-  test("no hook names the session's own checkout, which is the worktree the Worker edits", () => {
+  test("no hook names the session's own checkout, which is the worktree the Worker edits, and each starts in the main checkout, where `bun` reads no file of the Worker's", () => {
     const settings = textOf(JSON.stringify(worker));
 
     expect(settings).not.toContain("CLAUDE_PROJECT_DIR");
     expect(CHECKOUT_VARIABLE).toBe("LAB_MAIN_CHECKOUT");
+
+    const commands = [...settings.matchAll(/"command": "(?<command>[^\n]*)",?\n/gu)].map(
+      (match) => match.groups?.["command"] ?? "",
+    );
+
+    expect(commands).toHaveLength(2);
+    expect(commands.every((command) => command.startsWith(String.raw`cd \"$LAB_MAIN_CHECKOUT\" && bun `))).toBe(true);
+  });
+
+  test.each([
+    ['bun "${CLAUDE_PROJECT_DIR}"/factory/hooks/role.ts', "another spelling of the variable"],
+    ["bun factory/hooks/role.ts", "a path from the session's own directory"],
+    ['bun "$CLAUDE_PROJECT_DIR"/factory/hooks/role.ts --flag', "an argument"],
+    ['bun "$CLAUDE_PROJECT_DIR"/../outside.ts', "a path that leaves the checkout"],
+    ['bun "$CLAUDE_PROJECT_DIR"/factory/hooks/role.ts; true', "a second command"],
+    ['node "$CLAUDE_PROJECT_DIR"/factory/hooks/role.ts', "another runner"],
+    [
+      'cd "$CLAUDE_PROJECT_DIR" && bun "$CLAUDE_PROJECT_DIR"/factory/hooks/role.ts',
+      "a start in the session's checkout",
+    ],
+  ])(
+    "a hook command the rewrite cannot read (%s: %s) throws, naming it: none runs as it stands, where it could run a file of the worktree",
+    (command) => {
+      const project = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command }] }] } });
+
+      expect(() => apiWorkerSettingsTextOf(JSON.stringify(worker), project, PLACE)).toThrow(
+        `the main checkout's .claude/settings.json: the hook command \`${command}\` is not \`bun "$CLAUDE_PROJECT_DIR"/<file>\``,
+      );
+    },
+  );
+
+  test.each([
+    [{ hooks: [{ type: "prompt", prompt: "is it done?" }] }, '["hooks"][0]["command"]', "a hook that is no command"],
+    [{ matcher: "Bash" }, '["hooks"]', "a group with no hooks"],
+  ])("%j throws, naming the key it lacks (%s: %s): an API Worker's settings carry commands alone", (group, missing) => {
+    const project = JSON.stringify({ hooks: { Stop: [group] } });
+
+    expect(() => apiWorkerSettingsTextOf(JSON.stringify(worker), project, PLACE)).toThrow(
+      `the main checkout's .claude/settings.json: Missing key\n  at ["hooks"]["Stop"][0]${missing}`,
+    );
   });
 
   test("it takes the main checkout's hooks alone: no plugin, no other key of its settings", () => {
@@ -321,18 +368,14 @@ describe("apiWorkerSettingsTextOf", () => {
     expect(JSON.parse(textOf(JSON.stringify(held)))).toMatchObject({
       permissions: {
         allow: ["Bash(jq *)", "Edit(./**)", "Bash"],
-        deny: [
-          "Read(./secrets/**)",
-          "Read(//home/me/.api-agent/**)",
-          "Read(//home/me/.config/software-factory-lab/**)",
-        ],
+        deny: ["Read(./secrets/**)", ...DENY],
         ask: ["Bash(rm *)"],
       },
     });
     expect(JSON.parse(textOf(JSON.stringify({ ...worker, permissions: { deny: ["Read(./x)"] } })))).toMatchObject({
       permissions: {
         allow: ["Edit(./**)", "Bash"],
-        deny: ["Read(./x)", "Read(//home/me/.api-agent/**)", "Read(//home/me/.config/software-factory-lab/**)"],
+        deny: ["Read(./x)", ...DENY],
       },
     });
   });
@@ -401,6 +444,10 @@ describe("apiKeyProblemOf", () => {
 describe("the launch of an API Worker", () => {
   test("its session carries the issue's name, as a background Worker's does", () => {
     expect(sessionNameOf(168)).toBe("w-issue-168");
+  });
+
+  test("its worktree gets its dependencies as copies, with no lifecycle script, from the lockfile as it stands", () => {
+    expect(INSTALL_ARGV).toEqual(["bun", "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"]);
   });
 
   test("a first turn that still runs after the look, or that ended well, has no problem; one that ended with an error names its log", () => {

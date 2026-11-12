@@ -18,7 +18,7 @@ const TURN = {
   model: "opus",
   effort: null,
   settings: "/h/api-worker-settings.json",
-  worktree: "/repo/.claude/worktrees/issue-7",
+  checkout: "/repo",
   prompt: "the prompt",
 };
 
@@ -29,7 +29,7 @@ const TAIL = [
   "--setting-sources",
   "",
   "--append-system-prompt-file",
-  "/repo/.claude/worktrees/issue-7/AGENTS.md",
+  "/repo/AGENTS.md",
   "--permission-mode",
   "dontAsk",
   "--output-format",
@@ -48,10 +48,12 @@ describe("the key of an API Worker", () => {
     expect(apiKeyHelperOf("/home/o'neil")).toBe(String.raw`cat '/home/o'\''neil/.api-agent/key'`);
   });
 
-  test("Claude Code's own file tools are denied the directory that holds it, and the factory's own secrets, by their absolute paths", () => {
+  test("Claude Code's own file tools are denied the directory that holds it, and the factory's own secrets, to read and to write, by their absolute paths", () => {
     expect(apiWorkerDenyRulesOf("/home/me")).toEqual([
       "Read(//home/me/.api-agent/**)",
+      "Edit(//home/me/.api-agent/**)",
       "Read(//home/me/.config/software-factory-lab/**)",
+      "Edit(//home/me/.config/software-factory-lab/**)",
     ]);
   });
 });
@@ -106,7 +108,7 @@ describe("the turns of an API Worker", () => {
     expect(ONE_RESULT).toEqual({ verbose: false });
   });
 
-  test("the first turn is headless, names its session, loads its settings file alone and reads the worktree's root guide", () => {
+  test("the first turn is headless, names its session, loads its settings file alone and is given the main checkout's root guide", () => {
     expect(firstTurnArgvOf(TURN, "w-issue-7")).toEqual([
       "claude",
       "-p",
@@ -132,6 +134,15 @@ describe("the turns of an API Worker", () => {
 
     expect(argv.slice(6, 12)).toEqual(["--model", "opus", "--effort", "high", "--settings", TURN.settings]);
     expect(firstTurnArgvOf(TURN, "w-issue-7")).not.toContain("--effort");
+  });
+
+  test("the guide a turn is given is never a file of the worktree, which the Worker can make a link to a secret", () => {
+    const worktree = "/repo/.claude/worktrees/issue-7";
+
+    for (const argv of [firstTurnArgvOf(TURN, "w-issue-7"), resumedTurnArgvOf(TURN)]) {
+      expect(argv[argv.indexOf("--append-system-prompt-file") + 1]).toBe("/repo/AGENTS.md");
+      expect(argv.some((word) => word.startsWith(worktree))).toBe(false);
+    }
   });
 
   test("a turn whose model is not known names none", () => {

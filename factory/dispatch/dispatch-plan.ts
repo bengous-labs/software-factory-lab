@@ -7,7 +7,7 @@
 
 import { Result, Schema } from "effect";
 
-import { branchMadeFor } from "../contract.ts";
+import { branchMadeFor, WORKTREES_DIR } from "../contract.ts";
 import { CONFIG_DIR, TRUNK } from "../install/host.ts";
 import { apiKeyHelperOf, apiWorkerDenyRulesOf, apiWorkerSandboxOf, ONE_RESULT } from "../land/shared/api-worker.ts";
 import { API_WORKER_VARIABLE } from "../lib/author-session.ts";
@@ -93,7 +93,7 @@ export function branchOf(issue: number, title: string): string {
 }
 
 export function worktreeOf(checkout: string, issue: number): string {
-  return `${checkout}/.claude/worktrees/issue-${issue}`;
+  return `${checkout}/${WORKTREES_DIR}/issue-${issue}`;
 }
 
 /** The Worker settings file `factory/install/AGENTS.md` describes, which the Owner provisions. */
@@ -153,20 +153,55 @@ export const CHECKOUT_VARIABLE = "LAB_MAIN_CHECKOUT";
 /** The variable Claude Code gives a hook for the session's own checkout, which is the worktree for an API Worker. */
 const PROJECT_VARIABLE = "CLAUDE_PROJECT_DIR";
 
-const ProjectSettings = Schema.Struct({ hooks: Schema.Json });
+const Rest = Schema.Record(Schema.String, Schema.Json);
+
+/** A hook as `.claude/settings.json` wires it, as far as an API Worker's settings rewrite it: its command. */
+const Hook = Schema.StructWithRest(Schema.Struct({ command: Schema.String }), [Rest]);
+
+const HookGroup = Schema.StructWithRest(Schema.Struct({ hooks: Schema.Array(Hook) }), [Rest]);
+
+const ProjectSettings = Schema.Struct({ hooks: Schema.Record(Schema.String, Schema.Array(HookGroup)) });
+
+const PROJECT_SETTINGS = "the main checkout's .claude/settings.json";
+
+/** The one form of a hook's command an API Worker's settings take: `bun`, then a file of the session's own checkout. */
+const HOOK_COMMAND = new RegExp(String.raw`^bun "\$${PROJECT_VARIABLE}"/([\w./-]+)$`, "u");
 
 /**
- * The hooks of the main checkout's `.claude/settings.json`, from its text, each command naming the main
- * checkout through `CHECKOUT_VARIABLE` where it named the session's own: the guards, the Stop hook and
- * the relay it leaves then run from files the Worker cannot edit, as a background Worker's do.
+ * The command of a hook for an API Worker, from the one `.claude/settings.json` writes: it starts in the
+ * main checkout and runs the main checkout's file. The start matters as much as the file: `bun` reads
+ * the `bunfig.toml` and the `.env` of the directory it starts in, and a session's hooks start in its own
+ * checkout, which is the worktree the Worker edits. A command of any other form throws: rewritten by
+ * guess, it could still run a file of the worktree.
  */
-function mainCheckoutHooksOf(projectSettings: string): Schema.Json {
-  const { hooks } = decodeJson(ProjectSettings, "the main checkout's .claude/settings.json", projectSettings);
+function mainCheckoutCommandOf(command: string): string {
+  const file = HOOK_COMMAND.exec(command)?.[1];
 
-  return decodeJson(
-    Schema.Json,
-    "the main checkout's hooks",
-    JSON.stringify(hooks).replaceAll(`$${PROJECT_VARIABLE}`, `$${CHECKOUT_VARIABLE}`),
+  if (file === undefined || file.split("/").includes("..")) {
+    throw new Error(
+      `${PROJECT_SETTINGS}: the hook command \`${command}\` is not \`bun "$${PROJECT_VARIABLE}"/<file>\`, the one form an API Worker's settings can run from the main checkout`,
+    );
+  }
+
+  return `cd "$${CHECKOUT_VARIABLE}" && bun "$${CHECKOUT_VARIABLE}"/${file}`;
+}
+
+/**
+ * The hooks of the main checkout's `.claude/settings.json`, from its text, each command rewritten by
+ * `mainCheckoutCommandOf`: the guards, the Stop hook and the relay it leaves then run from files the
+ * Worker cannot edit, in a directory it cannot write, as a background Worker's do.
+ */
+function mainCheckoutHooksOf(projectSettings: string) {
+  const { hooks } = decodeJson(ProjectSettings, PROJECT_SETTINGS, projectSettings);
+
+  return Object.fromEntries(
+    Object.entries(hooks).map(([event, groups]) => [
+      event,
+      groups.map((group) => ({
+        ...group,
+        hooks: group.hooks.map((hook) => ({ ...hook, command: mainCheckoutCommandOf(hook.command) })),
+      })),
+    ]),
   );
 }
 
@@ -282,6 +317,15 @@ export function firstTurnProblemOf(code: number | null, log: string): string | n
     ? null
     : `the API Worker's first turn ended at once with exit ${code}: ${log} holds what it printed`;
 }
+
+/**
+ * The install that gives an API Worker's worktree its dependencies, run by Dispatch before the Worker
+ * exists, while the worktree holds the Trunk's files alone. No hook installs for an API Worker: a hook
+ * runs outside the sandbox, and an install in a directory the Worker has written follows what it left
+ * there. The command of `scripts/hooks/install-deps.ts`: copies, never hardlinks into bun's cache, and
+ * no lifecycle script.
+ */
+export const INSTALL_ARGV = ["bun", "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"];
 
 /** The name of the Worker's session, which Claude Code shows where it lists sessions. */
 export function sessionNameOf(issue: number): string {

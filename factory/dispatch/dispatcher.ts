@@ -20,6 +20,7 @@ import {
   apiWorkerSettingsTextOf,
   branchOf,
   firstTurnProblemOf,
+  INSTALL_ARGV,
   issueBranchesIn,
   launchArgvOf,
   projectSettingsOf,
@@ -209,22 +210,24 @@ async function launchBackground(
 const FIRST_LOOK_MS = 10_000;
 
 /**
- * Launches the API Worker: writes its settings file, whose text is `settingsText`, then leaves its first
- * turn running headless in its worktree, its output appended to the session's log in the main checkout.
- * A turn that ends with an error while Dispatch looks, its key refused or its command wrong, throws.
+ * Launches the API Worker: installs the dependencies of its worktree, which holds the Trunk's files
+ * alone, writes its settings file, whose text is `settingsText`, then leaves its first turn running
+ * headless in that worktree, its output appended to the session's log in the main checkout. A turn that
+ * ends with an error while Dispatch looks, its key refused or its command wrong, throws.
  */
 async function launchHeadless(
-  { leave, newSession, sleep, writeSecret }: DispatchPorts,
+  { run, leave, newSession, sleep, writeSecret }: DispatchPorts,
   assignment: Assignment,
   { model, effort, settings, checkout, env }: Launching,
   settingsText: string,
 ): Promise<Launched> {
   const { issue, worktree } = assignment;
+  await checked(run, INSTALL_ARGV, { cwd: worktree });
   await writeSecret(settings, settingsText);
 
   const session = newSession();
   const log = apiWorkerLogOf(checkout, session);
-  const turn = { session, model, effort: effort ?? null, settings, worktree, prompt: promptOf(assignment, true) };
+  const turn = { session, model, effort: effort ?? null, settings, checkout, prompt: promptOf(assignment, true) };
 
   const left = leave(firstTurnArgvOf(turn, sessionNameOf(issue)), { cwd: worktree, env: sessionEnvOf(env), log });
   const problem = firstTurnProblemOf(await Promise.race([left.exited, sleep(FIRST_LOOK_MS).then(() => null)]), log);

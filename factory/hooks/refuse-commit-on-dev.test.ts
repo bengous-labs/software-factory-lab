@@ -88,10 +88,11 @@ describe("refusalFor", () => {
   });
 });
 
-const runHook = (command: string, cwd: string) =>
+const runHook = (command: string, cwd: string, session: Readonly<Record<string, string>> = {}) =>
   $`bun ${SCRIPT} < ${Buffer.from(
     JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd }),
   )}`
+    .env({ ...process.env, ...session })
     .nothrow()
     .quiet();
 
@@ -118,6 +119,19 @@ describe("the hook", () => {
         permissionDecisionReason: refusalFor("dev"),
       },
     });
+  });
+
+  test("in an API Worker's session it runs no git and says nothing: the directory of the commit is the Worker's, and the hook is outside its sandbox", async () => {
+    const ran = await runHook('git commit -m "work"', repo, { LAB_API_WORKER: "1" });
+
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout.toString()).toBe("");
+  });
+
+  test("a session whose marker is not 1 is no API Worker's: the commit on dev is denied", async () => {
+    const ran = await runHook('git commit -m "work"', repo, { LAB_API_WORKER: "0" });
+
+    expect(ran.stdout.toString()).toContain('"permissionDecision":"deny"');
   });
 
   test("denies a commit that -C or cd sends to a checkout on dev", async () => {

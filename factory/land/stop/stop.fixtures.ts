@@ -3,7 +3,7 @@
  * it reads and the calls, log records and outcomes it leaves, and a git repository with a worktree.
  */
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -161,6 +161,13 @@ export function world(fake: Partial<Fake> = {}): World {
   const root = mainCheckout ? checkout : join(checkout, ".claude", "worktrees", "x");
   const calls: Call[] = [];
   const relays: RelayStart[] = [];
+
+  // What `git worktree add` leaves in the repository for the worktree: the hook tells an API Worker's by it.
+  if (!mainCheckout) {
+    mkdirSync(join(checkout, ".git", "worktrees", "x"), { recursive: true });
+    writeFileSync(join(checkout, ".git", "worktrees", "x", "gitdir"), `${root}/.git\n`);
+  }
+
   const outcomes: Array<{ checkout: string; line: OutcomeLine }> = [];
   const records: StopLogRecord[] = [];
   let asked = 0;
@@ -170,7 +177,7 @@ export function world(fake: Partial<Fake> = {}): World {
     ["git rev-parse --absolute-git-dir", mainCheckout ? `${checkout}/.git\n` : `${checkout}/.git/worktrees/x\n`],
     ["git rev-parse --path-format=absolute --git-common-dir", `${checkout}/.git\n`],
     ["git rev-parse HEAD", `${head}\n`],
-    ["git status --porcelain", dirty ? " M app/src/cli.ts\n" : ""],
+    ["git status --porcelain --ignore-submodules=all", dirty ? " M app/src/cli.ts\n" : ""],
     [conversationArgsOf(12).join(" "), conversation],
   ]);
 
@@ -235,6 +242,7 @@ export function world(fake: Partial<Fake> = {}): World {
     run,
     env,
     now: () => 0,
+    checkout,
     startRelay: (relay) => {
       relays.push(relay);
 

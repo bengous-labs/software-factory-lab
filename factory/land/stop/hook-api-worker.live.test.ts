@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
-import { API_WORKER_ENV, HEAD, stopIn, UNFINISHED, world, writes } from "./stop.fixtures.ts";
+import { stop } from "./hook.live.ts";
+import { API_WORKER_ENV, HEAD, input, stopIn, UNFINISHED, world, writes } from "./stop.fixtures.ts";
 
 const REPO = resolve(import.meta.dir, "..", "..", "..");
 
@@ -25,7 +27,7 @@ const API_FORK_SETTINGS = JSON.stringify({
     PreToolUse: [
       {
         matcher: "*",
-        hooks: [{ type: "command", command: `bun "${REPO}/factory/bin/fork-guard.ts"`, timeout: 30 }],
+        hooks: [{ type: "command", command: `cd "${REPO}" && bun "${REPO}/factory/bin/fork-guard.ts"`, timeout: 30 }],
       },
     ],
   },
@@ -92,5 +94,147 @@ describe("the stop of an API Worker", () => {
     const moved = world({ env: API_WORKER_ENV, checkout: found.checkout, head: "e".repeat(40) });
 
     expect(await stopIn(moved)).toMatchObject({ kind: "block" });
+  });
+
+  test("the hook asks the worktree nothing: git runs in the main checkout, handed the worktree through its environment, and gh runs there too", async () => {
+    const found = world({ env: API_WORKER_ENV });
+
+    await stopIn(found);
+    await stopIn(found, true);
+
+    const pinned = {
+      GIT_DIR: join(found.checkout, ".git", "worktrees", "x"),
+      GIT_COMMON_DIR: join(found.checkout, ".git"),
+      GIT_WORK_TREE: found.root,
+    };
+
+    const gits = found.calls.filter((call) => call.argv[0] === "git");
+    const ghs = found.calls.filter((call) => call.argv[0] === "gh");
+
+    expect(gits.length).toBeGreaterThan(5);
+    expect(ghs.length).toBeGreaterThan(2);
+
+    for (const call of gits) {
+      expect({ argv: call.argv.slice(0, 2), cwd: call.options.cwd, env: call.options.env }).toMatchObject({
+        cwd: found.checkout,
+        env: pinned,
+      });
+    }
+
+    for (const call of ghs) {
+      expect(call.options.cwd).toBe(found.checkout);
+    }
+
+    expect(gits.some((call) => call.argv.includes("--show-toplevel") || call.argv.includes("--git-common-dir"))).toBe(
+      false,
+    );
+  });
+
+  test("its push keeps the pinned environment beside the Author's token, and its status and its fetch enter no submodule", async () => {
+    const found = world({ env: API_WORKER_ENV });
+
+    await stopIn(found);
+    await stopIn(found, true);
+
+    const push = found.calls.find((call) => call.argv.includes("push"));
+
+    expect(push?.options.cwd).toBe(found.checkout);
+    expect(push?.options.env).toEqual({
+      GIT_DIR: join(found.checkout, ".git", "worktrees", "x"),
+      GIT_COMMON_DIR: join(found.checkout, ".git"),
+      GIT_WORK_TREE: found.root,
+      LAB_AUTHOR_TOKEN: "t0k",
+    });
+    expect(found.calls.map((call) => call.argv.join(" "))).toContain("git status --porcelain --ignore-submodules=all");
+    expect(found.calls.map((call) => call.argv.join(" "))).toContain(
+      "git fetch --quiet --no-recurse-submodules origin dev",
+    );
+  });
+
+  test("it writes nothing in the worktree, where a file can be a link to any file of the Owner's: its state lies in the main checkout", async () => {
+    const found = world({ env: API_WORKER_ENV });
+
+    await stopIn(found);
+    await stopIn(found, true);
+
+    expect(existsSync(join(found.root, ".lab"))).toBe(false);
+    expect(existsSync(join(found.checkout, ".lab", "state", `gates-${HEAD}`))).toBe(true);
+  });
+
+  test("its forks still run in the worktree, as sessions the sandbox holds", async () => {
+    const found = world({ env: API_WORKER_ENV });
+
+    await stopIn(found);
+    await stopIn(found, true);
+
+    const forks = found.calls.filter((call) => call.argv[0] === "claude");
+
+    expect(forks.map((call) => call.options.cwd)).toEqual([found.root, found.root]);
+  });
+
+  test("a stop in a subdirectory of the worktree is the worktree's", async () => {
+    const found = world({ env: API_WORKER_ENV });
+
+    expect(await stop(input(join(found.root, "factory", "land")), found.deps, found.log)).toMatchObject({
+      kind: "block",
+    });
+    expect(found.outcomes[0]?.line).toMatchObject({ worktree: found.root, branch: "agent/x" });
+  });
+
+  test.each([
+    [
+      "the repository knows no such worktree",
+      (checkout: string) => {
+        rmSync(join(checkout, ".git", "worktrees"), { recursive: true });
+      },
+    ],
+    [
+      "two of the repository's worktrees claim it",
+      (checkout: string, root: string) => {
+        mkdirSync(join(checkout, ".git", "worktrees", "y"), { recursive: true });
+        writeFileSync(join(checkout, ".git", "worktrees", "y", "gitdir"), `${root}/.git\n`);
+      },
+    ],
+    [
+      "its own entry names another directory",
+      (checkout: string) => {
+        writeFileSync(join(checkout, ".git", "worktrees", "x", "gitdir"), `${checkout}/.git\n`);
+      },
+    ],
+  ])(
+    "a stop whose worktree the hook cannot tell (%s) runs no git, publishes nothing and says why",
+    async (_, tamper) => {
+      const found = world({ env: API_WORKER_ENV });
+
+      tamper(found.checkout, found.root);
+
+      expect(await stopIn(found)).toEqual({ kind: "allow" });
+      expect(found.calls).toEqual([]);
+      expect(found.outcomes[0]?.line).toMatchObject({
+        api: true,
+        outcome: "not-published",
+        reason: `the stop of an API Worker comes from ${found.root}, no worktree of ${found.checkout} the hook can tell`,
+      });
+    },
+  );
+
+  test("a stop outside the worktrees Dispatch lays out, the main checkout among them, is told the same way", async () => {
+    const found = world({ env: API_WORKER_ENV, mainCheckout: true });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(found.calls).toEqual([]);
+    expect(found.outcomes[0]?.line.outcome).toBe("not-published");
+  });
+
+  test("another Author's stop runs git and gh in its own directory, with no pinned environment", async () => {
+    const found = world();
+
+    await stopIn(found);
+
+    const gits = found.calls.filter((call) => call.argv[0] === "git" && !call.argv.includes("push"));
+
+    expect(gits.length).toBeGreaterThan(5);
+    expect(gits.every((call) => call.options.cwd === found.root && call.options.env === undefined)).toBe(true);
+    expect(existsSync(join(found.root, ".lab", "state"))).toBe(true);
   });
 });

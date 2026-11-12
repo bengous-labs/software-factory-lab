@@ -15,6 +15,7 @@ import { resolve } from "node:path";
 import { $ } from "bun";
 
 import { TRUNK } from "../install/host.ts";
+import { isApiWorker } from "../lib/author-session.ts";
 import { bashCallOf, partsOf } from "../lib/bash.ts";
 import type { Part } from "../lib/bash.ts";
 import type { Env } from "../lib/env.ts";
@@ -167,7 +168,9 @@ async function branchIn(dir: string): Promise<string | null> {
   return ran.exitCode === 0 ? ran.stdout.toString().trim() : null;
 }
 
-if (import.meta.main) {
+// Not for an API Worker: the hook is outside its sandbox, and the directories of the command are the
+// Worker's, where git would read the config the Worker wrote.
+if (import.meta.main && !isApiWorker(process.env)) {
   const { command, cwd } = bashCallOf(await Bun.stdin.text());
 
   for (const dir of commitDirsOf(command, cwd, process.env)) {

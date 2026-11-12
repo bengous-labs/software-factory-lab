@@ -61,10 +61,10 @@ export function apiWorkerSandboxOf(home: string) {
 
 /**
  * The deny rules that keep Claude Code's own file tools, which run outside the sandbox, from the hidden
- * directories, through a symbolic link too.
+ * directories, to read or to write, through a symbolic link too.
  */
 export function apiWorkerDenyRulesOf(home: string): string[] {
-  return hiddenDirsOf(home).map((dir) => `Read(/${dir}/**)`);
+  return hiddenDirsOf(home).flatMap((dir) => [`Read(/${dir}/**)`, `Edit(/${dir}/**)`]);
 }
 
 /**
@@ -98,8 +98,12 @@ export interface HeadlessTurn {
   readonly effort: Effort | null;
   /** The API Worker settings file, passed by its path at every turn: a headless session saves no launch option. */
   readonly settings: string;
-  /** The worktree the session runs in, whose root guide every turn reads. */
-  readonly worktree: string;
+  /**
+   * The main checkout, whose root guide every turn is given. Never the worktree's own: Claude Code reads
+   * that file outside the sandbox, and a path of the worktree is what the Worker makes of it, a
+   * symbolic link to a secret included.
+   */
+  readonly checkout: string;
   readonly prompt: string;
 }
 
@@ -110,14 +114,14 @@ export interface HeadlessTurn {
  */
 export const NO_SETTING_SOURCES = ["--setting-sources", ""];
 
-/** The guide at the root of a checkout, which a session that loads no project settings is given by its path. */
+/** The guide at the root of the main checkout, which a session that loads no project settings is given by its path. */
 const ROOT_GUIDE = "AGENTS.md";
 
 /** The permission mode of every turn: a call no allow rule of the settings file covers is denied, since nobody answers a prompt. */
 const PERMISSION_MODE = "dontAsk";
 
 function turnArgvOf(start: readonly string[], turn: HeadlessTurn): string[] {
-  const { model, effort, settings, worktree, prompt } = turn;
+  const { model, effort, settings, checkout, prompt } = turn;
 
   return [
     "claude",
@@ -129,7 +133,7 @@ function turnArgvOf(start: readonly string[], turn: HeadlessTurn): string[] {
     settings,
     ...NO_SETTING_SOURCES,
     "--append-system-prompt-file",
-    `${worktree}/${ROOT_GUIDE}`,
+    `${checkout}/${ROOT_GUIDE}`,
     "--permission-mode",
     PERMISSION_MODE,
     "--output-format",

@@ -231,18 +231,19 @@ describe("apiForkOf", () => {
 describe("forkSettingsOf", () => {
   const guard = {
     PreToolUse: [
-      { matcher: "*", hooks: [{ type: "command", command: 'bun "/repo/factory/bin/fork-guard.ts"', timeout: 30 }] },
+      {
+        matcher: "*",
+        hooks: [{ type: "command", command: 'cd "/repo" && bun "/repo/factory/bin/fork-guard.ts"', timeout: 30 }],
+      },
     ],
   };
 
-  test("a fork's settings put every tool call under the fork guard, and add nothing else", () => {
-    expect(forkSettingsOf("/repo/factory/bin/fork-guard.ts", null)).toBe(JSON.stringify({ hooks: guard }));
+  test("a fork's settings put every tool call under the fork guard, started in the checkout that holds it and never in the fork's own directory, and add nothing else", () => {
+    expect(forkSettingsOf("/repo", null)).toBe(JSON.stringify({ hooks: guard }));
   });
 
   test("the settings of an API Worker's fork add the key helper, which names the key's file and never the key, and the sandbox", () => {
-    expect(forkSettingsOf("/repo/factory/bin/fork-guard.ts", API_FORK)).toBe(
-      JSON.stringify({ ...API_FORK, hooks: guard }),
-    );
+    expect(forkSettingsOf("/repo", API_FORK)).toBe(JSON.stringify({ ...API_FORK, hooks: guard }));
   });
 });
 

@@ -724,7 +724,7 @@ describe("sendingOf", () => {
         "--setting-sources",
         "",
         "--append-system-prompt-file",
-        `${worktree}/AGENTS.md`,
+        "/repo/AGENTS.md",
         "--permission-mode",
         "dontAsk",
         "--output-format",

@@ -67,6 +67,7 @@ function world(answers: Partial<Record<string, Ran>> = {}, machine: Partial<Mach
     ["git worktree remove", { code: 0, stdout: "", stderr: "" }],
     ["git branch -D", { code: 0, stdout: "", stderr: "" }],
     ["claude --bg", { code: 0, stdout: "claude stop s-123      stop this session\n", stderr: "" }],
+    ["bun install", { code: 0, stdout: "", stderr: "" }],
   ];
 
   const answer = (argv: readonly string[], options: RunOptions): Promise<Ran> => {
@@ -355,7 +356,7 @@ describe("the dispatch of an API Worker", () => {
     "--setting-sources",
     "",
     "--append-system-prompt-file",
-    `${WORKTREE}/AGENTS.md`,
+    `${CHECKOUT}/AGENTS.md`,
     "--permission-mode",
     "dontAsk",
     "--output-format",
@@ -382,6 +383,7 @@ describe("the dispatch of an API Worker", () => {
       "git worktree list",
       "git for-each-ref --format=%(refname:short)",
       "git worktree add",
+      "bun install --frozen-lockfile",
       "write",
       "leave",
     ]);
@@ -410,7 +412,11 @@ describe("the dispatch of an API Worker", () => {
     expect(JSON.parse(written[0]?.text ?? "")).toMatchObject({
       env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: CHECKOUT },
       apiKeyHelper: `cat '${KEY}'`,
-      hooks: { Stop: [{ hooks: [{ command: 'bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts' }] }] },
+      hooks: {
+        Stop: [
+          { hooks: [{ command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts' }] },
+        ],
+      },
       sandbox: {
         enabled: true,
         credentials: {
@@ -420,7 +426,14 @@ describe("the dispatch of an API Worker", () => {
           ],
         },
       },
-      permissions: { deny: ["Read(//home/me/.api-agent/**)", "Read(//home/me/.config/software-factory-lab/**)"] },
+      permissions: {
+        deny: [
+          "Read(//home/me/.api-agent/**)",
+          "Edit(//home/me/.api-agent/**)",
+          "Read(//home/me/.config/software-factory-lab/**)",
+          "Edit(//home/me/.config/software-factory-lab/**)",
+        ],
+      },
     });
   });
 
@@ -482,6 +495,41 @@ describe("the dispatch of an API Worker", () => {
       expect({ written, left }).toEqual({ written: [], left: [] });
     },
   );
+
+  test("installs the worktree's dependencies itself, in the worktree, before the Worker exists: no hook installs for an API Worker", async () => {
+    const { ports, calls, order } = world();
+
+    await dispatch(ports, API_REQUEST);
+
+    const install = calls.find((call) => call.argv[1] === "install");
+
+    expect(install?.argv).toEqual(["bun", "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"]);
+    expect(install?.options).toEqual({ cwd: WORKTREE });
+    expect(order.indexOf("bun install --frozen-lockfile")).toBeLessThan(order.indexOf("leave"));
+  });
+
+  test("removes the worktree and the branch when the install fails, writes no settings and leaves no turn", async () => {
+    const { ports, calls, left, written } = world({
+      "bun install": { code: 1, stdout: "", stderr: "lockfile had changes" },
+    });
+
+    expect(await failureOf(dispatch(ports, API_REQUEST))).toBe(
+      "bun install --frozen-lockfile exited 1: lockfile had changes",
+    );
+    expect({ left, written }).toEqual({ left: [], written: [] });
+    expect(calls.slice(-2).map((call) => call.argv)).toEqual([
+      ["git", "worktree", "remove", WORKTREE],
+      ["git", "branch", "-D", "issue/7-add-a-flag"],
+    ]);
+  });
+
+  test("a background Worker's worktree is installed by its session's hook, not by Dispatch", async () => {
+    const { ports, calls } = world();
+
+    await dispatch(ports, REQUEST);
+
+    expect(calls.some((call) => call.argv[0] === "bun")).toBe(false);
+  });
 
   test("removes the worktree and the branch when the settings file cannot be written, and leaves no turn", async () => {
     const { ports, calls, left } = world({}, { writable: false });

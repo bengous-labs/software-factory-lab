@@ -96,6 +96,18 @@ describe("the hook", () => {
     expect(existsSync(join(fork, "node_modules"))).toBe(false);
   });
 
+  test("does nothing in an API Worker's session: an install by a hook, outside its sandbox, would follow what the Worker left in the worktree", async () => {
+    const api = join(main, ".claude", "worktrees", "api");
+
+    await $`git worktree add -q -b api ${api}`.cwd(main).env(env).quiet();
+
+    expect((await runHook(api, { LAB_API_WORKER: "1" })).exitCode).toBe(0);
+    expect(existsSync(join(api, "node_modules"))).toBe(false);
+
+    expect((await runHook(api, { LAB_API_WORKER: "0" })).exitCode).toBe(0);
+    expect(existsSync(join(api, "node_modules"))).toBe(true);
+  });
+
   test("does nothing in a project checkout with no bun.lock", async () => {
     const lockless = join(main, ".claude", "worktrees", "lockless");
 

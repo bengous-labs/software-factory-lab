@@ -456,7 +456,7 @@ export function sendingOf(
       model: headless.model,
       effort: null,
       settings: apiWorkerSettingsOf(home),
-      worktree: headless.worktree,
+      checkout,
       prompt: text,
     }),
   };
