@@ -133,6 +133,9 @@ describe("escapeHtml", () => {
     ],
     ["math cannot take it", "$a`$ <b> `", "\\$a`$ <b> `"],
     ["a URL keeps its brackets", "see https://example.com/api?ids[]=1", "see https://example.com/api?ids[]=1"],
+    ["so does a URL whose scheme is one letter", "a://[x]", "a://[x]"],
+    ["a word set apart from its :// is no scheme", "a ://[x]", String.raw`a ://\[x\]`],
+    ["fewer than three w open no autolink", "w.[x]", String.raw`w.\[x\]`],
     [
       "an autolink runs through what was a <, so its < and backticks are escaped",
       "https://<``<b>``",

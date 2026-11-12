@@ -102,7 +102,7 @@ describe("edgeRefusal", () => {
   test("lets the domain import the domain, a port's value and the allowed effect modules", () => {
     expect(edgeRefusal(DECIDE, DOMAIN, value("./done-judge.prompt.ts", "x"))).toBeNull();
     expect(edgeRefusal(DECIDE, DOMAIN, value("../../lib/run.port.ts", "checked"))).toBeNull();
-    expect(edgeRefusal(DECIDE, DOMAIN, value("effect", "Schema", "Struct", "Exit", "SchemaGetter"))).toBeNull();
+    expect(edgeRefusal(DECIDE, DOMAIN, value("effect", "Schema", "Struct", "Exit", "Predicate"))).toBeNull();
   });
 
   test("refuses another effect module as a value in the domain, and allows it as a type", () => {

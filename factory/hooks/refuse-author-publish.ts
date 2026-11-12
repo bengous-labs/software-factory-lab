@@ -5,10 +5,8 @@
  * a bench session's (`isWorker`), it denies a command that runs `git push`, `gh pr create` or
  * `gh pr ready`: the Stop hook alone pushes, opens and readies an Author's PR. In any other session it
  * reads nothing and allows everything. In a Worker's session, an input it cannot read is denied. A
- * guard that cannot start, or times out, lets the call run, as any settings hook does: its entry sets no
- * `"onFailure": "block"`, because a session in a worktree reads that worktree's `.claude/settings.json`
- * and runs the hook's file from the main checkout, so a worktree ahead of the main checkout would have
- * every Bash call of its session blocked.
+ * guard that cannot start, or times out, blocks the call: its entry in `.claude/settings.json` sets
+ * `"onFailure": "block"` (`factory/hooks/AGENTS.md`).
  *
  * It reads the command as words, and refuses the three commands as an Author writes them. It holds an
  * Author to its role; it is no wall around the Author's token. What the shell builds at run time passes:

@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { Schema } from "effect";
 
+import { CI_CHECKS } from "../contract.ts";
 import { APP_LOGIN, AUTHOR_LOGIN, OWNER_LOGIN } from "../install/logins.ts";
 
 const Step = Schema.Struct({
@@ -168,6 +169,14 @@ describe("the Merge bot's workflow", () => {
     const { steps } = (await workflowOf("merge-bot.yml")).jobs["merge-bot"] ?? { steps: [] };
 
     expect(stepNamed(steps, "Get the agents' App token").with?.["permission-actions"]).toBe("write");
+  });
+});
+
+describe("CI's workflow", () => {
+  test("each check the Land gate waits for is one of its jobs, under that name", async () => {
+    const jobs = Object.keys((await workflowOf("ci.yml")).jobs);
+
+    expect(CI_CHECKS.filter((check) => !jobs.includes(check))).toEqual([]);
   });
 });
 

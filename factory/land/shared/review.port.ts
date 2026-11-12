@@ -16,6 +16,8 @@ export interface ReviewCall {
   readonly cwd: string;
   readonly model: string;
   readonly effort: ReviewEffort;
+  /** The tools of the session: `guard` decides each call. */
+  readonly tools: readonly string[];
   /** The JSON Schema the forked review's StructuredOutput call must follow. */
   readonly outputSchema: Schema.JsonObject;
   readonly guard: ToolGuard;

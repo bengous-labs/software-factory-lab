@@ -13,9 +13,6 @@ import { guardHook, modelOf, STRUCTURED_OUTPUT } from "../shared/ask.live.ts";
 import type { Stream } from "../shared/ask.live.ts";
 import type { ReviewCall, ReviewSession, SessionAnswer } from "../shared/review.port.ts";
 
-/** The tools of the session. The CLI adds StructuredOutput itself, for `outputFormat`. */
-export const REVIEW_TOOLS: readonly string[] = ["Read", "Grep", "Glob", "Bash", "Agent", "Skill"];
-
 /**
  * The `parent_tool_use_id` Claude Code gives every message of the skill's forked command. An external
  * name: Claude Code writes it, and an answer from any other parent is not the review's.
@@ -28,7 +25,7 @@ export function optionsOf(call: ReviewCall, abortController: AbortController): O
     effort: call.effort,
     cwd: call.cwd,
     abortController,
-    tools: [...REVIEW_TOOLS],
+    tools: [...call.tools],
     permissionMode: "dontAsk",
     hooks: { PreToolUse: [{ hooks: [guardHook(call.guard)], onFailure: "block" }] },
     skills: ["code-review"],

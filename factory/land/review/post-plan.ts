@@ -11,10 +11,10 @@ import { DELTA_READ } from "../../contract.ts";
 import { codeSpan, escapeHtml, escapeInline } from "../../lib/markdown.ts";
 import { postedCountOf } from "../shared/finding.ts";
 import type { Severity } from "../shared/finding.ts";
-import { markerOf, movedLineOf } from "../shared/findings.ts";
+import { markerOf, movedLineOf, reviewMarkerOf } from "../shared/findings.ts";
 import type { ReviewThread } from "../shared/findings.ts";
 import { reviewNameOf, roundNameOf } from "../shared/review-round.ts";
-import type { ReportedFinding, ReportedResult, ReviewRequest } from "./review-report.ts";
+import type { ReportedFinding, ReportedResult } from "./review-report.ts";
 
 /** The RIGHT-side lines of each hunk of the PR's whole diff, context included: GitHub accepts an inline comment only there. */
 export type DiffLines = ReadonlyMap<string, ReadonlySet<number>>;
@@ -154,11 +154,6 @@ function commentOf(planned: PlannedComment): string {
     "",
     markerOf(planned.severity),
   ].join("\n");
-}
-
-/** The marker of the review of `request`'s patch and round. An external name: posted reviews carry it, so the string stays. */
-export function reviewMarkerOf(request: ReviewRequest): string {
-  return `<!-- lab-review patch=${request.patch} round=${request.round} -->`;
 }
 
 /** A reply the Merge bot posts in the open thread of an earlier Important that a later round reports again. */

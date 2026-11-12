@@ -22,7 +22,7 @@ import {
   rangeOf,
   runOptions,
   snapshotAt,
-  testFileOf,
+  testFilesOf,
   undetected,
 } from "./mutation.ts";
 import type { Hunk, LineRange, Mutant } from "./mutation.ts";
@@ -153,7 +153,12 @@ test("a line the change left alone has its line at the base; a changed one has n
 });
 
 test("the listed modules a change reaches through their own lines or their tests, each once", () => {
-  const tests = { "a.ts": "a.test.ts", "b.ts": "b.test.ts", "c.ts": "shared.test.ts", "d.ts": "shared.test.ts" };
+  const tests = {
+    "a.ts": ["a.test.ts"],
+    "b.ts": ["b.test.ts"],
+    "c.ts": ["c.test.ts", "shared.test.ts"],
+    "d.ts": ["shared.test.ts"],
+  };
 
   expect(
     modulesOf([hunk("b.test.ts", [1, 1], [1, 1]), hunk("a.ts", [3, 0], [4, 1]), hunk("b.ts", [9, 1], [9, 1])], tests),
@@ -173,6 +178,12 @@ test("a pass mutates one module whole, against its own tests alone, on the fixed
   });
 });
 
+test("a pass runs every test file the module is given", () => {
+  expect(runOptions("a.ts", { "a.ts": ["a.test.ts", "b.test.ts"] }).commandRunner.command).toBe(
+    "FAST_CHECK_SEED=20261106 bun test --bail ./a.test.ts ./b.test.ts",
+  );
+});
+
 describe("parseArgs", () => {
   test("a command, with a base or without", () => {
     expect(parseArgs(["run"])).toEqual({ command: "run", base: undefined });
@@ -188,19 +199,20 @@ describe("parseArgs", () => {
   });
 });
 
-describe("testFileOf", () => {
-  test("is the test file TESTS gives the module", () => {
-    expect(testFileOf("app/src/commands/rename.ts")).toBe("app/test/rename.test.ts");
+describe("testFilesOf", () => {
+  test("is the test files TESTS gives the module", () => {
+    expect(testFilesOf("app/src/commands/rename.ts")).toEqual(["app/test/rename.test.ts"]);
   });
 
-  test("refuses a module TESTS does not list", () => {
-    expect(() => testFileOf("app/src/commands/undone.ts")).toThrow("no test file in stryker.config.ts's TESTS");
+  test("refuses a module TESTS does not list, or lists with no test file", () => {
+    expect(() => testFilesOf("app/src/commands/undone.ts")).toThrow("no test file in stryker.config.ts's TESTS");
+    expect(() => testFilesOf("a.ts", { "a.ts": [] })).toThrow("no test file in stryker.config.ts's TESTS");
   });
 });
 
 test("every listed module and its test file exist, and Stryker mutates exactly the listed modules", async () => {
   const root = join(import.meta.dir, "..", "..");
-  const paths = Object.entries(TESTS).flat();
+  const paths = Object.entries(TESTS).flat(2);
   const found = await Promise.all(paths.map((path) => Bun.file(join(root, path)).exists()));
 
   expect(paths.filter((_, index) => found[index] !== true)).toEqual([]);
@@ -408,7 +420,7 @@ describe("baseOf", () => {
   });
 });
 
-const LISTED = { "a/listed.ts": "a/listed.test.ts" };
+const LISTED = { "a/listed.ts": ["a/listed.test.ts"] };
 
 /** The message a promise rejects with; it fails the test when the promise resolves. */
 async function failureOf(promise: Promise<LineRange[]>): Promise<string> {
@@ -495,7 +507,7 @@ describe("changeSince", () => {
     write("c/listed.ts", "one\nTWO\nthree\n");
     commit("Move and change a line");
 
-    expect(await changeSince(root, { "c/listed.ts": "c/listed.test.ts" }, "dev", NO_ACTIONS)).toEqual({
+    expect(await changeSince(root, { "c/listed.ts": ["c/listed.test.ts"] }, "dev", NO_ACTIONS)).toEqual({
       since,
       hunks: [hunk("c/listed.ts", [2, 1], [2, 1])],
       renamedFrom: new Map([["c/listed.ts", "a/listed.ts"]]),
@@ -507,7 +519,7 @@ describe("changeSince", () => {
     write("c/listed.ts", "one\ntwo\nthree\n");
     commit("Move");
 
-    expect(await linesSince(root, { "c/listed.ts": "c/listed.test.ts" }, "dev", NO_ACTIONS)).toEqual([]);
+    expect(await linesSince(root, { "c/listed.ts": ["c/listed.test.ts"] }, "dev", NO_ACTIONS)).toEqual([]);
   });
 
   test("the tree at a commit, in a directory of its own", async () => {
@@ -612,7 +624,7 @@ describe("a pass leaves the checkout as it found it", () => {
   }
 
   function spawnPass(): Bun.Subprocess<"ignore", "pipe", "pipe"> {
-    const call = `(${JSON.stringify(root)}, "mod.ts", { "mod.ts": "mod.test.ts" })`;
+    const call = `(${JSON.stringify(root)}, "mod.ts", { "mod.ts": ["mod.test.ts"] })`;
 
     return Bun.spawn([process.execPath, "-e", `await (await import(${JSON.stringify(MUTATION)})).mutate${call};`], {
       stdin: "ignore",

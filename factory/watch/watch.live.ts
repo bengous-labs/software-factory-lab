@@ -16,7 +16,6 @@ import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { decodeJson } from "../lib/json.ts";
-import { run } from "../lib/run.live.ts";
 import { EMPTY_MEMORY, Memory, memoryFileOf, watchArgsOf } from "./watch-plan.ts";
 import type { WatchStep } from "./watch-plan.ts";
 import { mainCheckoutOf, watchTurn } from "./watcher.ts";
@@ -45,7 +44,7 @@ interface WatchState {
 }
 
 /** The watch's process: reads the factory every minute and prints each event once, until every watched issue is closed. */
-export async function main(): Promise<void> {
+export async function main({ run }: Pick<WatchPorts, "run">): Promise<void> {
   const { issues, standing } = watchArgsOf(process.argv.slice(2));
 
   const ports: WatchPorts = {

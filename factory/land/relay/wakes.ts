@@ -1,18 +1,19 @@
 /**
  * The Wakes of a pull request, as pure functions over one reading of it: a failing check on its head, a
- * conflict with the Trunk, a new open Important or Nit finding of the App, an Important a later round
- * reports again, a new comment of the Owner in an open thread or in the conversation, the PR back in
- * draft unless it holds the Author's question the Owner has not answered yet. A failing check another Wake already tells makes none: the Review check, which a finding
- * carries, and the Land gate of a conflicting PR. Nor do the App's own Pre-existing findings and its
- * conversation comments (state record, verdicts); nor the replies the Stop hook posts for the Author; nor
- * any other login's comment: the lab is public, and a Wake starts a turn in a session that holds the
- * Author's token. A PR that lands or closes starts no turn. Each Wake has a key, so the relay delivers it
- * once.
+ * conflict with the Trunk, a new open Important or Nit finding of the App, an Important a later round reports
+ * again, a new comment of the Owner in an open thread or in the conversation, the PR back in draft unless it
+ * holds the Author's question the Owner has not answered yet. A failing check another Wake already tells
+ * makes none: the Review check, which a finding carries, and the Land gate of a conflicting PR. Nor do the
+ * App's own Pre-existing findings and its conversation comments (state record, verdicts); nor the replies the
+ * Stop hook posts for the Author; nor any other login's comment: the lab is public, and a Wake starts a turn
+ * in a session that holds the Author's token. A PR that lands or closes starts no turn. Each Wake has a key,
+ * so the relay delivers it once.
  */
 
 import { Schema } from "effect";
 
 import { LAND_GATE, REVIEW_CHECK } from "../../contract.ts";
+import { TRUNK } from "../../install/host.ts";
 import { APP_LOGIN } from "../../install/logins.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { unescapeHtml } from "../../lib/markdown.ts";
@@ -138,8 +139,8 @@ export function wakesOf(pr: number, state: PrState): readonly Wake[] {
     wakes.push({
       key: `conflict:${state.head}`,
       kind: "conflict",
-      // The Author's `origin/dev` dates from its last stop: without the fetch the rebase would change nothing.
-      line: `PR #${pr} conflicts with dev: run \`git fetch origin dev\`, then rebase onto origin/dev.`,
+      // The Author's copy of the Trunk dates from its last stop: without the fetch the rebase would change nothing.
+      line: `PR #${pr} conflicts with ${TRUNK}: run \`git fetch origin ${TRUNK}\`, then rebase onto origin/${TRUNK}.`,
     });
   }
 

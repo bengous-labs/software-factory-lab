@@ -5,16 +5,19 @@ import { join } from "node:path";
 
 import { readGuide, readRules } from "./guide.live.ts";
 
-/** A checkout with `AGENTS.md`, two rules, and a secret outside it. */
+/** A checkout with `AGENTS.md`, two guides under `factory/`, one rule, and a secret outside it. */
 function checkout() {
   const parent = mkdtempSync(join(tmpdir(), "guide-"));
   const root = join(parent, "dev");
   const secret = join(parent, "secret");
 
-  mkdirSync(join(root, ".claude/rules/land-loop"), { recursive: true });
+  mkdirSync(join(root, ".claude/rules"), { recursive: true });
+  mkdirSync(join(root, "factory/land/stop"), { recursive: true });
   writeFileSync(join(root, "AGENTS.md"), "# Project\n");
-  writeFileSync(join(root, ".claude/rules/land-loop/stop.md"), "# The Stop hook\n");
-  writeFileSync(join(root, ".claude/rules/hooks.md"), "# Hooks\n");
+  writeFileSync(join(root, "factory/AGENTS.md"), "# The factory\n");
+  writeFileSync(join(root, "factory/land/stop/AGENTS.md"), "# The Stop hook\n");
+  writeFileSync(join(root, "factory/land/stop/notes.md"), "no guide\n");
+  writeFileSync(join(root, ".claude/rules/wiring.md"), "# Wiring\n");
   writeFileSync(join(root, ".claude/rules/notes.txt"), "not a rule\n");
   writeFileSync(secret, "TOKEN=t0k\n");
 
@@ -37,10 +40,11 @@ describe("readGuide", () => {
 });
 
 describe("readRules", () => {
-  test("every Markdown file under .claude/rules reads, with its path from the root, in the order of the paths", () => {
+  test("the AGENTS.md of each directory under factory/ and every Markdown file under .claude/rules read, each with its path from the root, in the order of the paths", () => {
     expect(readRules(checkout().root)).toEqual([
-      { path: ".claude/rules/hooks.md", text: "# Hooks\n" },
-      { path: ".claude/rules/land-loop/stop.md", text: "# The Stop hook\n" },
+      { path: ".claude/rules/wiring.md", text: "# Wiring\n" },
+      { path: "factory/AGENTS.md", text: "# The factory\n" },
+      { path: "factory/land/stop/AGENTS.md", text: "# The Stop hook\n" },
     ]);
   });
 
@@ -50,6 +54,16 @@ describe("readRules", () => {
 
     expect(() => readRules(root)).toThrow(
       ".claude/rules/leak.md is not a regular file of the checkout: a guide of the review is never a link",
+    );
+  });
+
+  test("a directory's guide that is a link fails the read too", () => {
+    const { root, secret } = checkout();
+    mkdirSync(join(root, "factory/lib"));
+    symlinkSync(secret, join(root, "factory/lib/AGENTS.md"));
+
+    expect(() => readRules(root)).toThrow(
+      "factory/lib/AGENTS.md is not a regular file of the checkout: a guide of the review is never a link",
     );
   });
 

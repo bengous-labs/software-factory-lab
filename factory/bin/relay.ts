@@ -13,6 +13,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { OUTCOMES_LOG } from "../contract.ts";
 import { deliverer, NotStopped, postToSocket } from "../land/relay/deliver.live.ts";
 import { readPr, turn } from "../land/relay/main.ts";
 import type { RelayIo } from "../land/relay/main.ts";
@@ -48,15 +49,12 @@ mkdirSync(files.stateDir, { recursive: true });
 
 writeFileSync(files.pid, `${process.pid}\n`);
 
-// An on-disk name: existing state files carry it, so it stays.
-const seenFile = join(files.stateDir, `watch-${pr}.json`);
-
 const seen = new Set<string>(
-  existsSync(seenFile) ? decodeJson(SeenKeys, seenFile, readFileSync(seenFile, "utf8")) : [],
+  existsSync(files.seen) ? decodeJson(SeenKeys, files.seen, readFileSync(files.seen, "utf8")) : [],
 );
 
 const outcomes = (event: "started" | "ended", reason: string | null): void => {
-  appendFileSync(join(cwd, ".lab", "outcomes.log"), `${relayLineOf(new Date().toISOString(), pr, event, reason)}\n`);
+  appendFileSync(join(cwd, OUTCOMES_LOG), `${relayLineOf(new Date().toISOString(), pr, event, reason)}\n`);
 };
 
 const gh: RunOptions = { cwd, env: ghEnv(requiredAuthorToken(process.env)) };
@@ -112,7 +110,7 @@ for (;;) {
     }
 
     if (delivered.length > 0) {
-      writeFileSync(seenFile, JSON.stringify([...seen]));
+      writeFileSync(files.seen, JSON.stringify([...seen]));
       console.log(`${new Date().toISOString()} delivered by ${via}: ${delivered.join(" ")}`);
     } else if (pending > 0) {
       console.log(`${new Date().toISOString()} ${pending} Wake(s) did not go through: a later turn sends them again`);

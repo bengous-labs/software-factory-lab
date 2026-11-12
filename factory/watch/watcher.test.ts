@@ -176,4 +176,12 @@ describe("mainCheckoutOf", () => {
     expect(await mainCheckoutOf(ports.run, "/repo/.claude/worktrees/issue-7")).toBe("/repo");
     expect(calls[0]?.options.cwd).toBe("/repo/.claude/worktrees/issue-7");
   });
+
+  test("reads the path git prints without the space around it", async () => {
+    const { ports } = world({
+      "git rev-parse --path-format=absolute": { code: 0, stdout: "  /repo/.git\n", stderr: "" },
+    });
+
+    expect(await mainCheckoutOf(ports.run, "/repo")).toBe("/repo");
+  });
 });

@@ -6,5 +6,7 @@
  */
 
 import { main } from "../land/merge-bot/main.live.ts";
+import { ask } from "../land/shared/ask.live.ts";
+import { run } from "../lib/run.live.ts";
 
-await main();
+await main({ run, ask });

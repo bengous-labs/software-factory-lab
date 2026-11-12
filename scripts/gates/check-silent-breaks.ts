@@ -6,7 +6,8 @@
  * `stryker.config.ts` lists that does not exist leaves the mutation job nothing to run, and it passes. A
  * script a hook of `.claude/settings.json`, a workflow or a skill names fails only once that hook or
  * workflow runs, from another checkout or after the landing. An `ownerPaths` or `deepReviewPaths` glob of
- * the factory config that matches no file sends nothing to the Owner or to a deep review.
+ * the factory config that matches no file sends nothing to the Owner or to a deep review. A logic file of the
+ * factory with no test in its directory leaves the mutation job, which says nothing.
  *
  * Reads the working tree under the current directory: the tracked files, and the untracked ones no
  * ignore rule covers.
@@ -16,7 +17,7 @@ import { $ } from "bun";
 import { Schema } from "effect";
 
 import { decodeJson } from "../../factory/lib/json.ts";
-import { TESTS } from "../../stryker.config.ts";
+import { isFactoryLogic, TESTS } from "../../stryker.config.ts";
 
 const RULES = ".claude/rules/";
 
@@ -72,8 +73,10 @@ export interface Tree {
   readonly rules: Readonly<Record<string, string>>;
   /** The files that name scripts, by path, with their text. */
   readonly naming: Readonly<Record<string, string>>;
-  /** The modules the mutation job mutates, each with its test file. */
-  readonly mutated: Readonly<Record<string, string>>;
+  /** The modules the mutation job mutates, each with its test files. */
+  readonly mutated: Readonly<Record<string, readonly string[]>>;
+  /** The logic files of the factory: the mutation job must reach each. */
+  readonly logic: readonly string[];
   /** The factory config's text. */
   readonly config: string;
 }
@@ -89,8 +92,14 @@ export function silentBreaks(tree: Tree): string[] {
     ),
   );
 
-  const mutated = [...new Set(Object.entries(tree.mutated).flat())].flatMap((path) =>
+  const mutated = [...new Set(Object.entries(tree.mutated).flat(2))].flatMap((path) =>
     files.has(path) ? [] : [`stryker.config.ts: \`${path}\` does not exist, so its mutation pass would run nothing.`],
+  );
+
+  const unmutated = tree.logic.flatMap((path) =>
+    Object.hasOwn(tree.mutated, path)
+      ? []
+      : [`stryker.config.ts: \`${path}\` has no \`x.test.ts\` in its directory, so the mutation job passes over it.`],
   );
 
   const scripts = Object.entries(tree.naming).flatMap(([path, text]) =>
@@ -103,7 +112,7 @@ export function silentBreaks(tree: Tree): string[] {
     matchesNone(glob) ? [`${FACTORY_CONFIG}: the glob \`${glob}\` matches no file, so it guards nothing.`] : [],
   );
 
-  return [...rules, ...mutated, ...scripts, ...guards];
+  return [...rules, ...mutated, ...unmutated, ...scripts, ...guards];
 }
 
 async function workingTreeFiles(): Promise<string[]> {
@@ -127,17 +136,18 @@ if (import.meta.main) {
     rules: await textsOf(files.filter((file) => file.startsWith(RULES) && file.endsWith(".md"))),
     naming: await textsOf(files.filter((file) => NAMING.some((glob) => new Bun.Glob(glob).match(file)))),
     mutated: TESTS,
+    logic: files.filter((file) => isFactoryLogic(file)),
     config: await Bun.file(FACTORY_CONFIG).text(),
   });
 
   if (errors.length > 0) {
-    console.error(`${errors.length} name(s) that name no file:\n`);
+    console.error(`${errors.length} silent break(s):\n`);
 
     for (const error of errors) {
       console.error(`  ${error}`);
     }
 
-    console.error("\nPoint each at the file it means, or remove it.");
+    console.error("\nPoint each name at the file it means, or remove it; give a logic file a test beside it.");
     process.exit(1);
   }
 }

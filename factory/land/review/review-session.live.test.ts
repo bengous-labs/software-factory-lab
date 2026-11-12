@@ -5,7 +5,8 @@ import type { Schema } from "effect";
 
 import type { Stream } from "../shared/ask.live.ts";
 import type { ReviewCall, ToolGuard } from "../shared/review.port.ts";
-import { FORK_PARENT, optionsOf, REVIEW_TOOLS, sessionWith } from "./review-session.live.ts";
+import { CODE_REVIEW } from "./code-review.actor.ts";
+import { FORK_PARENT, optionsOf, sessionWith } from "./review-session.live.ts";
 
 const SONNET = "claude-sonnet-5-5";
 
@@ -17,6 +18,7 @@ const CALL: ReviewCall = {
   cwd: "/work/pr",
   model: "sonnet",
   effort: "medium",
+  tools: CODE_REVIEW.tools,
   outputSchema: { type: "object" },
   guard: allowReads,
   timeoutMs: 1000,
@@ -109,7 +111,7 @@ describe("optionsOf", () => {
       model: "sonnet",
       effort: "medium",
       cwd: "/work/pr",
-      tools: [...REVIEW_TOOLS],
+      tools: ["Read", "Grep", "Glob", "Bash", "Agent", "Skill"],
       permissionMode: "dontAsk",
       skills: ["code-review"],
       settingSources: [],

@@ -1,11 +1,11 @@
+import type { Env } from "./env.ts";
+
 /**
  * What makes a session an Author: its environment holds `LAB_AUTHOR=1`. The launcher gives it through
  * the `env` of the settings file it passes at launch. Nothing else makes a session an Author: not its
  * branch, not being interactive, not being in the background.
  */
 export const AUTHOR_VARIABLE = "LAB_AUTHOR";
-
-type Env = Readonly<Record<string, string | undefined>>;
 
 export function isAuthor(env: Env): boolean {
   return env[AUTHOR_VARIABLE] === "1";

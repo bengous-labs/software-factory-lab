@@ -1,36 +1,28 @@
 #!/usr/bin/env bun
 
 /**
- * The process `.github/workflows/queue-checks.yml` runs on the merge queue's commit: it re-posts the
- * App's required checks there (`land/queue/repost.ts`).
+ * The process `.github/workflows/queue-checks.yml` runs on the merge queue's commit: it re-posts the App's
+ * required checks there (`land/queue/repost.ts`).
  *
- * Reads GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID, MERGE_GROUP_HEAD_SHA, MERGE_GROUP_HEAD_REF (`gh-readonly-queue/<base>/pr-<n>-<sha>`), APP_SLUG.
+ * Reads GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID, MERGE_GROUP_HEAD_SHA, MERGE_GROUP_HEAD_REF
+ * (`gh-readonly-queue/<base>/pr-<n>-<sha>`), APP_SLUG.
  */
 
 import { CheckRuns, CHECKS, greenOnHead, prOfRef, Pull, repostBodyOf } from "../land/queue/repost.ts";
+import { requiredOf } from "../lib/env.ts";
 import { decodeJson } from "../lib/json.ts";
 import { run } from "../lib/run.live.ts";
 import { checked } from "../lib/run.port.ts";
 
-function required(name: string): string {
-  const value = process.env[name];
+const repo = requiredOf(process.env, "GITHUB_REPOSITORY");
 
-  if (value === undefined || value === "") {
-    throw new Error(`${name} is unset`);
-  }
+const sha = requiredOf(process.env, "MERGE_GROUP_HEAD_SHA");
 
-  return value;
-}
+const ref = requiredOf(process.env, "MERGE_GROUP_HEAD_REF");
 
-const repo = required("GITHUB_REPOSITORY");
+const appSlug = requiredOf(process.env, "APP_SLUG");
 
-const sha = required("MERGE_GROUP_HEAD_SHA");
-
-const ref = required("MERGE_GROUP_HEAD_REF");
-
-const appSlug = required("APP_SLUG");
-
-const runUrl = `${required("GITHUB_SERVER_URL")}/${repo}/actions/runs/${required("GITHUB_RUN_ID")}`;
+const runUrl = `${requiredOf(process.env, "GITHUB_SERVER_URL")}/${repo}/actions/runs/${requiredOf(process.env, "GITHUB_RUN_ID")}`;
 
 const cwd = process.cwd();
 

@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
-import { landedOpenNoteOf, ledgerOf, standingOf } from "../merge-bot/decide.ts";
-import { reviewMarkerOf } from "../review/post-plan.ts";
+import { landedOpenNoteOf, ledgerOf, standingOf } from "../merge-bot/ledger.ts";
 import type { ReviewRequest } from "../review/review-report.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "./author-mark.ts";
 import {
@@ -21,6 +20,7 @@ import {
   openFindingsOf,
   openImportantOf,
   rejectedImportantOf,
+  reviewMarkerOf,
   reviewOfBody,
   ReviewThreads,
   severityOfBody,
@@ -271,6 +271,12 @@ const REQUEST: ReviewRequest = {
 
 /** A Nit's comment as `post-plan.ts` writes it once its finding is anchored away from `place`. */
 const MOVED_NIT = (place: string): string => `**Nit**: a name\n${movedLineOf(place)}\n\nwhy\n\n${markerOf("nit")}`;
+
+describe("reviewMarkerOf", () => {
+  test("names the patch and the round of the review", () => {
+    expect(reviewMarkerOf({ ...REQUEST, patch: "abc", round: 1 })).toBe("<!-- lab-review patch=abc round=1 -->");
+  });
+});
 
 describe("reviewOfBody", () => {
   test("reads the patch and round of the marker a posted review ends with; a body without one has none", () => {

@@ -327,6 +327,12 @@ describe("land-ok given", () => {
       ]),
     ).toBe(2);
   });
+
+  test("another label the Owner sets, or a labeled event that names no label, is not one", () => {
+    const { label: _label, ...unnamed } = landOk("2026-11-07T22:34:00Z");
+
+    expect(landOkGivenOf([{ ...landOk("2026-11-07T22:33:00Z"), label: { name: "land:human" } }, unnamed])).toBe(0);
+  });
 });
 
 const revert = (sha: string): DevCommit => ({

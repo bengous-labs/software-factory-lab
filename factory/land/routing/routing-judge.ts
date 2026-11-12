@@ -1,18 +1,17 @@
 /**
- * The Routing judge, past the Routing rules: Haiku reads the change, headless, with read-only tools
- * under the guard of `review/tool-guard.ts`, and answers the Review depth and, on a Patch delta, whether
- * it is read again; the Land route is the Routing rules' alone. Any failure, or an answer outside the
- * schema, answers review:deep and a second round: the safe side.
+ * The Routing judge, past the Routing rules: the model of `routing-judge.actor.ts` reads the change,
+ * headless, with read-only tools under the guard of `shared/tool-guard.ts`, and answers the Review depth and,
+ * on a Patch delta, whether it is read again; the Land route is the Routing rules' alone. Any failure, or an
+ * answer outside the schema, answers review:deep and a second round: the safe side.
  */
 
 import { Result, Schema } from "effect";
 
 import type { TokenCounts } from "../../lib/tokens.ts";
 import type { Ask, Reader } from "../shared/ask.port.ts";
+import { ROUTING_JUDGE } from "./routing-judge.actor.ts";
 import { routingPromptOf } from "./routing-judge.prompt.ts";
 import type { RoutingAnswer } from "./routing-rules.ts";
-
-export const ROUTING_JUDGE_MODEL = "haiku";
 
 export const SCHEMA = {
   type: "object",
@@ -66,17 +65,18 @@ export async function routingJudge(
   patchDelta: boolean,
 ): Promise<RoutingVerdict> {
   const answer = await ask({
-    model: ROUTING_JUDGE_MODEL,
+    model: ROUTING_JUDGE.model,
+    tools: ROUTING_JUDGE.tools,
     prompt: routingPromptOf(stat, diff, patchDelta),
     schema: SCHEMA,
     ...reader,
-    timeoutMs: 180_000,
+    timeoutMs: ROUTING_JUDGE.timeoutMs,
   });
 
   const { tokens } = answer;
 
   const safeSide = (why: string): RoutingVerdict => ({
-    routing: judgeFailed(why, answer.model ?? ROUTING_JUDGE_MODEL),
+    routing: judgeFailed(why, answer.model ?? ROUTING_JUDGE.model),
     tokens,
   });
 

@@ -9,6 +9,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Schema } from "effect";
 
+import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";
 import { answerOf, askWith, guardHook, modelOf, optionsOf } from "./ask.live.ts";
 import type { Stream } from "./ask.live.ts";
 import type { Answer, Question } from "./ask.port.ts";
@@ -21,6 +22,7 @@ const allowReads: ToolGuard = (toolName) =>
 
 const QUESTION: Question = {
   model: "haiku",
+  tools: ROUTING_JUDGE.tools,
   prompt: "p",
   schema: { type: "object" },
   cwd: "/repo",

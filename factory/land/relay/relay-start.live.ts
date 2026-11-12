@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import type { Env } from "../../lib/env.ts";
 import type { RelayStart, StartRelay } from "../shared/relay.port.ts";
 
 const RELAY = resolve(import.meta.dir, "..", "..", "bin", "relay.ts");
@@ -19,8 +20,6 @@ const RELAY = resolve(import.meta.dir, "..", "..", "bin", "relay.ts");
  * after it: the Author's marker, its token and the fork flag never reach the relay.
  */
 const KEPT = ["HOME", "PATH", "USER", "SHELL", "LANG", "XDG_RUNTIME_DIR", "CLAUDE_CONFIG_DIR", "LAB_AUTHOR_TOKEN_FILE"];
-
-type Env = Readonly<Record<string, string | undefined>>;
 
 /** The relay's whole environment, from the hook's. */
 export function relayEnvOf(env: Env): Record<string, string> {
@@ -36,11 +35,12 @@ export function relayFilesOf(checkout: string, pr: number) {
     pid: join(stateDir, `relay-${pr}.pid`),
     session: join(stateDir, `relay-${pr}.session`),
     log: join(stateDir, `relay-${pr}.log`),
+    seen: join(stateDir, `watch-${pr}.json`),
   };
 }
 
 /** What starting a relay touches outside its files. */
-export interface RelayIo {
+export interface RelayStartIo {
   /** Whether process `pid` is the relay of PR `pr`. */
   readonly watches: (pid: number, pr: number) => boolean;
   /** Leaves `argv` running detached in `cwd`, its output appended to `log`; returns its pid. */
@@ -54,7 +54,7 @@ export interface RelayIo {
  * A `StartRelay` over `io`: it names the publishing session as the one the PR's Wakes go to, then starts
  * a relay unless the one `relay-<pr>.pid` names still watches the PR.
  */
-export function relayStarter(io: RelayIo, env: Env): StartRelay {
+export function relayStarter(io: RelayStartIo, env: Env): StartRelay {
   return ({ pr, session, checkout }: RelayStart) => {
     const files = relayFilesOf(checkout, pr);
     mkdirSync(files.stateDir, { recursive: true });
@@ -80,7 +80,7 @@ export function watchesOf(args: string, pr: number): boolean {
   return script !== -1 && words[script + 1] === String(pr);
 }
 
-const IO: RelayIo = {
+const IO: RelayStartIo = {
   watches: (pid, pr) => {
     const ps = Bun.spawnSync(["ps", "-p", String(pid), "-o", "args="], { stdout: "pipe", stderr: "ignore" });
 

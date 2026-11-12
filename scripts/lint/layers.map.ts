@@ -18,7 +18,7 @@ const at = (pkg: Package, layer: Layer): Place => ({ package: pkg, layer });
 /** Paths from the repository root. The first glob that matches wins, so a file comes before a glob that also matches it. */
 export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   // The factory: a suffix says the layer, and so does the directory of a process's door. A name with no
-  // suffix is pure logic.
+  // suffix is logic: it does no I/O itself, and reaches outside only through a port it is handed.
   ["factory/**/*.test.ts", at("factory", "test")],
   ["factory/**/*.fixtures.ts", at("factory", "test")],
   ["factory/bin/*.ts", at("factory", "entry")],
@@ -123,8 +123,9 @@ export const EXTERNAL_IMPORTS: Readonly<Record<Layer, readonly External[]>> = {
 
 /**
  * The only `effect` modules the domain may import as values, its data toolbox: schemas and what builds
- * them, and plain result values. `Exit.succeed` gives a schema its decoding default. The runtime, `Effect`
- * itself among it, stays in the infra and the entry points; a type-only import may name any module.
+ * them, plain result values and type guards. `Exit.succeed` gives a schema its decoding default. The
+ * runtime, `Effect` itself among it, stays in the infra and the entry points; a type-only import may name
+ * any module.
  */
 export const DOMAIN_EFFECT_MODULES: readonly string[] = [
   "Schema",
@@ -135,6 +136,7 @@ export const DOMAIN_EFFECT_MODULES: readonly string[] = [
   "Result",
   "Exit",
   "Struct",
+  "Predicate",
 ];
 
 export const IO_GLOBALS: readonly string[] = ["fetch", "process"];

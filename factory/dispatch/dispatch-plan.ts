@@ -6,6 +6,7 @@
 import { Result, Schema } from "effect";
 
 import { branchMadeFor } from "../contract.ts";
+import { CONFIG_DIR, TRUNK } from "../install/host.ts";
 
 export interface DispatchArgs {
   readonly issue: number;
@@ -54,9 +55,9 @@ export function worktreeOf(checkout: string, issue: number): string {
   return `${checkout}/.claude/worktrees/issue-${issue}`;
 }
 
-/** The Worker settings file `.claude/rules/identities.md` describes, which the Owner provisions. */
+/** The Worker settings file `factory/install/AGENTS.md` describes, which the Owner provisions. */
 export function workerSettingsOf(home: string): string {
-  return `${home}/.config/software-factory-lab/worker-settings.json`;
+  return `${home}/.config/${CONFIG_DIR}/worker-settings.json`;
 }
 
 /**
@@ -116,7 +117,7 @@ export interface Assignment {
  * instructions, `AGENTS.md`, never from here.
  */
 export function promptOf({ issue, repo, worktree, branch }: Assignment): string {
-  return `Implement GitHub issue #${issue} of ${repo} (read it with: gh issue view ${issue} --repo ${repo}). Your worktree exists: first call EnterWorktree with the path ${worktree} and work there; its branch ${branch} starts at origin/dev.`;
+  return `Implement GitHub issue #${issue} of ${repo} (read it with: gh issue view ${issue} --repo ${repo}). Your worktree exists: first call EnterWorktree with the path ${worktree} and work there; its branch ${branch} starts at origin/${TRUNK}.`;
 }
 
 export interface Launch {

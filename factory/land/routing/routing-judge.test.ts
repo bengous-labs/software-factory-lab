@@ -3,7 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { Result, Schema } from "effect";
 
 import type { Answer, Ask, Question, Reader } from "../shared/ask.port.ts";
-import { ROUTING_JUDGE_MODEL, routingJudge, RoutingJudgeAnswer, routingOf, SCHEMA } from "./routing-judge.ts";
+import { ROUTING_JUDGE } from "./routing-judge.actor.ts";
+import { routingJudge, RoutingJudgeAnswer, routingOf, SCHEMA } from "./routing-judge.ts";
 
 const TOKENS = { input: 2, output: 58, cacheRead: 1568, cacheCreation: 6770 };
 
@@ -74,7 +75,7 @@ describe("routingJudge", () => {
     const { routing, tokens } = await routingJudge(ask, READER, "1 file changed", "+docs", false);
 
     expect(questions).toHaveLength(1);
-    expect(questions[0]).toMatchObject({ model: ROUTING_JUDGE_MODEL, cwd: "/work/pr", env: READER.env });
+    expect(questions[0]).toMatchObject({ model: ROUTING_JUDGE.model, cwd: "/work/pr", env: READER.env });
     expect(questions[0]?.guard).toBe(READER.guard);
     expect(questions[0]?.prompt.split("\n")[1]).toBe(CHECKED_OUT);
     expect(questions[0]?.schema).toEqual(SCHEMA);
@@ -112,7 +113,7 @@ describe("routingJudge", () => {
     const { ask } = asking({ kind: "failed", error: "timed out after 180000 ms", tokens: null, model: null });
 
     expect(await routingJudge(ask, READER, "s", "p", false)).toMatchObject({
-      routing: { ...SAFE, model: ROUTING_JUDGE_MODEL },
+      routing: { ...SAFE, model: ROUTING_JUDGE.model },
       tokens: null,
     });
   });

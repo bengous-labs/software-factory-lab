@@ -43,7 +43,7 @@ export function optionsOf(question: Question, abortController: AbortController):
     model: question.model,
     cwd: question.cwd,
     abortController,
-    tools: ["Read", "Grep", "Glob", "Bash"],
+    tools: [...question.tools],
     env: { ...question.env },
     strictMcpConfig: true,
     settingSources: [],

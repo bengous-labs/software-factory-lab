@@ -9,6 +9,7 @@ describe("prOfRef", () => {
   test("the queue's ref names the PR it tests", () => {
     expect(prOfRef(`refs/heads/gh-readonly-queue/dev/pr-12-${SHA}`)).toBe(12);
     expect(prOfRef("refs/heads/dev")).toBeNull();
+    expect(prOfRef(`refs/heads/gh-readonly-queue/dev/pr-12-${SHA}/more`)).toBeNull();
   });
 });
 
@@ -30,6 +31,28 @@ describe("greenOnHead", () => {
 
     expect(greenOnHead(runs, "land-gate", "bengous-labs-agents")).toBe(true);
     expect(greenOnHead(runs, "agent-review", "bengous-labs-agents")).toBe(false);
+  });
+
+  test("the latest completion decides, whatever order GitHub lists the checks in", () => {
+    const green = check("land-gate", "success", "bengous-labs-agents", "2026-11-05T11:00:00Z");
+    const red = check("land-gate", "failure", "bengous-labs-agents", "2026-11-05T10:00:00Z");
+    const older = check("land-gate", "failure", "bengous-labs-agents", "2026-11-05T09:00:00Z");
+
+    expect(greenOnHead([green, red], "land-gate", "bengous-labs-agents")).toBe(true);
+    expect(greenOnHead([red, green], "land-gate", "bengous-labs-agents")).toBe(true);
+    expect(greenOnHead([older, red, green], "land-gate", "bengous-labs-agents")).toBe(true);
+    expect(
+      greenOnHead([older, green, { ...red, completed_at: "2026-11-05T12:00:00Z" }], "land-gate", "bengous-labs-agents"),
+    ).toBe(false);
+  });
+
+  test("a check that has not completed does not decide", () => {
+    const runs = [
+      check("land-gate", "failure", "bengous-labs-agents", "2026-11-05T10:00:00Z"),
+      { ...check("land-gate", "success", "bengous-labs-agents", "2026-11-05T11:00:00Z"), status: "in_progress" },
+    ];
+
+    expect(greenOnHead(runs, "land-gate", "bengous-labs-agents")).toBe(false);
   });
 });
 
@@ -72,6 +95,15 @@ describe("the GitHub answers this job reads", () => {
     expect(() => decodeJson(CheckRuns, "check runs", JSON.stringify({ check_runs: [{ name: "x" }] }))).toThrow(
       'check runs: Missing key\n  at ["check_runs"][0]["status"]',
     );
+    expect(() =>
+      decodeJson(
+        CheckRuns,
+        "check runs",
+        JSON.stringify({
+          check_runs: [{ name: "x", status: "completed", conclusion: null, completed_at: null, app: {} }],
+        }),
+      ),
+    ).toThrow('check runs: Missing key\n  at ["check_runs"][0]["app"]["slug"]');
   });
 });
 

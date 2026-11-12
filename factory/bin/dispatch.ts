@@ -2,7 +2,7 @@
 
 /**
  * Hands an issue to a Worker: creates its worktree under `.claude/worktrees/` on a new branch from
- * `origin/dev`, and launches it as a background session in the main checkout.
+ * the Trunk, and launches it as a background session in the main checkout.
  *
  *   bun factory/bin/dispatch.ts <issue> [--model <model>]
  */

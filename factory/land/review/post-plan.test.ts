@@ -4,7 +4,7 @@ import { Schema } from "effect";
 
 import { markerOf } from "../shared/findings.ts";
 import type { ReviewThread } from "../shared/findings.ts";
-import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewMarkerOf, reviewOf } from "./post-plan.ts";
+import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewOf } from "./post-plan.ts";
 import type { DiffLines } from "./post-plan.ts";
 import type { ReportedFinding, ReportedResult } from "./review-report.ts";
 
@@ -550,11 +550,5 @@ describe("againRepliesOf", () => {
     expect(againRepliesOf(result, ["T1", "T2"], [], APP).map((reply) => reply.thread)).toEqual(["T1"]);
     expect(againRepliesOf(result, [], [], APP)).toEqual([]);
     expect(againRepliesOf(resultOf(), ["T1"], [], APP)).toEqual([]);
-  });
-});
-
-describe("reviewMarkerOf", () => {
-  test("names the patch and the round of the review", () => {
-    expect(reviewMarkerOf({ ...REQUEST, patch: "abc", round: 1 })).toBe("<!-- lab-review patch=abc round=1 -->");
   });
 });

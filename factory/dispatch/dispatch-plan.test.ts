@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-import { printableOf } from "../lib/terminal.ts";
 import {
   branchOf,
   dispatchArgsOf,
@@ -214,11 +213,5 @@ describe("workerSettingsProblemOf", () => {
   test("never quotes the file, which holds the token", () => {
     expect(workerSettingsProblemOf('{"env":{"LAB_AUTHOR":"0","GH_TOKEN":"ghp_secret"}}')).not.toContain("ghp_secret");
     expect(workerSettingsProblemOf('{"env":{"GH_TOKEN":"ghp_secret"')).not.toContain("ghp_secret");
-  });
-});
-
-describe("printableOf", () => {
-  test("drops the control characters an issue title may carry, escape sequences included", () => {
-    expect(printableOf("Add\u001B[2J a\u0007 flag\u009B\n")).toBe("Add[2J a flag");
   });
 });

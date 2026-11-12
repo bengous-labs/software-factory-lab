@@ -1,8 +1,9 @@
 /**
- * The names the factory stores outside its code, each in its one place: GitHub's ruleset, the labels and
+ * The names the factory stores outside its code and several steps read: GitHub's ruleset, the labels and
  * checks of open pull requests, posted comments and existing state records hold them, so each keeps its
  * spelling whatever the code calls the thing. A step reads another step's work through these names, never
- * through its code. `stored-names.test.ts` pins each value.
+ * through its code. A stored name one module alone writes and reads stays in that module; `contract.test.ts`
+ * pins every stored name, wherever it lives.
  */
 
 /** Who lands a change: `auto`, the Merge bot alone, or `owner`, with a Land approval. */
@@ -54,6 +55,12 @@ export const MERGE_BOT_STATE_MARKER = "<!-- lab-conductor-state";
 
 /** The marker of the App's reply that lands a finding open. An external name: posted replies carry it, so the string stays. */
 export const LANDED_OPEN_MARKER = "<!-- lab-landed-open -->";
+
+/**
+ * The log of the main checkout, by its path from that checkout, where the Stop hook and the relay leave one
+ * line per outcome and the watch reads them. An external name: a running relay and a running watch hold it.
+ */
+export const OUTCOMES_LOG = ".lab/outcomes.log";
 
 /**
  * Whether `ref`, a branch or its `origin/` copy, was made for `issue`: `<type>/<issue>-…`. An external

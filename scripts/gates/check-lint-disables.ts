@@ -15,7 +15,7 @@
 
 import { $ } from "bun";
 
-import { BUDGETS } from "../lint/exceptions.ts";
+import { BUDGETS, FILE_BUDGETS } from "../lint/exceptions.ts";
 
 const EXCLUDED_PREFIXES = ["node_modules/", "scripts/vendor/anti-slop/"];
 
@@ -28,7 +28,7 @@ const DIRECTIVE = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b/u;
 const JUSTIFIED = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b.*\s--\s+\S/u;
 
 // The layer map and the budget exceptions belong to the Owner: a violation is fixed, never silenced.
-const UNSUPPRESSIBLE = ["local/layers", ...Object.keys(BUDGETS)];
+const UNSUPPRESSIBLE = ["local/layers", ...Object.keys(BUDGETS), ...Object.keys(FILE_BUDGETS)];
 
 // The rule list runs from the directive to its reason, the end of a block comment, or the end of the line.
 const RULE_LIST = /\b(?:ox|es)lint-disable(?:-next-line|-line)?\b(?<rules>.*?)(?:\s--(?:\s|$)|\*\/|$)/u;

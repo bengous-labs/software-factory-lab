@@ -1,13 +1,15 @@
 /**
  * Dispatch: hands one issue to a Worker. It creates the Worker's worktree on a new branch from
- * `origin/dev`, then launches the Worker as a background session in the main checkout, which enters
+ * the Trunk, then launches the Worker as a background session in the main checkout, which enters
  * that worktree itself.
  */
 
 import { Schema } from "effect";
 
+import { TRUNK } from "../install/host.ts";
 import { OWNER_LOGIN } from "../install/logins.ts";
 import { decodeJson } from "../lib/json.ts";
+import { checked } from "../lib/run.port.ts";
 import type { Ran, Run, RunOptions } from "../lib/run.port.ts";
 import { printableOf } from "../lib/terminal.ts";
 import {
@@ -58,16 +60,6 @@ function failureOf(command: string, ran: Ran): string {
   return `${command} exited ${ran.code}: ${(ran.stderr || ran.stdout).trim()}`;
 }
 
-async function out(run: Run, argv: readonly string[], options: RunOptions): Promise<string> {
-  const ran = await run(argv, options);
-
-  if (ran.code !== 0) {
-    throw new Error(failureOf(argv.slice(0, 3).join(" "), ran));
-  }
-
-  return ran.stdout;
-}
-
 /** Runs each removal, whatever the one before did, and returns the failures, with the command each names. */
 async function removalFailures(
   run: Run,
@@ -113,7 +105,7 @@ async function checkWorkerSettings(readText: DispatchPorts["readText"], path: st
  * writers can edit, is handed to one.
  */
 async function ownersIssue(run: Run, issue: number, at: RunOptions): Promise<{ title: string; repo: string }> {
-  const view = await out(run, ["gh", "issue", "view", String(issue), "--json", "title,url,author"], at);
+  const view = await checked(run, ["gh", "issue", "view", String(issue), "--json", "title,url,author"], at);
   const { title, url, author } = decodeJson(IssueView, `gh issue view ${issue}`, view);
 
   if (author.login !== OWNER_LOGIN) {
@@ -127,13 +119,13 @@ async function ownersIssue(run: Run, issue: number, at: RunOptions): Promise<{ t
 
 /** Throws, naming what to remove, when the issue already has a worktree or a branch. */
 async function checkFree(run: Run, issue: number, worktree: string, at: RunOptions): Promise<void> {
-  if (worktreeListed(await out(run, ["git", "worktree", "list", "--porcelain"], at), worktree)) {
+  if (worktreeListed(await checked(run, ["git", "worktree", "list", "--porcelain"], at), worktree)) {
     throw new Error(
       `issue #${issue} already has a worktree: ${worktree}. Remove it first (git worktree remove ${worktree})`,
     );
   }
 
-  const refs = await out(
+  const refs = await checked(
     run,
     ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"],
     at,
@@ -164,13 +156,13 @@ export async function dispatch(
   const at = { cwd: checkout };
   const { title, repo } = await ownersIssue(run, issue, at);
 
-  await out(run, ["git", "fetch", "--prune", "origin"], at);
+  await checked(run, ["git", "fetch", "--prune", "origin"], at);
 
   const worktree = worktreeOf(checkout, issue);
   await checkFree(run, issue, worktree, at);
 
   const branch = branchOf(issue, title);
-  await out(run, ["git", "worktree", "add", "-b", branch, worktree, "origin/dev"], at);
+  await checked(run, ["git", "worktree", "add", "-b", branch, worktree, `origin/${TRUNK}`], at);
 
   const argv = launchArgvOf({ issue, model, settings, prompt: promptOf({ issue, repo, worktree, branch }) });
 

@@ -56,7 +56,7 @@ test("each run launches a session on the issue in its own clone, and the report 
   expect(launches[0]?.argv.at(-1)).toEndWith("## Problem");
   expect(report).toContain("## Run 2, session s-2, in /b/run-2");
   expect(report).toContain("committed in /b/run-1");
-  expect(report).toContain("Rules loaded: .claude/rules/hooks.md");
+  expect(report).toContain("Guides loaded: .claude/rules/hooks.md");
   expect(report).not.toContain("after the Wake");
 });
 

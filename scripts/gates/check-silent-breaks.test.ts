@@ -21,7 +21,8 @@ const SOUND: Tree = {
   files: ["src/a.ts", "src/a.test.ts", "tools/hook.ts", "docs/guide.md"],
   rules: { ".claude/rules/a.md": '---\npaths:\n  - "src/**"\n  - "tools/hook.ts"\n---\n\n# A rule\n' },
   naming: { ".claude/settings.json": 'bun "$CLAUDE_PROJECT_DIR"/tools/hook.ts' },
-  mutated: { "src/a.ts": "src/a.test.ts" },
+  mutated: { "src/a.ts": ["src/a.test.ts"] },
+  logic: [],
   config: configOf(["docs/**"], ["src/a.ts"]),
 };
 
@@ -89,16 +90,22 @@ describe("silentBreaks", () => {
   });
 
   test("a mutated module that does not exist is one, and so is its test file", () => {
-    expect(silentBreaks({ ...SOUND, mutated: { "src/gone.ts": "src/a.test.ts" } })).toEqual([
+    expect(silentBreaks({ ...SOUND, mutated: { "src/gone.ts": ["src/a.test.ts"] } })).toEqual([
       "stryker.config.ts: `src/gone.ts` does not exist, so its mutation pass would run nothing.",
     ]);
-    expect(silentBreaks({ ...SOUND, mutated: { "src/a.ts": "src/gone.test.ts" } })).toEqual([
+    expect(silentBreaks({ ...SOUND, mutated: { "src/a.ts": ["src/gone.test.ts"] } })).toEqual([
       "stryker.config.ts: `src/gone.test.ts` does not exist, so its mutation pass would run nothing.",
     ]);
   });
 
+  test("a logic file the mutation job passes over is one", () => {
+    expect(silentBreaks({ ...SOUND, logic: ["src/a.ts", "src/b.ts"] })).toEqual([
+      "stryker.config.ts: `src/b.ts` has no `x.test.ts` in its directory, so the mutation job passes over it.",
+    ]);
+  });
+
   test("a test file two missing modules share is told once", () => {
-    const mutated = { "src/a.ts": "src/gone.test.ts", "tools/hook.ts": "src/gone.test.ts" };
+    const mutated = { "src/a.ts": ["src/gone.test.ts"], "tools/hook.ts": ["src/gone.test.ts"] };
 
     expect(silentBreaks({ ...SOUND, mutated })).toHaveLength(1);
   });

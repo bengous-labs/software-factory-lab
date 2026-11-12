@@ -7,6 +7,7 @@
 
 import { Result, Schema } from "effect";
 
+import { RELEASE_BRANCH, TRUNK } from "../../install/host.ts";
 import { AUTHOR_LOGIN } from "../../install/logins.ts";
 import { AUTHOR_VARIABLE } from "../../lib/author-session.ts";
 import { codeSpan, escapeHtml } from "../../lib/markdown.ts";
@@ -20,7 +21,7 @@ import type { ConversationComment } from "../shared/conversation.ts";
 export const FORK_MARKER = "[harness:fork-probe]";
 
 /** Branches the hook never publishes: the trunk, the release branch, and the lab's own test branches. */
-const IGNORED_BRANCH = /^(dev|main|lab\/.*)$/u;
+const IGNORED_BRANCH = new RegExp(`^(${TRUNK}|${RELEASE_BRANCH}|lab/.*)$`, "u");
 
 export interface Session {
   /** The session's environment holds `LAB_AUTHOR=1`. */
@@ -91,7 +92,7 @@ export interface Snapshot {
   readonly branch: string;
   readonly head: string;
   readonly treeClean: boolean;
-  /** Commits on HEAD that `origin/dev` lacks. */
+  /** Commits on HEAD that the Trunk lacks. */
   readonly ahead: number;
   readonly pr: PullRequest | null;
 }
@@ -189,7 +190,7 @@ export function admit(snapshot: Snapshot, blocked: boolean): Admission {
   }
 
   if (snapshot.ahead === 0) {
-    return none(`${snapshot.branch} has no commit that dev lacks`);
+    return none(`${snapshot.branch} has no commit that ${TRUNK} lacks`);
   }
 
   const { pr } = snapshot;
@@ -228,7 +229,7 @@ export function noAuthorToken(path: string, reported: boolean): Refusal {
 
   return {
     kind: "block",
-    reason: `The Stop hook found no Author token at ${path}, so nothing was published. The Owner provisions it (.claude/rules/identities.md). Stop, and ask no question.`,
+    reason: `The Stop hook found no Author token at ${path}, so nothing was published. The Owner provisions it (factory/install/AGENTS.md). Stop, and ask no question.`,
   };
 }
 

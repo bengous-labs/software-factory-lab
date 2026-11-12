@@ -13,7 +13,7 @@ import { mergedResultOf, resultOf } from "./review-report.ts";
 import type { ReviewRequest, ReviewResult } from "./review-report.ts";
 import { securityPromptOf } from "./security-pass.prompt.ts";
 
-/** What the prompts read besides the request: the guides from `dev` and the earlier findings. */
+/** What the prompts read besides the request: the guides from the Trunk and the earlier findings. */
 export interface PromptInputs {
   readonly guides: Guides;
   readonly threads: readonly EarlierThread[];

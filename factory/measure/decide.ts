@@ -5,18 +5,15 @@
 
 import { Schema } from "effect";
 
-import { DELTA_READ, LAND_APPROVAL_LABEL } from "../contract.ts";
+import { DELTA_READ, LAND_APPROVAL_LABEL, landLabelOf } from "../contract.ts";
+import { TRUNK } from "../install/host.ts";
+import { APP_LOGIN, OWNER_LOGIN } from "../install/logins.ts";
+import { markerOf, reviewMarkerOf } from "../land/shared/findings.ts";
 import { reviewNameOf } from "../land/shared/review-round.ts";
 import { decodeJson } from "../lib/json.ts";
 
-export const REPO = "bengous-labs/software-factory-lab";
-
-const APP = "bengous-labs-agents[bot]";
-
-const OWNER = "bengous";
-
-/** The marker `review/findings.ts` puts on an Important finding; posted comments keep its spelling. */
-const IMPORTANT_MARKER = "<!-- lab-finding severity=important -->";
+/** The App's login as REST prints it. */
+const APP = `${APP_LOGIN}[bot]`;
 
 const Login = Schema.NullOr(Schema.Struct({ login: Schema.String }));
 
@@ -91,7 +88,7 @@ export const decodeCommentsPages = (text: string): PrData["comments"] =>
   decodeJson(Schema.Array(Schema.Array(ReviewComment)), "pull review comments", text).flat();
 
 export const decodeDevCommitsPages = (text: string): readonly DevCommit[] =>
-  decodeJson(Schema.Array(Schema.Array(DevCommit)), "dev commits", text).flat();
+  decodeJson(Schema.Array(Schema.Array(DevCommit)), `${TRUNK} commits`, text).flat();
 
 export const decodeCheckRunsPages = (text: string): readonly CheckRun[] =>
   decodeJson(Schema.Array(CheckRunsPage), "land-gate check runs", text).flatMap((page) => page.check_runs);
@@ -119,24 +116,25 @@ export interface Row {
   readonly fixed: number;
   readonly rejected: number;
   readonly landOkGiven: number;
-  /** The short sha of the commit on dev that reverts the PR. */
+  /** The short sha of the commit on the Trunk that reverts the PR. */
   readonly revertedBy: string | null;
 }
 
 export function routeOf(pull: Pull): Route | null {
   const names = new Set(pull.labels.map((label) => label.name));
 
-  if (names.has("land:human")) {
+  if (names.has(landLabelOf("owner"))) {
     return "owner";
   }
 
-  return names.has("land:auto") ? "auto" : null;
+  return names.has(landLabelOf("auto")) ? "auto" : null;
 }
 
 const landOkTimes = (events: PrData["events"]): readonly number[] =>
   events
     .filter(
-      (event) => event.event === "labeled" && event.label?.name === LAND_APPROVAL_LABEL && event.actor?.login === OWNER,
+      (event) =>
+        event.event === "labeled" && event.label?.name === LAND_APPROVAL_LABEL && event.actor?.login === OWNER_LOGIN,
     )
     .map((event) => Date.parse(event.created_at))
     .toSorted((a, b) => a - b);
@@ -173,7 +171,7 @@ const ROUND = /^(?:Review round (\d+) |Round (\d+): )/u;
  * posted before the summary line said what it posted, `Delta read `, with the patch its marker names.
  */
 const DELTA_READ_BODY = new RegExp(
-  `^${reviewNameOf(DELTA_READ)}[ :][\\s\\S]*<!-- lab-review patch=(\\S+) round=${DELTA_READ} -->`,
+  `^${reviewNameOf(DELTA_READ)}[ :][\\s\\S]*${reviewMarkerOf({ patch: String.raw`(\S+)`, round: DELTA_READ })}`,
   "u",
 );
 
@@ -229,7 +227,7 @@ export interface FindingAnswers {
 /** The App's Important findings with a reply starting "Fixed in ", and those another login answered otherwise. */
 export function findingAnswersOf(comments: PrData["comments"]): FindingAnswers {
   const importants = comments.filter(
-    (comment) => comment.user?.login === APP && comment.body.includes(IMPORTANT_MARKER),
+    (comment) => comment.user?.login === APP && comment.body.includes(markerOf("important")),
   );
 
   let fixed = 0;

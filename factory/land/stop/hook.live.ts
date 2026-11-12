@@ -1,37 +1,29 @@
 /**
  * The Stop hook. It does nothing for a session that is not an Author, whose environment holds no
- * `LAB_AUTHOR=1`, nor for a fork it launched. For an Author it reads git and the branch's PR, decides
- * with `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the
- * session whether the change is finished and which findings the Author rejects or fixed, then publishes:
+ * `LAB_AUTHOR=1`, nor for a fork it launched. For an Author it reads git and the branch's PR, decides with
+ * `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the session whether
+ * the change is finished and which findings the Author rejects or fixed, then publishes (`publish.live.ts`):
  * posts the rejections, records the fixed findings on the PR, pushes the branch, opens or readies the PR,
- * resolves the App's open Nit threads, and leaves the PR's relay. A stop that leaves a question to the Owner pushes the branch to a PR in draft,
- * posts the question there once, and leaves the relay that brings the answer back. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's
- * latency and tokens, and every stop of an Author leaves one line in `.lab/outcomes.log` of the main
- * checkout.
+ * resolves the App's open Nit threads, and leaves the PR's relay. A stop that leaves a question to the Owner
+ * pushes the branch to a PR in draft, posts the question there once, and leaves the relay that brings the
+ * answer back. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's latency and
+ * tokens, and every stop of an Author leaves one line in `.lab/outcomes.log` of the main checkout.
  *
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 
-import { Predicate, Result, Schema } from "effect";
-
-import { APP_LOGIN } from "../../install/logins.ts";
+import { OUTCOMES_LOG } from "../../contract.ts";
+import { TRUNK } from "../../install/host.ts";
 import { isAuthor } from "../../lib/author-session.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
-import type { Run, RunOptions } from "../../lib/run.port.ts";
-import { ModelUsage, tokensOf } from "../../lib/tokens.ts";
-import type { TokenCounts } from "../../lib/tokens.ts";
 import { questionOpen } from "../shared/author-mark.ts";
-import { authorTokenOf, ghEnv, pushArgs } from "../shared/author.live.ts";
-import type { AuthorToken } from "../shared/author.live.ts";
+import { authorTokenOf } from "../shared/author.live.ts";
 import { conversationArgsOf, conversationOf } from "../shared/conversation.ts";
-import { openFindingsOf, ReviewThreads, threadsQueryOf } from "../shared/findings.ts";
 import type { OpenFinding } from "../shared/findings.ts";
-import type { StartRelay } from "../shared/relay.port.ts";
-import { replyInThread, resolveThread } from "../shared/threads.live.ts";
 import {
   admit,
   afterClosed,
@@ -39,339 +31,39 @@ import {
   bystanderOf,
   chainOf,
   checkoutOf,
-  closingLineOf,
-  decide,
   DONE_SCHEMA,
   doneAnswerOf,
-  fixedOf,
-  fixedRecordBodyOf,
   fixedRecordIn,
-  FORK_MARKER,
   noAuthorToken,
   noDoneAnswer,
   outcomeLineOf,
-  questionCommentOf,
   quotedQuestionOf,
-  rejectionReplyOf,
-  rejectionsOf,
 } from "./decide.ts";
-import type {
-  Action,
-  ClosedPullRequest,
-  DoneAnswer,
-  FixedRecord,
-  Outcome,
-  PullRequest,
-  Refusal,
-  Rejection,
-  Snapshot,
-  StopChecks,
-  StopFacts,
-} from "./decide.ts";
-import { BODY_REQUEST, doneQuestionOf } from "./done-judge.prompt.ts";
-
-export const FORK_FLAG = "LAB_STOP_FORK";
-
-const TRUNK = "dev";
-
-const FORK_TIMEOUT_MS = 180_000;
+import type { Refusal, Snapshot, StopChecks, StopFacts } from "./decide.ts";
+import { doneQuestionOf } from "./done-judge.prompt.ts";
+import { hasForkMarker, modelOf, transcriptLinesOf } from "./fork.ts";
+import type { ForkResult, TranscriptLine } from "./fork.ts";
+import {
+  ALLOW,
+  askFork,
+  closedPrsOf,
+  closeNits,
+  FORK_FLAG,
+  ghOptions,
+  gitOut,
+  notPublished,
+  openFindings,
+  prOf,
+  publish,
+  StopInput,
+} from "./publish.live.ts";
+import type { Answer, AuthorStop, Deps, Log, StopLogRecord, Stopped } from "./publish.live.ts";
 
 const STOP_CHECKS_TIMEOUT_MS = 300_000;
 
-/** The repository of the hook's own files, where the fork guard lives; the Author's cwd may be another checkout. */
-const REPO = resolve(import.meta.dir, "..", "..", "..");
-
-// No Monitor: a fork that armed a watch waited on it until it was killed (#38, #39).
-const FORK_TOOLS = "Read,Grep,Glob,Bash";
-
-const FORK_SETTINGS = JSON.stringify({
-  hooks: {
-    PreToolUse: [
-      {
-        matcher: "*",
-        hooks: [
-          {
-            type: "command",
-            command: `bun "${join(REPO, "factory", "bin", "fork-guard.ts")}"`,
-            timeout: 30,
-          },
-        ],
-      },
-    ],
-  },
-});
-
-export const StopInput = Schema.Struct({
-  session_id: Schema.String,
-  transcript_path: Schema.String,
-  cwd: Schema.String,
-  stop_hook_active: Schema.optionalKey(Schema.Boolean),
-});
-
-export type StopInput = typeof StopInput.Type;
-
-export interface Deps {
-  readonly run: Run;
-  readonly env: Readonly<Record<string, string | undefined>>;
-  readonly now: () => number;
-  readonly startRelay: StartRelay;
-  /** Appends `line` to `.lab/outcomes.log` of the main checkout `checkout`. */
-  readonly recordOutcome: (checkout: string, line: string) => void;
-}
-
-/** One line of a session transcript, as far as this hook reads it: a message's model and its text blocks. */
-export const TranscriptLine = Schema.Struct({
-  type: Schema.optionalKey(Schema.String),
-  message: Schema.optionalKey(
-    Schema.Struct({
-      model: Schema.optionalKey(Schema.String),
-      content: Schema.optionalKey(
-        Schema.Union([Schema.String, Schema.Array(Schema.Struct({ text: Schema.optionalKey(Schema.String) }))]),
-      ),
-    }),
-  ),
-});
-
-export type TranscriptLine = typeof TranscriptLine.Type;
-
-type Content = NonNullable<NonNullable<TranscriptLine["message"]>["content"]>;
-
 /** The lines of the transcript at `path`; a missing transcript has none. */
 export function linesOf(path: string): TranscriptLine[] {
-  if (!existsSync(path)) {
-    return [];
-  }
-
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .flatMap((line, index) =>
-      line.trim() === "" ? [] : [decodeJson(TranscriptLine, `${path} line ${index + 1}`, line)],
-    );
-}
-
-function textOf(content: Content | undefined): string {
-  if (content === undefined) {
-    return "";
-  }
-
-  return Predicate.isString(content) ? content : content.map((block) => block.text ?? "").join("");
-}
-
-/** Whether a user turn of the transcript opens with the fork marker. */
-export function hasForkMarker(lines: readonly TranscriptLine[]): boolean {
-  return lines.some(
-    (line) => line.type === "user" && textOf(line.message?.content).trimStart().startsWith(FORK_MARKER),
-  );
-}
-
-/** The model of the last assistant message: the Stop input does not carry it. */
-export function modelOf(lines: readonly TranscriptLine[]): string | null {
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const model = lines[index]?.message?.model;
-
-    if (lines[index]?.type === "assistant" && model !== undefined && model !== "<synthetic>") {
-      return model;
-    }
-  }
-
-  return null;
-}
-
-/** The title and body a fork wrote: its first line, then the rest. */
-export function prTextOf(text: string): { title: string; body: string } | null {
-  const [first = "", ...rest] = text.trim().split("\n");
-  const title = first.replace(/^#+\s*/u, "").trim();
-
-  return title === "" ? null : { title, body: rest.join("\n").trim() };
-}
-
-/** What `claude -p --output-format json` prints, as far as this hook reads it. */
-export const ForkOutput = Schema.Struct({
-  result: Schema.optionalKey(Schema.String),
-  /** The answer a fork asked with `--json-schema` gives. */
-  structured_output: Schema.optionalKey(Schema.Unknown),
-  // Read on its own: a usage that does not read loses the tokens, never the fork's answer.
-  modelUsage: Schema.optionalKey(Schema.Unknown),
-});
-
-const decodeForkOutput = Schema.decodeResult(Schema.fromJsonString(ForkOutput));
-
-const decodeModelUsage = Schema.decodeUnknownResult(ModelUsage);
-
-/** `unreadable` says why the fork's output did not read: such a fork gave no answer. */
-export interface ForkResult {
-  readonly text: string;
-  /** The fork's structured output; undefined when it gave none. */
-  readonly structured: unknown;
-  readonly ms: number;
-  readonly tokens: TokenCounts | null;
-  readonly code: number;
-  readonly unreadable: string | null;
-}
-
-/** The answer a fork printed; output that does not read is no answer, and says why. */
-export function forkResultOf(stdout: string, code: number, ms: number): ForkResult {
-  const out = decodeForkOutput(stdout);
-
-  if (Result.isFailure(out)) {
-    return {
-      text: "",
-      structured: undefined,
-      ms,
-      tokens: null,
-      code,
-      unreadable: out.failure.message,
-    };
-  }
-
-  return {
-    text: out.success.result ?? "",
-    structured: out.success.structured_output,
-    ms,
-    tokens: Result.match(decodeModelUsage(out.success.modelUsage), {
-      onFailure: () => null,
-      onSuccess: tokensOf,
-    }),
-    code,
-    unreadable: null,
-  };
-}
-
-/** What the hook asks a fork: the prompt, on the session's model, and the JSON Schema its answer follows, if any. */
-interface ForkAsk {
-  readonly model: string | null;
-  readonly prompt: string;
-  readonly schema: Schema.JsonObject | null;
-}
-
-async function askFork(deps: Deps, input: StopInput, ask: ForkAsk): Promise<ForkResult> {
-  const started = deps.now();
-
-  const argv = [
-    "claude",
-    "-p",
-    "--resume",
-    input.session_id,
-    "--fork-session",
-    "--tools",
-    FORK_TOOLS,
-    "--permission-mode",
-    "dontAsk",
-    "--settings",
-    FORK_SETTINGS,
-    "--strict-mcp-config",
-    ...(ask.schema === null ? [] : ["--json-schema", JSON.stringify(ask.schema)]),
-    "--output-format",
-    "json",
-    ...(ask.model === null ? [] : ["--model", ask.model]),
-    ask.prompt,
-  ];
-
-  const ran = await deps.run(argv, {
-    cwd: input.cwd,
-    env: { [FORK_FLAG]: "1" },
-    timeoutMs: FORK_TIMEOUT_MS,
-  });
-
-  return forkResultOf(ran.stdout, ran.code, deps.now() - started);
-}
-
-async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise<string> {
-  return (await checked(deps.run, ["git", ...args], { cwd })).trim();
-}
-
-export const ListedPrs = Schema.Array(
-  Schema.Struct({
-    number: Schema.Finite,
-    isDraft: Schema.Boolean,
-    headRefOid: Schema.String,
-    isCrossRepository: Schema.Boolean,
-  }),
-);
-
-/** The options of a `gh` call: with the Author's credential once its token is found. */
-function ghOptions(cwd: string, author: AuthorToken): RunOptions {
-  return author.kind === "found" ? { cwd, env: ghEnv(author.token) } : { cwd };
-}
-
-/** The branch's open PR; `--head` also matches a fork's branch of the same name, which is not the Author's. */
-async function prOf(deps: Deps, gh: RunOptions, branch: string): Promise<PullRequest | null> {
-  const listed = decodeJson(
-    ListedPrs,
-    "gh pr list",
-    await checked(
-      deps.run,
-      [
-        "gh",
-        "pr",
-        "list",
-        "--head",
-        branch,
-        "--state",
-        "open",
-        "--json",
-        "number,isDraft,headRefOid,isCrossRepository",
-      ],
-      gh,
-    ),
-  );
-
-  const pr = listed.find((one) => !one.isCrossRepository);
-
-  return pr === undefined ? null : { number: pr.number, draft: pr.isDraft, headSha: pr.headRefOid };
-}
-
-const ListedClosedPrs = Schema.Array(
-  Schema.Struct({
-    number: Schema.Finite,
-    headRefOid: Schema.String,
-    state: Schema.String,
-    isCrossRepository: Schema.Boolean,
-  }),
-);
-
-/**
- * The branch's PRs closed without landing: `--state closed` lists the landed ones too, and `--head`
- * matches a fork's branch of the same name, which anyone can open and close.
- */
-async function closedPrsOf(deps: Deps, gh: RunOptions, branch: string): Promise<readonly ClosedPullRequest[]> {
-  const listed = decodeJson(
-    ListedClosedPrs,
-    "gh pr list --state closed",
-    await checked(
-      deps.run,
-      [
-        "gh",
-        "pr",
-        "list",
-        "--head",
-        branch,
-        "--state",
-        "closed",
-        "--json",
-        "number,headRefOid,state,isCrossRepository",
-      ],
-      gh,
-    ),
-  );
-
-  return listed
-    .filter((pr) => pr.state === "CLOSED" && !pr.isCrossRepository)
-    .map((pr) => ({ number: pr.number, headSha: pr.headRefOid }));
-}
-
-/** The App's open Important and Nit findings on PR `pr`, read as the Author. */
-async function openFindings(deps: Deps, gh: RunOptions, pr: number): Promise<readonly OpenFinding[]> {
-  const answer = await checked(
-    deps.run,
-    ["gh", "api", "graphql", "-f", `query=${threadsQueryOf(pr)}`, "-F", "owner={owner}", "-F", "name={repo}"],
-    gh,
-  );
-
-  const threads = decodeJson(ReviewThreads, "the review threads query", answer).data.repository.pullRequest
-    .reviewThreads.nodes;
-
-  return openFindingsOf(APP_LOGIN, threads);
+  return existsSync(path) ? transcriptLinesOf(readFileSync(path, "utf8"), path) : [];
 }
 
 async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: string): Promise<StopChecks> {
@@ -393,312 +85,9 @@ async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: strin
   return { kind: "green" };
 }
 
-/** The body of a PR the hook opens: the fork's body, then the closing line. */
-function openBodyOf(branch: string, forkBody: string): string {
-  return [forkBody, closingLineOf(branch, forkBody)].filter((part) => part !== null && part !== "").join("\n\n");
-}
-
-/** What Claude Code is told: let the session stop, or block the stop with a reason the Author reads. */
-export type Answer = { readonly kind: "allow" } | { readonly kind: "block"; readonly reason: string };
-
-const ALLOW: Answer = { kind: "allow" };
-
-/** One `.lab/stop.log` record: the step it logs, and that step's fields. */
-export interface StopLogRecord {
-  readonly step: string;
-  readonly [field: string]: Schema.Json;
-}
-
-type Log = (record: StopLogRecord) => void;
-
-/** What one stop of an Author gave: the hook's answer, and the outcome it leaves. */
-interface Stopped {
-  readonly answer: Answer;
-  readonly outcome: Outcome;
-}
-
-const notPublished = (reason: string, answer: Answer = ALLOW): Stopped => ({
-  answer,
-  outcome: { kind: "not-published", reason },
-});
-
 /** The stop of a decision that publishes nothing: blocked with its reason, or let go. */
 const stoppedOf = (next: Refusal, why: string): Stopped =>
   next.kind === "block" ? notPublished(why, next) : notPublished(next.reason);
-
-/** The Author's stop, as its steps read it. */
-interface AuthorStop {
-  readonly deps: Deps;
-  readonly input: StopInput;
-  readonly log: Log;
-  readonly branch: string;
-  readonly head: string;
-  /** The main checkout, where the relay runs. */
-  readonly checkout: string;
-  readonly model: string | null;
-}
-
-/** The Author's credential, found. */
-interface Credential {
-  readonly token: string;
-  readonly gh: RunOptions;
-}
-
-/**
- * Resolves the App's open Nit threads of `findings`: the Author's stop closes them. A failure leaves the
- * rest open and is logged: the next stop of an Author on the PR closes them.
- */
-async function closeNits(stopping: AuthorStop, gh: RunOptions, findings: readonly OpenFinding[]): Promise<void> {
-  const nits = findings.filter((finding) => finding.severity === "nit");
-
-  try {
-    for (const nit of nits) {
-      await resolveThread(stopping.deps.run, gh, nit.thread);
-    }
-
-    stopping.log({ step: "nits", resolved: nits.length });
-  } catch (error) {
-    stopping.log({
-      step: "nits",
-      resolved: null,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
-/** Leaves the PR's relay, when none watches it. A failure is logged: the PR is published either way. */
-function leaveRelay(stopping: AuthorStop, pr: number): void {
-  try {
-    const { input, checkout } = stopping;
-    const started = stopping.deps.startRelay({ pr, session: input.session_id, checkout });
-    stopping.log({ step: "relay", pr, relay: started });
-  } catch (error) {
-    stopping.log({
-      step: "relay",
-      pr,
-      relay: null,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
-/** Opens the PR of the pushed branch, in draft when `draft`, with the title and body a fork writes; returns its number. */
-async function openPr(stopping: AuthorStop, gh: RunOptions, draft: boolean): Promise<number> {
-  const { deps, input, branch } = stopping;
-
-  const bodyFork = await askFork(deps, input, {
-    model: stopping.model,
-    prompt: BODY_REQUEST,
-    schema: null,
-  });
-
-  const subject = await gitOut(deps, input.cwd, ["log", "-1", "--format=%s"]);
-  const text = prTextOf(bodyFork.text) ?? { title: subject, body: "" };
-  stopping.log({
-    step: "body-fork",
-    ms: bodyFork.ms,
-    tokens: bodyFork.tokens,
-    unreadable: bodyFork.unreadable,
-    title: text.title,
-  });
-
-  const body = openBodyOf(branch, text.body);
-
-  const url = await checked(
-    deps.run,
-    [
-      "gh",
-      "pr",
-      "create",
-      "--base",
-      TRUNK,
-      "--head",
-      branch,
-      ...(draft ? ["--draft"] : []),
-      "--title",
-      text.title,
-      "--body-file",
-      "-",
-    ],
-    { ...gh, stdin: body === "" ? "(no body)" : body },
-  );
-
-  return Number(/\/pull\/(\d+)/u.exec(url)?.[1]);
-}
-
-/** What the Done judge's fork was asked about, and what it answered. */
-interface Judged {
-  readonly pr: PullRequest | null;
-  readonly findings: readonly OpenFinding[];
-  readonly answer: DoneAnswer;
-  /** The PR's conversation holds a question the hook put to the Owner, still unanswered. */
-  readonly asked: boolean;
-  /** What the PR records of the findings the Author says it fixed. */
-  readonly fixed: FixedRecord;
-}
-
-async function push(stopping: AuthorStop, author: Credential): Promise<void> {
-  await checked(stopping.deps.run, pushArgs(stopping.branch), {
-    cwd: stopping.input.cwd,
-    env: { LAB_AUTHOR_TOKEN: author.token },
-    timeoutMs: 120_000,
-  });
-}
-
-/**
- * Puts the Author's question to the Owner on a draft PR, so nothing lands while it is open: a ready PR
- * goes back to draft before the push, a branch with none opens one in draft. The question is posted
- * unless one the Owner has not answered is there already, and the relay is left to bring the answer.
- */
-async function askOwner(
-  stopping: AuthorStop,
-  author: Credential,
-  action: Extract<Action, { kind: "ask" }>,
-): Promise<Stopped> {
-  const { deps, input, log, branch } = stopping;
-
-  if (action.pr !== null && action.toDraft) {
-    await checked(deps.run, ["gh", "pr", "ready", String(action.pr), "--undo"], author.gh);
-  }
-
-  await push(stopping, author);
-
-  const pr = action.pr ?? (await openPr(stopping, author.gh, true));
-  const posted = action.post;
-
-  if (posted) {
-    await checked(deps.run, ["gh", "pr", "comment", String(pr), "--body-file", "-"], {
-      ...author.gh,
-      stdin: questionCommentOf(action.question, branch, input.session_id),
-    });
-  }
-
-  log({ step: "question", pr, posted });
-  leaveRelay(stopping, pr);
-
-  return { answer: ALLOW, outcome: { kind: "asked", pr, reason: action.reason } };
-}
-
-/**
- * Records on PR `pr` the findings the Author says it fixed, in the hook's one comment there, posted or
- * edited. It goes before the push, so the Merge bot run the push starts reads it for its ledger. A
- * failure is logged: the ledger only shows it, so the PR is published either way.
- */
-async function recordFixed(
-  stopping: AuthorStop,
-  author: Credential,
-  pr: number,
-  { judged, posted }: { readonly judged: Judged; readonly posted: readonly Rejection[] },
-): Promise<void> {
-  const recorded = fixedOf(
-    judged.answer.fixed,
-    judged.findings.map((finding) => finding.thread),
-    posted,
-  );
-
-  const body = fixedRecordBodyOf(judged.fixed, recorded);
-
-  if (body === null) {
-    return;
-  }
-
-  const { comment } = judged.fixed;
-
-  try {
-    await (comment === null
-      ? checked(stopping.deps.run, ["gh", "pr", "comment", String(pr), "--body-file", "-"], {
-          ...author.gh,
-          stdin: body,
-        })
-      : checked(
-          stopping.deps.run,
-          ["gh", "api", "-X", "PATCH", `repos/{owner}/{repo}/issues/comments/${comment}`, "--input", "-"],
-          { ...author.gh, stdin: JSON.stringify({ body }) },
-        ));
-
-    stopping.log({ step: "fixed", threads: [...recorded] });
-  } catch (error) {
-    stopping.log({ step: "fixed", threads: null, error: error instanceof Error ? error.message : String(error) });
-  }
-}
-
-/**
- * The Publication: the rejections first, each a reply and a resolved thread, and the findings the Author
- * fixed, then the push, the PR opened or readied, the Nit threads resolved and the relay left. A push that
- * fails writes nothing after it.
- */
-async function publish(stopping: AuthorStop, author: Credential, judged: Judged): Promise<Stopped> {
-  const { deps, log, head } = stopping;
-  const action = decide(judged.pr, judged.answer, judged.asked);
-
-  if (action.kind === "none") {
-    return notPublished(action.reason);
-  }
-
-  const logDropped = (dropped: readonly Rejection[]): void => {
-    for (const rejection of dropped) {
-      log({ step: "rejection-dropped", thread: rejection.thread, reason: rejection.reason.slice(0, 300) });
-    }
-  };
-
-  if (action.kind === "ask" || action.kind === "hold") {
-    logDropped(judged.answer.rejections);
-  }
-
-  if (action.kind === "ask") {
-    return askOwner(stopping, author, action);
-  }
-
-  if (action.kind === "hold") {
-    leaveRelay(stopping, action.pr);
-
-    return notPublished(action.reason);
-  }
-
-  const rejections = rejectionsOf(
-    judged.answer.rejections,
-    judged.findings.map((finding) => finding.thread),
-  );
-
-  logDropped(rejections.dropped);
-
-  for (const rejection of rejections.posted) {
-    await replyInThread(deps.run, author.gh, rejection.thread, rejectionReplyOf(rejection.reason));
-    await resolveThread(deps.run, author.gh, rejection.thread);
-    log({ step: "rejection", thread: rejection.thread });
-  }
-
-  if (action.kind === "push") {
-    await recordFixed(stopping, author, action.pr, { judged, posted: rejections.posted });
-  }
-
-  await push(stopping, author);
-
-  let number: number;
-
-  if (action.kind === "open") {
-    number = await openPr(stopping, author.gh, false);
-  } else {
-    number = action.pr;
-
-    if (action.ready) {
-      await checked(deps.run, ["gh", "pr", "ready", String(number)], author.gh);
-    }
-  }
-
-  log({ step: "published", action: action.kind, pr: number, head });
-
-  const rejected = new Set(rejections.posted.map((rejection) => rejection.thread));
-
-  await closeNits(
-    stopping,
-    author.gh,
-    judged.findings.filter((finding) => !rejected.has(finding.thread)),
-  );
-  leaveRelay(stopping, number);
-
-  return { answer: ALLOW, outcome: { kind: "published", pr: number } };
-}
 
 /** The Done judge: a fork of the session answers whether the change is finished and which findings the Author rejects or fixed. */
 function askDoneJudge(stopping: AuthorStop, findings: readonly OpenFinding[]): Promise<ForkResult> {
@@ -847,7 +236,7 @@ function stopIn(
 /** Appends `line` to `.lab/outcomes.log` of the main checkout `checkout`. */
 function appendOutcome(checkout: string, line: string): void {
   mkdirSync(join(checkout, ".lab"), { recursive: true });
-  appendFileSync(join(checkout, ".lab", "outcomes.log"), `${line}\n`);
+  appendFileSync(join(checkout, OUTCOMES_LOG), `${line}\n`);
 }
 
 /** Reads, decides and acts; returns what Claude Code is told. `log` gets one record per step. */

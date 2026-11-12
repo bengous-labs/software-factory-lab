@@ -1,8 +1,8 @@
 /**
  * Mutation testing on what a change alters in the modules `stryker.config.ts` lists, or in the test
- * file `TESTS` gives each: Stryker mutates each such module whole, in a pass of its own against that
- * test file alone. A survivor whose lines meet a changed line of the module fails. When the test file
- * changed, a second pass runs the module and its tests as they were at the base, and a mutant they
+ * files `TESTS` gives each: Stryker mutates each such module whole, in a pass of its own against those
+ * test files alone. A survivor whose lines meet a changed line of the module fails. When one of its test
+ * files changed, a second pass runs the module and its tests as they were at the base, and a mutant they
  * killed that survives now fails too: the tests were weakened. Each failure is named with its file,
  * line, mutator and replacement. A whole module, since Stryker keeps a mutant only when its whole node
  * lies inside a line range: a block or a condition that spans past a changed line would go untested.
@@ -166,22 +166,25 @@ export function rangeLabel(range: LineRange): string {
   return `${range.file}:${range.start}-${range.end}`;
 }
 
-/** The test file a pass runs against a listed module. */
-export function testFileOf(module: string, tests: Readonly<Record<string, string>> = TESTS): string {
-  const testFile = tests[module];
+/** Each listed module, with the test files a pass runs against it. */
+export type Tests = Readonly<Record<string, readonly string[]>>;
 
-  if (testFile === undefined) {
+/** The test files a pass runs against a listed module. */
+export function testFilesOf(module: string, tests: Tests = TESTS): readonly string[] {
+  const testFiles = tests[module];
+
+  if (testFiles === undefined || testFiles.length === 0) {
     throw new Error(`${module}: no test file in stryker.config.ts's TESTS`);
   }
 
-  return testFile;
+  return testFiles;
 }
 
-/** The listed modules the hunks reach, through their own lines or their test file, each once. */
-export function modulesOf(hunks: readonly Hunk[], tests: Readonly<Record<string, string>> = TESTS): string[] {
+/** The listed modules the hunks reach, through their own lines or one of their test files, each once. */
+export function modulesOf(hunks: readonly Hunk[], tests: Tests = TESTS): string[] {
   const reached = hunks.flatMap((hunk) =>
-    Object.entries(tests).flatMap(([module, testFile]) =>
-      module === hunk.file || testFile === hunk.file ? [module] : [],
+    Object.entries(tests).flatMap(([module, testFiles]) =>
+      module === hunk.file || testFiles.includes(hunk.file) ? [module] : [],
     ),
   );
 
@@ -347,14 +350,9 @@ async function renamesSince(repoRoot: string, sha: string, paths: readonly strin
  * The hunks of the listed modules and their test files since the merge-base with the base. A file
  * moved since is diffed against its path there, so a move counts only the lines it changed.
  */
-export async function changeSince(
-  repoRoot: string,
-  tests: Readonly<Record<string, string>>,
-  base: string | undefined,
-  env: Env,
-): Promise<Change> {
+export async function changeSince(repoRoot: string, tests: Tests, base: string | undefined, env: Env): Promise<Change> {
   const since = await mergeBaseWith(repoRoot, baseOf(base, env));
-  const paths = [...new Set(Object.entries(tests).flat())];
+  const paths = [...new Set(Object.entries(tests).flat(2))];
   const renamedFrom = await renamesSince(repoRoot, since, paths);
 
   const diff = await gitRead(repoRoot, [
@@ -397,18 +395,16 @@ export function githubOutput(hunks: readonly Hunk[]): string {
  * What a pass adds to `stryker.config.ts`: one module, whole, and its own tests alone. The command
  * runner reads only the exit code, so `--bail` stops at the first failing test: it kills the mutant.
  */
-export function runOptions(module: string, tests: Readonly<Record<string, string>> = TESTS) {
+export function runOptions(module: string, tests: Tests = TESTS) {
+  const testFiles = testFilesOf(module, tests).map((testFile) => `./${testFile}`);
+
   return {
     mutate: [module],
-    commandRunner: { command: `FAST_CHECK_SEED=${FAST_CHECK_SEED} bun test --bail ./${testFileOf(module, tests)}` },
+    commandRunner: { command: `FAST_CHECK_SEED=${FAST_CHECK_SEED} bun test --bail ${testFiles.join(" ")}` },
   };
 }
 
-export async function mutate(
-  repoRoot: string,
-  module: string,
-  tests: Readonly<Record<string, string>> = TESTS,
-): Promise<MutantResult[]> {
+export async function mutate(repoRoot: string, module: string, tests: Tests = TESTS): Promise<MutantResult[]> {
   const { Stryker: Runner } = await import("@stryker-mutator/core");
   // Stryker copies the working directory into its sandbox, and mutates the copy.
   process.chdir(repoRoot);
@@ -420,16 +416,16 @@ async function existsAt(repoRoot: string, sha: string, path: string): Promise<bo
   return (await git(repoRoot, ["cat-file", "-e", `${sha}:${path}`])).exitCode === 0;
 }
 
-/** The pass over the module and its tests as they were at `sha`; `null` when either was missing. */
+/** The pass over the module and its tests as they were at `sha`; `null` when it or one of them was missing. */
 async function mutateAt(
   repoRoot: string,
   sha: string,
   module: string,
-  testFile: string,
+  testFiles: readonly string[],
 ): Promise<MutantResult[] | null> {
-  const [found, tested] = await Promise.all([existsAt(repoRoot, sha, module), existsAt(repoRoot, sha, testFile)]);
+  const found = await Promise.all([module, ...testFiles].map((path) => existsAt(repoRoot, sha, path)));
 
-  if (!found || !tested) {
+  if (found.includes(false)) {
     return null;
   }
 
@@ -438,7 +434,7 @@ async function mutateAt(
   try {
     await symlink(join(repoRoot, "node_modules"), join(dir, "node_modules"), "dir");
 
-    return await mutate(dir, module, { [module]: testFile });
+    return await mutate(dir, module, { [module]: testFiles });
   } finally {
     process.chdir(repoRoot);
     await rm(dir, { recursive: true, force: true });
@@ -470,8 +466,8 @@ async function runPasses(change: Change): Promise<number> {
   let failed = 0;
 
   for (const module of modulesOf(change.hunks)) {
-    const testFile = testFileOf(module);
-    const testsChanged = change.hunks.some((hunk) => hunk.file === testFile);
+    const testFiles = testFilesOf(module);
+    const testsChanged = change.hunks.some((hunk) => testFiles.includes(hunk.file));
     const source = await Bun.file(join(REPO_ROOT, module)).text();
     const head = await mutate(REPO_ROOT, module);
 
@@ -480,7 +476,7 @@ async function runPasses(change: Change): Promise<number> {
           REPO_ROOT,
           change.since,
           change.renamedFrom.get(module) ?? module,
-          change.renamedFrom.get(testFile) ?? testFile,
+          testFiles.map((testFile) => change.renamedFrom.get(testFile) ?? testFile),
         )
       : null;
 

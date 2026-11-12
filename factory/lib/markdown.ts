@@ -10,9 +10,11 @@ const TILDE_FENCE = /(?<=^|\n)(?<tilde>~{3,})(?!~)[^\n]*\n[\s\S]*?(?<=\n) {0,3}\
  * A word GitHub's extended autolink may take, from `www.` or `scheme://` to the next ASCII space: once
  * its `<` are written `&lt;`, the link runs through them, backticks and brackets included. Its brackets
  * stay, so the link keeps its target; its `<` and backticks are escaped, so a code span cannot open
- * inside it, and a word GitHub does not link pairs with nothing.
+ * inside it, and a word GitHub does not link pairs with nothing. `\t-\r` is the tab, the line feed, the
+ * vertical tab, the form feed and the carriage return, as a range: the mutation job's regex mutator turns
+ * a written `\v` into `\V`, which no Unicode pattern parses, and the module stops loading.
  */
-const AUTOLINK = /(?:[Ww]{3}\.|[A-Za-z][A-Za-z\d+.-]*:\/\/)[^ \t\n\v\f\r]*/u;
+const AUTOLINK = /(?:[Ww]{3}\.|[A-Za-z][A-Za-z\d+.-]*:\/\/)[^ \t-\r]*/u;
 
 /** A code span on one line with no `|`: a table cell would split it, and GitHub would read its content as text. */
 const CODE_SPAN = /(?<!`)(?<ticks>`+)(?!`)[^\n|]*?(?<!`)\k<ticks>(?!`)/u;

@@ -1,12 +1,17 @@
 # software-factory-lab
 
-This repository builds a software factory: a dark factory where agents turn issues into landed changes, and the Owner, the one human accountable for it, steps in only where human judgment is needed. Orchestrators hand issues to Workers; each Worker implements its issue, commits and stops, and the Land loop publishes its change as a pull request, brings the review back to it, and lands it. The Owner talks to the Orchestrators and approves the pull requests too critical to land alone.
+This repository builds a software factory: a dark factory where agents turn issues into landed changes, and the Owner, the one human accountable for it, steps in only where human judgment is needed.
+Orchestrators hand issues to Workers; each Worker implements its issue, commits and stops, and the Land loop publishes its change as a pull request, brings the review back to it, and lands it.
+The Owner talks to the Orchestrators and approves the pull requests too critical to land alone.
 
-The factory is built one subsystem at a time, and its design keeps moving. The Land loop, which carries a finished change through review to the Trunk, is the first subsystem in place, and it is still being built. Read what exists as one part of the factory, not as its whole shape. The app under `app/` is a small task CLI that gives the agents something to change; `docs/usage.md` documents it.
+The factory is built one subsystem at a time, and its design keeps moving.
+The Land loop, which carries a finished change through review to the Trunk, is the first subsystem in place, and it is still being built.
+Read what exists as one part of the factory, not as its whole shape.
 
 ## Roles
 
-Each session reads its role's instructions at start, from `factory/roles/`: `worker.md` for a Worker, a session whose environment holds `LAB_AUTHOR=1`, or `LAB_ROLE=worker` for a session the Worker bench (`scripts/lab/bench.ts`) launches, and `owner.md` for every other session, which the Owner attends. `factory/hooks/role.ts` gives them.
+Each session reads its role's instructions at start, from `factory/roles/`: `worker.md` for a Worker, a session whose environment holds `LAB_AUTHOR=1`, or `LAB_ROLE=worker` for a session the Worker bench (`scripts/lab/bench.ts`) launches, and `owner.md` for every other session, which the Owner attends.
+`factory/hooks/role.ts` gives them.
 
 ## How to decide
 
@@ -17,44 +22,32 @@ The factory is young and its design moves: a rule serves the goal, it is not the
 - A choice that changes how the factory works beyond the task at hand (a new step, a new actor, a door to the Owner that moves) is the Owner's: ask the Owner, as your role's instructions say.
 - A rule gives its reason. Where the reason does not hold for your case, say so in the commit message. Where a rule is wrong, change it in the same pull request.
 
+## Where things are
+
+- `factory/`: the factory's own code. `factory/AGENTS.md` is its map, and a directory with a design of its own holds an `AGENTS.md` (each step of `land/` and `land/shared/`, `dispatch/`, `watch/`, `hooks/`, `install/`): Claude Code loads one when you read a file of that directory with the Read tool.
+- `app/`: a small task CLI that gives the agents something to change; `docs/usage.md` documents it.
+- `scripts/`: the tooling that checks both: the gates, the lint rules, the CI scripts, the Worker bench, and two hooks of this repository's own toolchain.
+- `.claude/` and `.github/`: what plugs the factory into this repository: the hooks' wiring, the skills, the workflows, the factory config.
+
 ## Commands
 
 - `bun check` is the one check: CI's `validate` job and the Stop hook run it. It chains the typecheck, oxlint, the format check, the gates in `scripts/gates/`, knip, the tests with coverage, then the coverage floor. `scripts/ci/check.ts` holds the stages: green prints one line, red prints the failing stage's output and names it last.
 - `bun run mods` validates and tests the mods under `.claude/plugins/` with the Claude Code that `bun install` puts in `node_modules`; `bun check` runs it.
 - `bun test <file>` runs one test file; add `-t <name>` to run the tests whose name matches.
-- `bun scripts/ci/mutation.ts run` is CI's `mutation` job: Stryker on each module `stryker.config.ts` lists that your branch changes, through its lines or its test file. `bun check` does not run it; run it before you stop when your change reaches one of those modules.
+- `bun scripts/ci/mutation.ts run` is CI's `mutation` job: Stryker on each module `stryker.config.ts` lists that your branch changes, through its lines or its tests. `bun check` does not run it; run it before you stop when your change reaches one of those modules.
 - `bun app/src/cli.ts <command>` runs the CLI on `todo.json`, or on the file `TODO_FILE` names.
-- `bun factory/bin/dispatch.ts <issue> [--model <model>]`, or `/dispatch <issue>` in the Owner's session, hands an issue to a Worker: its worktree from `origin/dev`, and a background session launched with the one versioned prompt.
-- `bun factory/bin/watch.ts [--standing] [<issue>...]`, or `/watch` in the Owner's session, follows the Workers of those issues until every one is closed, or the open PRs until it is stopped: one line per event, and with `--standing` first what an earlier run told that still holds.
 
-## Architecture
+## The app
 
-The repository holds the factory (`factory/`), the app the agents change (`app/`), and the tooling that checks both (`scripts/gates/`, `scripts/lint/`, `scripts/ci/`, `scripts/hooks/`, `scripts/lab/`). Inside the factory: the Land loop (`land/`), Dispatch and the watch (`dispatch/`, `watch/`), the measure (`measure/`), the session hooks (`hooks/`), the roles' instructions (`roles/`), what an installation sets (`install/`), the names stored outside the code (`contract.ts`), and small helpers the tooling imports too (`lib/`). `factory/bin/` holds one file per process, the only files a hook, a workflow or a skill names.
-
-### The Land loop
-
-The Trunk is `dev`; `main` is the release branch. A finished change goes through five steps, each in its own directory under `factory/land/`:
-
-1. `stop/`: the Stop hook publishes an Author's committed branch as a pull request.
-2. `relay/`: one process per pull request starts a turn in the Author's session when the pull request needs it.
-3. `merge-bot/`: on each pull request event, the Merge bot routes the pull request, has it reviewed, posts the two required checks and enables the merge.
-4. `routing/` and `review/`: the Judges that route and review.
-5. `queue/`: GitHub's merge queue lands the change.
-
-The rules under `.claude/rules/` hold each step's design. Claude Code loads one when you read a file it covers.
-
-### The app
-
-`app/src/commands/` holds one pure function over the task list per command; `app/src/cli.ts` parses argv, loads the store and saves the result. `app/src/store/` is the task file format: a change there can make existing task files unreadable, and both format versions in `app/test/fixtures/` must still read.
-
-### Layers
-
-`scripts/lint/layers.map.ts` places every linted file in a package and a layer, and the `local/layers` lint rule holds each file to what its layer may import and do. Under `factory/` the layer is read in the file's name: `x.ts` is pure logic, `x.live.ts` calls outside (a process, a model, a file), `x.port.ts` is the type through which logic takes such a call, `x.prompt.ts` and `x.actor.ts` are a Judge's text and settings, `x.test.ts` and `x.fixtures.ts` are tests, and a file of `bin/` or `hooks/` is a process's entry. Pure logic takes from `effect` only its data toolbox as values (`Schema`, `Data`, `Option`, `Result`, `Exit`, `Struct`). Only the infra, entry, tooling and test layers do I/O (`fetch`, `process`, any `Bun` member but `Bun.Glob`). The same rule holds the factory's zones: a directory imports only what lies below it (`land/shared/`, `install/`, `contract.ts`, `lib/`), a step of the Land loop never imports another step, except the Merge bot, which calls the routing and the review, the factory imports nothing outside `factory/`, and the tooling imports only `factory/lib/`. A file that no glob of the map matches fails the lint. The map and the rule belong to the Owner: fix a refused import by moving the I/O to the entry point or behind a port.
+`app/src/commands/` holds one pure function over the task list per command; `app/src/cli.ts` parses argv, loads the store and saves the result.
+`app/src/store/` is the task file format: a change there can make existing task files unreadable, and both format versions in `app/test/fixtures/` must still read.
 
 ## Gates
 
+- `scripts/lint/layers.map.ts` places every linted file in a package and a layer, and the `local/layers` lint rule holds each file to what its layer may import and do. Only the infra, entry, tooling and test layers do I/O (`fetch`, `process`, any `Bun` member but `Bun.Glob`). A file that no glob of the map matches fails the lint. The map and the rule belong to the Owner: fix a refused import by moving the I/O to the entry point or behind a port.
 - A lint suppression names its rules and gives its reason on the same line: `// oxlint-disable-next-line some-rule -- why`. `local/layers` and the budget rules of `scripts/lint/exceptions.ts` admit no suppression.
-- `scripts/lint/exceptions.ts` lists the functions over budget, each with its measure. The list only shrinks: an entry leaves when its function is fixed, and the ratchet fails when a listed measure moves.
+- `scripts/lint/exceptions.ts` holds the budgets, a file's length among them, and lists the functions over budget, each with its measure. The list only shrinks: an entry leaves when its function is fixed, and the ratchet fails when a listed measure moves.
+- A path that names no file fails `bun run gates`: a rule's glob, a mutated module, a script a hook, a workflow or a skill names, an `ownerPaths` glob of the factory config.
 - The coverage floor in `scripts/gates/check-coverage-floor.ts` only rises.
 - Property tests use fast-check. `FAST_CHECK_SEED` fixes their seed; the mutation passes set it.
 - A test that runs git on a fixture repository passes `fixtureEnv` (`scripts/gates/fixture-env.ts`) as its environment, so an inherited `GIT_DIR` cannot reach the real repository.

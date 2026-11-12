@@ -2,7 +2,7 @@
  * The Land loop's safety guarantees, as properties over the pure decisions that enforce them: the
  * Routing rules and the Merge bot's `decide`. A change to that code that breaks one fails `bun check`;
  * a change that weakens one here shows in its diff, for the Code review to read. The generators they
- * share with the other tests of those modules live in `arbitraries.ts`.
+ * share with the other tests of those modules live in `arbitraries.fixtures.ts`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -31,7 +31,8 @@ import {
   UNDER,
   withdrawn,
 } from "./arbitraries.fixtures.ts";
-import type { Snapshot, StateRecord } from "./merge-bot/decide.ts";
+import type { StateRecord } from "./merge-bot/record.ts";
+import type { Snapshot } from "./merge-bot/snapshot.ts";
 import type { RoutingAnswer, RoutingInput } from "./routing/routing-rules.ts";
 import { judgeAskOf, NON_EXECUTABLE, routingOf, routingRulesOf } from "./routing/routing-rules.ts";
 

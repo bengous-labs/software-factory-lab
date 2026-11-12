@@ -15,6 +15,14 @@ export const BUDGETS = {
 
 export type BudgetRule = keyof typeof BUDGETS;
 
+/**
+ * The budget of a file: an agent reads a file whole, so a file that grows past it is cut where its rules
+ * part. No exception lists a file: every line counts, comments and blank lines included.
+ */
+export const FILE_BUDGETS = {
+  "eslint/max-lines": ["error", { max: 800 }],
+} satisfies DummyRuleMap;
+
 export interface Exception {
   readonly file: string;
   readonly rule: BudgetRule;

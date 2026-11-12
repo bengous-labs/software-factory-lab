@@ -6,6 +6,7 @@
  *   bun factory/bin/watch.ts [--standing] [<issue>...]
  */
 
+import { run } from "../lib/run.live.ts";
 import { main } from "../watch/watch.live.ts";
 
-await main();
+await main({ run });

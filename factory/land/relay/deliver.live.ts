@@ -9,11 +9,10 @@
 import { connect } from "node:net";
 import { join } from "node:path";
 
+import type { Env } from "../../lib/env.ts";
 import type { Run } from "../../lib/run.port.ts";
 import { checked } from "../../lib/run.port.ts";
 import type { Delivered, Route } from "./wakes.ts";
-
-type Env = Readonly<Record<string, string | undefined>>;
 
 /** The paths the messaging socket of the Claude Code process `pid` may have, most likely first. */
 export function socketPathsOf(pid: number, env: Env, uid: number): readonly string[] {

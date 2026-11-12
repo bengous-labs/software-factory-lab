@@ -1,21 +1,22 @@
 /**
  * The Author's GitHub credential: the fine-grained token of the machine account
- * `bengous-labs-author`, which every write the Author's code makes on GitHub goes out under.
+ * (`AUTHOR_LOGIN`), which every write the Author's code makes on GitHub goes out under.
  */
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { CONFIG_DIR } from "../../install/host.ts";
+import type { Env } from "../../lib/env.ts";
+
 /** Under `homedir()`, which reads HOME and falls back to the user's passwd entry: never a path relative to the work tree. */
-export const AUTHOR_TOKEN_PATH = join(homedir(), ".config", "software-factory-lab", "author-token");
+export const AUTHOR_TOKEN_PATH = join(homedir(), ".config", CONFIG_DIR, "author-token");
 
 /** `path` is the file read, found or not. */
 export type AuthorToken =
   | { readonly kind: "found"; readonly token: string; readonly path: string }
   | { readonly kind: "missing"; readonly path: string };
-
-type Env = Readonly<Record<string, string | undefined>>;
 
 /** The file `LAB_AUTHOR_TOKEN_FILE` names, or `AUTHOR_TOKEN_PATH` when it is unset. */
 export function authorTokenPathOf(env: Env): string {
@@ -43,7 +44,7 @@ export function requiredAuthorToken(env: Env): string {
 
   if (author.kind === "missing") {
     throw new Error(
-      `no Author token at ${author.path}: the Owner provisions it (.claude/rules/identities.md); nothing was posted`,
+      `no Author token at ${author.path}: the Owner provisions it (factory/install/AGENTS.md); nothing was posted`,
     );
   }
 

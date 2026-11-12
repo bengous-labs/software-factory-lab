@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { relayEnvOf, relayFilesOf, relayStarter, watchesOf } from "./relay-start.live.ts";
-import type { RelayIo } from "./relay-start.live.ts";
+import type { RelayStartIo } from "./relay-start.live.ts";
 
 const RELAY = resolve(import.meta.dir, "..", "..", "bin", "relay.ts");
 
@@ -19,7 +19,7 @@ function world(watching: ReadonlyMap<number, number> = new Map()) {
   const left: Left[] = [];
   const asked: Array<[number, number]> = [];
 
-  const io: RelayIo = {
+  const io: RelayStartIo = {
     watches: (pid, pr) => {
       asked.push([pid, pr]);
 
@@ -46,6 +46,10 @@ function world(watching: ReadonlyMap<number, number> = new Map()) {
 }
 
 describe("relayStarter", () => {
+  test("the script it leaves running is a file of the factory", () => {
+    expect(existsSync(RELAY)).toBe(true);
+  });
+
   test("a Publication starts one relay for its PR in the main checkout, and names its session", () => {
     const { checkout, left, start } = world();
 

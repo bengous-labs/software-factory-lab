@@ -13,7 +13,8 @@ import { Result, Schema } from "effect";
 
 import { branchMadeFor, CI_CHECKS, LAND_GATE, REVIEW_CHECK } from "../contract.ts";
 import { APP_LOGIN } from "../install/logins.ts";
-import { gateWaitOf, REVIEW_DEADLINE_MS } from "../land/merge-bot/decide.ts";
+import { gateWaitOf } from "../land/merge-bot/gate.ts";
+import { REVIEW_DEADLINE_MS } from "../land/merge-bot/review-job.ts";
 import { openQuestionOf } from "../land/shared/author-mark.ts";
 import { decodeJson } from "../lib/json.ts";
 import { unescapeHtml } from "../lib/markdown.ts";

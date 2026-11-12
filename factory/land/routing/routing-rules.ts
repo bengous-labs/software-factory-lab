@@ -1,12 +1,13 @@
 /**
- * The Routing rules: what sets a change's Land route and Review depth whatever a model says of it, under
- * the routing policy of the factory config. A path of `ownerPaths`, or the factory config itself, sends
- * the change to the Owner. A path of `factoryPaths` or `deepReviewPaths` gets a deep Code review and
- * lands without the Owner once CI is green and no Important is open. A change that only deletes files,
- * Markdown or text among them, gets a light review. A change that touches a path outside `factoryPaths`
- * goes to the Owner when one of its commits is breaking. A change past `lineCap` gets a deep Code review. The Routing judge answers the Review depth of the paths no rule names; it
- * never sets the Land route. A change with a path of `ownerPaths`, `factoryPaths` or `deepReviewPaths`,
- * or the factory config, gets a security pass in each Review round.
+ * The Routing rules: what sets a change's Land route and Review depth whatever a model says of it, under the
+ * routing policy of the factory config. A path of `ownerPaths`, or the factory config itself, sends the
+ * change to the Owner. A path of `factoryPaths` or `deepReviewPaths` gets a deep Code review and lands
+ * without the Owner once CI is green and no Important is open. A change that only deletes files, Markdown or
+ * text among them, gets a light review. A change that touches a path outside `factoryPaths` goes to the Owner
+ * when one of its commits is breaking. A change past `lineCap` gets a deep Code review. The Routing judge
+ * answers the Review depth of the paths no rule names; it never sets the Land route. A change with a path of
+ * `ownerPaths`, `factoryPaths` or `deepReviewPaths`, or the factory config, gets a security pass in each
+ * Review round.
  */
 
 import type { LandRoute, ReviewDepth } from "../../contract.ts";

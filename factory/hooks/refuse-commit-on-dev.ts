@@ -2,7 +2,7 @@
 
 /**
  * The PreToolUse hook on Bash. It denies a `git commit` that would run while the checked-out branch is
- * `dev`: GitHub refuses a direct push to `dev`, so such a commit is never published. It leaves every
+ * the Trunk: GitHub refuses a direct push to it, so such a commit is never published. It leaves every
  * other command alone, and a commit on any other branch or on a detached HEAD. It throws when its input
  * does not read.
  *
@@ -14,10 +14,10 @@ import { resolve } from "node:path";
 
 import { $ } from "bun";
 
+import { TRUNK } from "../install/host.ts";
 import { bashCallOf, partsOf } from "../lib/bash.ts";
 import type { Part } from "../lib/bash.ts";
-
-const PROTECTED_BRANCH = "dev";
+import type { Env } from "../lib/env.ts";
 
 /** The git global options that take their value as the next word. */
 const VALUED_OPTIONS = new Set(["-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"]);
@@ -54,9 +54,6 @@ export function commitDirOf(words: readonly string[], cwd: string): string | nul
 
   return null;
 }
-
-/** The environment a Bash command expands its variables from. */
-export type Env = Readonly<Record<string, string | undefined>>;
 
 /** `word` with its `~` and `$VAR` expanded from `env`, or null when it holds what the hook cannot expand. */
 function expandedOf(word: string, env: Env): string | null {
@@ -158,8 +155,8 @@ export function commitDirsOf(command: string, cwd: string, env: Env): readonly s
 
 /** Why a commit on `branch` is refused, or null when it may go ahead; `branch` is null on a detached HEAD. */
 export function refusalFor(branch: string | null): string | null {
-  return branch === PROTECTED_BRANCH
-    ? `Refused: the checked-out branch is \`${PROTECTED_BRANCH}\`. GitHub accepts \`${PROTECTED_BRANCH}\` only through a pull request, so this commit would never be published. Create a branch first with \`git switch -c <branch>\`, then commit there.`
+  return branch === TRUNK
+    ? `Refused: the checked-out branch is \`${TRUNK}\`. GitHub accepts \`${TRUNK}\` only through a pull request, so this commit would never be published. Create a branch first with \`git switch -c <branch>\`, then commit there.`
     : null;
 }
 

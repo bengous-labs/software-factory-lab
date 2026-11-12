@@ -6,30 +6,33 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 
 import {
+  branchMadeFor,
   CI_CHECKS,
   DELTA_READ,
   LAND_APPROVAL_LABEL,
   LAND_GATE,
   LANDED_OPEN_MARKER,
   landLabelOf,
+  landRouteOf,
   MERGE_BOT_STATE_MARKER,
+  OUTCOMES_LOG,
   REVIEW_CHECK,
   reviewLabelOf,
   storedLandRouteOf,
 } from "./contract.ts";
 import { FACTORY_CONFIG_PATH } from "./install/factory-config.ts";
-import { EMPTY_RECORD, recordOfComment, stateCommentOf, storedOfRecord } from "./land/merge-bot/decide.ts";
-import type { StateRecord } from "./land/merge-bot/decide.ts";
+import { EMPTY_RECORD, recordOfComment, stateCommentOf, storedOfRecord } from "./land/merge-bot/record.ts";
+import type { StateRecord } from "./land/merge-bot/record.ts";
 import { relayFilesOf } from "./land/relay/relay-start.live.ts";
-import { reviewMarkerOf } from "./land/review/post-plan.ts";
 import { FORK_PARENT } from "./land/review/review-session.live.ts";
 import { STRUCTURED_OUTPUT } from "./land/shared/ask.live.ts";
 import { AUTHOR_MARK, FIXED_MARK, QUESTION_MARK, REJECT_MARK } from "./land/shared/author-mark.ts";
-import { markerOf, movedLineOf, reviewOfBody, severityOfBody } from "./land/shared/findings.ts";
+import { markerOf, movedLineOf, reviewMarkerOf, reviewOfBody, severityOfBody } from "./land/shared/findings.ts";
 import { FORK_MARKER } from "./land/stop/decide.ts";
-import { FORK_FLAG } from "./land/stop/hook.live.ts";
+import { FORK_FLAG } from "./land/stop/publish.live.ts";
 import { AUTHOR_VARIABLE, ROLE_VARIABLE } from "./lib/author-session.ts";
 
 const REQUEST = {
@@ -76,6 +79,32 @@ describe("the names GitHub's ruleset and the open pull requests hold", () => {
       auto: "auto",
       owner: "human",
     });
+  });
+
+  test("the Land mod, which cannot import these names, spells the Land gate and the Land approval label the same", async () => {
+    const mod = await Bun.file(join(import.meta.dir, "..", ".claude", "plugins", "land", "hooks", "land.tsx")).text();
+
+    expect(mod).toContain(`const LABEL = "${LAND_APPROVAL_LABEL}";`);
+    expect(mod).toContain(`const GATE = "${LAND_GATE}";`);
+  });
+
+  test("a stored Land route reads back as auto only when it says auto: any other value is the Owner's", () => {
+    expect(["auto", "human", "owner", ""].map((stored) => landRouteOf(stored))).toEqual([
+      "auto",
+      "owner",
+      "owner",
+      "owner",
+    ]);
+  });
+
+  test("a branch is made for an issue when its name opens with a type, the issue's number and a dash", () => {
+    expect(branchMadeFor("issue/12-add-a-flag", 12)).toBe(true);
+    expect(branchMadeFor("origin/fix/12-x", 12)).toBe(true);
+    expect(branchMadeFor("issue/123-add-a-flag", 12)).toBe(false);
+    expect(branchMadeFor("issue/12", 12)).toBe(false);
+    expect(branchMadeFor("12-add-a-flag", 12)).toBe(false);
+    expect(branchMadeFor("x/issue/12-a", 12)).toBe(false);
+    expect(branchMadeFor("Issue/12-a", 12)).toBe(false);
   });
 
   test("the labels that carry a Land route and a Review depth", () => {
@@ -199,11 +228,13 @@ describe("the names sessions and files hold", () => {
 
   test("the factory config's path, and a relay's files under the main checkout", () => {
     expect(FACTORY_CONFIG_PATH).toBe(".github/software-factory.json");
+    expect(OUTCOMES_LOG).toBe(".lab/outcomes.log");
     expect(relayFilesOf("/repo", 7)).toEqual({
       stateDir: "/repo/.lab/state",
       pid: "/repo/.lab/state/relay-7.pid",
       session: "/repo/.lab/state/relay-7.session",
       log: "/repo/.lab/state/relay-7.log",
+      seen: "/repo/.lab/state/watch-7.json",
     });
   });
 });

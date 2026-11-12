@@ -156,7 +156,14 @@ export function rejectedImportantOf(logins: ThreadLogins, threads: readonly Revi
   }).length;
 }
 
-/** The marker a posted review ends with, as `post-plan.ts` `reviewMarkerOf` writes it: it names the review's patch and round. */
+/**
+ * The marker a posted review ends with: it names the review's patch and round. An external name: posted
+ * reviews carry it, so the string stays. A pattern that reads it back puts a group in place of a value.
+ */
+export function reviewMarkerOf(review: { readonly patch: string; readonly round: number }): string {
+  return `<!-- lab-review patch=${review.patch} round=${review.round} -->`;
+}
+
 const REVIEW_MARKER_PATTERN = /<!-- lab-review patch=(\S+) round=(\d+) -->/u;
 
 /** The patch and Review round a posted review's body names; null for a body with no marker, such as a human's. */

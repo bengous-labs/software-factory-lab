@@ -4,7 +4,9 @@
  * checkout, then the step `watch-plan.ts` decides over it.
  */
 
-import type { Run, RunOptions } from "../lib/run.port.ts";
+import { OUTCOMES_LOG } from "../contract.ts";
+import { checked } from "../lib/run.port.ts";
+import type { Run } from "../lib/run.port.ts";
 import {
   behindOf,
   checkRunsPathOf,
@@ -36,20 +38,10 @@ export interface WatchTurn {
   readonly retell: boolean;
 }
 
-async function out(run: Run, argv: readonly string[], options: RunOptions): Promise<string> {
-  const ran = await run(argv, options);
-
-  if (ran.code !== 0) {
-    throw new Error(`${argv.slice(0, 3).join(" ")} exited ${ran.code}: ${(ran.stderr || ran.stdout).trim()}`);
-  }
-
-  return ran.stdout;
-}
-
 /** The main checkout of the repository `cwd` is a checkout of: the parent of its git common directory. */
 export async function mainCheckoutOf(run: Run, cwd: string): Promise<string> {
   const commonDir = (
-    await out(run, ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd })
+    await checked(run, ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd })
   ).trim();
 
   return commonDir.replace(/\/[^/]+$/u, "");
@@ -64,14 +56,14 @@ async function readFactory(
 ): Promise<Reading> {
   const at = { cwd: checkout };
 
-  const answer = await out(
+  const answer = await checked(
     run,
     ["gh", "api", "graphql", "-f", `query=${watchQueryOf(issues, prs)}`, "-F", "owner={owner}", "-F", "name={repo}"],
     at,
   );
 
   const github = githubOf(answer);
-  const api = (path: string): Promise<string> => out(run, ["gh", "api", path], at);
+  const api = (path: string): Promise<string> => checked(run, ["gh", "api", path], at);
 
   const read = await Promise.all(
     github.prs.map(async (pr) => {
@@ -85,8 +77,8 @@ async function readFactory(
     }),
   );
 
-  const agents = await out(run, ["claude", "agents", "--json"], at);
-  const log = await readText(`${checkout}/.lab/outcomes.log`);
+  const agents = await checked(run, ["claude", "agents", "--json"], at);
+  const log = await readText(`${checkout}/${OUTCOMES_LOG}`);
 
   return { prs: read, issues: github.issues, sessions: sessionsOf(agents), stops: stopsOf(log) };
 }

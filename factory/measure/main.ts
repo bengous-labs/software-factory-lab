@@ -1,9 +1,10 @@
 /**
  * The Land loop's weekly measure (`bin/measure.ts`): the Owner's wait, the Review rounds, the Important
- * findings fixed or rejected, the Land approvals given again and the reverts of the PRs merged into dev
+ * findings fixed or rejected, the Land approvals given again and the reverts of the PRs merged into the Trunk
  * since a date.
  */
 
+import { REPOSITORY, TRUNK } from "../install/host.ts";
 import { checked } from "../lib/run.port.ts";
 import type { Run } from "../lib/run.port.ts";
 import type { PrData, Pull } from "./decide.ts";
@@ -15,7 +16,6 @@ import {
   decodeEventsPages,
   decodePullsPages,
   decodeReviewsPages,
-  REPO,
   reportOf,
   rowOf,
 } from "./decide.ts";
@@ -33,7 +33,7 @@ export function argsOf(argv: readonly string[]): { since: string } | null {
 }
 
 async function readPr(api: (endpoint: string) => Promise<string>, pull: Pull): Promise<PrData> {
-  const base = `repos/${REPO}`;
+  const base = `repos/${REPOSITORY}`;
   const n = pull.number;
 
   const [events, commits, reviews, comments] = await Promise.all([
@@ -52,20 +52,20 @@ async function readPr(api: (endpoint: string) => Promise<string>, pull: Pull): P
   return { pull, events, commits, checkRuns: checkRuns.flat(), reviews, comments };
 }
 
-/** The report of the PRs merged into dev from `since` (inclusive), read through `gh api`. */
+/** The report of the PRs merged into the Trunk from `since` (inclusive), read through `gh api`. */
 export async function measure(runner: Run, cwd: string, since: string): Promise<string> {
   const api = (endpoint: string): Promise<string> =>
     checked(runner, ["gh", "api", "-X", "GET", "--paginate", "--slurp", endpoint], { cwd });
 
   const from = `${since}T00:00:00Z`;
 
-  const merged = decodePullsPages(await api(`repos/${REPO}/pulls?state=closed&base=dev`)).filter(
+  const merged = decodePullsPages(await api(`repos/${REPOSITORY}/pulls?state=closed&base=${TRUNK}`)).filter(
     (pull) => pull.merged_at !== null && Date.parse(pull.merged_at) >= Date.parse(from),
   );
 
   const [prs, devCommits] = await Promise.all([
     Promise.all(merged.map((pull) => readPr(api, pull))),
-    api(`repos/${REPO}/commits?sha=dev&since=${from}`).then(decodeDevCommitsPages),
+    api(`repos/${REPOSITORY}/commits?sha=${TRUNK}&since=${from}`).then(decodeDevCommitsPages),
   ]);
 
   return reportOf(prs.map((pr) => rowOf(pr, devCommits)));

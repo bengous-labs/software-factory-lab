@@ -5,6 +5,8 @@ import type { ToolGuard } from "./review.port.ts";
 
 export interface Question {
   readonly model: string;
+  /** The tools of the session, read-only ones: `guard` decides each call. */
+  readonly tools: readonly string[];
   readonly prompt: string;
   /** The JSON Schema the answer must follow; the caller decodes `structured` with its own Effect schema. */
   readonly schema: Schema.JsonObject;
