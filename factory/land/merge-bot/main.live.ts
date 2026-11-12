@@ -44,6 +44,7 @@ import {
   conversationReader,
   devRunsReader,
   draftConverter,
+  envOf,
   gh,
   git,
   issueOpener,
@@ -169,7 +170,8 @@ export function reviewJobReader(
   };
 }
 
-async function snapshotOf(
+/** The snapshot of PR `pr` a decision reads, over `env`'s ports and logins. */
+export async function snapshotOf(
   env: Env,
   pr: Pull,
   range: Range,
@@ -511,15 +513,7 @@ async function numbersOf(env: Env): Promise<number[]> {
  * names, or one for every PR a Sweep serves.
  */
 export async function main(ports: Pick<Env, "run" | "ask">): Promise<void> {
-  const env: Env = {
-    ...ports,
-    repo: requiredOf(process.env, "GITHUB_REPOSITORY"),
-    owner: requiredOf(process.env, "OWNER"),
-    authorLogin: requiredOf(process.env, "AUTHOR_LOGIN"),
-    appLogin: requiredOf(process.env, "APP_LOGIN"),
-    cwd: process.cwd(),
-    runUrl: `${requiredOf(process.env, "GITHUB_SERVER_URL")}/${requiredOf(process.env, "GITHUB_REPOSITORY")}/actions/runs/${requiredOf(process.env, "GITHUB_RUN_ID")}`,
-  };
+  const env = envOf(process.env, ports, process.cwd());
 
   const reason = process.env["EJECTION_REASON"];
 

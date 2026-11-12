@@ -4,8 +4,11 @@ import { join } from "node:path";
 
 import type { Ran, Run } from "../../lib/run.port.ts";
 import { resultOf } from "../review/review-report.ts";
-import { reviewJobReader } from "./main.live.ts";
-import { ok, WHERE } from "./merge-bot.fixtures.ts";
+import { envOf } from "./github.ts";
+import { reviewJobReader, snapshotOf } from "./main.live.ts";
+import { labeled, ok, WHERE } from "./merge-bot.fixtures.ts";
+import type { Pull } from "./readings.ts";
+import { EMPTY_RECORD } from "./record.ts";
 import type { ReviewState } from "./record.ts";
 
 const ASKED: ReviewState = { kind: "requested", patch: "p1", round: 1, runId: 7, at: "2026-11-07T11:00:00.000Z" };
@@ -54,6 +57,98 @@ const downloaded = (dir: string): Ran => {
 
   return ok("");
 };
+
+/** The job's variables, each login its own, as `merge-bot.yml` sets them. */
+const VARIABLES = {
+  GITHUB_REPOSITORY: "o/r",
+  GITHUB_SERVER_URL: "https://github.com",
+  GITHUB_RUN_ID: "5",
+  OWNER: "the-owner",
+  AUTHOR_LOGIN: "the-author",
+  APP_LOGIN: "the-app[bot]",
+};
+
+const HEAD = "a".repeat(40);
+
+const PULL: Pull = {
+  number: 12,
+  node_id: "PR_1",
+  state: "open",
+  merged: false,
+  draft: false,
+  mergeable: true,
+  mergeable_state: "clean",
+  user: { login: "the-author" },
+  labels: [{ name: "land-ok" }],
+  head: { sha: HEAD, ref: "issue/1-x", repo: { full_name: "o/r" } },
+  base: { ref: "dev" },
+};
+
+/**
+ * A runner over a PR whose head was pushed at 10:00 and reviewed by the App at 10:30, on which `login` put
+ * the Land approval at 11:00.
+ */
+const landOkRunner =
+  (login: string): Run =>
+  (argv) => {
+    const [command, ...args] = argv;
+    const path = args.at(-1) ?? "";
+
+    if (command === "git") {
+      return Promise.resolve(
+        ok(args[0] === "rev-parse" ? "d".repeat(40) : args.includes("--name-only") ? "x.ts\n" : ""),
+      );
+    }
+
+    const answers: ReadonlyArray<readonly [string, unknown]> = [
+      ["/check-runs", { check_runs: [] }],
+      ["/check-suites", { check_suites: [{ id: 1, head_branch: "issue/1-x", created_at: "2026-11-05T10:00:00Z" }] }],
+      ["/issues/12/events", [[labeled("land-ok", login, "2026-11-05T11:00:00Z")]]],
+      [
+        "/pulls/12/reviews",
+        [
+          [
+            {
+              user: { login: VARIABLES.APP_LOGIN },
+              body: "Round 1: 0 Important.\n\n<!-- lab-review patch=p1 round=1 -->",
+              submitted_at: "2026-11-05T10:30:00Z",
+            },
+          ],
+        ],
+      ],
+    ];
+
+    const answer = answers.find(([part]) => path.includes(part));
+
+    return answer === undefined
+      ? Promise.reject(new Error(`unexpected command: ${argv.join(" ")}`))
+      : Promise.resolve(ok(JSON.stringify(answer[1])));
+  };
+
+/** The snapshot of `PULL` when `login` put its Land approval, over the Env the job's variables give. */
+const snapshotBy = (login: string) =>
+  snapshotOf(
+    envOf(VARIABLES, { run: landOkRunner(login), ask: () => Promise.reject(new Error("no model")) }, "/tmp"),
+    PULL,
+    { base: "b".repeat(40), head: HEAD },
+    EMPTY_RECORD,
+    [],
+  );
+
+describe("snapshotOf", () => {
+  test("a Land approval the Owner put after the head's push and the App's review counts", async () => {
+    expect(await snapshotBy(VARIABLES.OWNER)).toMatchObject({
+      landApprovalByOwner: true,
+      landApprovalPutByOwner: true,
+    });
+  });
+
+  test("a Land approval the Author's machine account or the App put counts for nothing, whatever the job's variables name", async () => {
+    for (const login of [VARIABLES.AUTHOR_LOGIN, VARIABLES.APP_LOGIN]) {
+      expect(await snapshotBy(login)).toMatchObject({ landApprovalByOwner: false, landApprovalPutByOwner: false });
+    }
+  });
+});
 
 describe("reviewJobReader", () => {
   test("no request, or one for another patch, reads no run", async () => {
