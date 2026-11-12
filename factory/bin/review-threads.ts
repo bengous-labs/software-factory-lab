@@ -9,11 +9,9 @@
  * Reads GITHUB_REPOSITORY, the request's variables (`REVIEW_VARIABLES`) and APP_LOGIN; calls gh with GH_TOKEN.
  */
 
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../install/logins.ts";
-import { requestOfVariables, REVIEW_THREADS_FILE } from "../land/review/review-report.ts";
+import { writeEarlierThreads } from "../land/review/job-files.live.ts";
+import { requestOfVariables } from "../land/review/review-report.ts";
 import { graphqlLogin, ReviewThreads, shownThreadsOf, threadsQueryOf } from "../land/shared/findings.ts";
 import { requiredOf } from "../lib/env.ts";
 import { decodeJson } from "../lib/json.ts";
@@ -39,6 +37,6 @@ const earlier = shownThreadsOf(
   threads,
 );
 
-writeFileSync(join(process.cwd(), REVIEW_THREADS_FILE), `${JSON.stringify(earlier, null, 2)}\n`);
+writeEarlierThreads(process.cwd(), earlier);
 
 console.log(`review threads pr=${pr}: ${earlier.length} earlier finding(s)`);
