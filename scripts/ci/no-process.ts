@@ -4,20 +4,36 @@
  * `no-process:`, which the run fails on even when the code under test catches the throw. A test that starts
  * a process takes its time from the machine's load: under Stryker's parallel runs it can pass `bun test`'s
  * limit, and a test that times out kills a mutant no assertion checked.
+ *
+ * A `Worker` a test starts loads no preload, and nothing here refuses a start in it: wrapping `Worker` to
+ * pass it this file is what `local/layers` refuses, with no suppression.
  */
 
 // Taken as the preload loads: a test that mutes `console.error` later cannot hide a refusal. Bun writes it in
 // order with its own report, where `process.stderr` would put it ahead of its test file's name.
 const report = console.error.bind(console);
 
-const refusal = (name: string) => (): never => {
-  const message = `${name} starts a process in a test of the mutation set. A test that starts one is a \`x.live.test.ts\`, which the mutation job does not run.`;
-  report(`no-process: ${message}`);
+const refusal =
+  (name: string, does = "starts a process") =>
+  (): never => {
+    const message = `${name} ${does} in a test of the mutation set. A test that does is a \`x.live.test.ts\`, which the mutation job does not run.`;
+    report(`no-process: ${message}`);
 
-  throw new Error(message);
-};
+    throw new Error(message);
+  };
 
-Object.assign(Bun, { spawn: refusal("Bun.spawn"), spawnSync: refusal("Bun.spawnSync"), $: refusal("Bun.$") });
+// `bun:ffi`, which `local/layers` refuses in every layer, is `Bun.FFI` too, which bun-types does not declare:
+// a native symbol it makes callable, libc's `system` or `fork`, starts a process.
+const NATIVE = "calls native code, which can start a process,";
+
+Object.assign(Bun, {
+  spawn: refusal("Bun.spawn"),
+  spawnSync: refusal("Bun.spawnSync"),
+  $: refusal("Bun.$"),
+  FFI: Object.fromEntries(
+    ["dlopen", "linkSymbols", "cfunction"].map((name) => [name, refusal(`Bun.FFI.${name}`, NATIVE)]),
+  ),
+});
 
 // Each start of `node:child_process` reaches Bun's, whose refusal its line already fails the run on; the
 // patch names it by its own API, and makes its `spawnSync` throw, where it would return Bun's refusal as

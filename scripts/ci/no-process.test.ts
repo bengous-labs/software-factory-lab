@@ -36,7 +36,7 @@ function failuresOf(output: string): string[] {
   });
 }
 
-/** A test file that starts a process each way Bun and Node offer, and expects each start to throw the refusal that names it. */
+/** A test file that starts a process each way Bun and Node offer, and calls native code through `Bun.FFI`, expecting each to throw the refusal that names it. */
 const STARTS = [
   'import { expect, test } from "bun:test";',
   'import { $, spawn, spawnSync } from "bun";',
@@ -44,8 +44,8 @@ const STARTS = [
   'import childProcess, { execFileSync, spawnSync as nodeSpawnSync } from "node:child_process";',
   'import * as node from "node:child_process";',
   "",
-  "const refused = (start: () => unknown, name: string): void => {",
-  "  expect(start).toThrow(`${name} starts a process in a test of the mutation set.`);",
+  'const refused = (start: () => unknown, name: string, does = "starts a process"): void => {',
+  "  expect(start).toThrow(`${name} ${does} in a test of the mutation set.`);",
   "};",
   "",
   'test("each start of Bun is refused, by its name", () => {',
@@ -69,6 +69,13 @@ const STARTS = [
   '  refused(() => node.fork("x.js"), "child_process.fork");',
   '  refused(() => require("node:child_process").execSync("true"), "child_process.execSync");',
   '  refused(() => require("child_process").spawnSync("true"), "child_process.spawnSync");',
+  "});",
+  "",
+  'test("each way Bun.FFI makes native code callable is refused, by its name", () => {',
+  '  const native = "calls native code, which can start a process,";',
+  '  refused(() => (Bun as any).FFI.dlopen("libc.so.6", { system: { args: ["cstring"], returns: "int" } }), "Bun.FFI.dlopen", native);',
+  '  refused(() => (Bun as any).FFI.linkSymbols({}), "Bun.FFI.linkSymbols", native);',
+  '  refused(() => (Bun as any).FFI.cfunction({ ptr: 0 }), "Bun.FFI.cfunction", native);',
   "});",
 ].join("\n");
 
@@ -101,7 +108,7 @@ describe("the preload", () => {
     writeFileSync(join(dir, "starts.test.ts"), STARTS);
     const { code, output } = await underPreload(dir, ["./starts.test.ts"], 25_000);
 
-    expect(output).toContain(" 2 pass\n 0 fail\n");
+    expect(output).toContain(" 3 pass\n 0 fail\n");
     expect(code).toBe(0);
   }, 30_000);
 
@@ -111,7 +118,7 @@ describe("the preload", () => {
 
     expect(code).toBe(0);
     expect(failuresOf(output)).toEqual([
-      "swallowed.test.ts: no-process: Bun.spawnSync starts a process in a test of the mutation set. A test that starts one is a `x.live.test.ts`, which the mutation job does not run.",
+      "swallowed.test.ts: no-process: Bun.spawnSync starts a process in a test of the mutation set. A test that does is a `x.live.test.ts`, which the mutation job does not run.",
     ]);
   }, 30_000);
 });
