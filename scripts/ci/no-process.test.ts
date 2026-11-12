@@ -23,13 +23,14 @@ async function underPreload(cwd: string, testFiles: readonly string[], timeout: 
 
 /**
  * What fails a run under the preload, each line with its test file: a failed test, its error, and a refusal,
- * which the code under test may have caught. `bun test` names a file on a line of its own, then prints them.
+ * which the code under test may have caught. `bun test` names a file on a line of its own, then prints them;
+ * on GitHub Actions that line opens a log group, `::group::x.test.ts:`.
  */
 function failuresOf(output: string): string[] {
   let file = "";
 
   return output.split("\n").flatMap((line) => {
-    file = /^(\S+\.test\.ts):$/u.exec(line)?.[1] ?? file;
+    file = /^(?:::group::)?(\S+\.test\.ts):$/u.exec(line)?.[1] ?? file;
 
     return ["(fail)", "error: ", "no-process: "].some((start) => line.startsWith(start)) ? [`${file}: ${line}`] : [];
   });
@@ -111,6 +112,27 @@ describe("the preload", () => {
       "swallowed.test.ts: no-process: Bun.spawnSync starts a process in a test of the mutation set. A test that starts one is a `x.live.test.ts`, which the mutation job does not run.",
     ]);
   }, 30_000);
+});
+
+test("a run's failures are read with their file, whether bun prints its file as a line or as GitHub Actions' log group", () => {
+  const plain = ["a.test.ts:", "(pass) p", "b.test.ts:", "no-process: Bun.spawn starts", "error: x", "(fail) f"];
+
+  const grouped = [
+    "::group::a.test.ts:",
+    "(pass) p",
+    "::endgroup::",
+    "::group::b.test.ts:",
+    "no-process: Bun.spawn starts",
+    "error: x",
+    "::error file=b.test.ts::x",
+    "(fail) f",
+    "::endgroup::",
+  ];
+
+  const failures = ["b.test.ts: no-process: Bun.spawn starts", "b.test.ts: error: x", "b.test.ts: (fail) f"];
+
+  expect(failuresOf(plain.join("\n"))).toEqual(failures);
+  expect(failuresOf(grouped.join("\n"))).toEqual(failures);
 });
 
 // The run is killed before this test's own limit, which can then fail it rather than wait on a run that hangs.
