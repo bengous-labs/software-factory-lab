@@ -28,9 +28,10 @@ Two serve this repository's own toolchain and live in `scripts/hooks/`: `fix-edi
 - A hook that must stop a call exits 2 or prints a deny.
   By default a hook that fails, with exit 1 or an uncaught throw, or times out lets the call run.
   A guard that must also stop the call when it fails itself sets `"onFailure": "block"` on its entry in `.claude/settings.json`: the two guards do, and `factory/hooks/guards.test.ts` holds them to it.
-  A session in a worktree reads that worktree's `.claude/settings.json` and runs each hook's file from the main checkout: an entry with `"onFailure": "block"` whose file the main checkout lacks blocks every call of that session, and the session keeps the entry after the file drops it.
-  So a pull request never adds such an entry together with its hook file.
-  After a change that moves a guard's file lands, the main checkout is pulled before any Worker starts.
+  A session reads the `.claude/settings.json` of the checkout it started in and runs each hook's file from that checkout: one that entered a worktree with `EnterWorktree` reads the main checkout's entries, never the worktree's, and one started inside the worktree reads the worktree's, so the entries and the files a session runs always come from one checkout.
+  A running session reads that file again when it changes: an entry the file drops stops firing.
+  An entry with `"onFailure": "block"` blocks every call only when its own checkout lacks its file.
+  A guard a change adds or moves reaches the Workers once the main checkout is pulled, since they run its hooks.
 
 - Each worktree gets its own `node_modules`: `install-deps.ts` installs it at SessionStart, SubagentStart and after EnterWorktree, the three events whose `cwd` is a new worktree, and does nothing in a Stop hook fork.
   The packages it places are copies, not hardlinks into bun's cache, so a write to them cannot reach the main checkout's `node_modules`, from which the hooks load.
