@@ -19,7 +19,7 @@ Each text a Judge reads lives in a `*.prompt.ts` file, and each Judge's tools an
 
 ## The code of a step
 
-Each step splits into pure decisions over a snapshot (`stop/decide.ts`, `merge-bot/decide.ts` and the rules it assembles, `routing/routing-rules.ts`, `relay/wakes.ts`) and a shell that reads the state and acts on the decision (`stop/hook.live.ts`, `merge-bot/main.live.ts`, `relay/main.ts`).
+Each step splits into pure decisions over a snapshot (`stop/decide.ts`, `merge-bot/decide.ts` and the rules it assembles, `routing/routing-rules.ts`, `relay/wakes.ts` with the relay's turn and its count of failed stops in `relay/main.ts`) and a shell that reads the state and acts on the decision (`stop/hook.live.ts`, `merge-bot/main.live.ts`, `relay/relay.live.ts`).
 A Merge bot run re-reads the whole PR, so an event that arrives twice, late or never changes nothing.
 Put new decisions in the pure files, where the tests and mutation testing reach them.
 A shell takes its I/O through the types in the `*.port.ts` files; the `*.live.ts` files hold the live implementations, the doors under `factory/bin/` pass them, and tests pass fakes.

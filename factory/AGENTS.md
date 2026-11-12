@@ -7,7 +7,7 @@ The repository's tooling (`scripts/`) checks it, and the app (`app/`) is what it
 
 - `bin/`: one file per process.
   A hook, a workflow or a skill names these files and the three hooks of `hooks/`, nothing else in `factory/`.
-  A door builds the real ports and hands them to what it starts: the `main` of a shell for the Stop hook, the Merge bot and the watch, and for the others the logic itself, called in the door.
+  A door builds the real ports and hands them to what it starts: the `main` of a shell for the Stop hook, the Merge bot, the relay and the watch, and for the others the logic itself, called in the door.
 - `hooks/`: the hooks of a session: its role, and the two guards.
 - `roles/`: the instructions a session reads at start.
 - `land/`: the Land loop, one directory per step, and `shared/` for what several steps use and none owns.
