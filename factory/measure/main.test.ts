@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { Run } from "../lib/run.port.ts";
-import { argsOf, measure, USAGE } from "./main.ts";
+import { argsOf, measure } from "./main.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 
@@ -50,24 +50,6 @@ describe("argsOf", () => {
     expect(argsOf(["--since", "2026-11"])).toBeNull();
     expect(argsOf(["--since", "2026-11-02", "extra"])).toBeNull();
     expect(argsOf(["2026-11-02"])).toBeNull();
-  });
-
-  test("with no --since, the script exits 1 with the usage line on stderr", async () => {
-    const child = Bun.spawn(["bun", join(import.meta.dir, "..", "bin", "measure.ts")], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
-
-    expect(code).toBe(1);
-    expect(stderr).toBe(`${USAGE}\n`);
-    expect(stdout).toBe("");
-    expect(USAGE).toBe("usage: bun factory/bin/measure.ts --since YYYY-MM-DD");
   });
 });
 

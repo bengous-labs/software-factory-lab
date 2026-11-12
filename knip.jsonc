@@ -3,7 +3,7 @@
   // Run by path and never imported: the CLI and the Worker bench by hand, the factory's processes
   // (factory/bin/) and its session hooks (factory/hooks/) by the workflows, the settings, the skills and
   // the Stop hook, the edit hook from .claude/settings.json, the ratchet's config by
-  // check-exception-ratchet.ts.
+  // check-exception-ratchet.ts, the preload that refuses a process by no-process.test.ts.
   "entry": [
     "app/src/cli.ts",
     "factory/bin/*.ts",
@@ -11,6 +11,7 @@
     "scripts/lab/bench.ts",
     "scripts/hooks/fix-edited.ts",
     "scripts/lint/exception-ratchet.oxlint.config.ts",
+    "scripts/ci/no-process.ts",
   ],
   "project": ["**/*.ts"],
   "ignore": ["scripts/vendor/anti-slop/**", ".claude/plugins/**"],
