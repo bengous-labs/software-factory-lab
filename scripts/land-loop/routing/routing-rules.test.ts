@@ -5,7 +5,7 @@ import * as fc from "fast-check";
 import { LAB, SEGMENT, UNDER } from "../arbitraries.ts";
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
-import type { RoutingAnswer } from "../merge-bot/decide.ts";
+import type { NitAnswerInput, RoutingAnswer, RoutingInput, RulesVerdict } from "./routing-rules.ts";
 import {
   judgeAskOf,
   NIT_ANSWER_LINE_CAP,
@@ -15,7 +15,6 @@ import {
   routingRulesOf,
   withNitAnswers,
 } from "./routing-rules.ts";
-import type { NitAnswerInput, RoutingInput, RulesVerdict } from "./routing-rules.ts";
 
 const lab = (input: RoutingInput): RulesVerdict => routingRulesOf(LAB, input);
 

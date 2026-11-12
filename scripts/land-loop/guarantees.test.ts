@@ -28,12 +28,12 @@ import {
   UNDER,
   withdrawn,
 } from "./arbitraries.ts";
+import { LAND_APPROVAL_LABEL } from "./contract.ts";
 import { FACTORY_CONFIG_PATH } from "./factory-config.ts";
 import type { RoutingPolicy } from "./factory-config.ts";
-import { LAND_APPROVAL_LABEL } from "./merge-bot/decide.ts";
-import type { RoutingAnswer, Snapshot, StateRecord } from "./merge-bot/decide.ts";
+import type { Snapshot, StateRecord } from "./merge-bot/decide.ts";
+import type { RoutingAnswer, RoutingInput } from "./routing/routing-rules.ts";
 import { judgeAskOf, NON_EXECUTABLE, routingOf, routingRulesOf } from "./routing/routing-rules.ts";
-import type { RoutingInput } from "./routing/routing-rules.ts";
 
 const ANY_PATH = fc.array(SEGMENT, { minLength: 1, maxLength: 4 }).map((segments) => segments.join("/"));
 

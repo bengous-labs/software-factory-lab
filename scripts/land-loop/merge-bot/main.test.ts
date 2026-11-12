@@ -14,9 +14,10 @@ import type { Reader } from "../ports/ask.ts";
 import type { Ran, Run } from "../ports/run.ts";
 import { resultOf } from "../review/review-report.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
+import type { LedgerFinding } from "../shared/finding.ts";
 import { fixedRecordBodyOf, questionCommentOf } from "../stop/decide.ts";
 import { EMPTY_RECORD, stateBodyOf, stateCommentOf } from "./decide.ts";
-import type { LedgerFinding, LedgerInputs, ReviewState, StateRead, StateRecord, Step } from "./decide.ts";
+import type { LedgerInputs, ReviewState, StateRead, StateRecord, Step } from "./decide.ts";
 import {
   ActionsRun,
   againPoster,

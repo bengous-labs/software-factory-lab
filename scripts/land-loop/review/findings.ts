@@ -10,9 +10,9 @@ import { Option, Schema } from "effect";
 
 import { codeSpan, unescapeHtml } from "../../lib/markdown.ts";
 import { AUTHOR_MARK, REJECT_MARK } from "../author-mark.ts";
-import { DELTA_READ, LANDED_OPEN_MARKER } from "../merge-bot/decide.ts";
-import type { ImportantThread, LedgerFinding } from "../merge-bot/decide.ts";
-import { Severity } from "./review-report.ts";
+import { DELTA_READ, LANDED_OPEN_MARKER } from "../contract.ts";
+import type { ImportantThread, LedgerFinding } from "../shared/finding.ts";
+import { Severity } from "../shared/finding.ts";
 
 /** The marker a finding's comment carries. An external name: posted findings carry it, so the string stays. */
 const FINDING_MARKER = "lab-finding";

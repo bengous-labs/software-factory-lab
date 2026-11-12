@@ -9,9 +9,36 @@
  * or the factory config, gets a security pass in each Review round.
  */
 
+import type { LandRoute, ReviewDepth } from "../contract.ts";
 import { FACTORY_CONFIG_PATH } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
-import type { RoutingAnswer, StateRecord } from "../merge-bot/decide.ts";
+
+/**
+ * The Routing answer of one patch. Its keys are the stored record's format, an external name: existing
+ * records must still read, so they stay as they are. `land` holds the Land route.
+ */
+export interface RoutingAnswer {
+  readonly land: LandRoute;
+  readonly review: ReviewDepth;
+  /**
+   * On a Patch delta: whether the delta deserves another read on its own: it touches a path a Routing
+   * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names; never when it
+   * only answers the Nits of the last Review round, which posted no Important (`withNitAnswers`). After Review
+   * round 1 it runs Review round 2, after Review round 2 Review round 3; after Review round 3 it holds the
+   * change for the Owner, unless `deltaRead`.
+   */
+  readonly secondRound: boolean;
+  /**
+   * On a Patch delta after Review round 3 that only answers that round's Nits, its tests included
+   * (`withNitAnswers`): one Delta read in place of the hold for the Owner. Absent, as in older records, reads as false.
+   */
+  readonly deltaRead?: boolean;
+  readonly reason: string;
+  /** The model asked, exact when it answered; null when the Routing rules decided. */
+  readonly model: string | null;
+  /** Whether each Review round of the change runs a security pass; absent, as in older records, reads as false. */
+  readonly security?: boolean;
+}
 
 const BREAKING = /^\w+(\([^)]*\))?!:|BREAKING CHANGE/mu;
 
@@ -161,8 +188,12 @@ export const NIT_ANSWER_LINE_CAP = 100;
 
 /** What a Patch delta after a Review round is weighed against. */
 export interface NitAnswerInput {
-  /** The PR's state record: its rounds, each round's Important count, the head the last round read. */
-  readonly record: Pick<StateRecord, "reviewRounds" | "importantByRound" | "reviewedHead">;
+  /** What the PR's state record holds of its reviews: its rounds, each round's Important count, the head the last round read. */
+  readonly record: {
+    readonly reviewRounds: number;
+    readonly importantByRound?: ReadonlyArray<number | null>;
+    readonly reviewedHead: string | null;
+  };
   /** Where the Patch delta starts: the head the last round read, or the merge base once that head left the PR's history. */
   readonly deltaFrom: string;
   /** The files the last Review round posted a Nit finding on. */

@@ -23,6 +23,7 @@ import { isAuthor } from "../../lib/author-session.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { ModelUsage, tokensOf } from "../../lib/tokens.ts";
 import type { TokenCounts } from "../../lib/tokens.ts";
+import { questionOpen } from "../author-mark.ts";
 import { authorTokenOf, ghEnv, pushArgs } from "../lib/author.ts";
 import type { AuthorToken } from "../lib/author.ts";
 import { startRelay } from "../lib/relay-start.ts";
@@ -31,9 +32,9 @@ import { replyInThread, resolveThread } from "../lib/threads.ts";
 import { APP_LOGIN } from "../logins.ts";
 import type { StartRelay } from "../ports/relay.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
-import { conversationArgsOf, conversationOf } from "../relay/wakes.ts";
 import { openFindingsOf, ReviewThreads, threadsQueryOf } from "../review/findings.ts";
 import type { OpenFinding } from "../review/findings.ts";
+import { conversationArgsOf, conversationOf } from "../shared/conversation.ts";
 import {
   admit,
   afterClosed,
@@ -53,7 +54,6 @@ import {
   noDoneAnswer,
   outcomeLineOf,
   questionCommentOf,
-  questionOpen,
   quotedQuestionOf,
   rejectionReplyOf,
   rejectionsOf,

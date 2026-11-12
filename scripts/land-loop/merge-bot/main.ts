@@ -22,6 +22,17 @@ import { Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import { escapeHtml } from "../../lib/markdown.ts";
 import { tokensText } from "../../lib/tokens.ts";
+import { fixedListOf } from "../author-mark.ts";
+import {
+  CI_CHECKS,
+  LAND_APPROVAL_LABEL,
+  LAND_GATE,
+  landLabelOf,
+  MERGE_BOT_STATE_MARKER,
+  REVIEW_CHECK,
+  reviewLabelOf,
+} from "../contract.ts";
+import type { LandRoute, ReviewDepth } from "../contract.ts";
 import { FACTORY_CONFIG_PATH, factoryConfigOf } from "../factory-config.ts";
 import type { RoutingPolicy } from "../factory-config.ts";
 import { ask } from "../lib/ask.ts";
@@ -50,38 +61,28 @@ import { readGuardOf } from "../review/tool-guard.ts";
 import { judgeFailed, ROUTING_JUDGE_MODEL, routingJudge } from "../routing/routing-judge.ts";
 import type { RoutingVerdict } from "../routing/routing-judge.ts";
 import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
-import type { JudgeAsk } from "../routing/routing-rules.ts";
-import { fixedListOf } from "../stop/decide.ts";
+import type { JudgeAsk, RoutingAnswer } from "../routing/routing-rules.ts";
+import type { LedgerFinding } from "../shared/finding.ts";
+import type { ReviewRound } from "../shared/review-round.ts";
 import {
-  CI_CHECKS,
   ciOf,
   conflictingOf,
   decide,
   EMPTY_RECORD,
   followUpIssueOf,
-  LAND_APPROVAL_LABEL,
-  LAND_GATE,
   landApprovalCounts,
   landedOpenNoteOf,
-  MERGE_BOT_STATE_MARKER,
   patchDeltaStart,
   postedFindingsOf,
   recordOfComment,
-  REVIEW_CHECK,
   stateWriteOf,
-  storedLandRouteOf,
 } from "./decide.ts";
 import type {
   CheckState,
   Issue,
-  LandRoute,
-  LedgerFinding,
   LedgerInputs,
-  ReviewDepth,
   ReviewJob,
-  ReviewRound,
   ReviewState,
-  RoutingAnswer,
   Snapshot,
   StateRead,
   StateRecord,
@@ -274,7 +275,7 @@ export function humanLabelByOf(
   labels: readonly string[],
   { appLogin, authorLogin }: { readonly appLogin: string; readonly authorLogin: string },
 ): Snapshot["humanLabelBy"] {
-  const humanLabel = `land:${storedLandRouteOf("owner")}`;
+  const humanLabel = landLabelOf("owner");
 
   if (!labels.includes(humanLabel)) {
     return null;
@@ -709,7 +710,7 @@ async function snapshotOf(
   const patch = await patchOf(env, range);
   const empty = (await pathsListed(env, changedPathsArgs(range.base, range.head))).length === 0;
   const labels = pr.labels.map((label) => label.name);
-  const humanLabel = `land:${storedLandRouteOf("owner")}`;
+  const humanLabel = landLabelOf("owner");
 
   const events =
     labels.includes(LAND_APPROVAL_LABEL) || labels.includes(humanLabel) ? await labelEventsOf(env, pr.number) : [];
@@ -815,7 +816,7 @@ const postAgain = againPoster(run);
 
 /** Sets the `land:*` and `review:*` labels. Their names are external: open PRs carry them, so the strings stay. */
 async function setLabels(env: Env, pr: Pull, landRoute: LandRoute, depth: ReviewDepth): Promise<void> {
-  const wanted = [`land:${storedLandRouteOf(landRoute)}`, `review:${depth}`];
+  const wanted = [landLabelOf(landRoute), reviewLabelOf(depth)];
   const current = pr.labels.map((label) => label.name);
   const stale = current.filter((name) => /^(land|review):/u.test(name) && !wanted.includes(name));
   const missing = wanted.filter((name) => !current.includes(name));

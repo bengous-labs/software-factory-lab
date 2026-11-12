@@ -7,13 +7,13 @@ import { Schema } from "effect";
 import * as fc from "fast-check";
 
 import { decodeJson } from "../../lib/json.ts";
-import { AUTHOR_MARK, FIXED_MARK, REJECT_MARK } from "../author-mark.ts";
+import { AUTHOR_MARK, FIXED_MARK, fixedListOf, REJECT_MARK } from "../author-mark.ts";
 import { pushArgs } from "../lib/author.ts";
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
 import type { RelayStart } from "../ports/relay.ts";
 import type { Ran, Run, RunOptions } from "../ports/run.ts";
-import { conversationArgsOf } from "../relay/wakes.ts";
-import { DONE_SCHEMA, fixedListOf, fixedRecordBodyOf, FORK_MARKER, questionCommentOf } from "./decide.ts";
+import { conversationArgsOf } from "../shared/conversation.ts";
+import { DONE_SCHEMA, fixedRecordBodyOf, FORK_MARKER, questionCommentOf } from "./decide.ts";
 import { BODY_REQUEST, doneQuestionOf } from "./done-prompt.ts";
 import {
   FORK_FLAG,

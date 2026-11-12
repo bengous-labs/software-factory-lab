@@ -14,10 +14,11 @@ import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import { unescapeHtml } from "../../lib/markdown.ts";
+import { byOwner, questionOpen } from "../author-mark.ts";
+import { LAND_GATE, REVIEW_CHECK } from "../contract.ts";
 import { APP_LOGIN } from "../logins.ts";
-import { LAND_GATE, REVIEW_CHECK } from "../merge-bot/decide.ts";
 import { severityOfBody } from "../review/findings.ts";
-import { byOwner, questionOpen } from "../stop/decide.ts";
+import { conversationOf } from "../shared/conversation.ts";
 
 /** One check as `gh pr checks --json name,bucket,link` prints it. */
 const Check = Schema.Struct({ name: Schema.String, bucket: Schema.String, link: Schema.String });
@@ -29,13 +30,6 @@ interface Comment {
   readonly author: string;
   readonly body: string;
 }
-
-/** One conversation comment as the relay's `--jq` filter prints it; a deleted user's has a null author. */
-const ConversationComment = Schema.Struct({
-  id: Schema.String,
-  author: Schema.NullOr(Schema.String),
-  body: Schema.String,
-});
 
 interface Thread {
   readonly id: string;
@@ -290,30 +284,6 @@ export function prStateOf(view: string, checks: string, conversation: string, th
     })),
     comments: conversationOf(conversation),
   };
-}
-
-/** The `gh` command that prints the conversation comments of PR `pr`, one JSON line each, for `conversationOf`. */
-export function conversationArgsOf(pr: number): readonly string[] {
-  return [
-    "gh",
-    "api",
-    "--paginate",
-    `repos/{owner}/{repo}/issues/${pr}/comments?per_page=100`,
-    "--jq",
-    ".[] | {id: (.id | tostring), author: .user.login, body}",
-  ];
-}
-
-/** A PR's conversation comments, from the lines `conversationArgsOf` prints. */
-export function conversationOf(conversation: string): readonly Comment[] {
-  return conversation
-    .split("\n")
-    .filter((line) => line !== "")
-    .map((line) => {
-      const comment = decodeJson(ConversationComment, "a conversation comment", line);
-
-      return { ...comment, author: comment.author?.replace(/\[bot\]$/u, "") ?? "unknown" };
-    });
 }
 
 /**

@@ -4,7 +4,7 @@
  * reaches the fork as part of its review target.
  */
 
-import { DELTA_READ } from "../merge-bot/decide.ts";
+import { DELTA_READ } from "../contract.ts";
 import type { EarlierThread } from "./findings.ts";
 import type { ReviewRequest } from "./review-report.ts";
 

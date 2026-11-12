@@ -3,7 +3,7 @@
  * the exact model that ran.
  */
 
-import type { ReviewDepth } from "../merge-bot/decide.ts";
+import type { ReviewDepth } from "../contract.ts";
 import type { ReviewRequest } from "./review-report.ts";
 
 export const REVIEW_SETTINGS: Readonly<Record<Exclude<ReviewDepth, "none">, Pick<ReviewRequest, "model" | "effort">>> =

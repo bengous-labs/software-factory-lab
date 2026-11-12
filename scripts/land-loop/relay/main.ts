@@ -22,8 +22,8 @@ import type { Delivered } from "../lib/deliver.ts";
 import { relayFilesOf } from "../lib/relay-start.ts";
 import { checked, run } from "../lib/run.ts";
 import type { Run, RunOptions } from "../ports/run.ts";
+import { conversationArgsOf } from "../shared/conversation.ts";
 import {
-  conversationArgsOf,
   ownerWordsIn,
   prStateOf,
   readingOf,

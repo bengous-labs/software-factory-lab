@@ -10,78 +10,23 @@ import { Schema, Struct } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import { codeSpan, escapeInline } from "../../lib/markdown.ts";
+import {
+  DELTA_READ,
+  LAND_APPROVAL_LABEL,
+  LAND_GATE,
+  LANDED_OPEN_MARKER,
+  landRouteOf,
+  MERGE_BOT_STATE_MARKER,
+  reviewLabelOf,
+  storedLandRouteOf,
+} from "../contract.ts";
+import type { LandRoute, ReviewDepth, StoredLandRoute } from "../contract.ts";
 import type { ReportedResult, ReviewResult } from "../review/review-report.ts";
-
-/** Who lands a change: `auto`, the Merge bot alone, or `owner`, with a Land approval. */
-export type LandRoute = "auto" | "owner";
-
-/**
- * The Land route as the `land:*` labels and the state record store it. An external name: open PRs
- * and existing records carry `human` for `owner`, so the stored value stays; anything but `auto`
- * reads as `owner`, the safe side.
- */
-export type StoredLandRoute = "auto" | "human";
-
-const landRouteOf = (stored: string): LandRoute => (stored === "auto" ? "auto" : "owner");
-
-export const storedLandRouteOf = (route: LandRoute): StoredLandRoute => (route === "auto" ? "auto" : "human");
-
-export type ReviewDepth = "none" | "light" | "deep";
-
-/** The label of a Land approval. An external name: the owner puts it by hand, so the string stays. */
-export const LAND_APPROVAL_LABEL = "land-ok";
-
-/** The Review check's name. An external name: GitHub's ruleset requires it, so the string stays. */
-export const REVIEW_CHECK = "agent-review";
-
-/** The Land gate's check name. An external name: GitHub's ruleset requires it, so the string stays. */
-export const LAND_GATE = "land-gate";
-
-/**
- * The Routing answer of one patch. Its keys are the stored record's format, an external name: existing
- * records must still read, so they stay as they are. `land` holds the Land route.
- */
-export interface RoutingAnswer {
-  readonly land: LandRoute;
-  readonly review: ReviewDepth;
-  /**
-   * On a Patch delta: whether the delta deserves another read on its own: it touches a path a Routing
-   * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names; never when it
-   * only answers the Nits of the last Review round, which posted no Important (`withNitAnswers`). After Review
-   * round 1 it runs Review round 2, after Review round 2 Review round 3; after Review round 3 it holds the
-   * change for the Owner, unless `deltaRead`.
-   */
-  readonly secondRound: boolean;
-  /**
-   * On a Patch delta after Review round 3 that only answers that round's Nits, its tests included
-   * (`withNitAnswers`): one Delta read in place of the hold for the Owner. Absent, as in older records, reads as false.
-   */
-  readonly deltaRead?: boolean;
-  readonly reason: string;
-  /** The model asked, exact when it answered; null when the Routing rules decided. */
-  readonly model: string | null;
-  /** Whether each Review round of the change runs a security pass; absent, as in older records, reads as false. */
-  readonly security?: boolean;
-}
-
-/**
- * The review job's number for the Delta read of a push after Review round 3: the job, its artifact and
- * its posted marker are keyed by a number, but the Delta read is no round, and the state record never
- * counts it among the three.
- */
-export const DELTA_READ = 4;
-
-/** Review rounds 1 to 3, and the Delta read: the review job's request reads the same numbers. */
-export const Round = Schema.Literals([1, 2, 3, DELTA_READ]);
-
-export type ReviewRound = typeof Round.Type;
-
-/** What a review calls itself where a human reads it: its Review round, or the Delta read. */
-export const reviewNameOf = (round: ReviewRound): string =>
-  round === DELTA_READ ? "Delta read" : `Review round ${round}`;
-
-/** What a review's summary line and the ledger call it, shorter: `Round 2`, or the Delta read. */
-export const roundNameOf = (round: number): string => (round === DELTA_READ ? "Delta read" : `Round ${round}`);
+import type { RoutingAnswer } from "../routing/routing-rules.ts";
+import { postedCountOf, SEVERITY_NAME } from "../shared/finding.ts";
+import type { Counted, ImportantThread, LedgerFinding } from "../shared/finding.ts";
+import { reviewNameOf, Round, roundNameOf } from "../shared/review-round.ts";
+import type { ReviewRound } from "../shared/review-round.ts";
 
 /** The review asked of the review job for one patch and round, and its run; `failed` once it gave no report. */
 const ReviewState = Schema.Union([
@@ -234,9 +179,6 @@ export function storedOfRecord(record: StateRecord): StoredRecord {
   return { ...record, triage: Object.fromEntries(triage) };
 }
 
-/** The state record's marker. An external name: existing PR records carry it, so the string stays. */
-export const MERGE_BOT_STATE_MARKER = "<!-- lab-conductor-state";
-
 /**
  * The record's line in its comment: a line of its own, which no line of the ledger is, since each of
  * those opens with the ledger's own words. `JSON.stringify` writes no line break.
@@ -259,12 +201,6 @@ export function recordOfComment(body: string): StateRecord {
   const json = RECORD_LINE.exec(body)?.[1];
 
   return json === undefined ? EMPTY_RECORD : recordOfJson(json);
-}
-
-/** An unresolved Important thread of the App: its id, and the patch and round of the review that posted it, null when its review names none. */
-export interface ImportantThread {
-  readonly thread: string;
-  readonly review: { readonly patch: string; readonly round: number } | null;
 }
 
 export interface Snapshot {
@@ -315,12 +251,6 @@ export type ReviewJob =
   | { readonly kind: "completed"; readonly conclusion: string; readonly result: ReviewResult | null }
   /** GitHub answers 404 for the run: it was deleted, and its result with it. */
   | { readonly kind: "missing" };
-
-/**
- * The CI checks a change lands on, the jobs of `.github/workflows/ci.yml`. External names: the workflow
- * names its jobs so, so the strings stay. The ruleset requires `validate` alone; the Land gate waits for both.
- */
-export const CI_CHECKS = ["validate", "mutation"] as const;
 
 interface CiCheck {
   readonly status: string;
@@ -420,7 +350,7 @@ export interface RisenLabels {
 
 function risenDepth(labels: readonly string[], review: ReviewDepth): ReviewDepth {
   return (
-    (["deep", "light", "none"] as const).find((depth) => depth === review || labels.includes(`review:${depth}`)) ??
+    (["deep", "light", "none"] as const).find((depth) => depth === review || labels.includes(reviewLabelOf(depth))) ??
     review
   );
 }
@@ -1089,58 +1019,6 @@ export function decide(snapshot: Snapshot): Decision {
   return { kind: "steps", steps };
 }
 
-/** A posted finding, as a round's count reads it: its severity, and whether the security pass reported it. */
-interface Counted {
-  readonly severity: "important" | "nit";
-  readonly security: boolean;
-}
-
-const SEVERITY_NAME: Readonly<Record<Counted["severity"], string>> = { important: "Important", nit: "Nit" };
-
-/**
- * What a round posted, in plain words: `2 Important (1 security), 5 Nit (2 security)`. A severity it
- * posted none of is left out, and a round that posted none says so.
- */
-export function postedCountOf(findings: readonly Counted[]): string {
-  const counts = (["important", "nit"] as const).flatMap((severity) => {
-    const posted = findings.filter((finding) => finding.severity === severity);
-    const security = posted.filter((finding) => finding.security).length;
-    const pass = security === 0 ? "" : ` (${security} security)`;
-
-    return posted.length === 0 ? [] : [`${posted.length} ${SEVERITY_NAME[severity]}${pass}`];
-  });
-
-  return counts.length === 0 ? "no new finding" : counts.join(", ");
-}
-
-/** A finding the App posted, as the ledger reads its thread (`review/findings.ts`, `ledgerFindingsOf`). */
-export interface LedgerFinding extends Counted {
-  readonly thread: string;
-  /** The finding's comment on GitHub. */
-  readonly url: string;
-  /** `<file>:<line>` of the line its thread is anchored on, or `<file>`. */
-  readonly where: string;
-  /** The file the finding is about, the one its comment names when it anchors on another. */
-  readonly file: string;
-  /** Its first line, without its label. */
-  readonly summary: string;
-  /** The Review round that posted it. */
-  readonly round: number;
-  readonly resolved: boolean;
-  /** The App resolved its thread: a later read left it out, or the Owner's Land approval closed it. */
-  readonly closedByApp: boolean;
-  /** The App's reply in its thread says the Owner's Land approval landed it open (`LANDED_OPEN_MARKER`). */
-  readonly landedOpen: boolean;
-  /** GitHub marks its thread outdated: the lines it is anchored on changed since. */
-  readonly outdated: boolean;
-  /** The Author's rejection reply, the resolved thread's latest answer; null when the Author did not reject it. */
-  readonly rejection: string | null;
-  /** The Owner's reply, the thread's latest answer, written by hand; null when the latest answer is none of the Owner's. */
-  readonly ownerAnswer: string | null;
-  /** The later reads that report it again in its thread: each a Review round, or a Delta read (DELTA_READ). */
-  readonly again: readonly number[];
-}
-
 /** Where a finding stands now. */
 export type Standing =
   /** An Important whose thread a later read closed: the round after the last that reported it, or past round 3 a Delta read (DELTA_READ). */
@@ -1327,9 +1205,6 @@ export function ledgerOf(
 
   return [`**Review findings**: ${totals.length === 0 ? "none" : totals.join(", ")}.`, ...sections].join("\n\n");
 }
-
-/** The marker of the App's reply that lands a finding open. An external name: posted replies carry it, so the string stays. */
-export const LANDED_OPEN_MARKER = "<!-- lab-landed-open -->";
 
 /**
  * The App's reply in the thread of an Important the Owner's Land approval lands open, posted before it

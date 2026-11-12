@@ -7,12 +7,9 @@
 import { Effect, Result, Schema, SchemaGetter, SchemaTransformation } from "effect";
 
 import { TokenCounts, tokensText } from "../../lib/tokens.ts";
-import { Round } from "../merge-bot/decide.ts";
 import type { SessionAnswer } from "../ports/review.ts";
-
-export const Severity = Schema.Literals(["important", "nit", "pre_existing"]);
-
-export type Severity = typeof Severity.Type;
+import { Severity } from "../shared/finding.ts";
+import { Round } from "../shared/review-round.ts";
 
 const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
 

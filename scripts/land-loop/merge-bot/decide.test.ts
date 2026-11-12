@@ -3,7 +3,12 @@ import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
 
 import { HUMAN_LABEL_BY, LABELS, recordOf, ROUTING, RUNS, SNAPSHOT, stepsOrNone, withdrawn } from "../arbitraries.ts";
+import { LAND_APPROVAL_LABEL, LANDED_OPEN_MARKER, MERGE_BOT_STATE_MARKER } from "../contract.ts";
 import type { ReportedFinding, ReportedResult, ReviewResult } from "../review/review-report.ts";
+import type { RoutingAnswer } from "../routing/routing-rules.ts";
+import { postedCountOf } from "../shared/finding.ts";
+import type { LedgerFinding } from "../shared/finding.ts";
+import { roundNameOf } from "../shared/review-round.ts";
 import {
   afterReview,
   ciOf,
@@ -13,14 +18,10 @@ import {
   EMPTY_RECORD,
   followUpIssueOf,
   gateWaitOf,
-  LAND_APPROVAL_LABEL,
   landApprovalCounts,
-  LANDED_OPEN_MARKER,
   landedOpenNoteOf,
   ledgerOf,
-  MERGE_BOT_STATE_MARKER,
   patchDeltaStart,
-  postedCountOf,
   postedFindingsOf,
   recordOfComment,
   recordOfJson,
@@ -28,7 +29,6 @@ import {
   REVIEW_DEADLINE_MS,
   reviewStepsOf,
   risen,
-  roundNameOf,
   standingOf,
   stateBodyOf,
   stateCommentOf,
@@ -37,11 +37,9 @@ import {
 } from "./decide.ts";
 import type {
   CheckState,
-  LedgerFinding,
   LedgerInputs,
   ReviewJob,
   ReviewState,
-  RoutingAnswer,
   Snapshot,
   StateRead,
   StateRecord,

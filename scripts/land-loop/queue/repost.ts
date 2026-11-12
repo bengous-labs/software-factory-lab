@@ -12,8 +12,8 @@
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
+import { LAND_GATE, REVIEW_CHECK } from "../contract.ts";
 import { checked, run } from "../lib/run.ts";
-import { LAND_GATE, REVIEW_CHECK } from "../merge-bot/decide.ts";
 
 export const CHECKS = [REVIEW_CHECK, LAND_GATE] as const;
 

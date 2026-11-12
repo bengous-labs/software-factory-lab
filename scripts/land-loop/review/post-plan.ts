@@ -8,10 +8,13 @@
 import type { Schema } from "effect";
 
 import { codeSpan, escapeHtml, escapeInline } from "../../lib/markdown.ts";
-import { DELTA_READ, postedCountOf, reviewNameOf, roundNameOf } from "../merge-bot/decide.ts";
+import { DELTA_READ } from "../contract.ts";
+import { postedCountOf } from "../shared/finding.ts";
+import type { Severity } from "../shared/finding.ts";
+import { reviewNameOf, roundNameOf } from "../shared/review-round.ts";
 import { markerOf, movedLineOf } from "./findings.ts";
 import type { ReviewThread } from "./findings.ts";
-import type { ReportedFinding, ReportedResult, ReviewRequest, Severity } from "./review-report.ts";
+import type { ReportedFinding, ReportedResult, ReviewRequest } from "./review-report.ts";
 
 /** The RIGHT-side lines of each hunk of the PR's whole diff, context included: GitHub accepts an inline comment only there. */
 export type DiffLines = ReadonlyMap<string, ReadonlySet<number>>;

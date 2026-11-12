@@ -9,18 +9,13 @@ import { join } from "node:path";
 
 import * as fc from "fast-check";
 
+import { LAND_APPROVAL_LABEL } from "./contract.ts";
 import { FACTORY_CONFIG_PATH, factoryConfigOf } from "./factory-config.ts";
-import { decide, LAND_APPROVAL_LABEL } from "./merge-bot/decide.ts";
-import type {
-  ImportantThread,
-  ReviewJob,
-  ReviewState,
-  RoutingAnswer,
-  Snapshot,
-  StateRecord,
-  Step,
-} from "./merge-bot/decide.ts";
+import { decide } from "./merge-bot/decide.ts";
+import type { ReviewJob, ReviewState, Snapshot, StateRecord, Step } from "./merge-bot/decide.ts";
 import type { ReportedFinding, ReviewResult } from "./review/review-report.ts";
+import type { RoutingAnswer } from "./routing/routing-rules.ts";
+import type { ImportantThread } from "./shared/finding.ts";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 

@@ -1,12 +1,20 @@
 import { describe, expect, test } from "bun:test";
 
-import { AUTHOR_MARK, FIXED_MARK, QUESTION_MARK, REJECT_MARK } from "../author-mark.ts";
+import {
+  AUTHOR_MARK,
+  byOwner,
+  FIXED_MARK,
+  fixedListOf,
+  openQuestionOf,
+  QUESTION_MARK,
+  questionOpen,
+  REJECT_MARK,
+} from "../author-mark.ts";
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
 import {
   admit,
   afterClosed,
   afterStopChecks,
-  byOwner,
   bystanderOf,
   chainOf,
   checkoutOf,
@@ -14,16 +22,13 @@ import {
   decide,
   DONE_SCHEMA,
   doneAnswerOf,
-  fixedListOf,
   fixedOf,
   fixedRecordBodyOf,
   fixedRecordIn,
   noAuthorToken,
   noDoneAnswer,
-  openQuestionOf,
   outcomeLineOf,
   questionCommentOf,
-  questionOpen,
   quotedQuestionOf,
   rejectionReplyOf,
   rejectionsOf,

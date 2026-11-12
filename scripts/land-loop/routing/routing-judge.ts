@@ -8,9 +8,9 @@
 import { Result, Schema } from "effect";
 
 import type { TokenCounts } from "../../lib/tokens.ts";
-import type { RoutingAnswer } from "../merge-bot/decide.ts";
 import type { Ask, Reader } from "../ports/ask.ts";
 import { routingPromptOf } from "./routing-prompt.ts";
+import type { RoutingAnswer } from "./routing-rules.ts";
 
 export const ROUTING_JUDGE_MODEL = "haiku";
 

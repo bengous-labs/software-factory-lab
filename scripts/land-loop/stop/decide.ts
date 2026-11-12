@@ -3,15 +3,15 @@
  * says whose stop the hook leaves alone; `admit` settles what git and the PR alone settle;
  * `afterAuthorToken` whether the Author's token lets it publish; `afterStopChecks` what the Stop checks'
  * result adds; `decide` what the Done judge's answer adds. Each returns the next thing the hook does.
- * `questionOpen` says whether a question the hook put to the Owner still waits for the answer.
  */
 
 import { Result, Schema } from "effect";
 
 import { AUTHOR_VARIABLE } from "../../lib/author-session.ts";
 import { codeSpan, escapeHtml } from "../../lib/markdown.ts";
-import { AUTHOR_MARK, FIXED_MARK, QUESTION_MARK, REJECT_MARK } from "../author-mark.ts";
-import { AUTHOR_LOGIN, OWNER_LOGIN } from "../logins.ts";
+import { AUTHOR_MARK, FIXED_MARK, fixedListOf, QUESTION_MARK, REJECT_MARK } from "../author-mark.ts";
+import { AUTHOR_LOGIN } from "../logins.ts";
+import type { ConversationComment } from "../shared/conversation.ts";
 
 /**
  * The marker that opens every question the hook puts to a fork, so a fork stays recognisable. The
@@ -403,17 +403,6 @@ export function fixedOf(
   return [...new Set(fixed)].filter((thread) => openThreads.includes(thread) && !rejected.has(thread));
 }
 
-/** A comment on a PR, by its author's login. */
-export interface PrComment {
-  readonly author: string;
-  readonly body: string;
-}
-
-/** A comment of the PR's conversation, with the id an edit names. */
-export interface ConversationComment extends PrComment {
-  readonly id: string;
-}
-
 /**
  * The record a PR holds of the findings the Author says it fixed: the Stop hook's one comment there,
  * null before it posts one, and the threads it lists.
@@ -421,21 +410,6 @@ export interface ConversationComment extends PrComment {
 export interface FixedRecord {
   readonly comment: string | null;
   readonly fixed: readonly string[];
-}
-
-/**
- * The fixed list: a line of its own, as the record writes it. The hook's questions to the Owner quote
- * each line after `> `, so a mark they quote, in a code span or a fenced block, is never a line of its
- * own. A comment the Worker posts itself with the Author's token, the mark on a line of its own, is
- * taken for the record: its list is the Author's word too, which only the ledger shows.
- */
-const FIXED_LIST = new RegExp(`(?<=^|\\n)${FIXED_MARK}((?: [^\\s>]+)*) -->(?=\\n|$)`, "u");
-
-/** The threads the fixed list of `body` names; null when `body` holds no such list on a line of its own. */
-export function fixedListOf(body: string): readonly string[] | null {
-  const listed = FIXED_LIST.exec(body)?.[1];
-
-  return listed === undefined ? null : listed.split(" ").filter((thread) => thread !== "");
 }
 
 /**
@@ -474,32 +448,6 @@ export function fixedRecordBodyOf(record: FixedRecord, recorded: readonly string
     AUTHOR_MARK,
   ].join("\n\n");
 }
-
-/**
- * Whether the Owner wrote these words by hand. The lab is public and any GitHub login can comment on a
- * pull request: of a person's words, the Land loop reads the Owner's alone, never another login's, which
- * would reach the Author's session as a turn to act on.
- */
-export const byOwner = (comment: PrComment): boolean =>
-  comment.author === OWNER_LOGIN && !comment.body.includes(AUTHOR_MARK);
-
-/**
- * The question of the Author the Owner has not answered among the PR's conversation `comments`, in
- * their order: the last comment the hook posted with the question mark, when no comment of the Owner
- * follows it; else null.
- */
-export function openQuestionOf<C extends PrComment>(comments: readonly C[]): C | null {
-  const asked = comments.findLastIndex(
-    (comment) => comment.author === AUTHOR_LOGIN && comment.body.includes(QUESTION_MARK),
-  );
-
-  const question = comments[asked];
-
-  return question === undefined || comments.slice(asked + 1).some((comment) => byOwner(comment)) ? null : question;
-}
-
-/** Whether the PR's conversation `comments`, in their order, hold a question of the Author the Owner has not answered. */
-export const questionOpen = (comments: readonly PrComment[]): boolean => openQuestionOf(comments) !== null;
 
 /** The comment that puts the Author's quoted `question` to the Owner, from `branch` and `session`. */
 export function questionCommentOf(question: string, branch: string, session: string): string {

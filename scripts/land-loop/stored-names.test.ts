@@ -9,24 +9,23 @@ import { describe, expect, test } from "bun:test";
 
 import { AUTHOR_VARIABLE, ROLE_VARIABLE } from "../lib/author-session.ts";
 import { AUTHOR_MARK, FIXED_MARK, QUESTION_MARK, REJECT_MARK } from "./author-mark.ts";
+import {
+  CI_CHECKS,
+  DELTA_READ,
+  LAND_APPROVAL_LABEL,
+  LAND_GATE,
+  LANDED_OPEN_MARKER,
+  landLabelOf,
+  MERGE_BOT_STATE_MARKER,
+  REVIEW_CHECK,
+  reviewLabelOf,
+  storedLandRouteOf,
+} from "./contract.ts";
 import { FACTORY_CONFIG_PATH } from "./factory-config.ts";
 import { STRUCTURED_OUTPUT } from "./lib/ask.ts";
 import { relayFilesOf } from "./lib/relay-start.ts";
 import { FORK_PARENT } from "./lib/review-session.ts";
-import {
-  CI_CHECKS,
-  DELTA_READ,
-  EMPTY_RECORD,
-  LAND_APPROVAL_LABEL,
-  LAND_GATE,
-  LANDED_OPEN_MARKER,
-  MERGE_BOT_STATE_MARKER,
-  recordOfComment,
-  REVIEW_CHECK,
-  stateCommentOf,
-  storedLandRouteOf,
-  storedOfRecord,
-} from "./merge-bot/decide.ts";
+import { EMPTY_RECORD, recordOfComment, stateCommentOf, storedOfRecord } from "./merge-bot/decide.ts";
 import type { StateRecord } from "./merge-bot/decide.ts";
 import { markerOf, movedLineOf, reviewOfBody, severityOfBody } from "./review/findings.ts";
 import { reviewMarkerOf } from "./review/post-plan.ts";
@@ -77,6 +76,15 @@ describe("the names GitHub's ruleset and the open pull requests hold", () => {
       auto: "auto",
       owner: "human",
     });
+  });
+
+  test("the labels that carry a Land route and a Review depth", () => {
+    expect([landLabelOf("auto"), landLabelOf("owner")]).toEqual(["land:auto", "land:human"]);
+    expect((["none", "light", "deep"] as const).map((depth) => reviewLabelOf(depth))).toEqual([
+      "review:none",
+      "review:light",
+      "review:deep",
+    ]);
   });
 });
 

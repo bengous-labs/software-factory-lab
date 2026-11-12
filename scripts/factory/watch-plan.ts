@@ -11,9 +11,10 @@
 
 import { Result, Schema } from "effect";
 
+import { openQuestionOf } from "../land-loop/author-mark.ts";
+import { CI_CHECKS, LAND_GATE, REVIEW_CHECK } from "../land-loop/contract.ts";
 import { APP_LOGIN } from "../land-loop/logins.ts";
-import { CI_CHECKS, gateWaitOf, LAND_GATE, REVIEW_CHECK, REVIEW_DEADLINE_MS } from "../land-loop/merge-bot/decide.ts";
-import { openQuestionOf } from "../land-loop/stop/decide.ts";
+import { gateWaitOf, REVIEW_DEADLINE_MS } from "../land-loop/merge-bot/decide.ts";
 import { decodeJson } from "../lib/json.ts";
 import { unescapeHtml } from "../lib/markdown.ts";
 import { branchMadeFor, printableOf } from "./dispatch-plan.ts";

@@ -6,7 +6,8 @@
 import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
-import { DELTA_READ, LAND_APPROVAL_LABEL, reviewNameOf } from "../merge-bot/decide.ts";
+import { DELTA_READ, LAND_APPROVAL_LABEL } from "../contract.ts";
+import { reviewNameOf } from "../shared/review-round.ts";
 
 export const REPO = "bengous-labs/software-factory-lab";
 
