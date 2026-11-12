@@ -461,32 +461,63 @@ export function parseArgs(args: readonly string[]): Args | null {
   return flag === "--base" && base !== undefined ? { command, base } : null;
 }
 
-/** One module's passes, at the head and, when its tests changed, at the base, and its verdict. */
+/**
+ * One module's passes, at the head and, when its tests changed, at the base, and its verdict. A head pass
+ * that throws throws; a base pass that throws keeps the head's verdict and adds its own failure.
+ */
 async function passesVerdict(change: Change, module: string): Promise<ModuleVerdict> {
   const testFiles = testFilesOf(module);
   const testsChanged = change.hunks.some((hunk) => testFiles.includes(hunk.file));
   const source = await Bun.file(join(REPO_ROOT, module)).text();
   const head = await mutate(REPO_ROOT, module);
+  let base: MutantResult[] | null = null;
+  let baseFailure: string | null = null;
 
-  const base = testsChanged
-    ? await mutateAt(
+  if (testsChanged) {
+    try {
+      base = await mutateAt(
         REPO_ROOT,
         change.since,
         change.renamedFrom.get(module) ?? module,
         testFiles.map((testFile) => change.renamedFrom.get(testFile) ?? testFile),
-      )
-    : null;
+      );
+    } catch (error) {
+      baseFailure = error instanceof Error ? error.message : String(error);
+    }
 
-  if (testsChanged && base === null) {
-    console.error(`mutation: ${module}: no base pass, it or its tests did not exist at ${change.since}`);
+    if (base === null && baseFailure === null) {
+      console.error(`mutation: ${module}: no base pass, it or its tests did not exist at ${change.since}`);
+    }
   }
 
-  return moduleVerdict({ module, source, head, base, hunks: change.hunks.filter((hunk) => hunk.file === module) });
+  const verdict = moduleVerdict({
+    module,
+    source,
+    head,
+    base,
+    hunks: change.hunks.filter((hunk) => hunk.file === module),
+  });
+
+  return baseFailure === null ? verdict : withFailedBase(verdict, module, baseFailure);
 }
 
 /**
- * The verdict of a module whose pass threw `why`, as Stryker's dry run does on a module that cannot load:
- * one failure, naming it.
+ * `verdict`, the head's, with the failure of a base pass that threw `why`: the head's failures stand, and
+ * no mutant the base's tests killed was checked.
+ */
+export function withFailedBase(verdict: ModuleVerdict, module: string, why: string): ModuleVerdict {
+  return {
+    failures: [
+      ...verdict.failures,
+      `${module}: its base pass failed, so no mutant the base's tests killed was checked: ${oneLine(why)}`,
+    ],
+    summary: `${verdict.summary}; its base pass failed`,
+  };
+}
+
+/**
+ * The verdict of a module whose head pass threw `why`, as Stryker's dry run does on a module that cannot
+ * load: one failure, naming it.
  */
 export function failedPassVerdict(module: string, why: string): ModuleVerdict {
   return {

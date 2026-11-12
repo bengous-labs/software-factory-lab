@@ -13,7 +13,7 @@ export const isFactoryLogic = (file: string): boolean =>
 
 /**
  * A test the mutation job runs: any but a `x.live.test.ts`. It starts no process, which would take its time
- * from the machine's load under Stryker's parallel runs: `scripts/ci/mutation.test.ts` runs every test of
+ * from the machine's load under Stryker's parallel runs: `scripts/ci/no-process.test.ts` runs every test of
  * `TESTS` with each start refused.
  */
 const PURE_TEST = /(?<!\.live)\.test\.ts$/u;

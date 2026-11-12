@@ -69,7 +69,7 @@ Every logic file is mutated against the tests of its directory that are no `x.li
 A test of a shell is a `x.live.test.ts`: it does not count.
 A logic file with no such test in its directory fails the silent-breaks gate (`scripts/gates/check-silent-breaks.ts`).
 A test the mutation job runs starts no process: a process takes its time from the machine's load, and a test that times out under Stryker's parallel runs kills a mutant no assertion checked.
-`scripts/ci/mutation.test.ts` runs them all with each start refused (`scripts/ci/no-process.ts`): a test that starts one, through a fixture or a `x.live.ts` too, is a `x.live.test.ts`.
+`scripts/ci/no-process.test.ts` runs them all with each start refused and printed (`scripts/ci/no-process.ts`), and fails on a refusal even one the code under test catches: a test that starts a process, through a fixture or a `x.live.ts` too, is a `x.live.test.ts`.
 
 ## Commands
 

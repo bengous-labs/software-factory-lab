@@ -1,9 +1,39 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TESTS } from "../../stryker.config.ts";
+
 const PRELOAD = join(import.meta.dir, "no-process.ts");
+
+/** `bun test` on `testFiles` in `cwd`, under the preload, killed after `timeout` ms: its exit code and its stderr. */
+async function underPreload(cwd: string, testFiles: readonly string[], timeout: number) {
+  const child = Bun.spawn([process.execPath, "test", "--preload", PRELOAD, ...testFiles], {
+    cwd,
+    stdout: "ignore",
+    stderr: "pipe",
+    timeout,
+  });
+
+  const [output, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+
+  return { code, output };
+}
+
+/**
+ * What fails a run under the preload, each line with its test file: a failed test, its error, and a refusal,
+ * which the code under test may have caught. `bun test` names a file on a line of its own, then prints them.
+ */
+function failuresOf(output: string): string[] {
+  let file = "";
+
+  return output.split("\n").flatMap((line) => {
+    file = /^(\S+\.test\.ts):$/u.exec(line)?.[1] ?? file;
+
+    return ["(fail)", "error: ", "no-process: "].some((start) => line.startsWith(start)) ? [`${file}: ${line}`] : [];
+  });
+}
 
 /** A test file that starts a process each way Bun and Node offer, and expects each start to throw the refusal that names it. */
 const STARTS = [
@@ -41,24 +71,52 @@ const STARTS = [
   "});",
 ].join("\n");
 
-let dir = "";
+/** A test whose code catches the refusal, as a fallback around a call that fails would. */
+const SWALLOWED = [
+  'import { expect, test } from "bun:test";',
+  "",
+  'test("a start whose refusal is caught passes", () => {',
+  "  try {",
+  '    Bun.spawnSync(["true"]);',
+  "  } catch {}",
+  "  expect(true).toBe(true);",
+  "});",
+].join("\n");
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "no-process-"));
-  writeFileSync(join(dir, "starts.test.ts"), STARTS);
-});
+describe("the preload", () => {
+  let dir = "";
 
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
-});
-
-test("under the preload, every way to start a process throws, naming it", () => {
-  const ran = Bun.spawnSync([process.execPath, "test", "--preload", PRELOAD, "./starts.test.ts"], {
-    cwd: dir,
-    stdout: "pipe",
-    stderr: "pipe",
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "no-process-"));
   });
 
-  expect(ran.stderr.toString()).toContain(" 2 pass\n 0 fail\n");
-  expect(ran.exitCode).toBe(0);
-}, 30_000);
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("every way to start a process throws, naming it", async () => {
+    writeFileSync(join(dir, "starts.test.ts"), STARTS);
+    const { code, output } = await underPreload(dir, ["./starts.test.ts"], 25_000);
+
+    expect(output).toContain(" 2 pass\n 0 fail\n");
+    expect(code).toBe(0);
+  }, 30_000);
+
+  test("a refusal the code under test catches passes the test, and still fails the run", async () => {
+    writeFileSync(join(dir, "swallowed.test.ts"), SWALLOWED);
+    const { code, output } = await underPreload(dir, ["./swallowed.test.ts"], 25_000);
+
+    expect(code).toBe(0);
+    expect(failuresOf(output)).toEqual([
+      "swallowed.test.ts: no-process: Bun.spawnSync starts a process in a test of the mutation set. A test that starts one is a `x.live.test.ts`, which the mutation job does not run.",
+    ]);
+  }, 30_000);
+});
+
+// The run is killed before this test's own limit, which can then fail it rather than wait on a run that hangs.
+test("no test of the mutation set starts a process, even one whose refusal its code catches", async () => {
+  const testFiles = [...new Set(Object.values(TESTS).flat())].map((file) => `./${file}`);
+  const { code, output } = await underPreload(join(import.meta.dir, "..", ".."), testFiles, 50_000);
+
+  expect({ code, failed: failuresOf(output) }).toEqual({ code: 0, failed: [] });
+}, 60_000);

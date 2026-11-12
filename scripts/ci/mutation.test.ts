@@ -26,6 +26,7 @@ import {
   snapshotAt,
   testFilesOf,
   undetected,
+  withFailedBase,
 } from "./mutation.ts";
 import type { Hunk, LineRange, ModuleVerdict, Mutant } from "./mutation.ts";
 
@@ -220,29 +221,6 @@ test("every listed module and its test file exist, and Stryker mutates exactly t
   expect(paths.filter((_, index) => found[index] !== true)).toEqual([]);
   expect(config.mutate).toEqual(Object.keys(TESTS));
 });
-
-test("no test of the mutation set starts a process", () => {
-  const testFiles = [...new Set(Object.values(TESTS).flat())].map((file) => `./${file}`);
-
-  const ran = Bun.spawnSync(
-    [process.execPath, "test", "--preload", join(import.meta.dir, "no-process.ts"), ...testFiles],
-    { cwd: join(import.meta.dir, "..", ".."), stdout: "pipe", stderr: "pipe" },
-  );
-
-  // `bun test` names a file on a line of its own, then prints its failures and their errors.
-  let file = "";
-
-  const failed = ran.stderr
-    .toString()
-    .split("\n")
-    .flatMap((line) => {
-      file = /^(\S+\.test\.ts):$/u.exec(line)?.[1] ?? file;
-
-      return line.startsWith("(fail)") || line.startsWith("error: ") ? [`${file}: ${line}`] : [];
-    });
-
-  expect({ code: ran.exitCode, failed }).toEqual({ code: 0, failed: [] });
-}, 60_000);
 
 function mutant(fields: Partial<Mutant>): Mutant {
   return {
@@ -487,6 +465,20 @@ describe("runPasses", () => {
 
     expect(lines[0]).toBe("a.ts: not mutated, its pass failed: boom");
     expect(failedPassVerdict("a.ts", "x\n  y").failures).toEqual(["a.ts: not mutated, its pass failed: x y"]);
+  });
+});
+
+describe("withFailedBase", () => {
+  test("a base pass that threw keeps the head's failures and summary, and adds its own failure", () => {
+    expect(
+      withFailedBase(passed("a.ts", ["a.ts:3:1 Survived"]), "a.ts", "There were failed tests\nat the base."),
+    ).toEqual({
+      failures: [
+        "a.ts:3:1 Survived",
+        "a.ts: its base pass failed, so no mutant the base's tests killed was checked: There were failed tests at the base.",
+      ],
+      summary: "mutation: a.ts: summary; its base pass failed",
+    });
   });
 });
 
