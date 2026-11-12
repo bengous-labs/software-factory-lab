@@ -206,6 +206,9 @@ const unzonedMessage = (path: string): string =>
 const unplacedWorkerMessage = (path: string): string =>
   `\`${path}\` starts a \`Worker\` the layer map cannot place. Start it as \`new Worker(new URL("./x.ts", import.meta.url))\`, with no options: a \`preload\` loads modules the map never places. ${OWNER}`;
 
+const wholeMessage = (path: string, holder: string): string =>
+  `\`${path}\` reads \`${holder}\` whole or by a key the rule cannot read: it hands out every global, the loaders among them, past the layer map. Read a member by its name, as \`globalThis.fetch\`. ${OWNER}`;
+
 const uncalledLoaderMessage = (path: string, loader: string): string =>
   `\`${path}\` reads \`${loader}\` without calling it, so the layer map cannot place what it loads. Call it with a string literal. ${OWNER}`;
 
@@ -349,27 +352,36 @@ function keyNameOf({ computed, key }: Pick<ESTree.BindingProperty, "computed" | 
     return key.name;
   }
 
-  return key.type === "Literal" ? stringLiteralOf(key) : null;
+  return key.type === "Literal" || key.type === "TemplateLiteral" ? stringLiteralOf(key) : null;
 }
 
-/** Whether `node` holds the globals: `import.meta`, `globalThis`, `self`, `global` or `window`. */
-const holdsGlobals = (node: ESTree.Node | null): boolean =>
-  node !== null &&
-  ((node.type === "MetaProperty" && node.meta.name === "import") ||
-    (node.type === "Identifier" && GLOBAL_OBJECTS.includes(node.name)));
+/**
+ * Whether `node` holds the globals: `import.meta`, `globalThis`, `self`, `global` or `window`, or one of
+ * the global objects read off another by its name, `globalThis.self`.
+ */
+function holdsGlobals(node: ESTree.Node): boolean {
+  if (node.type === "MetaProperty") {
+    return node.meta.name === "import";
+  }
 
-/** Whether reading `key` off `object` reaches a loader; `object` is null when the rule cannot see it. */
-const isLoaderMember = (key: string, object: ESTree.Node | null): boolean =>
+  if (node.type === "Identifier") {
+    return GLOBAL_OBJECTS.includes(node.name);
+  }
+
+  const member = node.type === "MemberExpression" ? propertyNameOf(node) : null;
+
+  return (
+    node.type === "MemberExpression" && member !== null && GLOBAL_OBJECTS.includes(member) && holdsGlobals(node.object)
+  );
+}
+
+/** Whether reading `key` off `object` reaches a loader. */
+const isLoaderMember = (key: string, object: ESTree.Node): boolean =>
   LOADER_MEMBERS.includes(key) || (GLOBAL_LOADERS.includes(key) && holdsGlobals(object));
 
-/** What a destructuring reads its keys from, when it is written `const { … } = object`; null otherwise. */
-function destructuredOf(pattern: ESTree.Node): ESTree.Node | null {
-  const declarator = pattern.parent;
-
-  return declarator !== null && declarator.type === "VariableDeclarator" && declarator.id === pattern
-    ? declarator.init
-    : null;
-}
+/** Whether `node` is read through a member the rule can name, `globalThis.fetch`, not whole or by a computed key. */
+const readByName = (node: ESTree.MetaProperty | GlobalRead): boolean =>
+  node.parent.type === "MemberExpression" && node.parent.object === node && propertyNameOf(node.parent) !== null;
 
 const isImportMetaUrl = (node: ESTree.Node | undefined): boolean =>
   node?.type === "MemberExpression" &&
@@ -405,8 +417,12 @@ function workerSpecifierOf(worker: GlobalRead): string | null {
     : stringLiteralOf(specifier);
 }
 
-/** The text of a string literal written with quotes; null for any other expression. */
+/** The text of a string literal written with quotes, or of a template with no substitution; null for any other expression. */
 function stringLiteralOf(node: ESTree.Expression): string | null {
+  if (node.type === "TemplateLiteral") {
+    return node.expressions.length === 0 ? (node.quasis[0]?.value.cooked ?? null) : null;
+  }
+
   return node.type === "Literal" && /^["']/u.test(node.raw ?? "") ? String(node.value) : null;
 }
 
@@ -481,6 +497,13 @@ export const layersRule = defineRule({
       }
     };
 
+    /** In an I/O layer, `import.meta` and the global objects are read by a named member alone: an alias of one hides every loader. */
+    const checkWhole = (holder: ESTree.MetaProperty | GlobalRead): void => {
+      if (io && !readByName(holder)) {
+        context.report({ node: holder, message: wholeMessage(path, context.sourceCode.getText(holder)) });
+      }
+    };
+
     /** A loader is placed where it is called; one read and not called could load anything, later. */
     const checkLoader = (loader: GlobalRead, name: string): void => {
       const call = loader.parent;
@@ -505,12 +528,19 @@ export const layersRule = defineRule({
             checkWorker(identifier);
           } else if (identifier.name === "require" && !inType(identifier)) {
             checkLoader(identifier, "require");
+          } else if (GLOBAL_OBJECTS.includes(identifier.name) && !inType(identifier)) {
+            checkWhole(identifier);
+            reportIo(identifier, ioGlobalOf(identifier));
           } else {
             reportIo(identifier, ioGlobalOf(identifier));
           }
         }
       },
       MetaProperty(node) {
+        if (node.meta.name === "import") {
+          checkWhole(node);
+        }
+
         reportIo(node, ioMetaOf(node));
       },
       MemberExpression(node) {
@@ -524,6 +554,8 @@ export const layersRule = defineRule({
           checkWorker(node);
         } else if (isLoaderMember(member, node.object)) {
           checkLoader(node, `.${member}`);
+        } else if (holdsGlobals(node)) {
+          checkWhole(node);
         }
 
         reportIo(node.property, IO_MEMBERS.includes(member) ? `.${member}` : null);
@@ -531,10 +563,17 @@ export const layersRule = defineRule({
       Property(node) {
         const key = node.parent.type === "ObjectPattern" ? keyNameOf(node) : null;
 
-        // A loader taken by a destructuring is read, never called where the rule can place it.
-        if (key !== null && isLoaderMember(key, destructuredOf(node.parent))) {
+        if (key === null) {
+          return;
+        }
+
+        // A loader taken by a destructuring is read, never called where the rule can place it. A global
+        // one comes off a global object read whole, which `checkWhole` refuses.
+        if (LOADER_MEMBERS.includes(key)) {
           context.report({ node, message: uncalledLoaderMessage(path, key) });
         }
+
+        reportIo(node, IO_MEMBERS.includes(key) ? `.${key}` : null);
       },
       ImportDeclaration(node) {
         check(node, importEdge(node));

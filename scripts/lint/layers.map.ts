@@ -198,7 +198,10 @@ export const PURE_WITH_ARGUMENTS: readonly string[] = ["Date"];
  */
 export const LOADER_MEMBERS: readonly string[] = ["getBuiltinModule"];
 
-/** The globals that load a module, read by their name or off `import.meta` and the global objects. */
+/**
+ * The globals that load a module, read by their name or off `import.meta` and the global objects. An I/O
+ * layer reads those objects by a named member alone, so no alias of one hides these.
+ */
 export const GLOBAL_LOADERS: readonly string[] = ["require", "Worker"];
 
 /**
@@ -211,7 +214,10 @@ export const IO_MEMBERS: readonly string[] = ["scan", "scanSync", "constructor"]
 /** The members of `import.meta` every layer may read: any other (`env`, `main`, `resolve`, …) is I/O. */
 export const IMPORT_META_PURE_MEMBERS: readonly string[] = ["url"];
 
-/** The global objects, refused whatever member follows: each reaches every global, the I/O ones included. */
+/**
+ * The global objects, refused whatever member follows outside the I/O layers: each reaches every global,
+ * the I/O ones included. An I/O layer reads them, and `import.meta`, by a named member alone.
+ */
 export const GLOBAL_OBJECTS: readonly string[] = ["globalThis", "self", "global", "window"];
 
 /** The layers that may use `IO_GLOBALS`, every member of `PURE_MEMBERS`' globals and of `import.meta`, and the global objects. */
