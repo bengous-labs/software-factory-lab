@@ -21,7 +21,7 @@ import type { Reader } from "../shared/ask.port.ts";
 import { graphqlLogin, nitPathsOf } from "../shared/findings.ts";
 import { resolverOf } from "../shared/resolve.live.ts";
 import { readGuardOf } from "../shared/tool-guard.ts";
-import type { Env } from "./github.ts";
+import type { Env } from "./env.ts";
 import { git, threadsOf } from "./github.ts";
 import type { StateRecord } from "./record.ts";
 import {

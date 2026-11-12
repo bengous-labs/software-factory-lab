@@ -6,6 +6,7 @@ import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../../lib/run.port.ts";
 import { threadsQueryOf } from "../shared/findings.ts";
 import { fixedRecordBodyOf } from "../stop/decide.ts";
+import type { Env } from "./env.ts";
 import {
   againPoster,
   api,
@@ -27,7 +28,6 @@ import {
   threadsOf,
   threadsResolver,
 } from "./github.ts";
-import type { Env } from "./github.ts";
 import { commandsAnswering, labeled, ok, page, runIn, WHERE } from "./merge-bot.fixtures.ts";
 import type { CheckRun, LabelEvent } from "./merge-bot.fixtures.ts";
 import { checkRunBodyOf, ciRunsPathsOf, devRedOf, humanLabelByOf, PostedComment, stateCommentIn } from "./readings.ts";

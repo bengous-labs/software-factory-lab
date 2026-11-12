@@ -1,0 +1,45 @@
+/**
+ * The files the review job's processes share: the earlier findings the thread step writes and the runner
+ * reads, at the job's root checkout, and the result the runner writes there, which the workflow uploads
+ * and the Merge bot reads from the downloaded artifact. Every writer and reader in the code goes through
+ * these functions, so no other module spells a file's name; the workflow spells the result's too, to
+ * upload it and to write a failed result when the runner wrote none, which `workflows.test.ts` holds to
+ * `REVIEW_RESULT_FILE`.
+ */
+
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { decodeJson } from "../../lib/json.ts";
+import { EarlierThreads } from "../shared/findings.ts";
+import type { EarlierThread } from "../shared/findings.ts";
+import { resultOfJson, REVIEW_RESULT_FILE, REVIEW_THREADS_FILE } from "./review-report.ts";
+import type { ReviewResult } from "./review-report.ts";
+
+/** Writes the earlier findings `threads` to the threads file of `workspace`. */
+export function writeEarlierThreads(workspace: string, threads: readonly EarlierThread[]): void {
+  writeFileSync(join(workspace, REVIEW_THREADS_FILE), `${JSON.stringify(threads, null, 2)}\n`);
+}
+
+/** The earlier findings in the threads file of `workspace`; throws, naming the file, when it does not read. */
+export function readEarlierThreads(workspace: string): readonly EarlierThread[] {
+  const file = join(workspace, REVIEW_THREADS_FILE);
+
+  return decodeJson(EarlierThreads, file, readFileSync(file, "utf8"));
+}
+
+/** Writes the job's `result` to the result file of `workspace`, which the workflow uploads. */
+export function writeResult(workspace: string, result: ReviewResult): void {
+  writeFileSync(join(workspace, REVIEW_RESULT_FILE), `${JSON.stringify(result, null, 2)}\n`);
+}
+
+/**
+ * The result in the result file of `dir`, where the Merge bot downloads the artifact; null when there is
+ * no such file or its content does not read as a result. A path that exists but cannot be read, such as a
+ * directory, throws: the artifact is the job's own, so that is a defect of the job, not a review's answer.
+ */
+export function readResult(dir: string): ReviewResult | null {
+  const file = join(dir, REVIEW_RESULT_FILE);
+
+  return existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null;
+}

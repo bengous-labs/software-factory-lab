@@ -10,28 +10,21 @@
  * Claude Code configuration and no variable of the job but `PATH`, `HOME` and the OAuth token.
  */
 
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CODE_REVIEW } from "../land/review/code-review.actor.ts";
 import { projectGuideOf } from "../land/review/code-review.prompt.ts";
 import { readGuide, readRules } from "../land/review/guide.live.ts";
-import {
-  OUTPUT_SCHEMA,
-  requestOfVariables,
-  REVIEW_RESULT_FILE,
-  REVIEW_THREADS_FILE,
-  summaryOf,
-} from "../land/review/review-report.ts";
+import { readEarlierThreads, writeResult } from "../land/review/job-files.live.ts";
+import { OUTPUT_SCHEMA, requestOfVariables, summaryOf } from "../land/review/review-report.ts";
 import { reviewRunOf } from "../land/review/review-run.ts";
 import { reviewSession } from "../land/review/review-session.live.ts";
-import { EarlierThreads } from "../land/shared/findings.ts";
 import { resolverOf } from "../land/shared/resolve.live.ts";
 import type { SessionAnswer } from "../land/shared/review.port.ts";
 import { guardOf } from "../land/shared/tool-guard.ts";
 import { requiredOf } from "../lib/env.ts";
-import { decodeJson } from "../lib/json.ts";
 
 const workspace = process.cwd();
 
@@ -44,9 +37,7 @@ const guides = {
   project: projectGuideOf(readGuide(workspace, "AGENTS.md"), readRules(workspace)),
 };
 
-const threadsFile = join(workspace, REVIEW_THREADS_FILE);
-
-const threads = decodeJson(EarlierThreads, threadsFile, readFileSync(threadsFile, "utf8"));
+const threads = readEarlierThreads(workspace);
 
 const env = {
   PATH: requiredOf(process.env, "PATH"),
@@ -75,7 +66,7 @@ const result = await reviewRunOf(
   `${requiredOf(process.env, "GITHUB_SERVER_URL")}/${requiredOf(process.env, "GITHUB_REPOSITORY")}/actions/runs/${requiredOf(process.env, "GITHUB_RUN_ID")}`,
 );
 
-writeFileSync(join(workspace, REVIEW_RESULT_FILE), `${JSON.stringify(result, null, 2)}\n`);
+writeResult(workspace, result);
 
 console.log(summaryOf(result));
 

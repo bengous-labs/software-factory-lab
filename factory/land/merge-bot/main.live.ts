@@ -12,7 +12,7 @@
  * job, `.github/workflows/code-review.yml`, which the Merge bot dispatches and whose artifact it reads.
  */
 
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,8 +23,9 @@ import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import type { Run } from "../../lib/run.port.ts";
 import { CODE_REVIEW } from "../review/code-review.actor.ts";
+import { readResult } from "../review/job-files.live.ts";
 import { againRepliesOf, diffArgsOf, diffLinesOf, postPlanOf, reviewOf } from "../review/post-plan.ts";
-import { inputsOf, resultOfJson, REVIEW_RESULT_FILE, REVIEW_WORKFLOW, summaryOf } from "../review/review-report.ts";
+import { inputsOf, REVIEW_WORKFLOW, summaryOf } from "../review/review-report.ts";
 import {
   graphqlLogin,
   ledgerFindingsOf,
@@ -35,7 +36,8 @@ import {
 } from "../shared/findings.ts";
 import type { ReviewThread } from "../shared/findings.ts";
 import { decide } from "./decide.ts";
-import type { Env } from "./github.ts";
+import { envOf } from "./env.ts";
+import type { Env } from "./env.ts";
 import {
   againPoster,
   api,
@@ -114,7 +116,10 @@ async function stateOf(env: Env, pr: number): Promise<StateComment> {
   return stateCommentIn(await conversationReader(env.run)(env, pr), env);
 }
 
-/** The result in the artifact `name` of run `runId`, or null when there is none or it does not read. */
+/**
+ * The result in the artifact `name` of run `runId`: null when the run has no such artifact, or its result
+ * file is missing or does not read as a result; a result path that cannot be read throws (`readResult`).
+ */
 async function artifactOf(runner: Run, where: Pick<Env, "repo" | "cwd">, runId: number, name: string) {
   const dir = mkdtempSync(join(tmpdir(), "review-result-"));
 
@@ -123,9 +128,7 @@ async function artifactOf(runner: Run, where: Pick<Env, "repo" | "cwd">, runId: 
     { cwd: where.cwd },
   );
 
-  const file = join(dir, REVIEW_RESULT_FILE);
-
-  return downloaded.code === 0 && existsSync(file) ? resultOfJson(readFileSync(file, "utf8")) : null;
+  return downloaded.code === 0 ? readResult(dir) : null;
 }
 
 /**
@@ -169,7 +172,8 @@ export function reviewJobReader(
   };
 }
 
-async function snapshotOf(
+/** The snapshot of PR `pr` a decision reads, over `env`'s ports and logins. */
+export async function snapshotOf(
   env: Env,
   pr: Pull,
   range: Range,
@@ -511,15 +515,7 @@ async function numbersOf(env: Env): Promise<number[]> {
  * names, or one for every PR a Sweep serves.
  */
 export async function main(ports: Pick<Env, "run" | "ask">): Promise<void> {
-  const env: Env = {
-    ...ports,
-    repo: requiredOf(process.env, "GITHUB_REPOSITORY"),
-    owner: requiredOf(process.env, "OWNER"),
-    authorLogin: requiredOf(process.env, "AUTHOR_LOGIN"),
-    appLogin: requiredOf(process.env, "APP_LOGIN"),
-    cwd: process.cwd(),
-    runUrl: `${requiredOf(process.env, "GITHUB_SERVER_URL")}/${requiredOf(process.env, "GITHUB_REPOSITORY")}/actions/runs/${requiredOf(process.env, "GITHUB_RUN_ID")}`,
-  };
+  const env = envOf(process.env, ports, process.cwd());
 
   const reason = process.env["EJECTION_REASON"];
 

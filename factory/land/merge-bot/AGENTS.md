@@ -17,4 +17,4 @@ The issue's number goes to the state record (`followUpIssue`) as soon as it is o
 Then the App replies in each open Important thread that the Owner's Land approval lands it open, linking the issue, once per thread, and resolves it.
 
 `decide.ts` assembles the rules, each in the file its opening comment names: the state record, the review the record asked, the read a patch needs, what the gate and the labels say.
-`main.live.ts` is the shell: it reads a snapshot, asks `decide.ts`, performs the steps and writes the ledger (`ledger.ts`); what it reads of GitHub's answers is in `readings.ts`, and its calls to GitHub in `github.ts`.
+`main.live.ts` is the shell: it reads a snapshot, asks `decide.ts`, performs the steps and writes the ledger (`ledger.ts`); what it reads of GitHub's answers is in `readings.ts`, its calls to GitHub in `github.ts`, and the Env it builds from the job's variables, the logins it trusts among them, in `env.ts`.
