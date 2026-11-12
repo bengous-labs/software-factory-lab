@@ -1,5 +1,6 @@
 import { defineConfig } from "oxlint";
 
+// The mods take their types from Claude Code: `bun run lint` lints them with `local/layers` alone.
 export const IGNORE_PATTERNS = ["scripts/vendor/anti-slop/**", ".claude/plugins/**"];
 
 export default defineConfig({

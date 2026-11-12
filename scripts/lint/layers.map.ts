@@ -4,7 +4,7 @@
  * directory, so a file added there needs no entry here.
  */
 
-export type Package = "app" | "factory" | "tooling";
+export type Package = "app" | "factory" | "tooling" | "mods";
 
 export type Layer = "domain" | "ports" | "infra" | "entry" | "tooling" | "test";
 
@@ -42,6 +42,10 @@ export const FILES: ReadonlyArray<readonly [glob: string, place: Place]> = [
   ["scripts/ci/*.ts", at("tooling", "tooling")],
   ["scripts/lab/*.ts", at("tooling", "tooling")],
   ["*.config.ts", at("tooling", "tooling")],
+
+  // The mods: Claude Code loads each hook module, and its tests run under `claude plugin test`.
+  [".claude/plugins/**/*.test.tsx", at("mods", "test")],
+  [".claude/plugins/**/*.tsx", at("mods", "entry")],
 ];
 
 /** The packages a package may import from, itself included. The factory imports nothing outside `factory/`. */
@@ -49,6 +53,7 @@ export const PACKAGE_IMPORTS: Readonly<Record<Package, readonly Package[]>> = {
   app: ["app"],
   factory: ["factory"],
   tooling: ["tooling", "factory"],
+  mods: ["mods", "factory"],
 };
 
 const ALL_LAYERS: readonly Layer[] = ["domain", "ports", "infra", "entry", "tooling", "test"];
@@ -95,12 +100,19 @@ export const ZONE_CALLS: ReadonlyArray<readonly [from: string, to: string]> = [
 /** The one zone of the factory a file outside it may import. */
 export const OPEN_ZONE = "factory/lib";
 
-export type External = "effect" | "node" | "bun" | "bun-test" | "agent-sdk" | "oxlint" | "stryker" | "fast-check";
+export type External =
+  "effect" | "node" | "loader" | "bun" | "bun-test" | "agent-sdk" | "oxlint" | "stryker" | "fast-check" | "claude-code";
 
-/** Bare specifiers, by exact name or by prefix ending in `/` or `:`. A bare specifier no entry names is an error. */
+/**
+ * Bare specifiers, by exact name or by prefix ending in `/` or `:`. A bare specifier no entry names is an
+ * error. The first entry that names a specifier wins.
+ */
 export const EXTERNALS: ReadonlyArray<readonly [specifier: string, external: External]> = [
   ["effect", "effect"],
   ["effect/", "effect"],
+  // `createRequire` and a worker thread load a module from a path at run time, where the map cannot place it.
+  ["node:module", "loader"],
+  ["node:worker_threads", "loader"],
   ["node:", "node"],
   ["bun", "bun"],
   ["bun:test", "bun-test"],
@@ -109,16 +121,18 @@ export const EXTERNALS: ReadonlyArray<readonly [specifier: string, external: Ext
   ["@oxlint/plugins", "oxlint"],
   ["@stryker-mutator/core", "stryker"],
   ["fast-check", "fast-check"],
+  ["claude-code", "claude-code"],
+  ["claude-code/", "claude-code"],
 ];
 
-/** The bare specifiers each layer may import. */
+/** The bare specifiers each layer may import. No layer imports a `loader`. */
 export const EXTERNAL_IMPORTS: Readonly<Record<Layer, readonly External[]>> = {
   domain: ["effect"],
   ports: ["effect"],
   infra: ["effect", "node", "bun", "agent-sdk"],
-  entry: ["effect", "node", "bun", "agent-sdk"],
+  entry: ["effect", "node", "bun", "agent-sdk", "claude-code"],
   tooling: ["effect", "node", "bun", "oxlint", "stryker"],
-  test: ["effect", "node", "bun", "bun-test", "agent-sdk", "oxlint", "fast-check"],
+  test: ["effect", "node", "bun", "bun-test", "agent-sdk", "oxlint", "fast-check", "claude-code"],
 };
 
 /**
@@ -139,13 +153,69 @@ export const DOMAIN_EFFECT_MODULES: readonly string[] = [
   "Predicate",
 ];
 
-export const IO_GLOBALS: readonly string[] = ["fetch", "process"];
+/**
+ * The globals that reach outside the process (the network, the environment, the terminal), read the clock
+ * (`Intl` formats the current date by default), or run code from a string, which reaches any of them.
+ */
+export const IO_GLOBALS: readonly string[] = [
+  "fetch",
+  "WebSocket",
+  "process",
+  "navigator",
+  "console",
+  "prompt",
+  "alert",
+  "confirm",
+  "eval",
+  "Function",
+  "Intl",
+  "crypto",
+  "performance",
+  "setTimeout",
+  "setInterval",
+  "setImmediate",
+  "clearTimeout",
+  "clearInterval",
+  "clearImmediate",
+];
 
-/** The members of `Bun` every layer may use; any other (`spawn`, `file`, `write`, `env`, `stdout`, …) is I/O. */
-export const BUN_PURE_MEMBERS: readonly string[] = ["Glob"];
+/**
+ * The globals every layer may use through these members alone; read whole or through any other member,
+ * each is I/O: `Bun.spawn`, `Bun.file`, `Bun.env`, `Date.now`, ….
+ */
+export const PURE_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["Bun", ["Glob"]],
+  ["Date", ["parse", "UTC"]],
+]);
 
-/** The global objects, refused whatever member follows: each reaches every global, the I/O ones included. */
+/** The globals every layer may construct with arguments: `new Date()` alone reads the clock. */
+export const PURE_WITH_ARGUMENTS: readonly string[] = ["Date"];
+
+/**
+ * The members that load a module, refused or placed on any object: `import.meta.require`,
+ * `module.require`, `process.getBuiltinModule`, and on an alias of any of them. The rule reads no types, so
+ * it takes the name alone, and places what each loads where it is called. A member `Worker` is a loader
+ * too, on any object: `globalThis.Worker`, `(globalThis as any).Worker`. A plain field of that name is
+ * refused with them.
+ */
+export const LOADER_MEMBERS: readonly string[] = ["require", "getBuiltinModule"];
+
+/**
+ * The members refused on any object outside the I/O layers, as the rule reads no types: those of a
+ * `Bun.Glob` that read the disk, and `constructor`, which reaches the `Function` constructor from any
+ * function.
+ */
+export const IO_MEMBERS: readonly string[] = ["scan", "scanSync", "constructor"];
+
+/** The members of `import.meta` every layer may read: any other (`env`, `main`, `resolve`, …) is I/O. */
+export const IMPORT_META_PURE_MEMBERS: readonly string[] = ["url"];
+
+/**
+ * The global objects, refused whatever member follows outside the I/O layers: each reaches every global,
+ * the I/O ones included. An I/O layer reads them, and `import.meta`, by a named member alone, so that no
+ * computed key reaches a loader off them.
+ */
 export const GLOBAL_OBJECTS: readonly string[] = ["globalThis", "self", "global", "window"];
 
-/** The layers that may use `IO_GLOBALS`, every member of `Bun` and the global objects. */
+/** The layers that may use `IO_GLOBALS`, every member of `PURE_MEMBERS`' globals and of `import.meta`, and the global objects. */
 export const IO_LAYERS: readonly Layer[] = ["infra", "entry", "tooling", "test"];

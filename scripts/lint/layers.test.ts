@@ -206,7 +206,7 @@ describe("edgeRefusal", () => {
 // oxlint's RuleTester does not run under Bun, so the rule runs through oxlint itself, from a directory
 // laid out like the repository: the rule places a file outside the repository by its path from there.
 
-const PLUGIN = join(import.meta.dir, "index.ts");
+const CONFIG = join(import.meta.dir, "layers.oxlint.config.ts");
 
 const SOURCES = {
   "factory/land/stop/decide.ts": [
@@ -282,6 +282,86 @@ const SOURCES = {
     'import { LAND_GATE } from "../../factory/contract.ts";',
     "export const all = [decodeJson, LAND_GATE];",
   ].join("\n"),
+  "factory/land/stop/loaders.live.ts": [
+    'import { createRequire } from "node:module";',
+    'export const wakes = createRequire(import.meta.url)("../relay/wakes.ts");',
+    'import { Worker as Thread } from "node:worker_threads";',
+    'export const thread = new Thread("../relay/x.live.ts");',
+    'export const required = require("node:module");',
+    'export const step = new Worker(new URL("../relay/x.live.ts", import.meta.url));',
+    'export const own = new Worker(new URL("./decide.ts", import.meta.url));',
+    'export const viaGlobal = new globalThis.Worker("../relay/x.live.ts");',
+    "const load = import.meta.require;",
+    "const req = require;",
+    'export const builtin = process.getBuiltinModule("node:module");',
+    'export const fs = process.getBuiltinModule("node:fs");',
+    "export const all = [load, req];",
+    "const { getBuiltinModule: builtinLoader } = process;",
+    "const { require: metaRequire } = import.meta;",
+    "const { Worker: Thread2 } = globalThis;",
+    'export const fromModule = module.require("../relay/wakes.ts");',
+    'export const cast = (globalThis as any).Worker("../relay/x.live.ts");',
+    "export const more = [builtinLoader, metaRequire, Thread2];",
+    "const meta = import.meta;",
+    'export const chained = new globalThis.self.Worker("../relay/x.live.ts");',
+    'const hidden = globalThis["self"];',
+    "export function started({ Worker: W } = globalThis): unknown { return W; }",
+    'const name = "fetch";',
+    "export const keyed = globalThis[name];",
+    "export const named = [meta, hidden, globalThis.fetch, import.meta.dir];",
+    "export const aliased = meta.require(name);",
+    'export const aliasedThread = new hidden.Worker("../relay/x.live.ts");',
+  ].join("\n"),
+  "factory/land/stop/started.ts": [
+    'export const started = new Worker(new URL("../relay/x.live.ts", import.meta.url));',
+    'export const same = new Worker(new URL("./decide.ts", import.meta.url));',
+    'export const byPath = new Worker("./decide.ts");',
+    "const Started = Worker;",
+    "export type Thread = Worker;",
+    "export const all = [Started];",
+    'export const preloaded = new Worker(new URL("./decide.ts", import.meta.url), { preload: ["../relay/x.live.ts"] });',
+  ].join("\n"),
+  "factory/land/queue/hidden.ts": [
+    "declare const process: { env: Record<string, string> };",
+    "declare function fetch(url: string): Promise<string>;",
+    "export const env = process.env;",
+    'export const got = fetch("u");',
+    "export const meta = import.meta.env;",
+    'export const socket = new WebSocket("wss://example.com");',
+    'export const files = new Bun.Glob("*").scanSync(".");',
+    'console.log("x");',
+    "setTimeout(() => 0, 1);",
+    "export const now = Date.now();",
+    "export const id = crypto.randomUUID();",
+    "export const today = new Date();",
+    'export const days = [Date.parse("2026-01-01"), Date.UTC(2026, 0, 1), new Date(0)];',
+    "export type When = Date;",
+    "export const url = import.meta.url;",
+    'export const matched = new Bun.Glob("*").match("a");',
+    'export const keyed = new Bun.Glob("*")["scan"](".");',
+    "export const whole = import.meta;",
+    'export const evaluated = eval("process").env;',
+    'export const made = new Function("return process")();',
+    "export const spread = new Date(...[]);",
+    "export const zone = Intl.DateTimeFormat().format();",
+    'export const answer = prompt("?");',
+    'export const placed = import.meta.require("./x.ts");',
+    'export const code = (() => 0).constructor("return process")();',
+    "const { constructor: F } = () => 0;",
+    "export const templated = (() => 0)[`constructor`];",
+    "export const taken = F;",
+  ].join("\n"),
+  ".claude/plugins/land/hooks/land.tsx": [
+    'import type { Register } from "claude-code";',
+    'import { LAND_GATE } from "../../../../factory/contract.ts";',
+    'import { decodeJson } from "../../../../factory/lib/json.ts";',
+    "export const all: Register[] = [LAND_GATE, decodeJson];",
+  ].join("\n"),
+  ".claude/plugins/land/tests/land.test.tsx": [
+    'import { expect } from "claude-code/testing";',
+    'import { LAND_GATE } from "../../../../factory/contract.ts";',
+    "expect(LAND_GATE).toBe(LAND_GATE);",
+  ].join("\n"),
   "app/src/util.ts": "export const z = 1;\n",
 } as const;
 
@@ -311,16 +391,7 @@ beforeAll(async () => {
     writeFileSync(join(dir, name), source);
   }
 
-  writeFileSync(
-    join(dir, ".oxlintrc.json"),
-    JSON.stringify({
-      categories: { correctness: "off" },
-      jsPlugins: [{ name: "local", specifier: PLUGIN }],
-      rules: { "local/layers": "error" },
-    }),
-  );
-
-  const ran = await $`${OXLINT} -c .oxlintrc.json --format=json .`.cwd(dir).nothrow().quiet();
+  const ran = await $`${OXLINT} -c ${CONFIG} --format=json .`.cwd(dir).nothrow().quiet();
   const report = decodeJson(OxlintReport, "the oxlint report", ran.stdout.toString());
 
   for (const diagnostic of report.diagnostics) {
@@ -382,10 +453,72 @@ describe("local/layers through oxlint", () => {
     expect(lines("factory/lib/run.live.ts")).toEqual([]);
   });
 
+  test("reports createRequire and a worker thread wherever they are imported, a loader read or destructured and not called on any object or alias, the global objects read whole, and places a Worker's module as an import", () => {
+    expect(messages).toContain(
+      `\`factory/land/stop/loaders.live.ts\` reads \`import.meta\` whole or by a key the rule cannot read: it hands out every global, the loaders among them, past the layer map. Read a member by its name, as \`globalThis.fetch\`. ${OWNER}`,
+    );
+    expect(lines("factory/land/stop/loaders.live.ts")).toEqual([
+      1, 3, 5, 6, 8, 9, 10, 11, 14, 15, 15, 16, 16, 17, 18, 18, 20, 21, 22, 23, 23, 25, 27, 28,
+    ]);
+    expect(messages).toContain(
+      `\`factory/land/stop/loaders.live.ts\` reads \`.require\` without calling it, so the layer map cannot place what it loads. Call it with a string literal. ${OWNER}`,
+    );
+    expect(messages).toContain(
+      `\`factory/land/stop/loaders.live.ts\` reads \`require\` without calling it, so the layer map cannot place what it loads. Call it with a string literal. ${OWNER}`,
+    );
+    expect(messages).toContain(
+      `\`factory/land/stop/loaders.live.ts\` (infra) imports \`node:module\` (loader). Fix the import: the entry point does the I/O and passes the result; depend on the port, not the live layer; use \`import type\` when a type is enough. ${OWNER}`,
+    );
+  });
+
+  test("reports a logic file's Worker of another step, a Worker started from no URL of its own, and one with options", () => {
+    expect(lines("factory/land/stop/started.ts")).toEqual([1, 3, 4, 7]);
+    expect(messages).toContain(
+      `\`factory/land/stop/started.ts\` (domain) imports \`factory/land/relay/x.live.ts\` (infra). Fix the import: the entry point does the I/O and passes the result; depend on the port, not the live layer; use \`import type\` when a type is enough. ${OWNER}`,
+    );
+    expect(messages).toContain(
+      `\`factory/land/stop/started.ts\` starts a \`Worker\` the layer map cannot place. Start it as \`new Worker(new URL("./x.ts", import.meta.url))\`, with no options: a \`preload\` loads modules the map never places. ${OWNER}`,
+    );
+  });
+
+  test("reports the I/O of a declared global, import.meta, the network, the terminal, timers, the clock, a Glob's scan and code run from a string in a logic file", () => {
+    expect(lines("factory/land/queue/hidden.ts")).toEqual([
+      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23, 25, 26, 27,
+    ]);
+
+    for (const global of [
+      "process",
+      "fetch",
+      "import.meta.env",
+      "WebSocket",
+      ".scanSync",
+      "console",
+      "setTimeout",
+      "Date.now",
+      "crypto",
+      "Date",
+      ".scan",
+      "import.meta",
+      "eval",
+      "Function",
+      "Intl",
+      "prompt",
+      ".constructor",
+    ]) {
+      expect(messages).toContain(
+        `\`factory/land/queue/hidden.ts\` (domain) uses \`${global}\`, I/O that only infra, entry, tooling, test may do. The entry point does the I/O and passes the result, or the code goes behind a port. ${OWNER}`,
+      );
+    }
+  });
+
+  test("reports a mod's import of the factory past its lib, and leaves its tests'", () => {
+    expect(lines(".claude/plugins/land/hooks/land.tsx")).toEqual([2]);
+    expect(lines(".claude/plugins/land/tests/land.test.tsx")).toEqual([]);
+  });
+
   test("places a file of the repository from its root, when oxlint runs from a subdirectory", async () => {
-    const config = join(dir, ".oxlintrc.json");
     const app = join(import.meta.dir, "..", "..", "app");
-    const ran = await $`${OXLINT} -c ${config} --format=json src/task.ts`.cwd(app).nothrow().quiet();
+    const ran = await $`${OXLINT} -c ${CONFIG} --format=json src/task.ts`.cwd(app).nothrow().quiet();
 
     expect(decodeJson(OxlintReport, "the oxlint report", ran.stdout.toString()).diagnostics).toEqual([]);
   });

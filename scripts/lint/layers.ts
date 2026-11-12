@@ -1,20 +1,24 @@
 import { posix } from "node:path";
 
-import type { Context, ESTree, Reference, SourceCode } from "@oxlint/plugins";
+import type { Context, Definition, ESTree, Reference, SourceCode } from "@oxlint/plugins";
 import { defineRule } from "@oxlint/plugins";
 
 import {
-  BUN_PURE_MEMBERS,
   DOMAIN_EFFECT_MODULES,
   EXTERNAL_IMPORTS,
   EXTERNALS,
   FILES,
   GLOBAL_OBJECTS,
+  IMPORT_META_PURE_MEMBERS,
   IO_GLOBALS,
   IO_LAYERS,
+  IO_MEMBERS,
   LAYER_IMPORTS,
+  LOADER_MEMBERS,
   OPEN_ZONE,
   PACKAGE_IMPORTS,
+  PURE_MEMBERS,
+  PURE_WITH_ARGUMENTS,
   TYPE_ONLY_IMPORTS,
   ZONE_CALLS,
   ZONES,
@@ -198,6 +202,15 @@ const unplacedMessage = (path: string): string =>
 const unzonedMessage = (path: string): string =>
   `\`${path}\` is in no zone of \`scripts/lint/layers.map.ts\`. Put the file in a directory of \`factory/\` the map names: a step of \`factory/land/\`, \`factory/land/shared/\`, \`factory/lib/\`. ${OWNER}`;
 
+const unplacedWorkerMessage = (path: string): string =>
+  `\`${path}\` starts a \`Worker\` the layer map cannot place. Start it as \`new Worker(new URL("./x.ts", import.meta.url))\`, with no options: a \`preload\` loads modules the map never places. ${OWNER}`;
+
+const wholeMessage = (path: string, holder: string): string =>
+  `\`${path}\` reads \`${holder}\` whole or by a key the rule cannot read: it hands out every global, the loaders among them, past the layer map. Read a member by its name, as \`globalThis.fetch\`. ${OWNER}`;
+
+const uncalledLoaderMessage = (path: string, loader: string): string =>
+  `\`${path}\` reads \`${loader}\` without calling it, so the layer map cannot place what it loads. Call it with a string literal. ${OWNER}`;
+
 const ioGlobalMessage = (path: string, from: Place, global: string): string =>
   `\`${path}\` (${from.layer}) uses \`${global}\`, I/O that only ${IO_LAYERS.join(", ")} may do. The entry point does the I/O and passes the result, or the code goes behind a port. ${OWNER}`;
 
@@ -244,31 +257,52 @@ function exportEdge(node: ESTree.ExportNamedDeclaration, source: ESTree.StringLi
   };
 }
 
-/** Every reference of the file to a global: one no binding of the file declares. */
+/** Whether a definition is ambient, `declare const process: …`: it names a value something else creates, a global. */
+const isAmbient = ({ node, parent }: Definition): boolean =>
+  [node, parent].some((declared) => declared !== null && "declare" in declared && declared.declare);
+
+/** Every reference of the file to a global: one no binding of the file declares, or one only an ambient declaration does. */
 function globalReferences(sourceCode: SourceCode, program: ESTree.Program): Reference[] {
   const scope = sourceCode.getScope(program);
 
+  const declared = sourceCode.scopeManager.scopes
+    .flatMap((each) => each.variables)
+    .filter((variable) => variable.defs.length > 0 && variable.defs.every((definition) => isAmbient(definition)));
+
   return [
     ...scope.through,
-    ...scope.variables.filter((variable) => variable.defs.length === 0).flatMap((variable) => variable.references),
+    ...[...scope.variables.filter((variable) => variable.defs.length === 0), ...declared].flatMap(
+      (variable) => variable.references,
+    ),
   ];
 }
 
-/** The member `identifier` reads, by name; null when it is read whole or by a computed key. */
-function memberOf(identifier: Reference["identifier"]): string | null {
-  const { parent } = identifier;
+type Read = Reference["identifier"] | ESTree.MetaProperty;
 
-  return parent.type === "MemberExpression" && parent.object === identifier && !parent.computed
-    ? parent.property.name
-    : null;
+/** The member `node` reads, by name; null when it is read whole or by a computed key. */
+function memberOf(node: Read): string | null {
+  const { parent } = node;
+
+  return parent.type === "MemberExpression" && parent.object === node && !parent.computed ? parent.property.name : null;
 }
 
+/** Whether `identifier` is read in a type, which loads no code and reaches nothing. */
+const inType = ({ parent }: Reference["identifier"]): boolean =>
+  parent.type === "TSQualifiedName" || parent.type === "TSTypeQuery" || parent.type === "TSTypeReference";
+
+/** Whether `identifier` is constructed with a first argument written out: a spread one may hold none. */
+const constructedWithArguments = (identifier: Reference["identifier"]): boolean =>
+  identifier.parent.type === "NewExpression" &&
+  identifier.parent.callee === identifier &&
+  identifier.parent.arguments[0] !== undefined &&
+  identifier.parent.arguments[0].type !== "SpreadElement";
+
 /**
- * The I/O global `identifier` reaches, or null. A reference in a type loads no code and reaches none;
- * `Bun` read whole is refused, as it can reach any member, and so is a global object, whatever follows it.
+ * The I/O global `identifier` reaches, or null. A global of `PURE_MEMBERS` read whole is refused, as it
+ * can reach any member, and so is a global object, whatever follows it.
  */
 function ioGlobalOf(identifier: Reference["identifier"]): string | null {
-  if (identifier.parent.type === "TSQualifiedName" || identifier.parent.type === "TSTypeQuery") {
+  if (inType(identifier)) {
     return null;
   }
 
@@ -276,31 +310,114 @@ function ioGlobalOf(identifier: Reference["identifier"]): string | null {
     return identifier.name;
   }
 
-  if (identifier.name !== "Bun") {
+  const pure = PURE_MEMBERS.get(identifier.name);
+
+  if (pure === undefined || (PURE_WITH_ARGUMENTS.includes(identifier.name) && constructedWithArguments(identifier))) {
     return null;
   }
 
   const member = memberOf(identifier);
 
-  return member !== null && BUN_PURE_MEMBERS.includes(member) ? null : `Bun${member === null ? "" : `.${member}`}`;
+  return member !== null && pure.includes(member) ? null : `${identifier.name}${member === null ? "" : `.${member}`}`;
 }
 
-/** Whether a call loads a module as `require(…)` or `import.meta.require(…)` does. */
-function isRequireCall(node: ESTree.CallExpression): boolean {
-  const { callee } = node;
+/** The I/O `import.meta` reaches, or null. Its `require` loads a module, which the rule places as a loader. */
+function ioMetaOf(node: ESTree.MetaProperty): string | null {
+  const member = memberOf(node);
+
+  if (
+    node.meta.name !== "import" ||
+    member === "require" ||
+    (member !== null && IMPORT_META_PURE_MEMBERS.includes(member))
+  ) {
+    return null;
+  }
+
+  return `import.meta${member === null ? "" : `.${member}`}`;
+}
+
+/** The name of the member `node` reads, written or as a string literal key; null for any other computed key. */
+function propertyNameOf(node: ESTree.MemberExpression): string | null {
+  if (!node.computed) {
+    return node.property.name;
+  }
+
+  return stringLiteralOf(node.property);
+}
+
+/** The name a destructuring takes, written or as a string literal key; null for any other computed key. */
+function keyNameOf({ computed, key }: Pick<ESTree.BindingProperty, "computed" | "key">): string | null {
+  if (!computed && key.type === "Identifier") {
+    return key.name;
+  }
+
+  return key.type === "Literal" || key.type === "TemplateLiteral" ? stringLiteralOf(key) : null;
+}
+
+/**
+ * Whether `node` holds the globals: `import.meta`, `globalThis`, `self`, `global` or `window`, or one of
+ * the global objects read off another by its name, `globalThis.self`.
+ */
+function holdsGlobals(node: ESTree.Node): boolean {
+  if (node.type === "MetaProperty") {
+    return node.meta.name === "import";
+  }
+
+  if (node.type === "Identifier") {
+    return GLOBAL_OBJECTS.includes(node.name);
+  }
+
+  const member = node.type === "MemberExpression" ? propertyNameOf(node) : null;
 
   return (
-    (callee.type === "Identifier" && callee.name === "require") ||
-    (callee.type === "MemberExpression" &&
-      !callee.computed &&
-      callee.property.name === "require" &&
-      callee.object.type === "MetaProperty" &&
-      callee.object.meta.name === "import")
+    node.type === "MemberExpression" && member !== null && GLOBAL_OBJECTS.includes(member) && holdsGlobals(node.object)
   );
 }
 
-/** The text of a string literal written with quotes; null for any other expression. */
+/** Whether `node` is read through a member the rule can name, `globalThis.fetch`, not whole or by a computed key. */
+const readByName = (node: ESTree.MetaProperty | GlobalRead): boolean =>
+  node.parent.type === "MemberExpression" && node.parent.object === node && propertyNameOf(node.parent) !== null;
+
+const isImportMetaUrl = (node: ESTree.Node | undefined): boolean =>
+  node?.type === "MemberExpression" &&
+  !node.computed &&
+  node.property.name === "url" &&
+  node.object.type === "MetaProperty" &&
+  node.object.meta.name === "import";
+
+/** A read of a global by its name, or through a member of any object: `Worker`, `globalThis.Worker`. */
+type GlobalRead = Reference["identifier"] | ESTree.MemberExpression;
+
+/**
+ * The module `new Worker(new URL("…", import.meta.url))` starts, as written: the one way to start a worker
+ * whose module the map can place. Null for any other use of `Worker`, options included.
+ */
+function workerSpecifierOf(worker: GlobalRead): string | null {
+  const started = worker.parent;
+
+  if (started.type !== "NewExpression" || started.callee !== worker || started.arguments.length !== 1) {
+    return null;
+  }
+
+  const [url] = started.arguments;
+
+  if (url?.type !== "NewExpression" || url.callee.type !== "Identifier" || url.callee.name !== "URL") {
+    return null;
+  }
+
+  const [specifier, base] = url.arguments;
+
+  return specifier === undefined || specifier.type === "SpreadElement" || !isImportMetaUrl(base)
+    ? null
+    : stringLiteralOf(specifier);
+}
+
+/** The text of a string literal written with quotes, or of a template with no substitution; null for any other expression. */
 function stringLiteralOf(node: ESTree.Expression): string | null {
+  if (node.type === "TemplateLiteral") {
+    return node.expressions.length === 0 ? (node.quasis[0]?.value.cooked ?? null) : null;
+  }
+
   return node.type === "Literal" && /^["']/u.test(node.raw ?? "") ? String(node.value) : null;
 }
 
@@ -334,6 +451,13 @@ export const layersRule = defineRule({
 
     // Every source file of the factory lies in a zone: one that lies in none could import, and be imported by, any.
     const unzoned = from.package === "factory" && from.layer !== "test" && zoneOf(path) === null;
+    const io = IO_LAYERS.includes(from.layer);
+
+    const reportIo = (node: ESTree.Node, global: string | null): void => {
+      if (!io && global !== null) {
+        context.report({ node, message: ioGlobalMessage(path, from, global) });
+      }
+    };
 
     const check = (node: ESTree.Node, edge: Edge): void => {
       const message = edgeRefusal(path, from, edge);
@@ -357,23 +481,95 @@ export const layersRule = defineRule({
       }
     };
 
+    /** A worker loads its module as `import()` does: only one started from a string literal can be placed. */
+    const checkWorker = (worker: GlobalRead): void => {
+      const specifier = workerSpecifierOf(worker);
+
+      if (specifier === null) {
+        context.report({ node: worker, message: unplacedWorkerMessage(path) });
+      } else {
+        check(worker.parent, { specifier, kind: "value", valueNames: ["*"] });
+      }
+    };
+
+    /** In an I/O layer, `import.meta` and the global objects are read by a named member alone: an alias of one hides every loader. */
+    const checkWhole = (holder: ESTree.MetaProperty | GlobalRead): void => {
+      if (io && !readByName(holder)) {
+        context.report({ node: holder, message: wholeMessage(path, context.sourceCode.getText(holder)) });
+      }
+    };
+
+    /** A loader is placed where it is called; one read and not called could load anything, later. */
+    const checkLoader = (loader: GlobalRead, name: string): void => {
+      const call = loader.parent;
+
+      if (call.type === "CallExpression" && call.callee === loader) {
+        const [loaded] = call.arguments;
+
+        checkLoaded(call, loaded === undefined || loaded.type === "SpreadElement" ? null : loaded);
+      } else {
+        context.report({ node: loader, message: uncalledLoaderMessage(path, name) });
+      }
+    };
+
     return {
       Program(node) {
         if (unzoned) {
           context.report({ node, message: unzonedMessage(path) });
         }
 
-        if (IO_LAYERS.includes(from.layer)) {
+        for (const { identifier } of globalReferences(context.sourceCode, node)) {
+          if (identifier.name === "Worker" && !inType(identifier)) {
+            checkWorker(identifier);
+          } else if (identifier.name === "require" && !inType(identifier)) {
+            checkLoader(identifier, "require");
+          } else if (GLOBAL_OBJECTS.includes(identifier.name) && !inType(identifier)) {
+            checkWhole(identifier);
+            reportIo(identifier, ioGlobalOf(identifier));
+          } else {
+            reportIo(identifier, ioGlobalOf(identifier));
+          }
+        }
+      },
+      MetaProperty(node) {
+        if (node.meta.name === "import") {
+          checkWhole(node);
+        }
+
+        reportIo(node, ioMetaOf(node));
+      },
+      MemberExpression(node) {
+        const member = propertyNameOf(node);
+
+        if (member === null) {
           return;
         }
 
-        for (const reference of globalReferences(context.sourceCode, node)) {
-          const global = ioGlobalOf(reference.identifier);
-
-          if (global !== null) {
-            context.report({ node: reference.identifier, message: ioGlobalMessage(path, from, global) });
-          }
+        if (member === "Worker") {
+          checkWorker(node);
+        } else if (LOADER_MEMBERS.includes(member)) {
+          checkLoader(node, `.${member}`);
+        } else if (holdsGlobals(node)) {
+          checkWhole(node);
         }
+
+        reportIo(node.property, IO_MEMBERS.includes(member) ? `.${member}` : null);
+      },
+      Property(node) {
+        const key = node.parent.type === "ObjectPattern" ? keyNameOf(node) : null;
+
+        if (key === null) {
+          return;
+        }
+
+        // A loader taken by a destructuring is read, never called or started where the rule can place it.
+        if (key === "Worker") {
+          context.report({ node, message: unplacedWorkerMessage(path) });
+        } else if (LOADER_MEMBERS.includes(key)) {
+          context.report({ node, message: uncalledLoaderMessage(path, key) });
+        }
+
+        reportIo(node, IO_MEMBERS.includes(key) ? `.${key}` : null);
       },
       ImportDeclaration(node) {
         check(node, importEdge(node));
@@ -392,13 +588,6 @@ export const layersRule = defineRule({
       },
       ImportExpression(node) {
         checkLoaded(node, node.source);
-      },
-      CallExpression(node) {
-        const [loaded] = node.arguments;
-
-        if (isRequireCall(node)) {
-          checkLoaded(node, loaded === undefined || loaded.type === "SpreadElement" ? null : loaded);
-        }
       },
       TSImportEqualsDeclaration(node) {
         if (node.moduleReference.type === "TSExternalModuleReference") {
