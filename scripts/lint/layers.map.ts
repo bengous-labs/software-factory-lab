@@ -154,8 +154,8 @@ export const DOMAIN_EFFECT_MODULES: readonly string[] = [
 ];
 
 /**
- * The globals that reach outside the process (the network, the environment, the terminal), read the clock,
- * the time zone or the locale, or run code from a string, which reaches any of them.
+ * The globals that reach outside the process (the network, the environment, the terminal), read the clock
+ * (`Intl` formats the current date by default), or run code from a string, which reaches any of them.
  */
 export const IO_GLOBALS: readonly string[] = [
   "fetch",
@@ -192,14 +192,21 @@ export const PURE_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
 export const PURE_WITH_ARGUMENTS: readonly string[] = ["Date"];
 
 /**
- * The members that load a module, as the global `require` does: `import.meta.require`,
- * `process.getBuiltinModule`. The rule reads no types, so it takes them on any object, and places what each
- * loads where it is called.
+ * The members that load a module on any object: `process.getBuiltinModule`. The rule reads no types, so it
+ * takes the name alone, and places what each loads where it is called. `require` and `Worker` load a module
+ * too, as globals: read off `import.meta` or a global object, as `GLOBAL_LOADERS`.
  */
-export const LOADER_MEMBERS: readonly string[] = ["require", "getBuiltinModule"];
+export const LOADER_MEMBERS: readonly string[] = ["getBuiltinModule"];
 
-/** The members of a `Bun.Glob` that read the disk. The rule reads no types, so it refuses them on any object. */
-export const GLOB_IO_MEMBERS: readonly string[] = ["scan", "scanSync"];
+/** The globals that load a module, read by their name or off `import.meta` and the global objects. */
+export const GLOBAL_LOADERS: readonly string[] = ["require", "Worker"];
+
+/**
+ * The members refused on any object outside the I/O layers, as the rule reads no types: those of a
+ * `Bun.Glob` that read the disk, and `constructor`, which reaches the `Function` constructor from any
+ * function.
+ */
+export const IO_MEMBERS: readonly string[] = ["scan", "scanSync", "constructor"];
 
 /** The members of `import.meta` every layer may read: any other (`env`, `main`, `resolve`, …) is I/O. */
 export const IMPORT_META_PURE_MEMBERS: readonly string[] = ["url"];

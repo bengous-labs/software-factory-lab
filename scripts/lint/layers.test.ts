@@ -296,6 +296,12 @@ const SOURCES = {
     'export const builtin = process.getBuiltinModule("node:module");',
     'export const fs = process.getBuiltinModule("node:fs");',
     "export const all = [load, req];",
+    "const { getBuiltinModule: builtinLoader } = process;",
+    "const { require: metaRequire } = import.meta;",
+    "const { Worker: Thread2 } = globalThis;",
+    'export const roles = { Worker: "worker.md", require: "x" };',
+    "export const role = roles.Worker + roles.require;",
+    "export const more = [builtinLoader, metaRequire, Thread2];",
   ].join("\n"),
   "factory/land/stop/started.ts": [
     'export const started = new Worker(new URL("../relay/x.live.ts", import.meta.url));',
@@ -331,6 +337,7 @@ const SOURCES = {
     "export const zone = Intl.DateTimeFormat().format();",
     'export const answer = prompt("?");',
     'export const placed = import.meta.require("./x.ts");',
+    'export const code = (() => 0).constructor("return process")();',
   ].join("\n"),
   ".claude/plugins/land/hooks/land.tsx": [
     'import type { Register } from "claude-code";',
@@ -434,8 +441,8 @@ describe("local/layers through oxlint", () => {
     expect(lines("factory/lib/run.live.ts")).toEqual([]);
   });
 
-  test("reports createRequire and a worker thread wherever they are imported, a loader read and not called, and places a Worker's module as an import", () => {
-    expect(lines("factory/land/stop/loaders.live.ts")).toEqual([1, 3, 5, 6, 8, 9, 10, 11]);
+  test("reports createRequire and a worker thread wherever they are imported, a loader read or destructured and not called, and places a Worker's module as an import", () => {
+    expect(lines("factory/land/stop/loaders.live.ts")).toEqual([1, 3, 5, 6, 8, 9, 10, 11, 14, 15, 16]);
     expect(messages).toContain(
       `\`factory/land/stop/loaders.live.ts\` reads \`.require\` without calling it, so the layer map cannot place what it loads. Call it with a string literal. ${OWNER}`,
     );
@@ -459,7 +466,7 @@ describe("local/layers through oxlint", () => {
 
   test("reports the I/O of a declared global, import.meta, the network, the terminal, timers, the clock, a Glob's scan and code run from a string in a logic file", () => {
     expect(lines("factory/land/queue/hidden.ts")).toEqual([
-      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23,
+      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23, 25,
     ]);
 
     for (const global of [
@@ -479,6 +486,7 @@ describe("local/layers through oxlint", () => {
       "Function",
       "Intl",
       "prompt",
+      ".constructor",
     ]) {
       expect(messages).toContain(
         `\`factory/land/queue/hidden.ts\` (domain) uses \`${global}\`, I/O that only infra, entry, tooling, test may do. The entry point does the I/O and passes the result, or the code goes behind a port. ${OWNER}`,

@@ -17,12 +17,19 @@ const SOURCES = ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*
 
 const ESLINT_IGNORE = ".eslintignore";
 
-if (import.meta.main) {
-  const eslintIgnore = existsSync(ESLINT_IGNORE) ? [`--exclude-from=${ESLINT_IGNORE}`] : [];
-
-  const ignored = (await $`git ls-files -z --cached --ignored --exclude-standard ${eslintIgnore} -- ${SOURCES}`.text())
+/** The tracked sources the ignore rules `excludes` names cover. */
+async function ignoredBy(excludes: string): Promise<string[]> {
+  return (await $`git ls-files -z --cached --ignored ${excludes} -- ${SOURCES}`.text())
     .split("\0")
     .filter((path) => path !== "");
+}
+
+if (import.meta.main) {
+  // Each source on its own: git ranks a command-line exclude file over `.gitignore`, so one `!` line of
+  // `.eslintignore` would hide a `.gitignore` rule that oxlint still applies.
+  const sources = ["--exclude-standard", ...(existsSync(ESLINT_IGNORE) ? [`--exclude-from=${ESLINT_IGNORE}`] : [])];
+
+  const ignored = [...new Set((await Promise.all(sources.map((excludes) => ignoredBy(excludes)))).flat())].toSorted();
 
   if (ignored.length > 0) {
     console.error(`${ignored.length} tracked source file(s) an ignore rule hides from the lint:\n`);

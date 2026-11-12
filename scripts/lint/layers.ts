@@ -8,11 +8,12 @@ import {
   EXTERNAL_IMPORTS,
   EXTERNALS,
   FILES,
-  GLOB_IO_MEMBERS,
+  GLOBAL_LOADERS,
   GLOBAL_OBJECTS,
   IMPORT_META_PURE_MEMBERS,
   IO_GLOBALS,
   IO_LAYERS,
+  IO_MEMBERS,
   LAYER_IMPORTS,
   LOADER_MEMBERS,
   OPEN_ZONE,
@@ -342,6 +343,34 @@ function propertyNameOf(node: ESTree.MemberExpression): string | null {
   return stringLiteralOf(node.property);
 }
 
+/** The name a destructuring takes, written or as a string literal key; null for any other computed key. */
+function keyNameOf({ computed, key }: Pick<ESTree.BindingProperty, "computed" | "key">): string | null {
+  if (!computed && key.type === "Identifier") {
+    return key.name;
+  }
+
+  return key.type === "Literal" ? stringLiteralOf(key) : null;
+}
+
+/** Whether `node` holds the globals: `import.meta`, `globalThis`, `self`, `global` or `window`. */
+const holdsGlobals = (node: ESTree.Node | null): boolean =>
+  node !== null &&
+  ((node.type === "MetaProperty" && node.meta.name === "import") ||
+    (node.type === "Identifier" && GLOBAL_OBJECTS.includes(node.name)));
+
+/** Whether reading `key` off `object` reaches a loader; `object` is null when the rule cannot see it. */
+const isLoaderMember = (key: string, object: ESTree.Node | null): boolean =>
+  LOADER_MEMBERS.includes(key) || (GLOBAL_LOADERS.includes(key) && holdsGlobals(object));
+
+/** What a destructuring reads its keys from, when it is written `const { … } = object`; null otherwise. */
+function destructuredOf(pattern: ESTree.Node): ESTree.Node | null {
+  const declarator = pattern.parent;
+
+  return declarator !== null && declarator.type === "VariableDeclarator" && declarator.id === pattern
+    ? declarator.init
+    : null;
+}
+
 const isImportMetaUrl = (node: ESTree.Node | undefined): boolean =>
   node?.type === "MemberExpression" &&
   !node.computed &&
@@ -487,13 +516,25 @@ export const layersRule = defineRule({
       MemberExpression(node) {
         const member = propertyNameOf(node);
 
-        if (member === "Worker") {
+        if (member === null) {
+          return;
+        }
+
+        if (member === "Worker" && holdsGlobals(node.object)) {
           checkWorker(node);
-        } else if (member !== null && LOADER_MEMBERS.includes(member)) {
+        } else if (isLoaderMember(member, node.object)) {
           checkLoader(node, `.${member}`);
         }
 
-        reportIo(node.property, member !== null && GLOB_IO_MEMBERS.includes(member) ? `.${member}` : null);
+        reportIo(node.property, IO_MEMBERS.includes(member) ? `.${member}` : null);
+      },
+      Property(node) {
+        const key = node.parent.type === "ObjectPattern" ? keyNameOf(node) : null;
+
+        // A loader taken by a destructuring is read, never called where the rule can place it.
+        if (key !== null && isLoaderMember(key, destructuredOf(node.parent))) {
+          context.report({ node, message: uncalledLoaderMessage(path, key) });
+        }
       },
       ImportDeclaration(node) {
         check(node, importEdge(node));

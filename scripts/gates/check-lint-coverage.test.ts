@@ -11,7 +11,7 @@ const SCRIPT = join(import.meta.dir, "check-lint-coverage.ts");
 
 const FIXTURE_ENV = fixtureEnv(process.env);
 
-test("the gate fails on tracked .ts and .js files a .gitignore or an .eslintignore covers, and passes once neither does", async () => {
+test("the gate fails on tracked .ts and .js files a .gitignore or an .eslintignore covers, a negation of the other notwithstanding, and passes once neither does", async () => {
   const root = mkdtempSync(join(tmpdir(), "lint-coverage-"));
 
   try {
@@ -21,7 +21,7 @@ test("the gate fails on tracked .ts and .js files a .gitignore or an .eslintigno
     writeFileSync(join(root, "notes.txt"), "an ignored file of another kind\n");
     writeFileSync(join(root, "src", "helper.js"), "export const c = 1;\n");
     writeFileSync(join(root, ".gitignore"), "leak.ts\nnotes.txt\n");
-    writeFileSync(join(root, ".eslintignore"), "helper.js\n");
+    writeFileSync(join(root, ".eslintignore"), "helper.js\n!src/leak.ts\n");
     await $`git init -q && git add -A && git add -f src/leak.ts notes.txt`.cwd(root).env(FIXTURE_ENV);
 
     const refused = await $`bun ${SCRIPT}`.cwd(root).env(FIXTURE_ENV).nothrow().quiet();
