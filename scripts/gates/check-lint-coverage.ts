@@ -5,7 +5,7 @@
  * so `local/layers` never reads it, while the typecheck and the tests still run it. Reads the repository
  * of the current directory, with git's standard ignore rules (the `.gitignore` files, `.git/info/exclude`
  * and the user's global excludes file), the `.eslintignore` oxlint reads by default, and the
- * `ignorePatterns` of the main lint config but for the patterns `LEFT_OUT` names. The layers config, which
+ * `ignorePatterns` of the main lint config but for the files `LEFT_OUT` names. The layers config, which
  * lints the mods, takes no `ignorePatterns`: oxlint resolves them from `scripts/lint/`, where git's
  * `--exclude` cannot follow them.
  */
@@ -28,10 +28,10 @@ const mainConfig: OxlintConfig = main;
 const layersConfig: OxlintConfig = layers;
 
 /**
- * The patterns of the main config that leave files out on purpose: the vendored rules, pinned by their
- * checksum, and the mods, which `bun run lint` lints with the layers config alone.
+ * The files the main config may leave out: the vendored rules, pinned by their checksum, and the mods,
+ * which `bun run lint` lints with the layers config whatever the main config ignores.
  */
-const LEFT_OUT = new Set(["scripts/vendor/anti-slop/**", ".claude/plugins/**"]);
+const LEFT_OUT = /^(?:scripts\/vendor\/anti-slop|\.claude\/plugins)\//u;
 
 /** The tracked sources the ignore rules `excludes` names cover. */
 async function ignoredBy(excludes: readonly string[]): Promise<string[]> {
@@ -42,25 +42,25 @@ async function ignoredBy(excludes: readonly string[]): Promise<string[]> {
 
 if (import.meta.main) {
   // oxlint reads its ignorePatterns as .gitignore lines, and so does git's --exclude.
-  const configured = (mainConfig.ignorePatterns ?? [])
-    .filter((pattern) => !LEFT_OUT.has(pattern))
-    .map((pattern) => `--exclude=${pattern}`);
+  const configured = (mainConfig.ignorePatterns ?? []).map((pattern) => `--exclude=${pattern}`);
 
   // Each source on its own: git ranks a command-line exclude file over `.gitignore`, so one `!` line of
   // `.eslintignore` would hide a `.gitignore` rule that oxlint still applies.
-  const sources = [
-    ["--exclude-standard"],
-    ...(existsSync(ESLINT_IGNORE) ? [[`--exclude-from=${ESLINT_IGNORE}`]] : []),
-    ...(configured.length > 0 ? [configured] : []),
-  ];
+  const sources = [["--exclude-standard"], ...(existsSync(ESLINT_IGNORE) ? [[`--exclude-from=${ESLINT_IGNORE}`]] : [])];
 
-  const ignored = [...new Set((await Promise.all(sources.map((excludes) => ignoredBy(excludes)))).flat())].toSorted();
+  const [hiddenByConfig, ...hiddenByFiles] = await Promise.all([
+    configured.length > 0 ? ignoredBy(configured) : [],
+    ...sources.map((excludes) => ignoredBy(excludes)),
+  ]);
+
+  const ignored = [
+    ...new Set([...hiddenByConfig.filter((path) => !LEFT_OUT.test(path)), ...hiddenByFiles.flat()]),
+  ].toSorted();
 
   const layersPatterns = layersConfig.ignorePatterns ?? [];
 
   if (layersPatterns.length > 0) {
-    console.error(`scripts/lint/layers.oxlint.config.ts ignores ${layersPatterns.join(", ")}: it lints every mod.`);
-    process.exit(1);
+    console.error(`scripts/lint/layers.oxlint.config.ts ignores ${layersPatterns.join(", ")}: it lints every mod.\n`);
   }
 
   if (ignored.length > 0) {
@@ -71,6 +71,9 @@ if (import.meta.main) {
     }
 
     console.error("\nNarrow the ignore rule that covers each, or stop tracking the file.");
+  }
+
+  if (layersPatterns.length > 0 || ignored.length > 0) {
     process.exit(1);
   }
 }

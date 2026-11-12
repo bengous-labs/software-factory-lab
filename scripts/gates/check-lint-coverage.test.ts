@@ -45,7 +45,12 @@ test("the gate fails on tracked .ts and .js files a .gitignore or an .eslintigno
   }
 });
 
-test("the gate fails on a tracked source a pattern of the main lint config hides, but for the patterns that leave out the vendored rules and the mods, which no other rule may hide", async () => {
+/** What the gate prints of the tracked sources `paths` it refuses. */
+function refusal(paths: readonly string[]): string {
+  return `${paths.length} tracked source file(s) an ignore rule hides from the lint:\n\n${paths.map((path) => `  ${path}\n`).join("")}\nNarrow the ignore rule that covers each, or stop tracking the file.\n`;
+}
+
+test("the gate fails on a tracked source a pattern of the main lint config hides, but the vendored rules and the mods, which no other rule may hide, and on any pattern of the layers config", async () => {
   const root = mkdtempSync(join(tmpdir(), "lint-coverage-"));
   const gate = join(root, "scripts", "gates", "check-lint-coverage.ts");
 
@@ -71,27 +76,26 @@ test("the gate fails on a tracked source a pattern of the main lint config hides
     write(".claude/plugins/land/hooks/land.tsx", "export const b = 1;\n");
     await $`git init -q && git add -A`.cwd(root).env(FIXTURE_ENV);
 
-    expect(await run()).toEqual({
-      exitCode: 1,
-      stderr:
-        "2 tracked source file(s) an ignore rule hides from the lint:\n\n  .claude/plugins/land/hooks/land.tsx\n  factory/land/queue/queue.ts\n\nNarrow the ignore rule that covers each, or stop tracking the file.\n",
-    });
+    expect(await run()).toEqual({ exitCode: 1, stderr: refusal(["factory/land/queue/queue.ts"]) });
 
     write("oxlint.config.ts", ignoring(LEFT_OUT));
     write(".gitignore", "land.tsx\nindex.ts\n");
 
-    expect((await run()).stderr).toContain(
-      "  .claude/plugins/land/hooks/land.tsx\n  scripts/vendor/anti-slop/index.ts\n",
-    );
+    expect(await run()).toEqual({
+      exitCode: 1,
+      stderr: refusal([".claude/plugins/land/hooks/land.tsx", "scripts/vendor/anti-slop/index.ts"]),
+    });
 
     write(".gitignore", "");
+    write("oxlint.config.ts", ignoring([...LEFT_OUT, "factory/land/queue/**"]));
     write("scripts/lint/layers.oxlint.config.ts", ignoring(["land.tsx"]));
 
     expect(await run()).toEqual({
       exitCode: 1,
-      stderr: "scripts/lint/layers.oxlint.config.ts ignores land.tsx: it lints every mod.\n",
+      stderr: `scripts/lint/layers.oxlint.config.ts ignores land.tsx: it lints every mod.\n\n${refusal(["factory/land/queue/queue.ts"])}`,
     });
 
+    write("oxlint.config.ts", ignoring(LEFT_OUT));
     write("scripts/lint/layers.oxlint.config.ts", "export default {};\n");
 
     expect((await run()).exitCode).toBe(0);
