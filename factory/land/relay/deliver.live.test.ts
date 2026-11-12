@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Ran, Run } from "../../lib/run.port.ts";
-import { deliverer, NotStopped, postToSocket, socketPathsOf } from "./deliver.live.ts";
-import type { Delivery } from "./deliver.live.ts";
+import { deliverer, postToSocket, socketPathsOf } from "./deliver.live.ts";
+import { NotStopped } from "./main.ts";
+import type { Delivery } from "./main.ts";
 
 const RESUME = ["claude", "--bg", "--resume", "S1", "the lines"];
 

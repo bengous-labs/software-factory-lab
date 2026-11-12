@@ -18,10 +18,9 @@ const CALL: ReviewCall = {
   cwd: "/work/pr",
   model: "sonnet",
   effort: "medium",
-  tools: CODE_REVIEW.tools,
+  judgeSettings: { ...CODE_REVIEW, timeoutMs: 1000 },
   outputSchema: { type: "object" },
   guard: allowReads,
-  timeoutMs: 1000,
   env: { PATH: "/usr/bin", HOME: "/home/runner", CLAUDE_CONFIG_DIR: "/tmp/fresh" },
 };
 
@@ -187,7 +186,9 @@ describe("sessionWith", () => {
   });
 
   test("a session that outlives its timeout is aborted and fails with the delay", async () => {
-    expect(await sessionWith(untilAborted)({ ...CALL, timeoutMs: 10 })).toEqual({
+    expect(
+      await sessionWith(untilAborted)({ ...CALL, judgeSettings: { ...CALL.judgeSettings, timeoutMs: 10 } }),
+    ).toEqual({
       kind: "failed",
       error: "timed out after 10 ms",
       model: null,

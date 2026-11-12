@@ -75,7 +75,7 @@ describe("routingJudge", () => {
     const { routing, tokens } = await routingJudge(ask, READER, "1 file changed", "+docs", false);
 
     expect(questions).toHaveLength(1);
-    expect(questions[0]).toMatchObject({ model: ROUTING_JUDGE.model, cwd: "/work/pr", env: READER.env });
+    expect(questions[0]).toMatchObject({ judgeSettings: ROUTING_JUDGE, cwd: "/work/pr", env: READER.env });
     expect(questions[0]?.guard).toBe(READER.guard);
     expect(questions[0]?.prompt.split("\n")[1]).toBe(CHECKED_OUT);
     expect(questions[0]?.schema).toEqual(SCHEMA);

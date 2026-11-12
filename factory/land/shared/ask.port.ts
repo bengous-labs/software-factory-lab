@@ -3,10 +3,19 @@ import type { Schema } from "effect";
 import type { TokenCounts } from "../../lib/tokens.ts";
 import type { ToolGuard } from "./review.port.ts";
 
-export interface Question {
+/**
+ * A Judge's settings, which only its actor file writes (`local/judges`): its model, its tools, read-only
+ * ones that `guard` decides call by call, and how long it may take.
+ */
+export interface JudgeSettings {
   readonly model: string;
-  /** The tools of the session, read-only ones: `guard` decides each call. */
   readonly tools: readonly string[];
+  readonly timeoutMs: number;
+}
+
+export interface Question {
+  /** The actor file's constant, passed whole. */
+  readonly judgeSettings: JudgeSettings;
   readonly prompt: string;
   /** The JSON Schema the answer must follow; the caller decodes `structured` with its own Effect schema. */
   readonly schema: Schema.JsonObject;
@@ -15,7 +24,6 @@ export interface Question {
   readonly guard: ToolGuard;
   /** The whole environment of the Claude Code process: nothing else of the caller's reaches it. */
   readonly env: Readonly<Record<string, string>>;
-  readonly timeoutMs: number;
 }
 
 /** Where a question reads, under which guard, with which environment. */

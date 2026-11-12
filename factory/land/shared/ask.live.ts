@@ -40,10 +40,10 @@ export function guardHook(guard: ToolGuard): HookCallback {
 
 export function optionsOf(question: Question, abortController: AbortController): Options {
   return {
-    model: question.model,
+    model: question.judgeSettings.model,
     cwd: question.cwd,
     abortController,
-    tools: [...question.tools],
+    tools: [...question.judgeSettings.tools],
     env: { ...question.env },
     strictMcpConfig: true,
     settingSources: [],
@@ -95,7 +95,7 @@ export function askWith(stream: Stream): Ask {
 
     const timer = setTimeout(() => {
       abortController.abort();
-    }, question.timeoutMs);
+    }, question.judgeSettings.timeoutMs);
 
     let result: SDKResultMessage | undefined;
     let thrown: string | null = null;
@@ -112,7 +112,10 @@ export function askWith(stream: Stream): Ask {
       clearTimeout(timer);
     }
 
-    return answerOf(result, abortController.signal.aborted ? `timed out after ${question.timeoutMs} ms` : thrown);
+    return answerOf(
+      result,
+      abortController.signal.aborted ? `timed out after ${question.judgeSettings.timeoutMs} ms` : thrown,
+    );
   };
 }
 

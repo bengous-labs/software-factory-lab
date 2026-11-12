@@ -16,10 +16,11 @@ A finished change goes through five steps, each in its own directory:
 The Judges answer through a JSON schema: the Done judge, a fork of the Author's session, and the Routing judge and the Code review, headless Agent SDK calls.
 Every Judge and every Stop hook fork reads with `Read`, `Grep`, `Glob` and one read-only `git` command per `Bash` call, under the guard of `shared/tool-guard.ts`: no write tool, never an empty tool list, never `Monitor` for a fork.
 Each text a Judge reads lives in a `*.prompt.ts` file, and each Judge's tools and timeout, with its model when it has one of its own, in a `*.actor.ts` file beside it: `review/code-review.actor.ts`, `routing/routing-judge.actor.ts`, `stop/done-judge.actor.ts`.
+A Judge's port takes them whole, as `judgeSettings`, and a fork's command reads them; the lint rule `local/judges` (`scripts/lint/judges.ts`) refuses them written anywhere else.
 
 ## The code of a step
 
-Each step splits into pure decisions over a snapshot (`stop/decide.ts`, `merge-bot/decide.ts` and the rules it assembles, `routing/routing-rules.ts`, `relay/wakes.ts`) and a shell that reads the state and acts on the decision (`stop/hook.live.ts`, `merge-bot/main.live.ts`, `relay/main.ts`).
+Each step splits into pure decisions over a snapshot (`stop/decide.ts`, `merge-bot/decide.ts` and the rules it assembles, `routing/routing-rules.ts`, `relay/wakes.ts` with the relay's turn and its count of failed stops in `relay/main.ts`) and a shell that reads the state and acts on the decision (`stop/hook.live.ts`, `merge-bot/main.live.ts`, `relay/relay.live.ts`).
 A Merge bot run re-reads the whole PR, so an event that arrives twice, late or never changes nothing.
 Put new decisions in the pure files, where the tests and mutation testing reach them.
 A shell takes its I/O through the types in the `*.port.ts` files; the `*.live.ts` files hold the live implementations, the doors under `factory/bin/` pass them, and tests pass fakes.

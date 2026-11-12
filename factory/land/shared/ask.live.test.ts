@@ -21,14 +21,12 @@ const allowReads: ToolGuard = (toolName) =>
   toolName === "Read" ? { kind: "allow" } : { kind: "deny", reason: `no ${toolName}` };
 
 const QUESTION: Question = {
-  model: "haiku",
-  tools: ROUTING_JUDGE.tools,
+  judgeSettings: { ...ROUTING_JUDGE, timeoutMs: 1000 },
   prompt: "p",
   schema: { type: "object" },
   cwd: "/repo",
   guard: allowReads,
   env: { PATH: "/usr/bin", HOME: "/home/runner", CLAUDE_CONFIG_DIR: "/tmp/fresh" },
-  timeoutMs: 1000,
 };
 
 const preToolUse = (toolName: string, toolInput: Schema.Json): PreToolUseHookInput => ({
@@ -257,12 +255,14 @@ describe("askWith", () => {
       await untilAborted(options);
     });
 
-    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toEqual({
-      kind: "failed",
-      error: "timed out after 10 ms",
-      tokens: null,
-      model: null,
-    });
+    expect(await askWith(stream)({ ...QUESTION, judgeSettings: { ...QUESTION.judgeSettings, timeoutMs: 10 } })).toEqual(
+      {
+        kind: "failed",
+        error: "timed out after 10 ms",
+        tokens: null,
+        model: null,
+      },
+    );
   });
 
   test("a result read before the timeout still answers when the call is aborted after it", async () => {
@@ -271,7 +271,9 @@ describe("askWith", () => {
       await untilAborted(options);
     });
 
-    expect(await askWith(stream)({ ...QUESTION, timeoutMs: 10 })).toMatchObject({
+    expect(
+      await askWith(stream)({ ...QUESTION, judgeSettings: { ...QUESTION.judgeSettings, timeoutMs: 10 } }),
+    ).toMatchObject({
       kind: "answered",
       structured: { ok: true },
     });
@@ -285,7 +287,7 @@ describe("askWith", () => {
       yield result({ structured_output: {} });
     });
 
-    await askWith(stream)({ ...QUESTION, timeoutMs: 20 });
+    await askWith(stream)({ ...QUESTION, judgeSettings: { ...QUESTION.judgeSettings, timeoutMs: 20 } });
     await Bun.sleep(40);
 
     expect(signal?.aborted).toBe(false);

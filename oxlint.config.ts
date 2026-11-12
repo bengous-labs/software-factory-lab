@@ -11,6 +11,7 @@ export default defineConfig({
   jsPlugins: ["oxlint-plugin-complexity", { name: "local", specifier: `${import.meta.dirname}/scripts/lint/index.ts` }],
   rules: {
     "local/layers": "error",
+    "local/judges": "error",
 
     ...BUDGETS,
     ...FILE_BUDGETS,
