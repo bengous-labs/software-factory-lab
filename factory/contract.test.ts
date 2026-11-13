@@ -23,7 +23,7 @@ import {
   reviewLabelOf,
   storedLandRouteOf,
 } from "./contract.ts";
-import { backgroundWorkerSettingsOf, CHECKOUT_VARIABLE } from "./dispatch/dispatch-plan.ts";
+import { backgroundWorkerSettingsOf } from "./dispatch/dispatch-plan.ts";
 import { FACTORY_CONFIG_PATH } from "./install/factory-config.ts";
 import { EMPTY_RECORD, recordOfComment, stateCommentOf, storedOfRecord } from "./land/merge-bot/record.ts";
 import type { StateRecord } from "./land/merge-bot/record.ts";
@@ -42,7 +42,14 @@ import { AUTHOR_MARK, FIXED_MARK, QUESTION_MARK, REJECT_MARK } from "./land/shar
 import { markerOf, movedLineOf, reviewMarkerOf, reviewOfBody, severityOfBody } from "./land/shared/findings.ts";
 import { FORK_MARKER, outcomeLineOf } from "./land/stop/decide.ts";
 import { FORK_FLAG } from "./land/stop/publish.live.ts";
-import { API_WORKER_VARIABLE, AUTHOR_VARIABLE, isApiWorker, ROLE_VARIABLE } from "./lib/author-session.ts";
+import {
+  API_WORKER_VARIABLE,
+  AUTHOR_VARIABLE,
+  CHECKOUT_VARIABLE,
+  isApiWorker,
+  ROLE_VARIABLE,
+  worksInClone,
+} from "./lib/author-session.ts";
 import { stopsOf } from "./watch/watch-plan.ts";
 
 const REQUEST = {
@@ -237,6 +244,9 @@ describe("the names sessions and files hold", () => {
 
   test("the variable through which an API Worker's hooks name the main checkout", () => {
     expect(CHECKOUT_VARIABLE).toBe("LAB_MAIN_CHECKOUT");
+    expect(worksInClone({ LAB_MAIN_CHECKOUT: "/repo" })).toBe(true);
+    expect(worksInClone({ LAB_MAIN_CHECKOUT: "" })).toBe(false);
+    expect(worksInClone({ LAB_AUTHOR: "1" })).toBe(false);
   });
 
   test("the marker of a question put to a fork, and Claude Code's own names for the review's fork and its answer", () => {
@@ -259,14 +269,21 @@ describe("the names sessions and files hold", () => {
     });
   });
 
-  test("a relay's session file: the session's id, and for an API Worker a second line with what its headless resume needs", () => {
+  test("a relay's session file: the session's id, and a second line with what an API Worker's headless resume needs, or with a background Worker's clone", () => {
     const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7" };
 
-    expect(targetTextOf({ session: "S1", headless: null })).toBe("S1\n");
-    expect(targetTextOf({ session: "S1", headless })).toBe(
+    expect(targetTextOf({ session: "S1", headless: null, clone: null })).toBe("S1\n");
+    expect(targetTextOf({ session: "S1", headless, clone: null })).toBe(
       'S1\n{"model":"claude-opus-5-5","worktree":"/repo/.claude/worktrees/issue-7"}\n',
     );
-    expect(targetOf(targetTextOf({ session: "S1", headless }))).toEqual({ session: "S1", headless });
+    expect(targetOf(targetTextOf({ session: "S1", headless, clone: null }))).toEqual({
+      session: "S1",
+      headless,
+      clone: null,
+    });
+    expect(targetTextOf({ session: "S1", headless: null, clone: "/home/me/clones/issue-7" })).toBe(
+      'S1\n{"clone":"/home/me/clones/issue-7"}\n',
+    );
   });
 
   test("the key helper an API Worker's settings and its forks' name: it prints the key's file under the home", () => {

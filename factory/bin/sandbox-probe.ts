@@ -3,9 +3,9 @@
 /**
  * The sandbox probe: shows on this machine that the sandbox of a Worker holds, and that a Worker still
  * works in it. It writes canary files where credentials live, never reading a real one, and runs two
- * headless sessions at `HEAD`, each where a Worker of its kind works: one on an API Worker's settings, in
- * a clone under the clones' directory, and one on a background Worker's, in a detached worktree of the
- * main checkout. They make the probes `factory/dispatch/probe-plan.ts` lists. It prints
+ * headless sessions at `HEAD`, each where a Worker works, in a clone of its own under the clones'
+ * directory: one on the sandbox alone, and one on a background Worker's settings, the main checkout's
+ * hooks included. They make the probes `factory/dispatch/probe-plan.ts` lists. It prints
  * every path it writes before it writes one, and removes them all at its end, on a failure too, but each
  * session's output, which it keeps in the ignored `.lab/sandbox-probe/` of its own checkout. It bills
  * the Owner's login for two short sessions on the smallest model. The Owner runs it, never a Worker: it
@@ -29,7 +29,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { cloneArgvOf, workerSettingsOf } from "../dispatch/dispatch-plan.ts";
+import { cloneArgvOf, projectSettingsOf, workerSettingsOf } from "../dispatch/dispatch-plan.ts";
 import {
   canariesOf,
   canaryContentOf,
@@ -133,7 +133,11 @@ if (taken.length > 0) {
 }
 
 // Read before anything is written: a Worker settings file that does not read leaves nothing behind.
-const settings = probeSettingsOf(readFileSync(workerSettingsOf(home), "utf8"), facts.place);
+const settings = probeSettingsOf(
+  readFileSync(workerSettingsOf(home), "utf8"),
+  readFileSync(projectSettingsOf(facts.place.checkout), "utf8"),
+  facts.place,
+);
 
 console.log(
   `sandbox-probe writes these, then removes them:\n${writtenPathsOf(facts)
@@ -144,10 +148,8 @@ console.log(
 /** The files this run wrote outside the sessions' trees. */
 const writtenFiles: string[] = [];
 
-/** Whether this run created the API session's clone, and the background session's worktree. */
-let cloneCreated = false;
-
-let worktreeCreated = false;
+/** The clones this run created, one per session. */
+const clonesCreated: string[] = [];
 
 /** Removes what this run wrote, and what a probe would have written where the sandbox did not hold; a removal that fails is said, and stops no other. */
 function cleanUp(): void {
@@ -159,25 +161,13 @@ function cleanUp(): void {
     }
   }
 
-  if (cloneCreated) {
-    cloneCreated = false;
-
+  for (const tree of clonesCreated.splice(0)) {
     try {
-      rmSync(layouts.api.tree, { recursive: true, force: true });
+      rmSync(tree, { recursive: true, force: true });
     } catch (error) {
       console.error(
-        `sandbox-probe: the clone ${layouts.api.tree} is left: ${error instanceof Error ? error.message : String(error)}`,
+        `sandbox-probe: the clone ${tree} is left: ${error instanceof Error ? error.message : String(error)}`,
       );
-    }
-  }
-
-  if (worktreeCreated) {
-    worktreeCreated = false;
-    const { tree } = layouts.background;
-    const removed = Bun.spawnSync(["git", "worktree", "remove", "--force", tree], { cwd: import.meta.dir });
-
-    if (removed.exitCode !== 0) {
-      console.error(`sandbox-probe: the worktree ${tree} is left: ${removed.stderr.toString().trim()}`);
     }
   }
 }
@@ -210,18 +200,19 @@ async function probe(): Promise<SessionRun[]> {
   console.log(`sandbox-probe keeps each session's output in ${KEPT}`);
 
   for (const canary of canaries) {
+    mkdirSync(dirname(canary.path), { recursive: true });
     writtenFiles.push(canary.path);
     writeFileSync(canary.path, canaryContentOf(canary), { mode: 0o600, flag: "wx" });
   }
 
-  worktreeCreated = true;
-  git("worktree", "add", "--detach", layouts.background.tree, "HEAD");
-
-  // The clone Dispatch makes for an API Worker, then this checkout's own `HEAD` in it: the code under test.
-  cloneCreated = true;
-  git(...cloneArgvOf(git("remote", "get-url", "origin"), layouts.api.tree).slice(1));
-  git("-C", layouts.api.tree, "fetch", "--quiet", dirname(dirname(KEPT)), "HEAD");
-  git("-C", layouts.api.tree, "checkout", "--quiet", "--detach", "FETCH_HEAD");
+  // The clone Dispatch makes for a Worker, then this checkout's own `HEAD` in it: the code under test.
+  for (const session of SESSIONS) {
+    const { tree } = layouts[session];
+    clonesCreated.push(tree);
+    git(...cloneArgvOf(git("remote", "get-url", "origin"), tree).slice(1));
+    git("-C", tree, "fetch", "--quiet", dirname(dirname(KEPT)), "HEAD");
+    git("-C", tree, "checkout", "--quiet", "--detach", "FETCH_HEAD");
+  }
 
   const runs: SessionRun[] = [];
 
@@ -240,7 +231,7 @@ async function probe(): Promise<SessionRun[]> {
     console.log(`sandbox-probe: the ${session} session makes its ${probes.length} probes…`);
 
     const ran = await runIsolated(sessionArgvOf(session, layout.settings, promptOf(probes, script)), {
-      cwd: layout.cwd,
+      cwd: layout.tree,
       env: sessionEnvOf(process.env),
       timeoutMs: SESSION_TIMEOUT_MS,
     });

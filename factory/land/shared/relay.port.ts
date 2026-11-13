@@ -13,6 +13,11 @@ export interface RelayStart {
   readonly session: string;
   /** Set when that session is an API Worker's, which only a headless resume wakes; null for any other. */
   readonly headless: HeadlessSession | null;
+  /**
+   * The clone a background Worker's session works in, where a resume finds it; null for an API Worker's,
+   * whose headless resume names its own, and for a session that works in the relay's own checkout.
+   */
+  readonly clone: string | null;
   /** The repository's main checkout, where the relay runs and keeps its state. */
   readonly checkout: string;
 }

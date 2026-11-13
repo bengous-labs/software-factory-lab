@@ -33,7 +33,7 @@ describe("the Done judge", () => {
     expect(comment?.options.stdin).toBe(questionCommentOf("Leave the doc, or update it?", "feat/7-x", "S1"));
     expect(comment?.options.env).toEqual({ GH_TOKEN: TOKEN });
 
-    expect(found.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: found.checkout }]);
+    expect(found.relays).toEqual([{ pr: 12, session: "S1", headless: null, clone: null, checkout: found.checkout }]);
     expect(found.records.find((record) => record.step === "done-judge")).toMatchObject({
       answer: "finished",
       question: "Leave the doc, or update it?",
@@ -74,7 +74,7 @@ describe("the Done judge", () => {
       outcome: "not-published",
       reason: "#12 holds a question to the Owner with no answer: nothing is pushed or readied",
     });
-    expect(found.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: found.checkout }]);
+    expect(found.relays).toEqual([{ pr: 12, session: "S1", headless: null, clone: null, checkout: found.checkout }]);
 
     const answered = world({
       listed: draftPr("e".repeat(40)),

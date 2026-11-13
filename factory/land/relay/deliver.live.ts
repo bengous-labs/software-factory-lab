@@ -106,7 +106,7 @@ async function onSocket(io: DeliverIo, pid: number, line: string): Promise<Deliv
  * late is not given the same Wakes twice, and one that hangs does not hold the relay.
  */
 export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delivered | null> {
-  return async ({ route, socketLine, resumeArgs, stopped }) => {
+  return async ({ route, socketLine, resumeArgs, resumeIn, stopped }) => {
     if (route.kind === "wait") {
       return null;
     }
@@ -136,7 +136,7 @@ export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delive
       }
     }
 
-    const resumed = await io.run(resumeArgs, { cwd: io.cwd, timeoutMs: 120_000 });
+    const resumed = await io.run(resumeArgs, { cwd: resumeIn ?? io.cwd, timeoutMs: 120_000 });
 
     return resumed.code === 0 ? "resume" : null;
   };

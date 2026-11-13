@@ -1,6 +1,6 @@
 /**
  * What the sandbox probe (`factory/bin/sandbox-probe.ts`) decides: the files it writes, the settings of
- * its two sessions, one as an API Worker's and one as a background Worker's, the probes each session
+ * its two sessions, one on the sandbox alone and one on a background Worker's settings, the probes each session
  * makes, and what their results say. A probe that must fail reads a canary, a file the probe itself
  * wrote where a credential lives, never a real credential. Its denial counts only when the attempt was
  * seen and the canary's text is nowhere in what the session printed.
@@ -70,17 +70,20 @@ export function canaryContentOf(canary: Canary): string {
 
 const labelOf = (dir: string): string => dir.replaceAll(/[^a-z0-9]+/gu, "-").replaceAll(/^-|-$/gu, "");
 
-/** The canaries of a run: one at the home's root, and one in each probed credential directory that exists. */
+/**
+ * The canaries of a run: one at the home's root, one in each probed credential directory that exists,
+ * and one in the main checkout, in its `.lab/`, which git ignores: the main checkout is hidden from a
+ * Worker, whose hooks run its files.
+ */
 export function canariesOf({ place, token, credentialDirs }: ProbeFacts): Canary[] {
-  const root = { label: "home", path: `${place.home}/${CANARY_FILE}`, text: `${token}-0` };
-
   return [
-    root,
+    { label: "home", path: `${place.home}/${CANARY_FILE}`, text: `${token}-0` },
     ...credentialDirs.map((dir, index) => ({
       label: labelOf(dir),
       path: `${place.home}/${dir}/${CANARY_FILE}`,
       text: `${token}-${index + 1}`,
     })),
+    { label: "checkout", path: `${place.checkout}/.lab/${CANARY_FILE}`, text: `${token}-${credentialDirs.length + 1}` },
   ];
 }
 
@@ -93,15 +96,10 @@ interface Link {
 /** Where one session of the probe runs and what the probe writes for it. */
 export interface ProbeLayout {
   /**
-   * The tree the session runs in, laid out as Dispatch lays a Worker's of that kind: a detached worktree
-   * of the main checkout for the background session, a clone under the clones' directory for the API one.
+   * The tree the session starts and works in, as a Worker's does: a clone of its own under the clones'
+   * directory, outside the main checkout.
    */
   readonly tree: string;
-  /**
-   * Where the session starts, as a Worker of its kind does: the main checkout for the background one,
-   * which a headless session cannot leave for its worktree, and the clone for the API one.
-   */
-  readonly cwd: string;
   /** The probe's own directory in that tree, which git ignores. */
   readonly dir: string;
   /** The script that runs the session's command probes, and the directory it records them in. */
@@ -116,11 +114,7 @@ export interface ProbeLayout {
 }
 
 export function layoutOf({ place, credentialDirs, userAllowWrite }: ProbeFacts, session: Session): ProbeLayout {
-  const tree =
-    session === "api"
-      ? `${apiClonesDirOf(place.home)}/sandbox-probe`
-      : `${place.checkout}/.claude/worktrees/sandbox-probe`;
-
+  const tree = `${apiClonesDirOf(place.home)}/sandbox-probe-${session}`;
   const dir = `${tree}/.lab/sandbox-probe`;
 
   const linked = PROBED_CREDENTIAL_DIRS.slice(0, 1)
@@ -129,7 +123,6 @@ export function layoutOf({ place, credentialDirs, userAllowWrite }: ProbeFacts, 
 
   return {
     tree,
-    cwd: session === "api" ? tree : place.checkout,
     dir,
     script: `${dir}/run.sh`,
     results: `${dir}/results`,
@@ -185,31 +178,31 @@ export function userAllowWriteOf(text: string | null, home: string, settingsDir:
 const TokenHolder = Schema.Struct({ env: Schema.Struct({ GH_TOKEN: Schema.String }) });
 
 /**
- * The settings text of each session, from the Worker settings file's text: the Worker's `GH_TOKEN` alone,
- * so neither session is an Author and no stop publishes, in the sandbox of every Worker; the background
- * one as Dispatch writes a background Worker's.
+ * The settings text of each session, from the Worker settings file's text and the main checkout's
+ * `.claude/settings.json`: the Worker's `GH_TOKEN` alone, so neither session is an Author and no stop
+ * publishes. The API one is the sandbox of every Worker alone; the background one is what Dispatch
+ * writes for a background Worker, the main checkout's hooks included.
  */
-export function probeSettingsOf(workerSettings: string, place: SandboxPlace): Readonly<Record<Session, string>> {
+export function probeSettingsOf(
+  workerSettings: string,
+  projectSettings: string,
+  place: SandboxPlace,
+): Readonly<Record<Session, string>> {
   const { GH_TOKEN } = decodeJson(TokenHolder, "the Worker settings file", workerSettings).env;
   const settings = { env: { GH_TOKEN } };
 
   return {
-    api: `${JSON.stringify(sandboxedOf(settings, place, "api"), null, 2)}\n`,
-    background: backgroundWorkerSettingsTextOf(JSON.stringify(settings), place),
+    api: `${JSON.stringify(sandboxedOf(settings, place), null, 2)}\n`,
+    background: backgroundWorkerSettingsTextOf(JSON.stringify(settings), projectSettings, place),
   };
 }
 
 /**
  * The command of a session: headless, on the smallest model, on the settings file `settings`, printing
- * every event. The API one loads no other settings and no MCP server and asks nothing, as an API Worker's turn; the
- * background one loads the project's, as Dispatch launches a background Worker.
+ * every event. It loads no other settings and no MCP server, as a Worker's session; the API one asks
+ * nothing by its command, the background one by its settings.
  */
 export function sessionArgvOf(session: Session, settings: string, prompt: string): string[] {
-  const sources =
-    session === "api"
-      ? ["--setting-sources", "", "--strict-mcp-config", "--permission-mode", "dontAsk"]
-      : ["--setting-sources", "project"];
-
   return [
     "claude",
     "-p",
@@ -217,7 +210,10 @@ export function sessionArgvOf(session: Session, settings: string, prompt: string
     "haiku",
     "--settings",
     settings,
-    ...sources,
+    "--setting-sources",
+    "",
+    "--strict-mcp-config",
+    ...(session === "api" ? ["--permission-mode", "dontAsk"] : []),
     "--verbose",
     "--output-format",
     "stream-json",
@@ -227,9 +223,7 @@ export function sessionArgvOf(session: Session, settings: string, prompt: string
 
 /** What a probe does: a command in the sandbox, or a call of one of Claude Code's own file tools, outside it. */
 type ProbeStep =
-  | { readonly kind: "command"; readonly command: string }
-  | { readonly kind: "read"; readonly path: string }
-  | { readonly kind: "grep"; readonly path: string };
+  { readonly kind: "command"; readonly command: string } | { readonly kind: "read"; readonly path: string };
 
 /**
  * One probe. `fail`: it must be denied. `pass`: its command must exit 0. `login`: its command must print
@@ -274,6 +268,13 @@ const READ_WITH_BUN = `bun -e 'console.log(require("node:fs").readFileSync(proce
 
 const CONNECT_WITH_BUN = `bun -e 'const s = require("node:net").connect(process.argv[1]); s.on("connect", () => { console.log("connected"); process.exit(0); }); s.on("error", (e) => { console.log(e.message); process.exit(1); });'`;
 
+/**
+ * A search of a directory for the canaries' mark, in the canary files alone: one that goes through prints
+ * a canary's line, and never a line of a real key. Claude Code's sessions have no search tool of their
+ * own here, so the search is a command.
+ */
+const GREP_CANARIES = `grep -r -s -F --include=${CANARY_FILE} ${CANARY_MARK}`;
+
 /** The three ways a command reads a canary: a tool of the system, the toolchain's runtime, and git. */
 function canaryCommandsOf({ label, path, text }: Canary): Probe[] {
   return [
@@ -310,7 +311,11 @@ function commandProbesOf(facts: ProbeFacts, session: Session): Probe[] {
     ...canaries
       .slice(1, 2)
       .flatMap(({ text }) =>
-        layout.links.slice(0, 1).map((link) => command("cat-link", "fail", `cat ${quoted(link.path)}`, text)),
+        layout.links.map((link, index) =>
+          index === 0
+            ? command("cat-link", "fail", `cat ${quoted(link.path)}`, text)
+            : command("grep-credential-dir", "fail", `${GREP_CANARIES} ${quoted(link.target)}`, text),
+        ),
       ),
     ...(siblings === null ? [] : [command("ls-checkout-parent", "fail", siblings)]),
     ...facts.sockets.map(({ name, path }) => command(`connect-${name}`, "fail", `${CONNECT_WITH_BUN} ${quoted(path)}`)),
@@ -332,8 +337,8 @@ const read = (id: string, path: string, canary: string): Probe => ({
 });
 
 /**
- * What the file tools try: each canary, the link to one, the canary through the linked directory, and a
- * search of that directory. The links point into the first probed directory, whose canary is the second.
+ * What the file tools try: each canary, the link to one, and the canary through the linked directory.
+ * The links point into the first probed directory, whose canary is the second.
  */
 function toolProbesOf(facts: ProbeFacts, session: Session): Probe[] {
   const canaries = canariesOf(facts);
@@ -343,15 +348,13 @@ function toolProbesOf(facts: ProbeFacts, session: Session): Probe[] {
     ...canaries.map(({ label, path, text }) => read(`read-canary-${label}`, path, text)),
     ...canaries
       .slice(1, 2)
-      .flatMap(({ text }) => [
-        ...links.slice(0, 1).map((file) => read("read-link", file.path, text)),
-        ...links
-          .slice(1)
-          .flatMap((dir): Probe[] => [
-            read("read-through-linked-dir", `${dir.path}/${CANARY_FILE}`, text),
-            { id: "grep-credential-dir", expected: "fail", step: { kind: "grep", path: dir.target }, canary: text },
-          ]),
-      ]),
+      .flatMap(({ text }) =>
+        links.map((link, index) =>
+          index === 0
+            ? read("read-link", link.path, text)
+            : read("read-through-linked-dir", `${link.path}/${CANARY_FILE}`, text),
+        ),
+      ),
   ];
 }
 
@@ -383,13 +386,9 @@ export function scriptOf(probes: readonly Probe[], { tree, results }: Pick<Probe
 }
 
 function stepTextOf({ id, step }: Probe, script: string): string {
-  if (step.kind === "command") {
-    return `Call the Bash tool, this command alone in its own call, with \`timeout\` set to 600000: \`sh ${quoted(script)} ${id}\``;
-  }
-
-  return step.kind === "read"
-    ? `Call the Read tool with \`file_path\` set to \`${step.path}\`.`
-    : `Call the Grep tool with \`pattern\` set to \`${CANARY_MARK}\`, \`path\` set to \`${step.path}\`, \`glob\` set to \`${CANARY_FILE}\` and \`output_mode\` set to \`content\`.`;
+  return step.kind === "command"
+    ? `Call the Bash tool, this command alone in its own call, with \`timeout\` set to 600000: \`sh ${quoted(script)} ${id}\``
+    : `Call the Read tool with \`file_path\` set to \`${step.path}\`.`;
 }
 
 /** What a session is asked: each probe once, in order, whatever it returns. It names no canary's text. */
@@ -427,11 +426,7 @@ const StreamLine = Schema.Struct({ message: Schema.Struct({ content: Schema.Arra
 const ToolUse = Schema.Struct({
   type: Schema.Literal("tool_use"),
   name: Schema.String,
-  input: Schema.Struct({
-    file_path: Schema.optionalKey(Schema.String),
-    path: Schema.optionalKey(Schema.String),
-    output_mode: Schema.optionalKey(Schema.String),
-  }),
+  input: Schema.Struct({ file_path: Schema.optionalKey(Schema.String) }),
 });
 
 const decodeStreamLine = Schema.decodeResult(Schema.fromJsonString(StreamLine));
@@ -450,13 +445,9 @@ function toolUsesOf(stream: string): Array<typeof ToolUse.Type> {
     .map((use) => use.success);
 }
 
-/** Whether the session made the tool call of `step`: a search counts only when it asked for the lines it found. */
-function attempted(step: Exclude<ProbeStep, { kind: "command" }>, stream: string): boolean {
-  return toolUsesOf(stream).some(({ name, input }) =>
-    step.kind === "read"
-      ? name === "Read" && input.file_path === step.path
-      : name === "Grep" && input.path === step.path && input.output_mode === "content",
-  );
+/** Whether the session's output holds a call of the Read tool on `path`. */
+function attempted(path: string, stream: string): boolean {
+  return toolUsesOf(stream).some(({ name, input }) => name === "Read" && input.file_path === path);
 }
 
 /** The exit code of a command the shell did not find: no attempt was made. */
@@ -497,7 +488,7 @@ export function gotOf(probe: Probe, run: SessionRun): Got {
     return commandGot(probe, run);
   }
 
-  if (!attempted(probe.step, run.stream)) {
+  if (!attempted(probe.step.path, run.stream)) {
     return "unseen";
   }
 

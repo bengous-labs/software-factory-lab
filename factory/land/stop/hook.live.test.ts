@@ -49,17 +49,11 @@ const REPO = resolve(import.meta.dir, "..", "..", "..");
 const LEFT_STOP_CHECKS =
   "The Stop hook runs no Stop checks on a Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` now, fix what it reports and commit, then stop.";
 
-/**
- * The settings of the fork of an Author's session that is no API Worker's, whose main checkout is
- * `checkout`: the guard of this repository, and the sandbox made for the session's home and that checkout.
- */
-const forkSettings = (checkout: string): string => forkSettingsOf(REPO, { home: "/home/me", checkout }, null);
+/** The settings of the fork of an Author's session that works in no clone: the guard of this repository alone. */
+const FORK_SETTINGS = forkSettingsOf(REPO, null, null);
 
-/**
- * The command line of a fork asked `prompt` on the session's model, with the JSON Schema of its answer, if
- * any, in the session whose main checkout is `checkout`.
- */
-const forkArgv = (prompt: string, schema: string | null, checkout: string): readonly string[] => [
+/** The command line of a fork asked `prompt` on the session's model, with the JSON Schema of its answer, if any. */
+const forkArgv = (prompt: string, schema: string | null): readonly string[] => [
   "claude",
   "-p",
   "--resume",
@@ -70,9 +64,7 @@ const forkArgv = (prompt: string, schema: string | null, checkout: string): read
   "--permission-mode",
   "dontAsk",
   "--settings",
-  forkSettings(checkout),
-  "--setting-sources",
-  "",
+  FORK_SETTINGS,
   "--strict-mcp-config",
   ...(schema === null ? [] : ["--json-schema", schema]),
   "--output-format",
@@ -223,7 +215,7 @@ describe("the checkout a stop comes from, as git reads it", () => {
       expect(found.outcomes).toMatchObject([
         { checkout: main, line: { worktree, branch: "feat/in-a-worktree", outcome: "published", pr: 12 } },
       ]);
-      expect(found.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: main }]);
+      expect(found.relays).toEqual([{ pr: 12, session: "S1", headless: null, clone: null, checkout: main }]);
     }
   });
 });
@@ -235,8 +227,8 @@ describe("the stop of an Author", () => {
     const forks = found.calls.filter((call) => call.argv[0] === "claude");
 
     expect(forks.map((call) => call.argv)).toEqual([
-      forkArgv(doneQuestionOf([]), JSON.stringify(DONE_SCHEMA), found.checkout),
-      forkArgv(BODY_REQUEST, null, found.checkout),
+      forkArgv(doneQuestionOf([]), JSON.stringify(DONE_SCHEMA)),
+      forkArgv(BODY_REQUEST, null),
     ]);
     expect(forks.every((call) => !(call.argv[call.argv.indexOf("--tools") + 1] ?? "").includes("Monitor"))).toBe(true);
     expect(forks.map((call) => call.options)).toEqual([
@@ -268,26 +260,27 @@ describe("the stop of an Author", () => {
     const opened = world();
 
     expect(await stopIn(opened)).toEqual({ kind: "allow" });
-    expect(opened.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: opened.checkout }]);
+    expect(opened.relays).toEqual([{ pr: 12, session: "S1", headless: null, clone: null, checkout: opened.checkout }]);
     expect(opened.records).toContainEqual({ step: "relay", pr: 12, relay: "started" });
 
     const pushed = world({ listed: readyPr("e".repeat(40)) });
 
     expect(await stopIn(pushed)).toEqual({ kind: "allow" });
-    expect(pushed.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: pushed.checkout }]);
+    expect(pushed.relays).toEqual([{ pr: 12, session: "S1", headless: null, clone: null, checkout: pushed.checkout }]);
   });
 
-  test("the stop of any other Author: its forks run in the sandbox made for its main checkout and name no key helper, its relay no headless resume, its outcome no API Worker", async () => {
+  test("the stop of an Author Dispatch launched in no clone: its forks take no sandbox and name no key helper, its relay no headless resume and no clone, its outcome no API Worker", async () => {
     const found = world();
 
     await stopIn(found);
 
-    const settings = found.calls.find((call) => call.argv[0] === "claude")?.argv[10] ?? "";
+    const fork = found.calls.find((call) => call.argv[0] === "claude")?.argv ?? [];
 
-    expect(settings).toBe(forkSettings(found.checkout));
-    expect(JSON.parse(settings)).toMatchObject({ sandbox: { enabled: true, filesystem: { denyRead: ["/home/me"] } } });
-    expect(JSON.parse(settings)).toHaveProperty("sandbox.filesystem.allowRead.0", found.checkout);
-    expect(settings).not.toContain("apiKeyHelper");
+    expect(fork).toContain(FORK_SETTINGS);
+    expect(fork).not.toContain("--setting-sources");
+    expect(JSON.parse(FORK_SETTINGS)).not.toHaveProperty("sandbox");
+    expect(JSON.parse(FORK_SETTINGS)).not.toHaveProperty("apiKeyHelper");
+    expect(found.relays[0]?.clone).toBeNull();
     expect(found.relays[0]?.headless).toBeNull();
     expect(found.outcomes[0]?.line.api).toBe(false);
   });

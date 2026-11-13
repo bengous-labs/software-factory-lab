@@ -4,7 +4,16 @@ import { join, resolve } from "node:path";
 
 import { forkSettingsOf } from "./fork.ts";
 import { stop } from "./hook.live.ts";
-import { API_WORKER_ENV, HEAD, input, stopIn, UNFINISHED, world, writes } from "./stop.fixtures.ts";
+import {
+  API_WORKER_ENV,
+  BACKGROUND_WORKER_ENV,
+  HEAD,
+  input,
+  stopIn,
+  UNFINISHED,
+  world,
+  writes,
+} from "./stop.fixtures.ts";
 
 const REPO = resolve(import.meta.dir, "..", "..", "..");
 
@@ -17,6 +26,54 @@ const apiForkSettings = (checkout: string): string =>
 
 /** A home that is a link: every path under it resolves under `/data/me`. */
 const real = (path: string): string => path.replace("/home/me/", "/data/me/");
+
+/** A background Worker's stop, in its clone, on a head no stop asked the Stop checks for yet. */
+const BACKGROUND = { env: BACKGROUND_WORKER_ENV, checksAsked: false };
+
+describe("the stop of a background Worker in its clone", () => {
+  test("the hook lets git find nothing from the clone, as for an API Worker: git and gh run in the main checkout, and its state lies there", async () => {
+    const found = world(BACKGROUND);
+
+    expect(await stopIn(found)).toMatchObject({ kind: "block" });
+
+    const git = found.calls.filter((call) => call.argv[0] === "git");
+
+    expect(git.length).toBeGreaterThan(0);
+    expect(git.every((call) => call.options.cwd === found.checkout)).toBe(true);
+    expect(git.every((call) => call.options.env?.["GIT_WORK_TREE"] === found.root)).toBe(true);
+    expect(existsSync(join(found.root, ".lab"))).toBe(false);
+    expect(found.outcomes[0]?.line).toMatchObject({ api: false, worktree: found.root, outcome: "not-published" });
+  });
+
+  test("its next stop publishes: its forks run in its sandbox and load no other settings, with no key helper, and its relay is told the clone, where a background resume finds the session", async () => {
+    const found = world(BACKGROUND);
+
+    await stopIn(found);
+
+    expect(await stopIn(found, true)).toEqual({ kind: "allow" });
+
+    const forks = found.calls.filter((call) => call.argv[0] === "claude");
+    const settings = forkSettingsOf(REPO, { home: "/home/me", checkout: found.checkout }, null);
+
+    expect(forks.map((call) => call.argv.slice(9, 13))).toEqual([
+      ["--settings", settings, "--setting-sources", ""],
+      ["--settings", settings, "--setting-sources", ""],
+    ]);
+    expect(settings).not.toContain("apiKeyHelper");
+    expect(found.relays).toEqual([
+      { pr: 12, session: "S1", headless: null, clone: found.root, checkout: found.checkout },
+    ]);
+    expect(found.outcomes.at(-1)?.line).toMatchObject({ api: false, outcome: "published", pr: 12 });
+  });
+
+  test("a stop outside the clones runs no git and publishes nothing: a Worker in a sandbox cannot send the hook's git elsewhere", async () => {
+    const found = world({ ...BACKGROUND, mainCheckout: true });
+
+    expect(await stopIn(found)).toEqual({ kind: "allow" });
+    expect(found.calls).toEqual([]);
+    expect(found.outcomes[0]?.line).toMatchObject({ api: false, outcome: "not-published" });
+  });
+});
 
 describe("the stop of an API Worker", () => {
   test("blocks once, leaving the Stop checks to it, and runs none of its code", async () => {
@@ -57,6 +114,7 @@ describe("the stop of an API Worker", () => {
         pr: 12,
         session: "S1",
         headless: { model: "claude-haiku-5-5", worktree: found.root },
+        clone: null,
         checkout: found.checkout,
       },
     ]);
@@ -176,7 +234,7 @@ describe("the stop of an API Worker", () => {
     expect(found.outcomes[0]?.line).toMatchObject({
       api: true,
       outcome: "not-published",
-      reason: `the stop of an API Worker comes from ${found.root}, which lies in no clone of /home/me/.local/share/software-factory-lab/api-workers`,
+      reason: `the stop of a Worker comes from ${found.root}, which lies in no clone of /home/me/.local/share/software-factory-lab/api-workers`,
     });
   });
 

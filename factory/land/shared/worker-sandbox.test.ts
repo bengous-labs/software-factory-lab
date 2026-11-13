@@ -41,10 +41,8 @@ const SECRET_RULES = [
   "Edit(//home/me/.config/software-factory-lab/**)",
 ];
 
-const DENY = [...SECRET_RULES, ...CREDENTIAL_RULES];
-
-/** An API Worker's: the main checkout too, and every write in the git directory of a clone. */
-const API_DENY = [
+/** The secrets, the main checkout, every write in the git directory of a clone, then each credential path. */
+const DENY = [
   ...SECRET_RULES,
   "Read(//repo/**)",
   "Edit(//repo/**)",
@@ -71,7 +69,6 @@ const SANDBOX = {
   filesystem: {
     denyRead: ["/home/me"],
     allowRead: [
-      "/repo",
       "/home/me/.local/share/mise/installs",
       "/home/me/.bun/install/cache",
       "/home/me/.gitconfig",
@@ -85,26 +82,15 @@ const SANDBOX = {
     files: [
       { path: "/home/me/.api-agent", mode: "deny" },
       { path: "/home/me/.config/software-factory-lab", mode: "deny" },
+      { path: "/repo", mode: "deny" },
     ],
   },
   network: { allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"] },
 };
 
-/** An API Worker's sandbox: no entry for where it works, its clone being its working directory, and the main checkout hidden from it. */
-const API_SANDBOX = {
-  ...SANDBOX,
-  filesystem: { ...SANDBOX.filesystem, allowRead: SANDBOX.filesystem.allowRead.slice(1) },
-  credentials: { files: [...SANDBOX.credentials.files, { path: "/repo", mode: "deny" }] },
-};
-
 describe("sandboxedOf", () => {
-  test("an API Worker is allowed the list alone beside its working directory, never the clones' directory nor the main checkout, which is hidden from its commands and its file tools, and its file tools write nothing in a clone's git directory", () => {
-    expect(sandboxedOf({ env: { LAB_AUTHOR: "1" } }, PLACE, "api")).toEqual({
-      env: { LAB_AUTHOR: "1", ...SANDBOX_ENV },
-      sandbox: API_SANDBOX,
-      permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["Edit(./**)", "Bash"], deny: API_DENY },
-    });
-    expect(API_SANDBOX.filesystem.allowRead).toEqual([
+  test("a command is allowed the list and the Workers' own bun cache alone beside its working directory: no entry for its clone, and none for the main checkout, which is hidden", () => {
+    expect(SANDBOX.filesystem.allowRead).toEqual([
       "/home/me/.local/share/mise/installs",
       "/home/me/.bun/install/cache",
       "/home/me/.gitconfig",
@@ -112,10 +98,12 @@ describe("sandboxedOf", () => {
       "/home/me/.config/git/ignore",
       "/home/me/.local/share/software-factory-lab/bun-cache",
     ]);
+    expect(SANDBOX.credentials.files).toContainEqual({ path: "/repo", mode: "deny" });
+    expect(sandboxedOf({ env: {} }, PLACE).sandbox).toEqual(SANDBOX);
   });
 
-  test("a background Worker: denies the home to every command, allows the checkout and the list again, hides the factory's secrets, and holds the file tools to the working directories", () => {
-    expect(sandboxedOf({ env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" } }, PLACE, "background")).toEqual({
+  test("denies the home to every command, allows the list again, hides the main checkout, hides the factory's secrets, and holds the file tools to the working directories", () => {
+    expect(sandboxedOf({ env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" } }, PLACE)).toEqual({
       env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", ...SANDBOX_ENV },
       sandbox: SANDBOX,
       permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["Edit(./**)", "Bash"], deny: DENY },
@@ -129,7 +117,7 @@ describe("sandboxedOf", () => {
       permissions: { allow: ["Bash(jq *)"], deny: ["Read(./secrets/**)"], ask: ["Bash(rm *)"] },
     };
 
-    expect(sandboxedOf(held, PLACE, "background")).toEqual({
+    expect(sandboxedOf(held, PLACE)).toEqual({
       env: { LAB_AUTHOR: "1", ...SANDBOX_ENV },
       outputStyle: "Proactive",
       sandbox: SANDBOX,
@@ -149,7 +137,7 @@ describe("sandboxedOf", () => {
       permissions: { blockReadsOutsideWorkingDirectories: false },
     };
 
-    expect(sandboxedOf(held, PLACE, "background")).toEqual({
+    expect(sandboxedOf(held, PLACE)).toEqual({
       env: SANDBOX_ENV,
       sandbox: SANDBOX,
       permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["Edit(./**)", "Bash"], deny: DENY },
@@ -157,7 +145,7 @@ describe("sandboxedOf", () => {
   });
 
   test("the sandbox widens nothing: it holds those keys alone, with no excluded command or Unix socket, and one write path, the Workers' own bun cache", () => {
-    const { sandbox } = sandboxedOf({ env: {} }, PLACE, "background");
+    const { sandbox } = sandboxedOf({ env: {} }, PLACE);
 
     expect(Object.keys(sandbox).toSorted()).toEqual([
       "allowUnsandboxedCommands",
@@ -192,10 +180,10 @@ const place = pathUnder("").chain((home) =>
 const within = (outer: string, inner: string): boolean => inner === outer || inner.startsWith(`${outer}/`);
 
 describe("the sandbox of any place", () => {
-  test("for either kind of Worker, what it allows to read under the home is narrower than the home and outside every credential path, and every credential path has its two rules", () => {
+  test("what it allows to read under the home is narrower than the home and outside every credential path, and every credential path has its two rules", () => {
     fc.assert(
-      fc.property(place, fc.constantFrom("background" as const, "api" as const), ({ home, checkout }, kind) => {
-        const { sandbox, permissions } = sandboxedOf({ env: {} }, { home, checkout }, kind);
+      fc.property(place, ({ home, checkout }) => {
+        const { sandbox, permissions } = sandboxedOf({ env: {} }, { home, checkout });
         const credentials = CREDENTIAL_PATHS.map((path) => `${home}/${path}`);
 
         expect(sandbox.filesystem.denyRead).toEqual([home]);
@@ -241,18 +229,4 @@ describe("sandboxPlaceProblemOf", () => {
       );
     },
   );
-
-  test.each([
-    ["/home/me", "/home/me", "the home itself"],
-    ["/home", "/home/me", "a parent of the home"],
-    ["/home/me/.ssh", "/home/me/.ssh", "a credential path"],
-    ["/home/me/.ssh/repo", "/home/me/.ssh", "a directory of a credential path"],
-    ["/home/me/.config", "/home/me/.config/software-factory-lab", "a parent of the factory's config"],
-    ["/home/me/.api-agent/repo", "/home/me/.api-agent", "a directory of the key's"],
-    ["/home/me/.config/git", "/home/me/.config/git/credentials", "a parent of git's credentials"],
-  ])("a checkout at %s is refused, naming %s (%s): it is readable whole", (checkout, secret) => {
-    expect(sandboxPlaceProblemOf({ home: "/home/me", checkout })).toBe(
-      `the main checkout ${checkout} holds ${secret} or lies in it: a Worker reads its whole checkout, so the sandbox would hide nothing there`,
-    );
-  });
 });

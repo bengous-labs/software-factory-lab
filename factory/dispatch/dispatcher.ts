@@ -1,13 +1,12 @@
 /**
- * Dispatch: hands one issue to a Worker. It creates the Worker's worktree on a new branch from
- * the Trunk, then launches the Worker as a background session in the main checkout, which enters
- * that worktree itself. An API Worker is launched headless in its worktree instead, detached. Either
- * runs on the settings file Dispatch writes for its kind, which holds its sandbox.
+ * Dispatch: hands one issue to a Worker. It makes the Worker a clone of its own, outside the main
+ * checkout, on a new branch from the Trunk, installs it, then launches the Worker there: a background
+ * session, or for an API Worker a headless one, detached. Either runs on the settings file Dispatch
+ * writes for its kind, which holds its sandbox and the main checkout's hooks.
  */
 
 import { Schema } from "effect";
 
-import { TRUNK } from "../install/host.ts";
 import { OWNER_LOGIN } from "../install/logins.ts";
 import { apiKeyFileOf, apiWorkerLogOf, apiWorkerSettingsOf, firstTurnArgvOf } from "../land/shared/api-worker.ts";
 import { sandboxPlaceProblemOf, workersBunCacheOf } from "../land/shared/worker-sandbox.ts";
@@ -18,13 +17,13 @@ import type { Leave, Ran, Run, RunOptions } from "../lib/run.port.ts";
 import { sessionEnvOf } from "../lib/session-env.ts";
 import { printableOf } from "../lib/terminal.ts";
 import {
-  apiCloneOf,
   apiKeyProblemOf,
   apiWorkerSettingsTextOf,
   backgroundWorkerSettingsOf,
   backgroundWorkerSettingsTextOf,
   branchOf,
   cloneArgvOf,
+  cloneOf,
   firstTurnProblemOf,
   INSTALL_ARGV,
   issueBranchesIn,
@@ -36,8 +35,6 @@ import {
   sessionNameOf,
   workerSettingsOf,
   workerSettingsProblemOf,
-  worktreeListed,
-  worktreeOf,
 } from "./dispatch-plan.ts";
 import type { Assignment, DispatchArgs } from "./dispatch-plan.ts";
 
@@ -69,7 +66,7 @@ export interface Dispatched {
   readonly issue: number;
   /** The issue's title, without its control characters. */
   readonly title: string;
-  /** The tree the Worker works in: its worktree of the main checkout, or the clone of an API Worker. */
+  /** The tree the Worker works in: its clone. */
   readonly worktree: string;
   readonly branch: string;
   readonly session: string;
@@ -162,22 +159,10 @@ async function ownersIssue(run: Run, issue: number, at: RunOptions): Promise<{ t
   return { title: printableOf(title), repo: repoOfIssueUrl(url) };
 }
 
-/** Where a Worker works: its worktree of the main checkout, or the clone of an API Worker. */
-type Tree = { readonly kind: "worktree" | "clone"; readonly path: string };
-
-/** Throws, naming what to remove, when the issue already has a worktree, a clone or a branch. */
-async function checkFree({ run, modeOf }: DispatchPorts, issue: number, tree: Tree, at: RunOptions): Promise<void> {
-  const { kind, path } = tree;
-
-  const taken =
-    kind === "clone"
-      ? (await modeOf(path)) !== null
-      : worktreeListed(await checked(run, ["git", "worktree", "list", "--porcelain"], at), path);
-
-  if (taken) {
-    throw new Error(
-      `issue #${issue} already has a ${kind}: ${path}. Remove it first (${kind === "clone" ? "rm -rf" : "git worktree remove"} ${path})`,
-    );
+/** Throws, naming what to remove, when the issue already has a clone or a branch. */
+async function checkFree({ run, modeOf }: DispatchPorts, issue: number, clone: string, at: RunOptions): Promise<void> {
+  if ((await modeOf(clone)) !== null) {
+    throw new Error(`issue #${issue} already has a clone: ${clone}. Remove it first (rm -rf ${clone})`);
   }
 
   const refs = await checked(
@@ -214,18 +199,34 @@ type Launched =
   | { readonly kind: "headless"; readonly session: string; readonly log: string };
 
 /**
- * Writes the background Worker settings file, then launches the Worker on it as a background session in
- * the main checkout; throws when the launch fails.
+ * Makes the Worker's clone, which holds the Trunk's files alone, ready for its session: creates its
+ * branch and installs its dependencies there, then writes the settings file of its kind.
  */
-async function launchBackground(
-  { launch, writeSecret }: DispatchPorts,
-  assignment: Assignment,
-  { model, effort, settings, settingsText, checkout, env }: Launching,
-): Promise<Launched> {
+async function prepare(
+  { run, writeSecret }: DispatchPorts,
+  { worktree, branch }: Assignment,
+  { settings, settingsText }: Launching,
+): Promise<void> {
+  await checked(run, ["git", "switch", "--quiet", "--create", branch], { cwd: worktree });
+  await checked(run, INSTALL_ARGV, { cwd: worktree });
   await writeSecret(settings, settingsText);
+}
 
-  const argv = launchArgvOf({ issue: assignment.issue, model, effort, settings, prompt: promptOf(assignment, false) });
-  const launched = await launch(argv, { cwd: checkout, env: sessionEnvOf(env) });
+/** Launches the background Worker in its clone, on its settings file; throws when the launch fails. */
+async function launchBackground(ports: DispatchPorts, assignment: Assignment, launching: Launching): Promise<Launched> {
+  const { model, effort, settings, checkout, env } = launching;
+  await prepare(ports, assignment, launching);
+
+  const argv = launchArgvOf({
+    issue: assignment.issue,
+    model,
+    effort,
+    settings,
+    checkout,
+    prompt: promptOf(assignment),
+  });
+
+  const launched = await ports.launch(argv, { cwd: assignment.worktree, env: sessionEnvOf(env) });
 
   if (launched.code !== 0) {
     throw new Error(failureOf("claude --bg", launched));
@@ -238,24 +239,19 @@ async function launchBackground(
 const FIRST_LOOK_MS = 10_000;
 
 /**
- * Launches the API Worker in its clone, which holds the Trunk's files alone: creates its branch and
- * installs its dependencies there, writes its settings file, then leaves its first turn running
- * headless in the clone, its output appended to the session's log in the main checkout. A turn that
- * ends with an error while Dispatch looks, its key refused or its command wrong, throws.
+ * Launches the API Worker in its clone: leaves its first turn running headless there, its output
+ * appended to the session's log in the main checkout. A turn that ends with an error while Dispatch
+ * looks, its key refused or its command wrong, throws.
  */
-async function launchHeadless(
-  { run, leave, newSession, sleep, writeSecret }: DispatchPorts,
-  assignment: Assignment,
-  { model, effort, settings, settingsText, checkout, env }: Launching,
-): Promise<Launched> {
-  const { issue, worktree, branch } = assignment;
-  await checked(run, ["git", "switch", "--quiet", "--create", branch], { cwd: worktree });
-  await checked(run, INSTALL_ARGV, { cwd: worktree });
-  await writeSecret(settings, settingsText);
+async function launchHeadless(ports: DispatchPorts, assignment: Assignment, launching: Launching): Promise<Launched> {
+  const { leave, newSession, sleep } = ports;
+  const { model, effort, settings, checkout, env } = launching;
+  const { issue, worktree } = assignment;
+  await prepare(ports, assignment, launching);
 
   const session = newSession();
   const log = apiWorkerLogOf(checkout, session);
-  const turn = { session, model, effort: effort ?? null, settings, checkout, prompt: promptOf(assignment, true) };
+  const turn = { session, model, effort: effort ?? null, settings, checkout, prompt: promptOf(assignment) };
 
   const left = leave(firstTurnArgvOf(turn, sessionNameOf(issue)), { cwd: worktree, env: sessionEnvOf(env), log });
   const problem = firstTurnProblemOf(await Promise.race([left.exited, sleep(FIRST_LOOK_MS).then(() => null)]), log);
@@ -267,27 +263,11 @@ async function launchHeadless(
   return { kind: "headless", session, log };
 }
 
-/**
- * What a failed launch leaves, said after its failure: nothing, or the worktree and the branch, or the
- * clone of an API Worker, with how to remove them.
- */
-async function leftoverOf(run: Run, { worktree, branch }: Assignment, api: boolean, at: RunOptions): Promise<string> {
-  const removals = api
-    ? [["rm", "-rf", "--", worktree]]
-    : [
-        ["git", "worktree", "remove", worktree],
-        ["git", "branch", "-D", branch],
-      ];
+/** What a failed launch leaves, said after its failure: nothing, or the Worker's clone, with how to remove it. */
+async function leftoverOf(run: Run, { worktree }: Assignment, at: RunOptions): Promise<string> {
+  const left = await removalFailures(run, [["rm", "-rf", "--", worktree]], at);
 
-  const left = await removalFailures(run, removals, at);
-
-  if (left.length === 0) {
-    return "";
-  }
-
-  return api
-    ? `. Its clone is left (${left.join("; ")}): remove it with rm -rf ${worktree}`
-    : `. Its worktree and branch are left (${left.join("; ")}): remove them with git worktree remove --force ${worktree} && git branch -D ${branch}`;
+  return left.length === 0 ? "" : `. Its clone is left (${left.join("; ")}): remove it with rm -rf ${worktree}`;
 }
 
 export async function dispatch(ports: DispatchPorts, request: DispatchRequest): Promise<Dispatched> {
@@ -307,25 +287,22 @@ export async function dispatch(ports: DispatchPorts, request: DispatchRequest): 
   }
 
   const text = await workerSettingsText(readText, workerSettingsOf(home));
-  const settingsText = api ? await apiSettingsText(ports, place, text) : backgroundWorkerSettingsTextOf(text, place);
+
+  const settingsText = api
+    ? await apiSettingsText(ports, place, text)
+    : backgroundWorkerSettingsTextOf(text, await readText(projectSettingsOf(checkout)), place);
 
   const at = { cwd: checkout };
   const { title, repo } = await ownersIssue(run, issue, at);
 
   await checked(run, ["git", "fetch", "--prune", "origin"], at);
 
-  const worktree = api ? apiCloneOf(home, issue) : worktreeOf(checkout, issue);
-  await checkFree(ports, issue, { kind: api ? "clone" : "worktree", path: worktree }, at);
+  const worktree = cloneOf(home, issue);
+  await checkFree(ports, issue, worktree, at);
 
   const branch = branchOf(issue, title);
-
-  await checked(
-    run,
-    api
-      ? cloneArgvOf((await checked(run, ["git", "remote", "get-url", "origin"], at)).trim(), worktree)
-      : ["git", "worktree", "add", "-b", branch, worktree, `origin/${TRUNK}`],
-    at,
-  );
+  const remote = (await checked(run, ["git", "remote", "get-url", "origin"], at)).trim();
+  await checked(run, cloneArgvOf(remote, worktree), at);
 
   const assignment = { issue, repo, worktree, branch };
   const launching = { model, effort, settingsText, checkout, env };
@@ -341,7 +318,7 @@ export async function dispatch(ports: DispatchPorts, request: DispatchRequest): 
   } catch (error) {
     const failure = error instanceof Error ? error.message : String(error);
 
-    throw new Error(`${failure}${await leftoverOf(run, assignment, api, at)}`, { cause: error });
+    throw new Error(`${failure}${await leftoverOf(run, assignment, at)}`, { cause: error });
   }
 
   return launched.kind === "headless"

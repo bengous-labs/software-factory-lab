@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 import { Schema } from "effect";
 
-import { isApiWorker } from "../../lib/author-session.ts";
+import { worksInClone } from "../../lib/author-session.ts";
 import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../../lib/run.port.ts";
 import { apiClonesDirOf } from "../shared/api-worker.ts";
@@ -38,8 +38,14 @@ export const TOKEN_FILE = tokenFile();
  */
 export const AUTHOR_ENV = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: TOKEN_FILE, HOME: "/home/me" };
 
-/** The environment of an API Worker's session: an Author's, and the marker of its settings file. */
-export const API_WORKER_ENV = { ...AUTHOR_ENV, LAB_API_WORKER: "1" };
+/**
+ * The environment of a background Worker Dispatch launched: an Author's, and the main checkout its
+ * settings name, which makes it a session that works in a clone.
+ */
+export const BACKGROUND_WORKER_ENV = { ...AUTHOR_ENV, LAB_MAIN_CHECKOUT: "/main" };
+
+/** The environment of an API Worker's session: a Worker's in a clone, and the marker of its settings file. */
+export const API_WORKER_ENV = { ...BACKGROUND_WORKER_ENV, LAB_API_WORKER: "1" };
 
 export interface Call {
   readonly argv: readonly string[];
@@ -167,18 +173,17 @@ export function world(fake: Partial<Fake> = {}): World {
 
   const checkout = fake.checkout ?? mkdtempSync(join(tmpdir(), "stop-"));
 
-  const tree =
-    env === API_WORKER_ENV
-      ? join(apiClonesDirOf(API_WORKER_ENV.HOME), "x")
-      : join(checkout, ".claude", "worktrees", "x");
+  const tree = worksInClone(env)
+    ? join(apiClonesDirOf(AUTHOR_ENV.HOME), "x")
+    : join(checkout, ".claude", "worktrees", "x");
 
   const root = mainCheckout ? checkout : tree;
   const calls: Call[] = [];
   const relays: RelayStart[] = [];
 
   if (checksAsked) {
-    // Where the hook keeps its state: the main checkout for an API Worker, else the worktree.
-    const stateDir = join(isApiWorker(env) ? checkout : root, ".lab", "state");
+    // Where the hook keeps its state: the main checkout for a Worker in a clone, else the worktree.
+    const stateDir = join(worksInClone(env) ? checkout : root, ".lab", "state");
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, `gates-${head}`), "left\n");
   }

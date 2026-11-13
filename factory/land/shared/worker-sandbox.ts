@@ -13,22 +13,14 @@ import type { Schema } from "effect";
 import { CREDENTIAL_PATHS, READABLE_UNDER_HOME, WORKERS_BUN_CACHE } from "../../install/sandbox-paths.ts";
 import { apiClonesDirOf, apiKeyFileOf, configDirOf } from "./api-worker.ts";
 
-/** Where a Worker's sandbox is made for: the Owner's home and the repository's main checkout. */
+/**
+ * Where a Worker's sandbox is made for: the Owner's home and the repository's main checkout, which is
+ * hidden from the Worker. It works in a clone of its own, its session's working directory.
+ */
 export interface SandboxPlace {
   readonly home: string;
   readonly checkout: string;
 }
-
-/**
- * The kind of Worker a sandbox is made for, by where it works. A background Worker works in a worktree
- * of the main checkout, where its session starts and which it reads whole, its other worktrees
- * included. An API Worker's session starts in a clone of its own, which is all it reads of the clones'
- * directory, and the main checkout, whose files every hook runs, is hidden from it.
- */
-export type WorkerKind = "background" | "api";
-
-/** Whether the path `inner` is `outer` or lies under it. */
-const within = (outer: string, inner: string): boolean => inner === outer || inner.startsWith(`${outer}/`);
 
 /**
  * The directories of the factory's own secrets, which no command and no file tool of a Worker sees,
@@ -41,9 +33,12 @@ function secretDirsOf(home: string): string[] {
   return [file.slice(0, file.lastIndexOf("/")), configDirOf(home)];
 }
 
-/** The directories hidden from a Worker of `kind`: the factory's secrets, and for an API Worker the main checkout. */
-function hiddenDirsOf({ home, checkout }: SandboxPlace, kind: WorkerKind): string[] {
-  return [...secretDirsOf(home), ...(kind === "api" ? [checkout] : [])];
+/**
+ * The directories hidden from a Worker: the factory's secrets, and the main checkout, whose files every
+ * hook runs outside the sandbox.
+ */
+function hiddenDirsOf({ home, checkout }: SandboxPlace): string[] {
+  return [...secretDirsOf(home), checkout];
 }
 
 /** The credential paths under the home `home`, by their absolute paths. */
@@ -64,9 +59,7 @@ const PATTERN_CHARACTER = /[*?[\]]/u;
 
 /**
  * Why no sandbox can be made for `place`, or null when one can. Claude Code reads a path that holds
- * `*`, `?`, `[` or `]` as a pattern, so the settings would not name the home or the checkout they
- * mean. A main checkout that holds the home or a secret, or lies in a secret, would be allowed to read
- * with it: a background Worker reads its checkout whole.
+ * `*`, `?`, `[` or `]` as a pattern, so the settings would not name the home or the checkout they mean.
  */
 export function sandboxPlaceProblemOf({ home, checkout }: SandboxPlace): string | null {
   for (const [name, path] of [
@@ -78,20 +71,14 @@ export function sandboxPlaceProblemOf({ home, checkout }: SandboxPlace): string 
     }
   }
 
-  const secret = [home, ...secretDirsOf(home), ...credentialPathsOf(home)].find(
-    (path) => within(checkout, path) || (path !== home && within(path, checkout)),
-  );
-
-  return secret === undefined
-    ? null
-    : `the main checkout ${checkout} holds ${secret} or lies in it: a Worker reads its whole checkout, so the sandbox would hide nothing there`;
+  return null;
 }
 
 /** The hosts a Worker's commands reach: GitHub, for `git` and `gh`, and the registry `bun install` reads. */
 const ALLOWED_DOMAINS = ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"];
 
 /**
- * What a Worker may do with no one to ask: edit under its working directory, and run any command, since
+ * What a Worker may do with no one to ask: edit under its working directory, its clone, and run any command, since
  * every command runs in the sandbox, which bounds it where no rule on a command's text would.
  */
 const WORKER_ALLOW = ["Edit(./**)", "Bash"];
@@ -112,18 +99,17 @@ const GIT_ENV = {
 };
 
 /**
- * The sandbox of the commands of a Worker of `kind`: every Bash command runs in it, with no retry
- * outside it, and none runs when it cannot start. A command reads nothing under the home but its
- * working directory, which the sandbox lets it read and write with no entry, the main checkout for a
- * background Worker, which starts there, and the allowed list; it sees no file of the hidden directories
- * whatever it runs, and reaches the hosts above. No entry holds an API Worker's clone: an entry that is
- * a parent of the working directory makes the sandbox fail to start (`bwrap` cannot place its guards in
- * a directory bound read-only). One write path is added, bun's install cache of the Workers alone:
- * `bun install` needs a cache it can write, and never the Owner's own. No other key widens the sandbox:
- * no excluded command, no Unix socket.
+ * The sandbox of a Worker's commands: every Bash command runs in it, with no retry outside it, and none
+ * runs when it cannot start. A command reads nothing under the home but its working directory, the
+ * Worker's clone, which the sandbox lets it read and write with no entry, and the allowed list; it sees
+ * no file of the hidden directories whatever it runs, the main checkout among them, and reaches the
+ * hosts above. No entry holds the clone: an entry that is a parent of the working directory makes the
+ * sandbox fail to start (`bwrap` cannot place its guards in a directory bound read-only). One write path
+ * is added, bun's install cache of the Workers alone: `bun install` needs a cache it can write, and
+ * never the Owner's own. No other key widens the sandbox: no excluded command, no Unix socket.
  */
-function sandboxOf(place: SandboxPlace, kind: WorkerKind) {
-  const { home, checkout } = place;
+function sandboxOf(place: SandboxPlace) {
+  const { home } = place;
 
   return {
     enabled: true,
@@ -132,14 +118,10 @@ function sandboxOf(place: SandboxPlace, kind: WorkerKind) {
     autoAllowBashIfSandboxed: true,
     filesystem: {
       denyRead: [home],
-      allowRead: [
-        ...(kind === "api" ? [] : [checkout]),
-        ...READABLE_UNDER_HOME.map((path) => `${home}/${path}`),
-        workersBunCacheOf(home),
-      ],
+      allowRead: [...READABLE_UNDER_HOME.map((path) => `${home}/${path}`), workersBunCacheOf(home)],
       allowWrite: [workersBunCacheOf(home)],
     },
-    credentials: { files: hiddenDirsOf(place, kind).map((path) => ({ path, mode: "deny" })) },
+    credentials: { files: hiddenDirsOf(place).map((path) => ({ path, mode: "deny" })) },
     network: { allowedDomains: ALLOWED_DOMAINS },
   };
 }
@@ -147,14 +129,13 @@ function sandboxOf(place: SandboxPlace, kind: WorkerKind) {
 /**
  * The deny rules on Claude Code's own file tools, which run outside the sandbox: they neither read nor
  * write the hidden directories, read no credential path, the path itself nor what lies under it,
- * through a symbolic link too, and, for an API Worker, write nothing in the git directory of a clone,
- * whose config and hooks the Stop hook's git reads. A rule names an absolute path by a second leading
- * slash.
+ * through a symbolic link too, and write nothing in the git directory of a clone, whose config and
+ * hooks the Stop hook's git reads. A rule names an absolute path by a second leading slash.
  */
-function denyRulesOf(place: SandboxPlace, kind: WorkerKind): string[] {
+function denyRulesOf(place: SandboxPlace): string[] {
   return [
-    ...hiddenDirsOf(place, kind).flatMap((dir) => [`Read(/${dir}/**)`, `Edit(/${dir}/**)`]),
-    ...(kind === "api" ? [`Edit(/${apiClonesDirOf(place.home)}/*/.git/**)`] : []),
+    ...hiddenDirsOf(place).flatMap((dir) => [`Read(/${dir}/**)`, `Edit(/${dir}/**)`]),
+    `Edit(/${apiClonesDirOf(place.home)}/*/.git/**)`,
     ...credentialPathsOf(place.home).flatMap((path) => [`Read(/${path})`, `Read(/${path}/**)`]),
   ];
 }
@@ -171,25 +152,21 @@ export interface SandboxableSettings {
 }
 
 /**
- * `settings`, the Worker settings, with the sandbox a Worker of `kind` has in `place` merged in: git's
- * configuration and bun's cache in the environment, the sandbox, which replaces any the settings held, and the rules of
- * the file tools, which read under the working directories alone. The allow and deny rules add to those
- * the settings hold; every other key stays as it stands.
+ * `settings`, the Worker settings, with the sandbox of `place` merged in: git's configuration and bun's
+ * cache in the environment, the sandbox, which replaces any the settings held, and the rules of the file
+ * tools, which read under the working directories alone. The allow and deny rules add to those the
+ * settings hold; every other key stays as it stands.
  */
-export function sandboxedOf<Settings extends SandboxableSettings>(
-  settings: Settings,
-  place: SandboxPlace,
-  kind: WorkerKind,
-) {
+export function sandboxedOf<Settings extends SandboxableSettings>(settings: Settings, place: SandboxPlace) {
   return {
     ...settings,
     env: { ...settings.env, ...GIT_ENV, BUN_INSTALL_CACHE_DIR: workersBunCacheOf(place.home) },
-    sandbox: sandboxOf(place, kind),
+    sandbox: sandboxOf(place),
     permissions: {
       ...settings.permissions,
       blockReadsOutsideWorkingDirectories: true,
       allow: [...(settings.permissions?.allow ?? []), ...WORKER_ALLOW],
-      deny: [...(settings.permissions?.deny ?? []), ...denyRulesOf(place, kind)],
+      deny: [...(settings.permissions?.deny ?? []), ...denyRulesOf(place)],
     },
   };
 }

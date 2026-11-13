@@ -1,6 +1,6 @@
 # What an installation sets
 
-`factory/install/` holds what names the repository the factory is installed in: the repository, its Trunk, its config directory, its API key file and the directory of its API Workers' clones (`host.ts`), its three logins (`logins.ts`), the factory config's schema and path (`factory-config.ts`), and what a Worker reads under the Owner's home (`sandbox-paths.ts`).
+`factory/install/` holds what names the repository the factory is installed in: the repository, its Trunk, its config directory, its API key file and the directory of its Workers' clones (`host.ts`), its three logins (`logins.ts`), the factory config's schema and path (`factory-config.ts`), and what a Worker reads under the Owner's home (`sandbox-paths.ts`).
 No source file of the factory outside `install/` spells one of these names, nor a path under a user's home: `host-names.test.ts` fails on one that does.
 It reads no test and no guide, and it lets the release branch's name pass, a common word.
 A change to `logins.ts` waits for the Owner: it says whose word the Land loop obeys.
@@ -37,22 +37,22 @@ A Worker runs code, so what holds a secret is the sandbox of its commands and th
 
 A command of a Worker, of either kind, reads:
 
-- under the Owner's home, where it works and this list alone: `~/.local/share/mise/installs`, `~/.bun/install/cache`, `~/.gitconfig`, `~/.config/git/config` and `~/.config/git/ignore`.
+- under the Owner's home, its own clone, which is its working directory, and this list alone: `~/.local/share/mise/installs`, `~/.bun/install/cache`, `~/.gitconfig`, `~/.config/git/config` and `~/.config/git/ignore`.
   The rest of the home is denied, a secret nobody listed included: SSH and GPG keys, the Owner's `gh` login, Claude Code's own login, shell history, the other checkouts of the machine;
-- where it works: for a background Worker the whole main checkout, with its other worktrees, its `.lab/` and its `.claude/settings.local.json`; for an API Worker its own clone, which is its working directory, and neither another API Worker's clone nor the main checkout, which is hidden from it;
+- never the main checkout, whose files every hook runs, nor another Worker's clone: the main checkout is hidden from it;
 - what lies outside the home: the system's files and the temporary directory;
 - the Author's `GH_TOKEN`, which its environment holds by design: its `gh` acts as the machine account.
 
-`~/.api-agent` and `~/.config/software-factory-lab` are hidden from every command, whatever else is allowed, and a command reaches GitHub and the package registry and no other host.
+`~/.api-agent`, `~/.config/software-factory-lab` and the main checkout are hidden from every command, whatever else is allowed, and a command reaches GitHub and the package registry and no other host.
 
 Claude Code's own file tools run outside the sandbox.
-They read the files under the session's working directories alone, the main checkout for a background Worker and its clone for an API Worker, and deny rules name the two hidden directories, the main checkout for an API Worker, and each credential path of `sandbox-paths.ts`, which holds through a symbolic link too.
+They read the files under the session's working directory alone, the Worker's clone, and deny rules name the three hidden directories and each credential path of `sandbox-paths.ts`, which holds through a symbolic link too.
 
-What runs outside the sandbox is a hook's command, and a Worker's hooks are the main checkout's (`factory/hooks/AGENTS.md`).
+What runs outside the sandbox is a hook's command, and a Worker's hooks are the main checkout's, which its settings file carries: it loads no settings of its clone (`factory/hooks/AGENTS.md`).
 No hook runs `bun check` or the format fix for an Author.
-In a background Worker's session `scripts/hooks/install-deps.ts` runs `bun install` on the worktree's own `bunfig.toml`, `.npmrc` and `bun.lock`, with no lifecycle script; Dispatch runs that install for an API Worker before the Worker exists.
+No hook installs for a Worker either: Dispatch runs `bun install` in its clone before the Worker exists.
 
-- Both settings files, `api-worker-settings.json` and `background-worker-settings.json` in `~/.config/software-factory-lab/`, are generated: Dispatch writes each from the Worker settings file at a dispatch of its kind.
+- Both settings files, `api-worker-settings.json` and `background-worker-settings.json` in `~/.config/software-factory-lab/`, are generated: Dispatch writes each from the Worker settings file and the main checkout's hooks at a dispatch of its kind.
   Change the Worker settings file or `worker-sandbox.ts`, never a generated file.
 - Every Worker needs `bubblewrap`, `socat` and the sandbox's seccomp filter on the machine: a session whose sandbox cannot start runs no command.
 - A Worker's commits and tags are unsigned: the home holds the signing key.
@@ -61,6 +61,6 @@ In a background Worker's session `scripts/hooks/install-deps.ts` runs `bun insta
 - The Worker bench (`scripts/lab/bench.ts`) launches its sessions unsandboxed: their commands read what the Owner's user reads.
 
 `bun factory/bin/sandbox-probe.ts` shows this on the machine, with canary files where credentials live and never a real credential.
-It runs one headless session on an API Worker's settings, in a clone under the clones' directory, and one on a background Worker's, started in the main checkout as a background Worker is, on a detached worktree of it; each tries the reads that must fail, by a command and by a file tool, and the commands a Worker must still pass: `bun install`, `bun check`, `git fetch origin`, `git ls-remote origin`, `gh issue view` and `git commit`.
+It runs two headless sessions, each in a clone of its own under the clones' directory, as a Worker works: one on the sandbox alone, and one on a background Worker's settings, the main checkout's hooks included; each tries the reads that must fail, a canary in the main checkout among them, by a command and by a file tool, and the commands a Worker must still pass: `bun install`, `bun check`, `git fetch origin`, `git ls-remote origin`, `gh issue view` and `git commit`.
 It prints every path it writes before it writes one, removes them at its end, keeps each session's output in the `.lab/sandbox-probe/` of its checkout, and ends with `sandbox-probe: <n>/<n> as expected` under one line per probe.
 The Owner runs it, never a Worker, since it writes in the home: after a change to `worker-sandbox.ts`, to `sandbox-paths.ts` or to the settings Dispatch writes, and after an update of Claude Code.

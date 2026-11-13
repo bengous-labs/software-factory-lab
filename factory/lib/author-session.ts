@@ -32,3 +32,19 @@ export const API_WORKER_VARIABLE = "LAB_API_WORKER";
 export function isApiWorker(env: Env): boolean {
   return env[API_WORKER_VARIABLE] === "1";
 }
+
+/**
+ * The variable that holds the repository's main checkout in the session of a Worker Dispatch launched:
+ * the Worker works in a clone of its own, and its hooks are the main checkout's, named through this
+ * variable. An external name: the settings files Dispatch writes and running sessions hold it.
+ */
+export const CHECKOUT_VARIABLE = "LAB_MAIN_CHECKOUT";
+
+/**
+ * Whether a session works in a clone of its own, outside the main checkout: Dispatch gives every Worker
+ * it launches the main checkout through `CHECKOUT_VARIABLE`. What runs outside such a Worker's sandbox
+ * asks its clone nothing.
+ */
+export function worksInClone(env: Env): boolean {
+  return (env[CHECKOUT_VARIABLE] ?? "") !== "";
+}

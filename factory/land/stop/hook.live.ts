@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
 import { TRUNK } from "../../install/host.ts";
-import { isApiWorker, isAuthor } from "../../lib/author-session.ts";
+import { isApiWorker, isAuthor, worksInClone } from "../../lib/author-session.ts";
 import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
@@ -207,7 +207,7 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
  * Where a session stops: its worktree, the repository's main checkout, whether they are the same, and
  * where the hook runs git and gh and keeps its state for this stop.
  */
-interface Place extends Pick<AuthorStop, "worktree" | "checkout" | "git" | "ghCwd"> {
+interface Place extends Pick<AuthorStop, "worktree" | "checkout" | "git" | "ghCwd" | "clone"> {
   readonly mainCheckout: boolean;
   readonly stateDir: string;
 }
@@ -222,6 +222,7 @@ async function placeOf(deps: Deps, cwd: string): Promise<Place> {
     worktree,
     checkout: dirname(commonDir),
     mainCheckout: gitDir === commonDir,
+    clone: null,
     git,
     ghCwd: cwd,
     stateDir: join(worktree, ".lab", "state"),
@@ -238,13 +239,13 @@ function realPathOf(path: string): string | null {
 }
 
 /**
- * Where an API Worker's session stops: the clone its directory `cwd` lies in, among those `clones`
+ * Where the session of a Worker that works in a clone stops: the clone its directory `cwd` lies in, among those `clones`
  * holds, with git handed that clone through its environment and run, as gh is, in the main checkout,
  * where the hook's state lies too. The hook is outside the Worker's sandbox, so it lets git find nothing
  * from the clone and writes nothing there (`clone-git.ts`). Both paths are compared with their links
  * resolved: a home reached through a link names the same clones. Null when `cwd` lies in no clone.
  */
-function apiPlaceOf({ checkout, realpath }: Deps, clones: string, cwd: string): Place | null {
+function clonePlaceOf({ checkout, realpath }: Deps, clones: string, cwd: string): Place | null {
   const realClones = realpath(clones);
   const realCwd = realpath(cwd);
   const worktree = realClones === null || realCwd === null ? null : cloneRootOf(realClones, realCwd);
@@ -257,6 +258,7 @@ function apiPlaceOf({ checkout, realpath }: Deps, clones: string, cwd: string): 
     worktree,
     checkout,
     mainCheckout: false,
+    clone: worktree,
     git: { cwd: checkout, env: pinnedGitEnvOf(worktree) },
     ghCwd: checkout,
     stateDir: join(checkout, ".lab", "state"),
@@ -279,10 +281,10 @@ function stopIn(
 
   mkdirSync(place.stateDir, { recursive: true });
 
-  const { worktree, git, ghCwd } = place;
+  const { worktree, clone, git, ghCwd } = place;
 
   return authorStop(
-    { ...stopping, branch: checkout.branch, head, checkout: place.checkout, worktree, git, ghCwd },
+    { ...stopping, branch: checkout.branch, head, checkout: place.checkout, worktree, clone, git, ghCwd },
     place.stateDir,
   );
 }
@@ -309,12 +311,13 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
   }
 
   const api = isApiWorker(deps.env);
-  const clones = api ? apiClonesDirOf(requiredOf(deps.env, "HOME")) : null;
-  const place = clones === null ? await placeOf(deps, cwd) : apiPlaceOf(deps, clones, cwd);
+  // A Worker Dispatch launched works in a clone, in a sandbox: the hook lets git find nothing from it.
+  const clones = worksInClone(deps.env) ? apiClonesDirOf(requiredOf(deps.env, "HOME")) : null;
+  const place = clones === null ? await placeOf(deps, cwd) : clonePlaceOf(deps, clones, cwd);
   const at = new Date(deps.now()).toISOString();
 
   if (place === null) {
-    const reason = `the stop of an API Worker comes from ${cwd}, which lies in no clone of ${clones}`;
+    const reason = `the stop of a Worker comes from ${cwd}, which lies in no clone of ${clones}`;
     log({ step: "admit", kind: "none", reason });
     deps.recordOutcome(
       deps.checkout,
@@ -357,9 +360,9 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
  */
 export async function main(ports: Pick<Deps, "run" | "startRelay">): Promise<void> {
   const input = decodeJson(StopInput, "the Stop input", await Bun.stdin.text());
-  // An API Worker's log lies in the main checkout: the hook writes nothing in a directory the Worker
+  // The log of a Worker in a clone lies in the main checkout: the hook writes nothing in a directory the Worker
   // prepares, where a file it appends to can be a link to any file of the Owner's.
-  const logDir = join(isApiWorker(process.env) ? REPO : input.cwd, ".lab");
+  const logDir = join(worksInClone(process.env) ? REPO : input.cwd, ".lab");
   const logFile = join(logDir, "stop.log");
   mkdirSync(logDir, { recursive: true });
 

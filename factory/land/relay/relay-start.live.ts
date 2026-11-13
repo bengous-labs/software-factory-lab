@@ -57,10 +57,10 @@ export interface RelayStartIo {
  * a relay unless the one `relay-<pr>.pid` names still watches the PR.
  */
 export function relayStarter(io: RelayStartIo, env: Env): StartRelay {
-  return ({ pr, session, headless, checkout }: RelayStart) => {
+  return ({ pr, session, headless, clone, checkout }: RelayStart) => {
     const files = relayFilesOf(checkout, pr);
     mkdirSync(files.stateDir, { recursive: true });
-    writeFileSync(files.session, targetTextOf({ session, headless }));
+    writeFileSync(files.session, targetTextOf({ session, headless, clone }));
 
     const pid = existsSync(files.pid) ? readFileSync(files.pid, "utf8").trim() : "";
 

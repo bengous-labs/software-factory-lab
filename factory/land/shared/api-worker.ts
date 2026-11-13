@@ -31,7 +31,7 @@ export function configDirOf(home: string): string {
   return `${home}/.config/${CONFIG_DIR}`;
 }
 
-/** The directory that holds the clone of each API Worker, under the home `home`. */
+/** The directory that holds the clone of each Worker, background or API, under the home `home`. */
 export function apiClonesDirOf(home: string): string {
   return `${home}/${API_CLONES_DIR}`;
 }

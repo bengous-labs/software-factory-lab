@@ -1,18 +1,25 @@
 /**
- * What Dispatch decides when it hands an issue to a Worker: the branch and the worktree it creates, the
- * one launch prompt, the settings file it writes for the Worker, sandbox included, and the `claude --bg`
- * command that starts the Worker in the main checkout. For an API Worker, a headless session that bills
- * the Owner's Console API key: its own settings file and the checks Dispatch makes on the key's file.
+ * What Dispatch decides when it hands an issue to a Worker: the branch and the clone it makes, the one
+ * launch prompt, the settings file it writes for the Worker, sandbox and main checkout's hooks included,
+ * and the `claude --bg` command that starts the Worker in its clone. For an API Worker, a headless
+ * session that bills the Owner's Console API key: its own settings file and the checks Dispatch makes on
+ * the key's file.
  */
 
 import { Result, Schema } from "effect";
 
 import { branchMadeFor } from "../contract.ts";
 import { TRUNK } from "../install/host.ts";
-import { apiClonesDirOf, apiKeyHelperOf, configDirOf, ONE_RESULT } from "../land/shared/api-worker.ts";
+import {
+  apiClonesDirOf,
+  apiKeyHelperOf,
+  configDirOf,
+  NO_SETTING_SOURCES,
+  ONE_RESULT,
+} from "../land/shared/api-worker.ts";
 import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
-import type { SandboxPlace, WorkerKind } from "../land/shared/worker-sandbox.ts";
-import { API_WORKER_VARIABLE } from "../lib/author-session.ts";
+import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
+import { API_WORKER_VARIABLE, CHECKOUT_VARIABLE } from "../lib/author-session.ts";
 import { Effort } from "../lib/effort.ts";
 import { decodeJson } from "../lib/json.ts";
 
@@ -94,19 +101,15 @@ export function branchOf(issue: number, title: string): string {
   return `issue/${issue}-${slugOf(title)}`;
 }
 
-export function worktreeOf(checkout: string, issue: number): string {
-  return `${checkout}/.claude/worktrees/issue-${issue}`;
-}
-
 /**
- * The clone an API Worker works in, under the home `home`: a repository of its own outside the main
+ * The clone a Worker works in, under the home `home`: a repository of its own outside the main
  * checkout, where a worktree would share the git directory of the checkout every hook runs from.
  */
-export function apiCloneOf(home: string, issue: number): string {
+export function cloneOf(home: string, issue: number): string {
   return `${apiClonesDirOf(home)}/issue-${issue}`;
 }
 
-/** The command that makes an API Worker's clone at `clone`, from the remote at `url`, on the Trunk. */
+/** The command that makes a Worker's clone at `clone`, from the remote at `url`, on the Trunk. */
 export function cloneArgvOf(url: string, clone: string): string[] {
   return ["git", "clone", "--quiet", "--branch", TRUNK, url, clone];
 }
@@ -152,12 +155,6 @@ const WorkerSettingsFile = Schema.StructWithRest(
   }),
   [Schema.Record(Schema.String, Schema.Json)],
 );
-
-/**
- * The variable that holds the main checkout in an API Worker's session: its hooks are the main
- * checkout's, named through it. An external name: the API Worker settings file and running sessions hold it.
- */
-export const CHECKOUT_VARIABLE = "LAB_MAIN_CHECKOUT";
 
 /** The variable Claude Code gives a hook for the session's own checkout, which is the worktree for an API Worker. */
 const PROJECT_VARIABLE = "CLAUDE_PROJECT_DIR";
@@ -214,27 +211,36 @@ function mainCheckoutHooksOf(projectSettings: string) {
   );
 }
 
-/** The Worker settings, from the Worker settings file's text `workerSettings`, in the sandbox a Worker of `kind` has in `place`. */
-function sandboxedWorkerSettingsOf(workerSettings: string, place: SandboxPlace, kind: WorkerKind) {
-  return sandboxedOf(decodeJson(WorkerSettingsFile, "the Worker settings file", workerSettings), place, kind);
+/**
+ * What every Worker's settings are made of, from the Worker settings file's text and the main checkout's
+ * `.claude/settings.json`: the Worker's identity, token and rules, in the sandbox of every Worker
+ * (`factory/land/shared/worker-sandbox.ts`); the main checkout, which makes the session one that works
+ * in a clone; and the main checkout's hooks, each started there. A Worker's session loads no settings
+ * but its file: its clone's own would run the hooks of the branch the Worker edits, outside the sandbox.
+ */
+function cloneWorkerSettingsOf(workerSettings: string, projectSettings: string, place: SandboxPlace) {
+  const settings = sandboxedOf(decodeJson(WorkerSettingsFile, "the Worker settings file", workerSettings), place);
+
+  return {
+    ...settings,
+    env: { ...settings.env, [CHECKOUT_VARIABLE]: place.checkout },
+    hooks: mainCheckoutHooksOf(projectSettings),
+  };
 }
 
 /**
- * The text of the API Worker settings file, the only settings an API Worker's turn loads, from the
- * Worker settings file's and the main checkout's `.claude/settings.json`: the Worker's identity, token
- * and rules, in the sandbox of an API Worker (`factory/land/shared/worker-sandbox.ts`); the helper that
- * prints the key, so the key enters no environment; the marker that makes the session an API Worker;
- * and the main checkout's hooks.
+ * The text of the API Worker settings file, the only settings an API Worker's turn loads: what every
+ * Worker's settings are made of; the helper that prints the key, so the key enters no environment; and
+ * the marker that makes the session an API Worker.
  */
 export function apiWorkerSettingsTextOf(workerSettings: string, projectSettings: string, place: SandboxPlace): string {
-  const settings = sandboxedWorkerSettingsOf(workerSettings, place, "api");
+  const settings = cloneWorkerSettingsOf(workerSettings, projectSettings, place);
 
   const added = {
     ...settings,
     ...ONE_RESULT,
     apiKeyHelper: apiKeyHelperOf(place.home),
-    env: { ...settings.env, [API_WORKER_VARIABLE]: "1", [CHECKOUT_VARIABLE]: place.checkout },
-    hooks: mainCheckoutHooksOf(projectSettings),
+    env: { ...settings.env, [API_WORKER_VARIABLE]: "1" },
   };
 
   return `${JSON.stringify(added, null, 2)}\n`;
@@ -252,14 +258,16 @@ export function backgroundWorkerSettingsOf(home: string): string {
 const BACKGROUND_MODE = "dontAsk";
 
 /**
- * The text of the background Worker settings file, from the Worker settings file's: the Worker's
- * identity, token and rules, in the sandbox of every Worker. The session loads the project's settings
- * beside it, whose hooks are the main checkout's, and asks nothing: it runs any command, in the
- * sandbox, and edits under the main checkout, where its worktree lies.
+ * The text of the background Worker settings file, the only settings a background Worker's session
+ * loads: what every Worker's settings are made of, in a mode that asks nothing. It runs any command, in
+ * the sandbox, and edits under its clone.
  */
-export function backgroundWorkerSettingsTextOf(workerSettings: string, place: SandboxPlace): string {
-  const settings = sandboxedWorkerSettingsOf(workerSettings, place, "background");
-
+export function backgroundWorkerSettingsTextOf(
+  workerSettings: string,
+  projectSettings: string,
+  place: SandboxPlace,
+): string {
+  const settings = cloneWorkerSettingsOf(workerSettings, projectSettings, place);
   const added = { ...settings, permissions: { ...settings.permissions, defaultMode: BACKGROUND_MODE } };
 
   return `${JSON.stringify(added, null, 2)}\n`;
@@ -298,30 +306,20 @@ export function issueBranchesIn(refs: string, issue: number): string[] {
   return refs.split("\n").filter((ref) => branchMadeFor(ref, issue));
 }
 
-/** Whether `git worktree list --porcelain` printed `path` among its worktrees. */
-export function worktreeListed(listing: string, path: string): boolean {
-  return listing.split("\n").includes(`worktree ${path}`);
-}
-
 export interface Assignment {
   readonly issue: number;
   readonly repo: string;
-  /** The tree the Worker works in: its worktree of the main checkout, or the clone of an API Worker. */
+  /** The tree the Worker works in: its clone. */
   readonly worktree: string;
   readonly branch: string;
 }
 
 /**
- * The one launch prompt. It names the issue and the Worker's tree; what a Worker does comes from its own
- * instructions, `AGENTS.md`, never from here. A Worker launched in the main checkout enters its worktree
- * itself; one `launchedInClone`, an API Worker, is told it is in its clone.
+ * The one launch prompt. It names the issue and the Worker's clone, where its session starts; what a
+ * Worker does comes from its own instructions, `AGENTS.md`, never from here.
  */
-export function promptOf({ issue, repo, worktree, branch }: Assignment, launchedInClone: boolean): string {
-  const place = launchedInClone
-    ? `You are in your own clone of the repository, ${worktree}: work there`
-    : `Your worktree exists: first call EnterWorktree with the path ${worktree} and work there`;
-
-  return `Implement GitHub issue #${issue} of ${repo} (read it with: gh issue view ${issue} --repo ${repo}). ${place}; its branch ${branch} starts at origin/${TRUNK}.`;
+export function promptOf({ issue, repo, worktree, branch }: Assignment): string {
+  return `Implement GitHub issue #${issue} of ${repo} (read it with: gh issue view ${issue} --repo ${repo}). You are in your own clone of the repository, ${worktree}: work there; its branch ${branch} starts at origin/${TRUNK}.`;
 }
 
 /**
@@ -335,11 +333,11 @@ export function firstTurnProblemOf(code: number | null, log: string): string | n
 }
 
 /**
- * The install that gives an API Worker's clone its dependencies, run by Dispatch before the Worker
- * exists, while the clone holds the Trunk's files alone. No hook installs for an API Worker: a hook
- * runs outside the sandbox, and an install in a directory the Worker has written follows what it left
- * there. The command of `scripts/hooks/install-deps.ts`: copies, never hardlinks into bun's cache, and
- * no lifecycle script.
+ * The install that gives a Worker's clone its dependencies, run by Dispatch before the Worker exists,
+ * while the clone holds the Trunk's files alone. No hook installs for such a Worker: a hook runs outside
+ * the sandbox, and an install in a directory the Worker has written follows what it left there. The
+ * command of `scripts/hooks/install-deps.ts`: copies, never hardlinks into bun's cache, and no
+ * lifecycle script.
  */
 export const INSTALL_ARGV = ["bun", "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"];
 
@@ -354,15 +352,20 @@ export interface Launch {
   readonly effort: Effort | undefined;
   /** The background Worker settings file, passed by its path: its token never reaches the command line. */
   readonly settings: string;
+  /** The main checkout, whose root guide the session is given: it loads no project settings. */
+  readonly checkout: string;
   readonly prompt: string;
 }
 
 /**
- * The command that starts a background Worker. Beside its settings file the session loads the project's
- * settings alone, for the main checkout's hooks: the Owner's own settings, user or local, can widen a
- * sandbox, with a write path or an excluded command.
+ * The command that starts a background Worker, in its clone. The session loads no settings but its
+ * file, and no MCP server but those its command names, which are none: the clone's own settings would
+ * run the hooks of the branch the Worker edits, a `.mcp.json` of the clone names a command Claude Code
+ * starts outside the sandbox, and the Owner's own settings can widen a sandbox. The guide it is given is
+ * the main checkout's: Claude Code reads that file outside the sandbox, and a path of the clone can be
+ * a link to a secret.
  */
-export function launchArgvOf({ issue, model, effort, settings, prompt }: Launch): string[] {
+export function launchArgvOf({ issue, model, effort, settings, checkout, prompt }: Launch): string[] {
   return [
     "claude",
     "--bg",
@@ -371,8 +374,10 @@ export function launchArgvOf({ issue, model, effort, settings, prompt }: Launch)
     ...(effort === undefined ? [] : ["--effort", effort]),
     "--settings",
     settings,
-    "--setting-sources",
-    "project",
+    ...NO_SETTING_SOURCES,
+    "--strict-mcp-config",
+    "--append-system-prompt-file",
+    `${checkout}/AGENTS.md`,
     "--name",
     sessionNameOf(issue),
     prompt,

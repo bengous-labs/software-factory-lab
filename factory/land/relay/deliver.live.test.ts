@@ -19,6 +19,7 @@ const delivery = (route: Delivery["route"], stoppedAt: number | null = 1): Deliv
     route,
     socketLine: "LINE\n",
     resumeArgs: RESUME,
+    resumeIn: null,
     stopped: () => {
       looks.count += 1;
 
@@ -45,6 +46,8 @@ const failureOf = (delivered: Promise<unknown>): Promise<string | null> =>
 interface World {
   readonly posts: string[];
   readonly runs: Array<{ argv: readonly string[]; env: unknown }>;
+  /** The directory each command ran in. */
+  readonly cwds: string[];
   readonly left: Array<{ argv: readonly string[]; options: LeaveOptions }>;
   readonly sleeps: number[];
 }
@@ -60,8 +63,11 @@ function world(open: readonly string[], code = 0, turnRuns = false): World & { d
   const left: World["left"] = [];
   const exited = turnRuns ? new Promise<number>(() => {}) : Promise.resolve(code);
 
+  const cwds: string[] = [];
+
   const run: Run = (argv, options): Promise<Ran> => {
     runs.push({ argv, env: options.env });
+    cwds.push(options.cwd);
 
     return Promise.resolve({ code, stdout: "", stderr: "" });
   };
@@ -88,7 +94,7 @@ function world(open: readonly string[], code = 0, turnRuns = false): World & { d
     cwd: "/main",
   });
 
-  return { posts, runs, left, sleeps, deliver };
+  return { posts, runs, cwds, left, sleeps, deliver };
 }
 
 describe("socketPathsOf", () => {
@@ -130,6 +136,15 @@ describe("deliverer", () => {
     expect(await found.deliver(delivery({ kind: "resume" }))).toBe("resume");
     expect(found.runs).toEqual([{ argv: RESUME, env: undefined }]);
     expect(found.posts).toEqual([]);
+  });
+
+  test("a background resume runs in the relay's checkout, or in the clone the session works in, where Claude Code keeps its conversation", async () => {
+    const found = world([]);
+
+    await found.deliver(delivery({ kind: "resume" }));
+    await found.deliver({ ...delivery({ kind: "resume" }), resumeIn: "/home/me/clones/issue-7" });
+
+    expect(found.cwds).toEqual(["/main", "/home/me/clones/issue-7"]);
   });
 
   test("a resume that fails delivered nothing", async () => {

@@ -156,38 +156,42 @@ export function apiForkOf(env: Env): ApiFork | null {
 /** The fork guard's door, by its path from the checkout that holds the hook's own files. */
 const FORK_GUARD = "factory/bin/fork-guard.ts";
 
-/**
- * The settings of an Author's fork, as the JSON its command passes: every tool call under the fork guard
- * of `checkout`, the checkout that holds the hook's own files; the sandbox and the file rules of every
- * Worker, made for `place` (`shared/worker-sandbox.ts`), since a fork carries on from what the Worker's
- * session read and runs commands as it does; one printed result, as a fork loads no other settings; and
- * what an API Worker's fork adds. The guard starts in that checkout: a fork runs in the Author's
- * worktree, and `bun` reads the `bunfig.toml` of the directory it starts in. The helper names the key's
- * file, never the key. A fork takes no allow rule: it is held to reading, and the sandbox lets its
- * commands run.
- */
-export function forkSettingsOf(checkout: string, place: SandboxPlace, api: ApiFork | null): string {
-  const command = `cd "${checkout}" && bun "${checkout}/${FORK_GUARD}"`;
-  const hooks = { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }] };
-  const { sandbox, permissions } = sandboxedOf({}, place, api === null ? "background" : "api");
+/** What the fork of a Worker in a clone takes of that Worker's sandbox: the sandbox itself and the rules of the file tools. */
+function sandboxOfFork(place: SandboxPlace) {
+  const { sandbox, permissions } = sandboxedOf({}, place);
   const { blockReadsOutsideWorkingDirectories, deny } = permissions;
 
-  return JSON.stringify({
-    ...ONE_RESULT,
-    ...api,
-    sandbox,
-    permissions: { blockReadsOutsideWorkingDirectories, deny },
-    hooks,
-  });
+  return { ...ONE_RESULT, sandbox, permissions: { blockReadsOutsideWorkingDirectories, deny } };
+}
+
+/**
+ * The settings of a fork, as the JSON its command passes: every tool call under the fork guard of
+ * `checkout`, the checkout that holds the hook's own files, and what an API Worker's fork adds. The
+ * guard starts in that checkout: a fork runs in the Author's tree, and `bun` reads the `bunfig.toml` of
+ * the directory it starts in. The helper names the key's file, never the key. The fork of a Worker that
+ * works in a clone, whose sandbox is made for `place`, also takes that sandbox and the rules of its file
+ * tools (`shared/worker-sandbox.ts`), since a fork carries on from what the Worker's session read and
+ * runs commands as it does, and prints one result, as it loads no other settings. It takes no allow
+ * rule: a fork is held to reading, and the sandbox lets its commands run. A null `place` is a session
+ * Dispatch launched in no clone: its fork takes nothing of a sandbox.
+ */
+export function forkSettingsOf(checkout: string, place: SandboxPlace | null, api: ApiFork | null): string {
+  const command = `cd "${checkout}" && bun "${checkout}/${FORK_GUARD}"`;
+  const hooks = { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }] };
+
+  const guarded = { ...api, hooks };
+
+  return JSON.stringify(place === null ? guarded : { ...sandboxOfFork(place), ...guarded });
 }
 
 /**
  * The command that asks a fork of `session`: a resumed fork of it, with the Done judge's tools, each call
- * under the guard `settings` wire, and its answer printed as JSON. A fork loads no settings but those:
- * the worktree's own would run the hooks of the branch the Worker edits, and the Owner's own could
- * widen the sandbox. The flag is written here, where `local/judges` reads the whole command.
+ * under the guard `settings` wire, and its answer printed as JSON. An `isolated` fork, a Worker's in a
+ * clone, loads no settings but those, as its session does: the clone's own would run the hooks of the
+ * branch the Worker edits, and the Owner's own could widen the sandbox. The flag is written here, where
+ * `local/judges` reads the whole command.
  */
-export function forkArgvOf(session: string, ask: ForkAsk, settings: string): string[] {
+export function forkArgvOf(session: string, ask: ForkAsk, settings: string, isolated: boolean): string[] {
   return [
     "claude",
     "-p",
@@ -200,8 +204,7 @@ export function forkArgvOf(session: string, ask: ForkAsk, settings: string): str
     DONE_JUDGE.permissionMode,
     "--settings",
     settings,
-    "--setting-sources",
-    "",
+    ...(isolated ? ["--setting-sources", ""] : []),
     "--strict-mcp-config",
     ...(ask.schema === null ? [] : ["--json-schema", JSON.stringify(ask.schema)]),
     "--output-format",
