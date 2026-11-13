@@ -28,7 +28,11 @@ const NIT = {
 };
 
 /** The session of the PR's latest Publication, an API Worker's, so a turn is seen to hand it on whole. */
-const TARGET: Target = { session: "S1", headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7" } };
+const TARGET: Target = {
+  session: "S1",
+  headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7" },
+  clone: null,
+};
 
 interface Sent {
   readonly session: Target;
@@ -229,7 +233,7 @@ describe("readPr", () => {
 const IDLE = JSON.stringify([{ sessionId: "S1", pid: 34_502, id: "725ecfab", status: "idle" }]);
 
 /** The background session S1, as the relay's session file names it. */
-const BACKGROUND: Target = { session: "S1", headless: null };
+const BACKGROUND: Target = { session: "S1", headless: null, clone: null };
 
 const PLACE = { checkout: "/repo", home: "/home/me" };
 
@@ -354,7 +358,12 @@ describe("relayDeliverer", () => {
 
 describe("relayDeliverer, to an API Worker's session", () => {
   /** An API Worker's session that no longer runs: the listing holds none. */
-  const API: Target = { session: "S9", headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7" } };
+  const API: Target = {
+    session: "S9",
+    headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7" },
+    clone: null,
+  };
+
   const MINUTE = 60_000;
 
   /** Sends a Wake to the API Worker's session at `at`, and swallows a failure. */

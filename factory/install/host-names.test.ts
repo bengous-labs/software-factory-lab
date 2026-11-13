@@ -32,12 +32,12 @@ const spelled = (name: string): RegExp =>
 const HOME_PATH = /\/(?:home|Users)\/[\w.-]+\//u;
 
 describe("the names of this host", () => {
-  test("install/ holds the repository, its Trunk, its release branch, its config directory, its API key file, the directory of its API Workers' clones and its three logins", () => {
+  test("install/ holds the repository, its Trunk, its release branch, its config directory, its API key file, the directory of its Workers' clones and its three logins", () => {
     expect(Object.keys(NAMES).toSorted()).toEqual([
-      "API_CLONES_DIR",
       "API_KEY_FILE",
       "APP_LOGIN",
       "AUTHOR_LOGIN",
+      "CLONES_DIR",
       "CONFIG_DIR",
       "OWNER_LOGIN",
       "RELEASE_BRANCH",

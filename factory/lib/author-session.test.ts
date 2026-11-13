@@ -5,8 +5,10 @@ import {
   AUTHOR_VARIABLE,
   isApiWorker,
   isAuthor,
+  isSandboxedWorker,
   isWorker,
   ROLE_VARIABLE,
+  worksInClone,
 } from "./author-session.ts";
 
 describe("isAuthor", () => {
@@ -38,5 +40,33 @@ describe("isWorker", () => {
   test("any other role, or none, plays no Worker", () => {
     expect(isWorker({ [ROLE_VARIABLE]: "owner" })).toBe(false);
     expect(isWorker({})).toBe(false);
+  });
+});
+
+describe("worksInClone", () => {
+  test("a session Dispatch gave the main checkout works in a clone of its own", () => {
+    expect(worksInClone({ LAB_MAIN_CHECKOUT: "/repo" })).toBe(true);
+    expect(worksInClone({ LAB_AUTHOR: "1", LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: "/repo" })).toBe(true);
+  });
+
+  test("a session with no main checkout, or an empty one, does not: an Author Dispatch did not launch", () => {
+    expect(worksInClone({})).toBe(false);
+    expect(worksInClone({ LAB_AUTHOR: "1" })).toBe(false);
+    expect(worksInClone({ LAB_MAIN_CHECKOUT: "" })).toBe(false);
+    expect(worksInClone({ LAB_MAIN_CHECKOUT: undefined })).toBe(false);
+  });
+});
+
+describe("isSandboxedWorker", () => {
+  test("an Author's session and a session that works in a clone both hold a Worker's code", () => {
+    expect(isSandboxedWorker({ LAB_AUTHOR: "1" })).toBe(true);
+    expect(isSandboxedWorker({ LAB_MAIN_CHECKOUT: "/repo" })).toBe(true);
+    expect(isSandboxedWorker({ LAB_AUTHOR: "1", LAB_MAIN_CHECKOUT: "/repo" })).toBe(true);
+  });
+
+  test("a session that is neither does not: the Owner's, or one of the Worker bench", () => {
+    expect(isSandboxedWorker({})).toBe(false);
+    expect(isSandboxedWorker({ LAB_AUTHOR: "0", LAB_MAIN_CHECKOUT: "" })).toBe(false);
+    expect(isSandboxedWorker({ LAB_ROLE: "worker" })).toBe(false);
   });
 });

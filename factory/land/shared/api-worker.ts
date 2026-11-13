@@ -2,21 +2,16 @@
  * What an API Worker is made of, for the steps that launch one, resume it or fork it: a headless
  * session, `claude -p`, whose turns bill the Owner's Console API key. The key stays in its file: the API
  * Worker settings file names a helper command that prints it, so it reaches no command line and no
- * environment, and the sandbox of the session's commands hides its directory from them. A turn loads no
- * settings but that file: the clone's own would run the hooks of the branch the Worker edits. The
- * Worker works in a clone of its own, outside the main checkout: it shares no git directory with the
- * checkout every hook runs from.
+ * environment, and the sandbox of a Worker's commands (`worker-sandbox.ts`) hides its directory from
+ * them. A turn loads no settings but that file: the clone's own would run the hooks of the branch the
+ * Worker edits. The Worker works in a clone of its own, outside the main checkout: it shares no git
+ * directory with the checkout every hook runs from.
  * Dispatch launches the first turn, the relay each later one, both detached, and each turn appends what
  * it printed to one log of the main checkout.
  */
 
-import { API_CLONES_DIR, API_KEY_FILE, CONFIG_DIR } from "../../install/host.ts";
+import { apiKeyFileOf, configDirOf } from "../../install/paths.ts";
 import type { Effort } from "../../lib/effort.ts";
-
-/** The file that holds the Console API key, under the home `home`. */
-export function apiKeyFileOf(home: string): string {
-  return `${home}/${API_KEY_FILE}`;
-}
 
 /**
  * The `apiKeyHelper` command of an API Worker and of its forks: it prints the key file, which Claude
@@ -24,65 +19,6 @@ export function apiKeyFileOf(home: string): string {
  */
 export function apiKeyHelperOf(home: string): string {
   return `cat '${apiKeyFileOf(home).replaceAll("'", String.raw`'\''`)}'`;
-}
-
-/** The factory's config directory, which holds the Author's token and the Worker settings files. */
-function configDirOf(home: string): string {
-  return `${home}/.config/${CONFIG_DIR}`;
-}
-
-/** The directory that holds the clone of each API Worker, under the home `home`. */
-export function apiClonesDirOf(home: string): string {
-  return `${home}/${API_CLONES_DIR}`;
-}
-
-/** Where an API Worker's settings are made for: the Owner's home and the repository's main checkout. */
-export interface ApiWorkerPlace {
-  readonly home: string;
-  readonly checkout: string;
-}
-
-/**
- * The directories an API Worker's commands and file tools never see: the one that holds the key's file,
- * the factory's own config, whose secrets would land a change around the Land gate, and the main
- * checkout, whose files every hook runs.
- */
-function hiddenDirsOf({ home, checkout }: ApiWorkerPlace): string[] {
-  const file = apiKeyFileOf(home);
-
-  return [file.slice(0, file.lastIndexOf("/")), configDirOf(home), checkout];
-}
-
-/** The hosts an API Worker's commands reach: GitHub, for `git` and `gh`, and the registry `bun install` reads. */
-const ALLOWED_DOMAINS = ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"];
-
-/**
- * The sandbox of an API Worker's commands and of its forks': every Bash command runs in it, with no
- * retry outside it, writes under the Worker's clone alone, the network through the
- * hosts above, and no sight of the hidden directories nor of another process. It holds against a command
- * that runs code, which no permission rule does. A session whose sandbox cannot start runs no command.
- */
-export function apiWorkerSandboxOf(place: ApiWorkerPlace) {
-  return {
-    enabled: true,
-    failIfUnavailable: true,
-    allowUnsandboxedCommands: false,
-    autoAllowBashIfSandboxed: true,
-    credentials: { files: hiddenDirsOf(place).map((path) => ({ path, mode: "deny" })) },
-    network: { allowedDomains: ALLOWED_DOMAINS },
-  };
-}
-
-/**
- * The deny rules on Claude Code's own file tools, which run outside the sandbox: they neither read nor
- * write the hidden directories, through a symbolic link too, and write nothing in the git directory of
- * a clone, whose config and hooks the Stop hook's git reads.
- */
-export function apiWorkerDenyRulesOf(place: ApiWorkerPlace): string[] {
-  return [
-    ...hiddenDirsOf(place).flatMap((dir) => [`Read(/${dir}/**)`, `Edit(/${dir}/**)`]),
-    `Edit(/${apiClonesDirOf(place.home)}/*/.git/**)`,
-  ];
 }
 
 /**

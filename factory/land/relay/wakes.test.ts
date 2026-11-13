@@ -658,18 +658,18 @@ describe("targetOf", () => {
   const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7" };
 
   test("a session file of one line names a session the relay reaches as any other", () => {
-    expect(targetOf("S1\n")).toEqual({ session: "S1", headless: null });
-    expect(targetOf("S1")).toEqual({ session: "S1", headless: null });
-    expect(targetTextOf({ session: "S1", headless: null })).toBe("S1\n");
+    expect(targetOf("S1\n")).toEqual({ session: "S1", headless: null, clone: null });
+    expect(targetOf("S1")).toEqual({ session: "S1", headless: null, clone: null });
+    expect(targetTextOf({ session: "S1", headless: null, clone: null })).toBe("S1\n");
   });
 
   test("a second line holds what the headless resume of an API Worker's session needs, and reads back", () => {
-    const text = targetTextOf({ session: "S1", headless });
+    const text = targetTextOf({ session: "S1", headless, clone: null });
 
     expect(text).toBe(`S1\n${JSON.stringify(headless)}\n`);
-    expect(targetOf(text)).toEqual({ session: "S1", headless });
+    expect(targetOf(text)).toEqual({ session: "S1", headless, clone: null });
     expect(
-      targetOf(targetTextOf({ session: "S1", headless: { ...headless, model: null } })).headless?.model,
+      targetOf(targetTextOf({ session: "S1", headless: { ...headless, model: null }, clone: null })).headless?.model,
     ).toBeNull();
   });
 
@@ -688,22 +688,23 @@ describe("sendingOf", () => {
 
   const place = { checkout: "/repo", home: "/home/me" };
   const worktree = "/repo/.claude/worktrees/issue-7";
-  const api = (session: string): Target => ({ session, headless: { model: "claude-opus-5-5", worktree } });
+  const api = (session: string): Target => ({ session, headless: { model: "claude-opus-5-5", worktree }, clone: null });
   const wake = { text: "the lines", stop: false, held: false };
 
   test("a session that is no API Worker's takes the socket, the stop or the background resume", () => {
-    const target = { session: "S-background", headless: null };
+    const target = { session: "S-background", headless: null, clone: null };
 
     expect(sendingOf(agents, target, wake, place)).toEqual({
       route: { kind: "socket", pid: 34_502 },
       socketLine: socketLineOf("the lines"),
       resumeArgs: ["claude", "--bg", "--resume", "S-background", "the lines"],
+      resumeIn: null,
     });
     expect(sendingOf(agents, target, { ...wake, stop: true }, place).route).toEqual({ kind: "stop", id: "725ecfab" });
   });
 
   test("a failed start of a headless turn holds no other session back", () => {
-    const target = { session: "S-background", headless: null };
+    const target = { session: "S-background", headless: null, clone: null };
 
     expect(sendingOf(agents, target, { ...wake, held: true }, place).route).toEqual({ kind: "socket", pid: 34_502 });
   });
@@ -712,6 +713,7 @@ describe("sendingOf", () => {
     expect(sendingOf(agents, api("S-api-gone"), wake, place)).toEqual({
       route: { kind: "headless", worktree, log: "/repo/.lab/state/api-worker-S-api-gone.log" },
       socketLine: socketLineOf("the lines"),
+      resumeIn: null,
       resumeArgs: [
         "claude",
         "-p",

@@ -248,11 +248,17 @@ export const labeled = (name: string, login: string | null, createdAt: string): 
 });
 
 // An inherited GIT_DIR would point a fixture's git at the real repository; the test layer cannot import fixtureEnv.
-export const FIXTURE_ENV = Object.fromEntries(
-  Object.entries(process.env).flatMap(([name, value]) =>
-    name.startsWith("GIT_") || value === undefined ? [] : [[name, value] as const],
+// A fixture's commit is not signed: in a Worker's sandbox the signing key is out of reach.
+export const FIXTURE_ENV = {
+  ...Object.fromEntries(
+    Object.entries(process.env).flatMap(([name, value]) =>
+      name.startsWith("GIT_") || value === undefined ? [] : [[name, value] as const],
+    ),
   ),
-);
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "commit.gpgsign",
+  GIT_CONFIG_VALUE_0: "false",
+};
 
 /** A new git repository, and a git that runs in it. */
 export async function fixtureRepo(prefix: string) {

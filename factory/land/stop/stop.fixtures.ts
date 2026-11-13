@@ -3,15 +3,16 @@
  * it reads and the calls, log records and outcomes it leaves, and a git repository with a worktree.
  */
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Schema } from "effect";
 
+import { clonesDirOf } from "../../install/paths.ts";
+import { worksInClone } from "../../lib/author-session.ts";
 import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../../lib/run.port.ts";
-import { apiClonesDirOf } from "../shared/api-worker.ts";
 import { conversationArgsOf } from "../shared/conversation.ts";
 import type { RelayStart } from "../shared/relay.port.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
@@ -31,11 +32,20 @@ function tokenFile(): string {
 
 export const TOKEN_FILE = tokenFile();
 
-/** The environment of an Author's session: the marker the launcher's settings file gives, and the token's file. */
-export const AUTHOR_ENV = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: TOKEN_FILE };
+/**
+ * The environment of an Author's session: the marker the launcher's settings file gives, the token's
+ * file, and the home its forks' sandbox denies.
+ */
+export const AUTHOR_ENV = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: TOKEN_FILE, HOME: "/home/me" };
 
-/** The environment of an API Worker's session: an Author's, the marker of its settings file, and the home its key lies under. */
-export const API_WORKER_ENV = { ...AUTHOR_ENV, LAB_API_WORKER: "1", HOME: "/home/me" };
+/**
+ * The environment of a background Worker Dispatch launched: an Author's, and the main checkout its
+ * settings name, which makes it a session that works in a clone.
+ */
+export const BACKGROUND_WORKER_ENV = { ...AUTHOR_ENV, LAB_MAIN_CHECKOUT: "/main" };
+
+/** The environment of an API Worker's session: a Worker's in a clone, and the marker of its settings file. */
+export const API_WORKER_ENV = { ...BACKGROUND_WORKER_ENV, LAB_API_WORKER: "1" };
 
 export interface Call {
   readonly argv: readonly string[];
@@ -119,6 +129,8 @@ export interface Fake {
   readonly head: string;
   /** What the PR's conversation comments print, one JSON line each, as the relay's filter prints them. */
   readonly conversation: string;
+  /** Whether an earlier stop asked the Worker for the Stop checks on this head: the hook's record of it is there. */
+  readonly checksAsked: boolean;
 }
 
 export interface World {
@@ -139,7 +151,7 @@ export const draftPr = (head = HEAD, isCrossRepository = false): string =>
 export const readyPr = (head = HEAD): string =>
   JSON.stringify([{ number: 12, isDraft: false, headRefOid: head, isCrossRepository: false }]);
 
-/** A fake of git, gh, bun and claude for an Author's session in a worktree, on `branch`, one commit ahead of dev. */
+/** A fake of git, gh and claude for an Author's session in a worktree, on `branch`, one commit ahead of dev. */
 export function world(fake: Partial<Fake> = {}): World {
   const {
     done = [FINISHED],
@@ -156,18 +168,25 @@ export function world(fake: Partial<Fake> = {}): World {
     env = AUTHOR_ENV,
     head = HEAD,
     conversation = "",
+    checksAsked = true,
   } = fake;
 
   const checkout = fake.checkout ?? mkdtempSync(join(tmpdir(), "stop-"));
 
-  const tree =
-    env === API_WORKER_ENV
-      ? join(apiClonesDirOf(API_WORKER_ENV.HOME), "x")
-      : join(checkout, ".claude", "worktrees", "x");
+  const tree = worksInClone(env)
+    ? join(clonesDirOf(AUTHOR_ENV.HOME), "x")
+    : join(checkout, ".claude", "worktrees", "x");
 
   const root = mainCheckout ? checkout : tree;
   const calls: Call[] = [];
   const relays: RelayStart[] = [];
+
+  if (checksAsked) {
+    // Where the hook keeps its state: the main checkout for a Worker in a clone, else the worktree.
+    const stateDir = join(worksInClone(env) ? checkout : root, ".lab", "state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, `gates-${head}`), "left\n");
+  }
 
   const outcomes: Array<{ checkout: string; line: OutcomeLine }> = [];
   const records: StopLogRecord[] = [];

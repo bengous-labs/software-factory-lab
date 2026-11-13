@@ -1,6 +1,6 @@
 # What an installation sets
 
-`factory/install/` holds what names the repository the factory is installed in: the repository, its Trunk, its config directory, its API key file and the directory of its API Workers' clones (`host.ts`), its three logins (`logins.ts`), and the factory config's schema and path (`factory-config.ts`).
+`factory/install/` holds what names the repository the factory is installed in: the repository, its Trunk, its config directory, its API key file and the directory of its Workers' clones (`host.ts`), those places as paths under a home (`paths.ts`), its three logins (`logins.ts`), the factory config's schema and path (`factory-config.ts`), and what a Worker reads under the Owner's home (`sandbox-paths.ts`).
 No source file of the factory outside `install/` spells one of these names, nor a path under a user's home: `host-names.test.ts` fails on one that does.
 It reads no test and no guide, and it lets the release branch's name pass, a common word.
 A change to `logins.ts` waits for the Owner: it says whose word the Land loop obeys.
@@ -28,6 +28,40 @@ The token file is mode 600.
 An API Worker (`factory/dispatch/AGENTS.md`) bills a Claude Console API key the Owner provisions in `~/.api-agent/key`, mode 600: `(umask 077 && wl-paste -n > ~/.api-agent/key)` puts it there from the clipboard, so it never crosses a conversation.
 No code of the factory reads that file: Dispatch reads its mode, and Claude Code runs the helper that prints it.
 Dispatch writes `~/.config/software-factory-lab/api-worker-settings.json` itself, from the Worker settings file, whose token it copies there, and the main checkout's hooks: after a change to either, the next API dispatch writes it again, and a session launched before keeps what it was launched with until then.
-The sandbox of an API Worker needs `bubblewrap` and `socat` on the machine: without them its session runs no command.
-It hides `~/.api-agent`, `~/.config/software-factory-lab` and the main checkout from the Worker's commands; a background Worker's commands read both.
 The key pays the turns of the API Worker and the forks of its stops; the Merge bot's Judges run in CI on their own credential.
+
+## What a Worker reads
+
+A Worker runs code, so what holds a secret is the sandbox of its commands and the rules of its file tools, never a rule on a command's text.
+`factory/land/shared/worker-sandbox.ts` is the one definition, for an API Worker, a background Worker and the forks of their stops; `sandbox-paths.ts` holds its two lists.
+
+A command of a Worker, of either kind, reads:
+
+- under the Owner's home, its own clone, which is its working directory, and this list alone: `~/.local/share/mise/installs`, `~/.gitconfig`, `~/.config/git/config` and `~/.config/git/ignore`.
+  The rest of the home is denied, a secret nobody listed included: SSH and GPG keys, the Owner's `gh` login, Claude Code's own login, shell history, the other checkouts of the machine;
+- never the main checkout, whose files every hook runs, nor another Worker's clone: the main checkout is hidden from it;
+- what lies outside the home: the system's files and the temporary directory;
+- the Author's `GH_TOKEN`, which its environment holds by design: its `gh` acts as the machine account.
+
+`~/.api-agent`, `~/.config/software-factory-lab` and the main checkout are hidden from every command, whatever else is allowed, and a command reaches GitHub and the package registry and no other host.
+
+Claude Code's own file tools run outside the sandbox.
+They read the files under the session's working directory alone, the Worker's clone, and deny rules name the three hidden directories and each credential path of `sandbox-paths.ts`, which holds through a symbolic link too.
+
+What runs outside the sandbox is a hook's command, and a Worker's hooks are the main checkout's, which its settings file carries: it loads no settings of its clone (`factory/hooks/AGENTS.md`).
+No hook runs `bun check` or the format fix for an Author.
+No hook installs for a Worker either: Dispatch runs `bun install` in its clone before the Worker exists.
+
+- Both settings files, `api-worker-settings.json` and `background-worker-settings.json` in `~/.config/software-factory-lab/`, are generated: Dispatch writes each from the Worker settings file and the main checkout's hooks at a dispatch of its kind.
+  Change the Worker settings file or `worker-sandbox.ts`, never a generated file.
+- Every Worker needs `bubblewrap`, `socat` and the sandbox's seccomp filter on the machine: a session whose sandbox cannot start runs no command.
+- A Worker's commits and tags are unsigned: the home holds the signing key.
+- `bun install` in a Worker's session fills a cache of that Worker's own, `.lab/bun-cache` in its clone, which git ignores: no command writes outside its clone and the session's temporary directory, and no Worker installs a package another one left. The path is relative, since one settings file serves every Worker of a kind: a `bun` started elsewhere than the clone's root, in a test's fixture, fills a `.lab/bun-cache` of the directory it starts in. The Owner's own cache, which holds the packages of other projects, is not read.
+- No command of a Worker makes or reaches a Unix socket: the one test of `bun check` that listens on one, in `factory/land/relay/deliver.live.test.ts`, is skipped there, and runs in CI.
+- The Worker bench (`scripts/lab/bench.ts`) launches its sessions unsandboxed: their commands read what the Owner's user reads.
+
+`bun factory/bin/sandbox-probe.ts` shows this on the machine, with canary files where credentials live and never a real credential.
+It runs two headless sessions, `claude -p`, each in a clone of its own under the clones' directory, as a Worker works: one on the sandbox alone, and one on a background Worker's settings, the main checkout's hooks included; each tries the reads that must fail, a canary in the main checkout among them, by a command and by a file tool, and the commands a Worker must still pass: `bun install`, `bun check`, `git fetch origin`, `git ls-remote origin`, `gh issue view` and `git commit`.
+It prints every path it writes before it writes one, removes them at its end, keeps each session's output in the `.lab/sandbox-probe/` of its checkout, and ends with `sandbox-probe: <n>/<n> as expected` under one line per probe.
+It shows what the settings hold in a session that loads them; it starts no `claude --bg` session and resumes none, so that a background session loads them at its launch and keeps them at a resume is Claude Code's own behaviour, which the probe does not show (`factory/land/relay/AGENTS.md`).
+The Owner runs it, never a Worker, since it writes in the home: after a change to `worker-sandbox.ts`, to `sandbox-paths.ts` or to the settings Dispatch writes, and after an update of Claude Code.

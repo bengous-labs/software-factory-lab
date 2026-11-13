@@ -369,26 +369,39 @@ export const stoppedIn = (agents: string, session: string): boolean =>
 export interface Target {
   readonly session: string;
   readonly headless: HeadlessSession | null;
+  /** The clone a background Worker's session works in, where its resume runs; null for any other. */
+  readonly clone: string | null;
 }
 
 const Headless = Schema.Struct({ model: Schema.NullOr(Schema.String), worktree: Schema.String });
 
+const InClone = Schema.Struct({ clone: Schema.String });
+
+const SecondLine = Schema.Union([Headless, InClone]);
+
 /**
- * The text of `relay-<pr>.session`: the session's id on the first line, and for an API Worker a second
- * line of JSON. An on-disk format: the Stop hook writes it at each Publication and a running relay reads it.
+ * The text of `relay-<pr>.session`: the session's id on the first line, and a second line of JSON for an
+ * API Worker, what its headless resume needs, or for a background Worker in a clone, that clone. An on-disk format: the Stop hook writes it at each Publication and a running relay reads it.
  */
-export function targetTextOf({ session, headless }: Target): string {
-  return headless === null ? `${session}\n` : `${session}\n${JSON.stringify(headless)}\n`;
+export function targetTextOf({ session, headless, clone }: Target): string {
+  if (headless !== null) {
+    return `${session}\n${JSON.stringify(headless)}\n`;
+  }
+
+  return clone === null ? `${session}\n` : `${session}\n${JSON.stringify({ clone })}\n`;
 }
 
 /** The target `relay-<pr>.session` holds, from its text. */
 export function targetOf(text: string): Target {
   const [session = "", second = ""] = text.split("\n");
 
-  return {
-    session,
-    headless: second === "" ? null : decodeJson(Headless, "the second line of the relay's session file", second),
-  };
+  if (second === "") {
+    return { session, headless: null, clone: null };
+  }
+
+  const held = decodeJson(SecondLine, "the second line of the relay's session file", second);
+
+  return "clone" in held ? { session, headless: null, clone: held.clone } : { session, headless: held, clone: null };
 }
 
 /** What one delivery sends, whichever way it goes: the route, the line for a socket, the command of a resume. */
@@ -396,6 +409,11 @@ export interface Sending {
   readonly route: Route;
   readonly socketLine: string;
   readonly resumeArgs: readonly string[];
+  /**
+   * The directory a background resume runs in: the clone the session works in, where Claude Code keeps
+   * its conversation; null for the relay's own checkout.
+   */
+  readonly resumeIn: string | null;
 }
 
 /** What a delivery sends, and what holds it back. */
@@ -438,11 +456,16 @@ export function sendingOf(
   { text, stop, held }: WakeSending,
   { checkout, home }: RelayPlace,
 ): Sending {
-  const { session, headless } = target;
+  const { session, headless, clone } = target;
   const socketLine = socketLineOf(text);
 
   if (headless === null) {
-    return { route: routeOf(agents, session, stop), socketLine, resumeArgs: resumeArgsOf(session, text) };
+    return {
+      route: routeOf(agents, session, stop),
+      socketLine,
+      resumeArgs: resumeArgsOf(session, text),
+      resumeIn: clone,
+    };
   }
 
   return {
@@ -451,6 +474,7 @@ export function sendingOf(
         ? { kind: "headless", worktree: headless.worktree, log: apiWorkerLogOf(checkout, session) }
         : { kind: "wait" },
     socketLine,
+    resumeIn: null,
     resumeArgs: resumedTurnArgvOf({
       session,
       model: headless.model,
@@ -467,7 +491,10 @@ export function socketLineOf(text: string): string {
   return `${JSON.stringify({ type: "user", message: { role: "user", content: text } })}\n`;
 }
 
-/** The command that resumes `session` in the background with `text` as its next turn, and no other flag: it keeps its launch options. */
+/**
+ * The command that resumes `session` in the background with `text` as its next turn, and no other flag:
+ * it keeps its launch options, and Claude Code starts a copy of a session whose resume names one.
+ */
 export function resumeArgsOf(session: string, text: string): readonly string[] {
   return ["claude", "--bg", "--resume", session, text];
 }

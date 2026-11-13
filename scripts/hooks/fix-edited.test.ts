@@ -12,6 +12,12 @@ const ROOT = join(import.meta.dir, "..", "..");
 
 const SCRIPT = join(import.meta.dir, "fix-edited.ts");
 
+/**
+ * What makes the hook's session neither an Author nor one that works in a clone: a Worker that runs
+ * these tests holds both variables, which the hook under test must not inherit.
+ */
+const NO_WORKER = { LAB_AUTHOR: "", LAB_MAIN_CHECKOUT: "" };
+
 const UNFORMATTED = "export function f(x: number) {\n  if (x > 0) return   'positive'\n  return 'other'\n}\n";
 
 const FIXED = 'export function f(x: number) {\n  if (x > 0) {\n    return "positive";\n  }\n\n  return "other";\n}\n';
@@ -73,7 +79,8 @@ describe("candidateOf", () => {
 
 /**
  * Runs the hook on a Write of `filePath`, as Claude Code does for the project at `project`, in a session
- * whose environment also holds `session`.
+ * whose environment also holds `session`. The session is the Owner's unless `session` says otherwise: a
+ * Worker that runs this test holds the Author's marker, which the hook under test must not inherit.
  */
 const runHook = (filePath: string, project = ROOT, session: Readonly<Record<string, string>> = {}) =>
   $`bun ${SCRIPT} < ${Buffer.from(
@@ -84,7 +91,7 @@ const runHook = (filePath: string, project = ROOT, session: Readonly<Record<stri
       cwd: project,
     }),
   )}`
-    .env({ ...fixtureEnv(process.env), CLAUDE_PROJECT_DIR: project, ...session })
+    .env({ ...fixtureEnv(process.env), ...NO_WORKER, CLAUDE_PROJECT_DIR: project, ...session })
     .nothrow()
     .quiet();
 
@@ -97,7 +104,7 @@ describe("the hook", () => {
     }
   });
 
-  test("fixes and formats the file a Write names, and prints nothing", async () => {
+  test("in the Owner's session it fixes and formats the file a Write names, and prints nothing", async () => {
     const path = join(import.meta.dir, `.fix-edited-fixture-${process.pid}.ts`);
 
     fixtures.push(path);
@@ -111,26 +118,44 @@ describe("the hook", () => {
     expect(await Bun.file(path).text()).toBe(FIXED);
   });
 
-  test("in an API Worker's session it leaves the file as it is: the fix would run the checkout's lint config outside the sandbox", async () => {
-    const path = join(import.meta.dir, `.fix-edited-fixture-api-${process.pid}.ts`);
+  test("in an Author's session, background or API, it leaves the unformatted file as written: the fix would run the checkout's lint config outside the sandbox", async () => {
+    const path = join(import.meta.dir, `.fix-edited-fixture-author-${process.pid}.ts`);
 
     fixtures.push(path);
     writeFileSync(path, UNFORMATTED);
 
-    const ran = await runHook(path, ROOT, { LAB_API_WORKER: "1" });
+    const ran = await runHook(path, ROOT, { LAB_AUTHOR: "1" });
 
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout.toString()).toBe("");
     expect(await Bun.file(path).text()).toBe(UNFORMATTED);
   });
 
-  test("a session whose marker is not 1 is no API Worker's: the file is fixed", async () => {
-    const path = join(import.meta.dir, `.fix-edited-fixture-bg-${process.pid}.ts`);
+  test("in a session that works in a clone and is no Author, it leaves the unformatted file as written: the clone holds a Worker's code", async () => {
+    const path = join(import.meta.dir, `.fix-edited-fixture-clone-${process.pid}.ts`);
 
     fixtures.push(path);
     writeFileSync(path, UNFORMATTED);
 
-    await runHook(path, ROOT, { LAB_API_WORKER: "0" });
+    const ran = await runHook(path, ROOT, { LAB_MAIN_CHECKOUT: ROOT });
+
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout.toString()).toBe("");
+    expect(await Bun.file(path).text()).toBe(UNFORMATTED);
+  });
+
+  test("a session with no Author's marker, or one that is not 1, is no Author's: the file is fixed", async () => {
+    const path = join(import.meta.dir, `.fix-edited-fixture-owner-${process.pid}.ts`);
+
+    fixtures.push(path);
+    writeFileSync(path, UNFORMATTED);
+
+    await runHook(path, ROOT, { LAB_AUTHOR: "" });
+
+    expect(await Bun.file(path).text()).toBe(FIXED);
+
+    writeFileSync(path, UNFORMATTED);
+    await runHook(path, ROOT, { LAB_AUTHOR: "0" });
 
     expect(await Bun.file(path).text()).toBe(FIXED);
   });
@@ -226,7 +251,7 @@ describe("the hook, on a file in a worktree", () => {
     writeFileSync(path, BARE);
 
     const ran = await $`bun ${SCRIPT} < ${Buffer.from(JSON.stringify({ tool_input: { file_path: path } }))}`
-      .env(fixtureEnv({ ...process.env, CLAUDE_PROJECT_DIR: undefined }))
+      .env(fixtureEnv({ ...process.env, ...NO_WORKER, CLAUDE_PROJECT_DIR: undefined }))
       .nothrow()
       .quiet();
 

@@ -128,11 +128,11 @@ export type Admission =
   | { readonly kind: "stop-checks" };
 
 /**
- * The Stop checks' result. `left`: the hook ran none and leaves them to the Author, an API Worker, whose
- * code the hook never runs: a hook's command is outside the session's sandbox.
+ * The Stop checks' result. The hook runs none: `bun check` is the Worker's code, and a hook's command is
+ * outside the session's sandbox. `left`: they are left to the Worker, which no stop asked for them on
+ * this head yet. `asked`: a stop asked for them on this head already; nothing says they ran or passed.
  */
-export type StopChecks =
-  { readonly kind: "green" } | { readonly kind: "red"; readonly report: string } | { readonly kind: "left" };
+export type StopChecks = { readonly kind: "asked" } | { readonly kind: "left" };
 
 /** A stop that publishes nothing: let go, or blocked once with a reason the Author reads. */
 export type Refusal =
@@ -238,39 +238,23 @@ export function noAuthorToken(path: string, reported: boolean): Refusal {
   };
 }
 
-/** What an API Worker reads when the hook leaves the Stop checks to it. */
+/** What a Worker reads when the hook leaves the Stop checks to it. */
 const LEFT_STOP_CHECKS =
-  "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your clone now, fix what it reports and commit, then stop.";
+  "The Stop hook runs no Stop checks on a Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` now, fix what it reports and commit, then stop.";
 
 /** Why a stop the Stop checks block publishes nothing, on the head `head`. */
-export function stopChecksOutcomeOf(stopChecks: StopChecks, head: string): string {
-  return stopChecks.kind === "left"
-    ? `the Stop checks on ${head} are left to the API Worker`
-    : `the Stop checks are red on ${head}`;
+export function stopChecksOutcomeOf(head: string): string {
+  return `the Stop checks on ${head} are left to the Worker`;
 }
 
 /**
- * Red Stop checks block once, with their report; red again after a block that reported a failure
- * (`Chain.reported`), they let the session end. Stop checks left to the Author block once, asking for
- * them; after that block the stop goes on, and CI's own run of the checks is what holds the change.
+ * Stop checks left to the Worker block once, asking for them; after a block that reported a failure
+ * (`Chain.reported`) the stop goes on, and CI's own run of the checks is what holds the change.
  */
 export function afterStopChecks(stopChecks: StopChecks, reported: boolean): Next {
-  if (stopChecks.kind === "green") {
-    return { kind: "ask-done-judge" };
-  }
-
-  if (stopChecks.kind === "left") {
-    return reported ? { kind: "ask-done-judge" } : { kind: "block", reason: LEFT_STOP_CHECKS };
-  }
-
-  if (reported) {
-    return none("the Stop checks are still red after a block: nothing is published");
-  }
-
-  return {
-    kind: "block",
-    reason: `The Stop checks are red on this head, so nothing was published:\n\n${stopChecks.report}\n\nFix them and commit, then stop.`,
-  };
+  return stopChecks.kind === "asked" || reported
+    ? { kind: "ask-done-judge" }
+    : { kind: "block", reason: LEFT_STOP_CHECKS };
 }
 
 /** The JSON Schema of the Done judge's answer, which the fork's structured output must follow. */

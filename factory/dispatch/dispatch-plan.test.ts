@@ -1,12 +1,19 @@
 import { describe, expect, test } from "bun:test";
 
+import { Schema } from "effect";
+
+import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
+import type { SandboxableSettings } from "../land/shared/worker-sandbox.ts";
+import { CHECKOUT_VARIABLE } from "../lib/author-session.ts";
+import { decodeJson } from "../lib/json.ts";
 import {
-  apiCloneOf,
   apiKeyProblemOf,
   apiWorkerSettingsTextOf,
+  backgroundWorkerSettingsOf,
+  backgroundWorkerSettingsTextOf,
   branchOf,
-  CHECKOUT_VARIABLE,
   cloneArgvOf,
+  cloneOf,
   dispatchArgsOf,
   firstTurnProblemOf,
   INSTALL_ARGV,
@@ -18,10 +25,9 @@ import {
   sessionIdOf,
   sessionNameOf,
   slugOf,
+  trustAdviceOf,
   workerSettingsOf,
   workerSettingsProblemOf,
-  worktreeListed,
-  worktreeOf,
 } from "./dispatch-plan.ts";
 
 describe("dispatchArgsOf", () => {
@@ -128,12 +134,6 @@ describe("branchOf", () => {
   });
 });
 
-describe("worktreeOf", () => {
-  test("lies under .claude/worktrees/ of the main checkout", () => {
-    expect(worktreeOf("/repo", 168)).toBe("/repo/.claude/worktrees/issue-168");
-  });
-});
-
 describe("workerSettingsOf", () => {
   test("is the Worker settings file under the home directory", () => {
     expect(workerSettingsOf("/home/me")).toBe("/home/me/.config/software-factory-lab/worker-settings.json");
@@ -162,15 +162,6 @@ describe("issueBranchesIn", () => {
   });
 });
 
-describe("worktreeListed", () => {
-  test("finds the worktree among those `git worktree list --porcelain` prints", () => {
-    const listing = "worktree /repo\nHEAD abc\nbranch refs/heads/dev\n\nworktree /repo/.claude/worktrees/issue-1\n";
-
-    expect(worktreeListed(listing, "/repo/.claude/worktrees/issue-1")).toBe(true);
-    expect(worktreeListed(listing, "/repo/.claude/worktrees/issue-10")).toBe(false);
-  });
-});
-
 describe("promptOf", () => {
   const assignment = {
     issue: 168,
@@ -179,23 +170,16 @@ describe("promptOf", () => {
     branch: "issue/168-x",
   };
 
-  test("names the issue, how to read it, the worktree and its branch, and nothing a Worker's instructions give", () => {
-    expect(promptOf(assignment, false)).toBe(
-      "Implement GitHub issue #168 of o/r (read it with: gh issue view 168 --repo o/r). Your worktree exists: first call EnterWorktree with the path /repo/.claude/worktrees/issue-168 and work there; its branch issue/168-x starts at origin/dev.",
-    );
-  });
-
-  test("an API Worker, launched in its clone, is told it is there, and enters nothing", () => {
-    const clone = apiCloneOf("/home/me", 168);
+  test("names the issue, how to read it, the Worker's clone, where its session starts, and its branch, and nothing a Worker's instructions give", () => {
+    const clone = cloneOf("/home/me", 168);
 
     expect(clone).toBe("/home/me/.local/share/software-factory-lab/api-workers/issue-168");
-    expect(promptOf({ ...assignment, worktree: clone }, true)).toBe(
+    expect(promptOf({ ...assignment, worktree: clone })).toBe(
       `Implement GitHub issue #168 of o/r (read it with: gh issue view 168 --repo o/r). You are in your own clone of the repository, ${clone}: work there; its branch issue/168-x starts at origin/dev.`,
     );
   });
 
-  test("a background Worker's worktree lies under the main checkout, an API Worker's clone outside it, cloned on the Trunk", () => {
-    expect(worktreeOf("/repo", 7)).toBe("/repo/.claude/worktrees/issue-7");
+  test("a Worker's clone is cloned from the main checkout's remote, on the Trunk", () => {
     expect(cloneArgvOf("git@github.com:o/r.git", "/clones/issue-7")).toEqual([
       "git",
       "clone",
@@ -234,16 +218,11 @@ const PROJECT = JSON.stringify({
 
 const PLACE = { home: "/home/me", checkout: "/repo" };
 
-/** The deny rules an API Worker's settings add: the two hidden directories, to read and to write. */
-const DENY = [
-  "Read(//home/me/.api-agent/**)",
-  "Edit(//home/me/.api-agent/**)",
-  "Read(//home/me/.config/software-factory-lab/**)",
-  "Edit(//home/me/.config/software-factory-lab/**)",
-  "Read(//repo/**)",
-  "Edit(//repo/**)",
-  "Edit(//home/me/.local/share/software-factory-lab/api-workers/*/.git/**)",
-];
+/** What the sandbox of every Worker adds to the Worker settings `settings`, for the home `/home/me` and the checkout `/repo`. */
+const sandboxed = (settings: SandboxableSettings) => sandboxedOf(settings, PLACE);
+
+/** The deny rules the sandbox adds. */
+const DENY = sandboxed({ env: {} }).permissions.deny;
 
 /** The API Worker settings text made from the Worker settings `json`, for the home `/home/me` and the checkout `/repo`. */
 const textOf = (json: string): string => apiWorkerSettingsTextOf(json, PROJECT, PLACE);
@@ -259,18 +238,19 @@ describe("apiWorkerSettingsTextOf", () => {
     const text = textOf(JSON.stringify(worker));
 
     expect(text).toEndWith("}\n");
+    expect(DENY.slice(0, 8)).toEqual([
+      "Read(//home/me/.api-agent/**)",
+      "Edit(//home/me/.api-agent/**)",
+      "Read(//home/me/.config/software-factory-lab/**)",
+      "Edit(//home/me/.config/software-factory-lab/**)",
+      "Read(//repo/**)",
+      "Edit(//repo/**)",
+      "Edit(//home/me/.local/share/software-factory-lab/api-workers/*/.git/**)",
+      "Read(//home/me/.ssh)",
+    ]);
     expect(JSON.parse(text)).toEqual({
-      env: {
-        LAB_AUTHOR: "1",
-        GH_TOKEN: "ghp_worker",
-        LAB_API_WORKER: "1",
-        LAB_MAIN_CHECKOUT: "/repo",
-        GIT_CONFIG_COUNT: "1",
-        GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf",
-        GIT_CONFIG_VALUE_0: "git@github.com:",
-      },
-      outputStyle: "Proactive",
-      claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"],
+      ...sandboxed(worker),
+      env: { ...sandboxed(worker).env, LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: "/repo" },
       verbose: false,
       apiKeyHelper: "cat '/home/me/.api-agent/key'",
       hooks: {
@@ -279,7 +259,8 @@ describe("apiWorkerSettingsTextOf", () => {
             hooks: [
               {
                 type: "command",
-                command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts',
+                command:
+                  'cd "$LAB_MAIN_CHECKOUT" && unset BUN_INSTALL_CACHE_DIR && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts',
                 timeout: 900,
               },
             ],
@@ -291,7 +272,8 @@ describe("apiWorkerSettingsTextOf", () => {
             hooks: [
               {
                 type: "command",
-                command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/hooks/refuse-author-publish.ts',
+                command:
+                  'cd "$LAB_MAIN_CHECKOUT" && unset BUN_INSTALL_CACHE_DIR && bun "$LAB_MAIN_CHECKOUT"/factory/hooks/refuse-author-publish.ts',
                 timeout: 30,
                 onFailure: "block",
               },
@@ -299,23 +281,13 @@ describe("apiWorkerSettingsTextOf", () => {
           },
         ],
       },
-      sandbox: {
-        enabled: true,
-        failIfUnavailable: true,
-        allowUnsandboxedCommands: false,
-        autoAllowBashIfSandboxed: true,
-        credentials: {
-          files: [
-            { path: "/home/me/.api-agent", mode: "deny" },
-            { path: "/home/me/.config/software-factory-lab", mode: "deny" },
-            { path: "/repo", mode: "deny" },
-          ],
-        },
-        network: {
-          allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"],
-        },
-      },
-      permissions: { allow: ["Edit(./**)", "Bash"], deny: DENY },
+    });
+    expect(JSON.parse(text)).toMatchObject({
+      env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", GIT_CONFIG_COUNT: "3" },
+      outputStyle: "Proactive",
+      claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"],
+      sandbox: { enabled: true, filesystem: { denyRead: ["/home/me"] } },
+      permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["Edit(./**)", "Bash"], deny: DENY },
     });
   });
 
@@ -330,7 +302,11 @@ describe("apiWorkerSettingsTextOf", () => {
     );
 
     expect(commands).toHaveLength(2);
-    expect(commands.every((command) => command.startsWith(String.raw`cd \"$LAB_MAIN_CHECKOUT\" && bun `))).toBe(true);
+    expect(
+      commands.every((command) =>
+        command.startsWith(String.raw`cd \"$LAB_MAIN_CHECKOUT\" && unset BUN_INSTALL_CACHE_DIR && bun `),
+      ),
+    ).toBe(true);
   });
 
   test.each([
@@ -417,7 +393,7 @@ describe("apiWorkerSettingsTextOf", () => {
     expect(JSON.parse(settings)).toMatchObject({
       apiKeyHelper: "cat '/home/me/.api-agent/key'",
       verbose: false,
-      env: { LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: "/repo", GIT_CONFIG_COUNT: "1" },
+      env: { LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: "/repo", GIT_CONFIG_COUNT: "3" },
       sandbox: { enabled: true },
     });
     expect(settings).not.toContain("excludedCommands");
@@ -442,6 +418,69 @@ describe("apiWorkerSettingsTextOf", () => {
 
   test("the main checkout's settings file is the one Claude Code reads there", () => {
     expect(projectSettingsOf("/repo")).toBe("/repo/.claude/settings.json");
+  });
+});
+
+describe("the settings of a background Worker", () => {
+  const worker = { env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" }, outputStyle: "Proactive" };
+
+  test("its settings file lies beside the API Worker's, in the config directory", () => {
+    expect(backgroundWorkerSettingsOf("/home/me")).toBe(
+      "/home/me/.config/software-factory-lab/background-worker-settings.json",
+    );
+  });
+
+  test("the text is what every Worker's settings are made of, the main checkout's hooks included, in a mode that asks nothing, and nothing of an API Worker", () => {
+    const text = backgroundWorkerSettingsTextOf(JSON.stringify(worker), PROJECT, PLACE);
+    const apiText = apiWorkerSettingsTextOf(JSON.stringify(worker), PROJECT, PLACE);
+    const { hooks } = decodeJson(Schema.Struct({ hooks: Schema.Json }), "the API Worker settings", apiText);
+
+    expect(text).toEndWith("}\n");
+    expect(JSON.parse(text)).toEqual({
+      ...sandboxed(worker),
+      env: { ...sandboxed(worker).env, LAB_MAIN_CHECKOUT: "/repo" },
+      hooks,
+      permissions: { ...sandboxed(worker).permissions, defaultMode: "dontAsk" },
+    });
+    expect(JSON.parse(text)).toMatchObject({
+      env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" },
+      outputStyle: "Proactive",
+      sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false },
+      permissions: { allow: ["Edit(./**)", "Bash"], deny: DENY },
+    });
+    expect(text).toContain(
+      String.raw`cd \"$LAB_MAIN_CHECKOUT\" && unset BUN_INSTALL_CACHE_DIR && bun \"$LAB_MAIN_CHECKOUT\"/factory/bin/stop-hook.ts`,
+    );
+    expect(text).not.toContain("CLAUDE_PROJECT_DIR");
+    expect(text).not.toContain("apiKeyHelper");
+    expect(text).not.toContain("LAB_API_WORKER");
+    expect(text).not.toContain("verbose");
+  });
+
+  test("the rules the Worker settings file holds stay, and a mode, a sandbox, hooks or a main checkout it holds give way", () => {
+    const held = {
+      ...worker,
+      env: { ...worker.env, LAB_MAIN_CHECKOUT: "/elsewhere" },
+      hooks: { Stop: [] },
+      sandbox: { enabled: false },
+      permissions: { allow: ["Bash(jq *)"], ask: ["Bash(rm *)"], defaultMode: "bypassPermissions" },
+    };
+
+    const text = backgroundWorkerSettingsTextOf(JSON.stringify(held), PROJECT, PLACE);
+
+    expect(JSON.parse(text)).toMatchObject({
+      env: { LAB_MAIN_CHECKOUT: "/repo" },
+      sandbox: { enabled: true },
+      permissions: { allow: ["Bash(jq *)", "Edit(./**)", "Bash"], ask: ["Bash(rm *)"], defaultMode: "dontAsk" },
+    });
+    expect(text).toContain("stop-hook.ts");
+  });
+
+  test("a Worker settings file that does not read, or a main checkout whose settings hold no hooks, throws, naming it: a Worker with no Stop hook publishes nothing", () => {
+    expect(() => backgroundWorkerSettingsTextOf("{", PROJECT, PLACE)).toThrow("the Worker settings file: ");
+    expect(() => backgroundWorkerSettingsTextOf(JSON.stringify(worker), '{"enabledPlugins":{}}', PLACE)).toThrow(
+      "the main checkout's .claude/settings.json: ",
+    );
   });
 });
 
@@ -485,37 +524,41 @@ describe("the launch of an API Worker", () => {
 });
 
 describe("launchArgvOf", () => {
-  test("launches a named background session with the Worker settings passed by path", () => {
-    expect(
-      launchArgvOf({ issue: 168, model: "opus", effort: undefined, settings: "/h/worker-settings.json", prompt: "P" }),
-    ).toEqual([
-      "claude",
-      "--bg",
-      "--model",
-      "opus",
-      "--settings",
-      "/h/worker-settings.json",
-      "--name",
-      "w-issue-168",
-      "P",
-    ]);
+  const launch = {
+    issue: 168,
+    model: "opus",
+    settings: "/h/background-worker-settings.json",
+    checkout: "/repo",
+    prompt: "P",
+  };
+
+  /** What the command ends with, after its model and its effort. */
+  const TAIL = [
+    "--settings",
+    "/h/background-worker-settings.json",
+    "--setting-sources",
+    "",
+    "--strict-mcp-config",
+    "--append-system-prompt-file",
+    "/repo/AGENTS.md",
+    "--name",
+    "w-issue-168",
+    "P",
+  ];
+
+  test("launches a named background session on its settings file alone, with no settings source and no MCP server of its clone, and the main checkout's root guide", () => {
+    expect(launchArgvOf({ ...launch, effort: undefined })).toEqual(["claude", "--bg", "--model", "opus", ...TAIL]);
   });
 
   test("passes the effort after the model when one is named", () => {
-    expect(
-      launchArgvOf({ issue: 168, model: "opus", effort: "xhigh", settings: "/h/worker-settings.json", prompt: "P" }),
-    ).toEqual([
+    expect(launchArgvOf({ ...launch, effort: "xhigh" })).toEqual([
       "claude",
       "--bg",
       "--model",
       "opus",
       "--effort",
       "xhigh",
-      "--settings",
-      "/h/worker-settings.json",
-      "--name",
-      "w-issue-168",
-      "P",
+      ...TAIL,
     ]);
   });
 });
@@ -557,5 +600,20 @@ describe("workerSettingsProblemOf", () => {
   test("never quotes the file, which holds the token", () => {
     expect(workerSettingsProblemOf('{"env":{"LAB_AUTHOR":"0","GH_TOKEN":"ghp_secret"}}')).not.toContain("ghp_secret");
     expect(workerSettingsProblemOf('{"env":{"GH_TOKEN":"ghp_secret"')).not.toContain("ghp_secret");
+  });
+});
+
+describe("trustAdviceOf", () => {
+  test("a launch Claude Code refused for workspace trust gets the way that works, an API Worker, after Claude Code's own words", () => {
+    expect(
+      trustAdviceOf(
+        "claude --bg exited 1: Workspace not trusted. Run `claude` in /clone once and accept the trust prompt, then retry.",
+      ),
+    ).toBe(" (no new clone has that trust: hand the issue to an API Worker with --api)");
+  });
+
+  test("any other failure gets nothing", () => {
+    expect(trustAdviceOf("claude --bg exited 1: no such model")).toBe("");
+    expect(trustAdviceOf("")).toBe("");
   });
 });

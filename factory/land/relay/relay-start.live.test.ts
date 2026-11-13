@@ -53,7 +53,7 @@ describe("relayStarter", () => {
   test("a Publication starts one relay for its PR in the main checkout, and names its session", () => {
     const { checkout, left, start } = world();
 
-    expect(start({ pr: 12, session: "S1", headless: null, checkout })).toBe("started");
+    expect(start({ pr: 12, session: "S1", headless: null, clone: null, checkout })).toBe("started");
     expect(left).toEqual([
       {
         argv: ["bun", RELAY, "12"],
@@ -71,15 +71,15 @@ describe("relayStarter", () => {
     const { checkout, start } = world();
     const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7" };
 
-    expect(start({ pr: 12, session: "S1", headless, checkout })).toBe("started");
+    expect(start({ pr: 12, session: "S1", headless, clone: null, checkout })).toBe("started");
     expect(readFileSync(relayFilesOf(checkout, 12).session, "utf8")).toBe(`S1\n${JSON.stringify(headless)}\n`);
   });
 
   test("a later Publication of another session names it alone: what an API Worker's left is gone", () => {
     const { checkout, start } = world();
 
-    start({ pr: 12, session: "S1", headless: { model: null, worktree: "/w" }, checkout });
-    start({ pr: 12, session: "S2", headless: null, checkout });
+    start({ pr: 12, session: "S1", headless: { model: null, worktree: "/w" }, clone: null, checkout });
+    start({ pr: 12, session: "S2", headless: null, clone: null, checkout });
 
     expect(readFileSync(relayFilesOf(checkout, 12).session, "utf8")).toBe("S2\n");
   });
@@ -89,7 +89,7 @@ describe("relayStarter", () => {
     mkdirSync(join(checkout, ".lab", "state"), { recursive: true });
     writeFileSync(relayFilesOf(checkout, 12).pid, "777\n");
 
-    expect(start({ pr: 12, session: "S2", headless: null, checkout })).toBe("running");
+    expect(start({ pr: 12, session: "S2", headless: null, clone: null, checkout })).toBe("running");
     expect(left).toEqual([]);
     expect(asked).toEqual([[777, 12]]);
     expect(readFileSync(relayFilesOf(checkout, 12).session, "utf8")).toBe("S2\n");
@@ -106,7 +106,7 @@ describe("relayStarter", () => {
       mkdirSync(join(checkout, ".lab", "state"), { recursive: true });
       writeFileSync(relayFilesOf(checkout, 12).pid, pidFile);
 
-      expect(start({ pr: 12, session: "S1", headless: null, checkout })).toBe("started");
+      expect(start({ pr: 12, session: "S1", headless: null, clone: null, checkout })).toBe("started");
       expect(left).toHaveLength(1);
     }
   });
@@ -116,7 +116,7 @@ describe("relayStarter", () => {
     mkdirSync(join(checkout, ".lab", "state"), { recursive: true });
     writeFileSync(relayFilesOf(checkout, 12).pid, "777\n");
 
-    expect(start({ pr: 13, session: "S1", headless: null, checkout })).toBe("started");
+    expect(start({ pr: 13, session: "S1", headless: null, clone: null, checkout })).toBe("started");
     expect(left.map((one) => one.argv)).toEqual([["bun", RELAY, "13"]]);
   });
 });

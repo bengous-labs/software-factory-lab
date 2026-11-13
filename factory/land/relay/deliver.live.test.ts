@@ -19,6 +19,7 @@ const delivery = (route: Delivery["route"], stoppedAt: number | null = 1): Deliv
     route,
     socketLine: "LINE\n",
     resumeArgs: RESUME,
+    resumeIn: null,
     stopped: () => {
       looks.count += 1;
 
@@ -45,6 +46,8 @@ const failureOf = (delivered: Promise<unknown>): Promise<string | null> =>
 interface World {
   readonly posts: string[];
   readonly runs: Array<{ argv: readonly string[]; env: unknown }>;
+  /** The directory each command ran in. */
+  readonly cwds: string[];
   readonly left: Array<{ argv: readonly string[]; options: LeaveOptions }>;
   readonly sleeps: number[];
 }
@@ -60,8 +63,11 @@ function world(open: readonly string[], code = 0, turnRuns = false): World & { d
   const left: World["left"] = [];
   const exited = turnRuns ? new Promise<number>(() => {}) : Promise.resolve(code);
 
+  const cwds: string[] = [];
+
   const run: Run = (argv, options): Promise<Ran> => {
     runs.push({ argv, env: options.env });
+    cwds.push(options.cwd);
 
     return Promise.resolve({ code, stdout: "", stderr: "" });
   };
@@ -88,7 +94,7 @@ function world(open: readonly string[], code = 0, turnRuns = false): World & { d
     cwd: "/main",
   });
 
-  return { posts, runs, left, sleeps, deliver };
+  return { posts, runs, cwds, left, sleeps, deliver };
 }
 
 describe("socketPathsOf", () => {
@@ -130,6 +136,15 @@ describe("deliverer", () => {
     expect(await found.deliver(delivery({ kind: "resume" }))).toBe("resume");
     expect(found.runs).toEqual([{ argv: RESUME, env: undefined }]);
     expect(found.posts).toEqual([]);
+  });
+
+  test("a background resume runs in the relay's checkout, or in the clone the session works in, where Claude Code keeps its conversation", async () => {
+    const found = world([]);
+
+    await found.deliver(delivery({ kind: "resume" }));
+    await found.deliver({ ...delivery({ kind: "resume" }), resumeIn: "/home/me/clones/issue-7" });
+
+    expect(found.cwds).toEqual(["/main", "/home/me/clones/issue-7"]);
   });
 
   test("a resume that fails delivered nothing", async () => {
@@ -232,30 +247,52 @@ describe("deliverer", () => {
   });
 });
 
-describe("postToSocket", () => {
-  test("writes the line on a socket that listens, and says so", async () => {
-    const path = join(mkdtempSync(join(tmpdir(), "sock-")), "s.sock");
+/** Whether this process may listen on a Unix socket: a Worker's sandbox forbids it, and allows no socket. */
+const canListen = await new Promise<boolean>((settle) => {
+  const server = createServer();
 
-    const received = new Promise<string>((settle) => {
-      const server = createServer((connection) => {
-        let text = "";
-        connection.on("data", (chunk) => {
-          text += String(chunk);
+  server.once("error", () => {
+    settle(false);
+  });
+  server.listen(join(mkdtempSync(join(tmpdir(), "sock-")), "can-listen.sock"), () => {
+    server.close();
+    settle(true);
+  });
+});
+
+/**
+ * Whether a test is skipped here, where this process can make no Unix socket. It takes the reason, so the
+ * line that skips a test says why.
+ */
+const noSocketSo = (why: string): boolean => why !== "" && !canListen;
+
+describe("postToSocket", () => {
+  test.skipIf(noSocketSo("a Worker's sandbox lets none be made, the one place this is skipped: CI runs it"))(
+    "writes the line on a socket that listens, and says so",
+    async () => {
+      const path = join(mkdtempSync(join(tmpdir(), "sock-")), "s.sock");
+
+      const received = new Promise<string>((settle) => {
+        const server = createServer((connection) => {
+          let text = "";
+          connection.on("data", (chunk) => {
+            text += String(chunk);
+          });
+          connection.on("end", () => {
+            server.close();
+            settle(text);
+          });
         });
-        connection.on("end", () => {
-          server.close();
-          settle(text);
-        });
+
+        server.listen(path);
       });
 
-      server.listen(path);
-    });
+      await Bun.sleep(20);
 
-    await Bun.sleep(20);
-
-    expect(await postToSocket(path, "LINE\n")).toBe(true);
-    expect(await received).toBe("LINE\n");
-  });
+      expect(await postToSocket(path, "LINE\n")).toBe(true);
+      expect(await received).toBe("LINE\n");
+    },
+  );
 
   test("a path nothing listens on takes nothing", async () => {
     expect(await postToSocket(join(tmpdir(), "no-such-dir", "s.sock"), "LINE\n")).toBe(false);

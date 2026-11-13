@@ -6,9 +6,9 @@ import type { DispatchPorts } from "./dispatcher.ts";
 
 const CHECKOUT = "/repo";
 
-const WORKTREE = "/repo/.claude/worktrees/issue-7";
-
 const SETTINGS = "/home/me/.config/software-factory-lab/worker-settings.json";
+
+const BACKGROUND_SETTINGS = "/home/me/.config/software-factory-lab/background-worker-settings.json";
 
 const API_SETTINGS = "/home/me/.config/software-factory-lab/api-worker-settings.json";
 
@@ -40,6 +40,14 @@ interface Left {
   readonly options: LeaveOptions;
 }
 
+/** The two hidden directories, then the first credential path's two rules, which every Worker's settings deny first. */
+const FIRST_DENIES = [
+  "Read(//home/me/.api-agent/**)",
+  "Read(//home/me/.config/software-factory-lab/**)",
+  "Read(//home/me/.ssh)",
+  "Read(//home/me/.ssh/**)",
+];
+
 /** What the fake's machine holds besides its commands: the Worker settings file, the key file's mode, whether a detached launch starts. */
 interface Machine {
   readonly settings: string | null;
@@ -49,7 +57,7 @@ interface Machine {
   readonly firstTurn: number | null;
   /** The main checkout's settings file; null when there is none. */
   readonly project: string | null;
-  /** Whether the API Worker settings file can be written. */
+  /** Whether the settings file Dispatch writes for the Worker can be written. */
   readonly writable: boolean;
   /** The permission bits of the directory an API Worker's clone goes to; null when nothing is there. */
   readonly clone: number | null;
@@ -171,15 +179,15 @@ const API_REQUEST = { ...REQUEST, api: true };
 const commandsOf = (calls: readonly Call[]) => calls.map((call) => call.argv.slice(0, 3).join(" "));
 
 describe("dispatch", () => {
-  test("creates the worktree from origin/dev, launches the Worker in the main checkout, and says what it did", async () => {
-    const { ports, calls, launches } = world();
+  test("clones the remote on the Trunk, creates the branch and installs the clone, writes the background Worker settings file, launches the Worker on it in its clone, and says what it did", async () => {
+    const { ports, calls, launches, written, order } = world();
 
     const dispatched = await dispatch(ports, REQUEST);
 
     expect(dispatched).toEqual({
       issue: 7,
       title: "Add a flag",
-      worktree: WORKTREE,
+      worktree: CLONE,
       branch: "issue/7-add-a-flag",
       session: "s-123",
       log: null,
@@ -187,17 +195,25 @@ describe("dispatch", () => {
     expect(commandsOf(calls)).toEqual([
       "gh issue view",
       "git fetch --prune",
-      "git worktree list",
       "git for-each-ref --format=%(refname:short)",
-      "git worktree add",
+      "git remote get-url",
+      "git clone --quiet",
+      "git switch --quiet",
+      "bun install --frozen-lockfile",
       "claude --bg --model",
     ]);
     expect(calls[1]?.argv).toEqual(["git", "fetch", "--prune", "origin"]);
-    expect(calls[4]?.argv).toEqual(["git", "worktree", "add", "-b", "issue/7-add-a-flag", WORKTREE, "origin/dev"]);
+    expect(calls[5]).toEqual({
+      argv: ["git", "switch", "--quiet", "--create", "issue/7-add-a-flag"],
+      options: { cwd: CLONE },
+    });
+    expect(calls[6]?.options.cwd).toBe(CLONE);
     expect(launches).toHaveLength(1);
+    expect(written.map((file) => file.path)).toEqual([BACKGROUND_SETTINGS]);
+    expect(order.slice(-3)).toEqual(["bun install --frozen-lockfile", "write", "claude --bg --model"]);
 
     const launch = launches[0];
-    expect(launch?.options.cwd).toBe(CHECKOUT);
+    expect(launch?.options.cwd).toBe(CLONE);
     expect(launch?.options.env).toEqual({ HOME: "/home/me", PATH: "/bin" });
     expect(launch?.argv).toEqual([
       "claude",
@@ -205,12 +221,18 @@ describe("dispatch", () => {
       "--model",
       "opus",
       "--settings",
-      SETTINGS,
+      BACKGROUND_SETTINGS,
+      "--setting-sources",
+      "",
+      "--strict-mcp-config",
+      "--append-system-prompt-file",
+      `${CHECKOUT}/AGENTS.md`,
       "--name",
       "w-issue-7",
-      `Implement GitHub issue #7 of o/r (read it with: gh issue view 7 --repo o/r). Your worktree exists: first call EnterWorktree with the path ${WORKTREE} and work there; its branch issue/7-add-a-flag starts at origin/dev.`,
+      `Implement GitHub issue #7 of o/r (read it with: gh issue view 7 --repo o/r). You are in your own clone of the repository, ${CLONE}: work there; its branch issue/7-add-a-flag starts at origin/dev.`,
     ]);
     expect(launch?.argv.join(" ")).not.toContain("secret");
+    expect(calls.some((call) => call.argv[1] === "worktree")).toBe(false);
   });
 
   test("launches the Worker at the effort the request names", async () => {
@@ -277,25 +299,32 @@ describe("dispatch", () => {
     expect(calls.some((call) => call.argv[0] === "claude" || call.argv[2] === "add")).toBe(false);
   });
 
-  test("names the worktree first when one holds the issue's branch, since the branch cannot go before it", async () => {
-    const { ports } = world({
-      "git worktree list": { code: 0, stdout: `worktree /repo\n\nworktree ${WORKTREE}\n`, stderr: "" },
-      "git for-each-ref": { code: 0, stdout: "issue/7-add-a-flag\n", stderr: "" },
-    });
+  test("names the clone first when one is there, whatever branch the issue has", async () => {
+    const { ports } = world(
+      { "git for-each-ref": { code: 0, stdout: "issue/7-add-a-flag\n", stderr: "" } },
+      { clone: 0o755 },
+    );
 
     expect(await failureOf(dispatch(ports, REQUEST))).toBe(
-      `issue #7 already has a worktree: ${WORKTREE}. Remove it first (git worktree remove ${WORKTREE})`,
+      `issue #7 already has a clone: ${CLONE}. Remove it first (rm -rf ${CLONE})`,
     );
   });
 
-  test("removes the worktree and the branch it created when the launch fails", async () => {
+  test("a background launch Claude Code refuses for workspace trust fails with Claude Code's own words, its exit code and the way that works, an API Worker, and removes the clone", async () => {
+    const refused = "Workspace not trusted. Run `claude` in /clone once and accept the trust prompt, then retry.";
+    const { ports, calls } = world({ "claude --bg": { code: 1, stdout: "", stderr: refused } });
+
+    expect(await failureOf(dispatch(ports, REQUEST))).toBe(
+      `claude --bg exited 1: ${refused} (no new clone has that trust: hand the issue to an API Worker with --api)`,
+    );
+    expect(calls.at(-1)?.argv).toEqual(["rm", "-rf", "--", CLONE]);
+  });
+
+  test("removes the clone it made when the launch fails", async () => {
     const { ports, calls } = world({ "claude --bg": { code: 1, stdout: "", stderr: "no such model" } });
 
-    expect(await failureOf(dispatch(ports, REQUEST))).toContain("no such model");
-    expect(calls.slice(-2).map((call) => call.argv)).toEqual([
-      ["git", "worktree", "remove", WORKTREE],
-      ["git", "branch", "-D", "issue/7-add-a-flag"],
-    ]);
+    expect(await failureOf(dispatch(ports, REQUEST))).toBe("claude --bg exited 1: no such model");
+    expect(calls.at(-1)?.argv).toEqual(["rm", "-rf", "--", CLONE]);
   });
 
   test("the failure of a launch carries the launch's own error as its cause", async () => {
@@ -313,36 +342,104 @@ describe("dispatch", () => {
     expect(failure).toHaveProperty("cause.message", "claude --bg exited 1: no such model");
   });
 
-  test("keeps the launch's error and tries both removals when the cleanup fails", async () => {
-    const { ports, calls } = world({
+  test("keeps the launch's error and says the clone is left when the removal fails", async () => {
+    const { ports } = world({
       "claude --bg": { code: 1, stdout: "", stderr: "no such model" },
-      "git worktree remove": { code: 128, stdout: "", stderr: "worktree is locked" },
-      "git branch -D": { code: 1, stdout: "", stderr: "branch is checked out" },
+      "rm -rf": { code: 1, stdout: "", stderr: "Permission denied" },
     });
 
     expect(await failureOf(dispatch(ports, REQUEST))).toBe(
-      `claude --bg exited 1: no such model. Its worktree and branch are left (git worktree remove ${WORKTREE} exited 128: worktree is locked; git branch -D issue/7-add-a-flag exited 1: branch is checked out): remove them with git worktree remove --force ${WORKTREE} && git branch -D issue/7-add-a-flag`,
+      `claude --bg exited 1: no such model. Its clone is left (rm -rf -- ${CLONE} exited 1: Permission denied): remove it with rm -rf ${CLONE}`,
     );
-    expect(calls.slice(-2).map((call) => call.argv.slice(0, 3).join(" "))).toEqual([
-      "git worktree remove",
-      "git branch -D",
-    ]);
   });
 
-  test("a background session whose id is not read keeps its worktree: the Worker runs", async () => {
+  test("a background session whose id is not read keeps its clone: the Worker runs", async () => {
     const { ports, calls } = world({ "claude --bg": { code: 0, stdout: "started\n", stderr: "" } });
 
     expect(await failureOf(dispatch(ports, REQUEST))).toBe("claude --bg printed no session id: started");
     expect(commandsOf(calls).at(-1)).toBe("claude --bg --model");
   });
 
-  test("a background Worker writes no API Worker settings, reads no key file, and is left no headless turn", async () => {
+  test("a background Worker reads no key file and is left no headless turn, and the one file written is its own", async () => {
     const { ports, left, written, stats } = world();
 
     await dispatch(ports, REQUEST);
 
-    expect({ left, written, stats }).toEqual({ left: [], written: [], stats: [] });
+    expect({ left, stats, written: written.map((file) => file.path) }).toEqual({
+      left: [],
+      stats: [CLONE],
+      written: [BACKGROUND_SETTINGS],
+    });
   });
+
+  test("the settings file it writes makes the Worker an Author in a clone, sandboxed with the home denied and the main checkout hidden, on the main checkout's hooks, that asks nothing, with no key helper and no marker of an API Worker", async () => {
+    const { ports, written } = world();
+
+    await dispatch(ports, REQUEST);
+
+    const settings: unknown = JSON.parse(written[0]?.text ?? "");
+
+    expect(settings).toMatchObject({
+      env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", GIT_CONFIG_COUNT: "3", LAB_MAIN_CHECKOUT: CHECKOUT },
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              {
+                command:
+                  'cd "$LAB_MAIN_CHECKOUT" && unset BUN_INSTALL_CACHE_DIR && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts',
+              },
+            ],
+          },
+        ],
+      },
+      sandbox: {
+        enabled: true,
+        allowUnsandboxedCommands: false,
+        filesystem: { denyRead: ["/home/me"] },
+      },
+      permissions: { defaultMode: "dontAsk", blockReadsOutsideWorkingDirectories: true },
+    });
+    expect(settings).toHaveProperty("sandbox.credentials.files.2", { path: CHECKOUT, mode: "deny" });
+    expect(settings).not.toHaveProperty("sandbox.filesystem.allowRead.6");
+    expect(settings).toHaveProperty("permissions.deny", expect.arrayContaining(FIRST_DENIES));
+    expect(settings).not.toHaveProperty("apiKeyHelper");
+    expect(settings).not.toHaveProperty("env.LAB_API_WORKER");
+  });
+
+  test("removes the clone when the background Worker settings file cannot be written, and launches nothing", async () => {
+    const { ports, calls, launches } = world({}, { writable: false });
+
+    expect(await failureOf(dispatch(ports, REQUEST))).toBe(`EACCES: permission denied, open '${BACKGROUND_SETTINGS}'`);
+    expect(launches).toEqual([]);
+    expect(calls.at(-1)?.argv).toEqual(["rm", "-rf", "--", CLONE]);
+  });
+
+  test("refuses a main checkout whose settings cannot be read, or hold no hooks, before it creates anything: a Worker with no Stop hook publishes nothing", async () => {
+    for (const project of [null, '{"enabledPlugins":{}}']) {
+      const { ports, calls, written } = world({}, { project });
+
+      expect(await failureOf(dispatch(ports, REQUEST))).not.toBe("");
+      expect({ calls, written }).toEqual({ calls: [], written: [] });
+    }
+  });
+
+  test.each([
+    [{ HOME: "/home/m*e" }, CHECKOUT, "the home /home/m*e holds one of * ? [ ]"],
+    [{ HOME: "/home/me" }, "/srv/repo[1]", "the main checkout /srv/repo[1] holds one of * ? [ ]"],
+  ])(
+    "refuses a place no sandbox can be made for (%j, %s), for either kind of Worker, before it reads a file or creates anything",
+    async (env, checkout, problem) => {
+      for (const request of [REQUEST, API_REQUEST]) {
+        const { ports, calls, written, stats } = world();
+
+        expect(await failureOf(dispatch(ports, { ...request, env, checkout }))).toStartWith(
+          `no Worker can be sandboxed here: ${problem}`,
+        );
+        expect({ calls, written, stats }).toEqual({ calls: [], written: [], stats: [] });
+      }
+    },
+  );
 
   test("fails with what gh printed when the issue cannot be read", async () => {
     const { ports } = world({ "gh issue": { code: 1, stdout: "", stderr: "could not find issue" } });
@@ -450,11 +547,19 @@ describe("the dispatch of an API Worker", () => {
       apiKeyHelper: `cat '${KEY}'`,
       hooks: {
         Stop: [
-          { hooks: [{ command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts' }] },
+          {
+            hooks: [
+              {
+                command:
+                  'cd "$LAB_MAIN_CHECKOUT" && unset BUN_INSTALL_CACHE_DIR && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts',
+              },
+            ],
+          },
         ],
       },
       sandbox: {
         enabled: true,
+        filesystem: { denyRead: ["/home/me"] },
         credentials: {
           files: [
             { path: "/home/me/.api-agent", mode: "deny" },
@@ -463,18 +568,10 @@ describe("the dispatch of an API Worker", () => {
           ],
         },
       },
-      permissions: {
-        deny: [
-          "Read(//home/me/.api-agent/**)",
-          "Edit(//home/me/.api-agent/**)",
-          "Read(//home/me/.config/software-factory-lab/**)",
-          "Edit(//home/me/.config/software-factory-lab/**)",
-          `Read(/${CHECKOUT}/**)`,
-          `Edit(/${CHECKOUT}/**)`,
-          "Edit(//home/me/.local/share/software-factory-lab/api-workers/*/.git/**)",
-        ],
-      },
+      permissions: { blockReadsOutsideWorkingDirectories: true },
     });
+    expect(JSON.parse(written[0]?.text ?? "")).toHaveProperty("permissions.deny", expect.arrayContaining(FIRST_DENIES));
+    expect(JSON.parse(written[0]?.text ?? "")).not.toHaveProperty("permissions.defaultMode");
   });
 
   test("neither the launch nor its environment holds a token: the settings go by their path", async () => {
@@ -560,12 +657,16 @@ describe("the dispatch of an API Worker", () => {
     expect(calls.at(-1)).toEqual({ argv: ["rm", "-rf", "--", CLONE], options: { cwd: CHECKOUT } });
   });
 
-  test("a background Worker keeps its worktree of the main checkout, which its session's hook installs, not Dispatch", async () => {
+  test("a background Worker's clone is installed by Dispatch too, in the clone, before the Worker exists", async () => {
     const { ports, calls, stats } = world();
 
-    expect((await dispatch(ports, REQUEST)).worktree).toBe(`${CHECKOUT}/.claude/worktrees/issue-7`);
-    expect(calls.some((call) => call.argv[0] === "bun" || call.argv[1] === "clone")).toBe(false);
-    expect(stats).toEqual([]);
+    expect((await dispatch(ports, REQUEST)).worktree).toBe(CLONE);
+
+    const install = calls.findIndex((call) => call.argv[0] === "bun");
+
+    expect(calls[install]?.options.cwd).toBe(CLONE);
+    expect(install).toBeLessThan(calls.findIndex((call) => call.argv[0] === "claude"));
+    expect(stats).toEqual([CLONE]);
   });
 
   test("removes the clone when the settings file cannot be written, and leaves no turn", async () => {

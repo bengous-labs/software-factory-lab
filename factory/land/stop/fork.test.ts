@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { sandboxedOf } from "../shared/worker-sandbox.ts";
 import { FORK_MARKER } from "./decide.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
 import {
@@ -194,38 +195,21 @@ describe("forkResultOf", () => {
   });
 });
 
-const API_FORK = {
-  verbose: false,
-  apiKeyHelper: "cat '/home/me/.api-agent/key'",
-  sandbox: {
-    enabled: true,
-    failIfUnavailable: true,
-    allowUnsandboxedCommands: false,
-    autoAllowBashIfSandboxed: true,
-    credentials: {
-      files: [
-        { path: "/home/me/.api-agent", mode: "deny" },
-        { path: "/home/me/.config/software-factory-lab", mode: "deny" },
-        { path: "/work/repo", mode: "deny" },
-      ],
-    },
-    network: { allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"] },
-  },
-};
+const API_FORK = { apiKeyHelper: "cat '/home/me/.api-agent/key'" };
 
 describe("apiForkOf", () => {
-  test("the forks of an API Worker's session bill the key and run their commands in its sandbox, and print one result", () => {
-    expect(apiForkOf({ LAB_API_WORKER: "1", LAB_AUTHOR: "1", HOME: "/home/me" }, "/work/repo")).toEqual(API_FORK);
+  test("the forks of an API Worker's session bill the key: their settings name the helper that prints its file", () => {
+    expect(apiForkOf({ LAB_API_WORKER: "1", LAB_AUTHOR: "1", HOME: "/home/me" })).toEqual(API_FORK);
   });
 
   test("the forks of any other session take its login: nothing is added", () => {
-    expect(apiForkOf({ LAB_AUTHOR: "1", HOME: "/home/me" }, "/work/repo")).toBeNull();
-    expect(apiForkOf({ LAB_API_WORKER: "0", HOME: "/home/me" }, "/work/repo")).toBeNull();
-    expect(apiForkOf({}, "/work/repo")).toBeNull();
+    expect(apiForkOf({ LAB_AUTHOR: "1", HOME: "/home/me" })).toBeNull();
+    expect(apiForkOf({ LAB_API_WORKER: "0", HOME: "/home/me" })).toBeNull();
+    expect(apiForkOf({})).toBeNull();
   });
 
   test("an API Worker's session with no home throws: its fork would bill another credential", () => {
-    expect(() => apiForkOf({ LAB_API_WORKER: "1" }, "/work/repo")).toThrow("HOME is unset");
+    expect(() => apiForkOf({ LAB_API_WORKER: "1" })).toThrow("HOME is unset");
   });
 });
 
@@ -239,12 +223,35 @@ describe("forkSettingsOf", () => {
     ],
   };
 
-  test("a fork's settings put every tool call under the fork guard, started in the checkout that holds it and never in the fork's own directory, and add nothing else", () => {
-    expect(forkSettingsOf("/repo", null)).toBe(JSON.stringify({ hooks: guard }));
+  const place = { home: "/home/me", checkout: "/main" };
+  const { sandbox, permissions } = sandboxedOf({ env: {} }, place);
+  const rules = { blockReadsOutsideWorkingDirectories: true, deny: permissions.deny };
+
+  test("a fork's settings put every tool call under the fork guard, started in the checkout that holds it and never in the fork's own directory; the fork of a session in no clone adds nothing else", () => {
+    expect(forkSettingsOf("/repo", null, null)).toBe(JSON.stringify({ hooks: guard }));
   });
 
-  test("the settings of an API Worker's fork add the key helper, which names the key's file and never the key, and the sandbox", () => {
-    expect(forkSettingsOf("/repo", API_FORK)).toBe(JSON.stringify({ ...API_FORK, hooks: guard }));
+  test("the fork of a Worker in a clone prints one result, runs its commands in that Worker's sandbox, which hides the main checkout, and reads no credential with its file tools", () => {
+    expect(forkSettingsOf("/repo", place, null)).toBe(
+      JSON.stringify({ verbose: false, sandbox, permissions: rules, hooks: guard }),
+    );
+    expect(sandbox.filesystem.denyRead).toEqual(["/home/me"]);
+    expect(sandbox.credentials.files).toContainEqual({ path: "/main", mode: "deny" });
+    expect(sandbox.filesystem.allowRead).not.toContain("/main");
+    expect(rules.deny).toContain("Read(//home/me/.ssh/**)");
+  });
+
+  test("a fork takes no allow rule and no variable of a Worker's settings: it is held to reading", () => {
+    const settings: unknown = JSON.parse(forkSettingsOf("/repo", place, null));
+
+    expect(settings).not.toHaveProperty("permissions.allow");
+    expect(settings).not.toHaveProperty("env");
+  });
+
+  test("the settings of an API Worker's fork add the key helper, which names the key's file and never the key", () => {
+    expect(forkSettingsOf("/repo", place, API_FORK)).toBe(
+      JSON.stringify({ verbose: false, sandbox, permissions: rules, ...API_FORK, hooks: guard }),
+    );
   });
 });
 
@@ -281,7 +288,7 @@ describe("forkArgvOf", () => {
     expect(argv.slice(11)).toEqual(["--strict-mcp-config", "--output-format", "json", "are you done?"]);
   });
 
-  test("the fork of an API Worker's session loads no settings but its own: no hook of the worktree runs in it", () => {
+  test("the fork of a Worker in a clone loads no settings but its own: no hook of the clone runs in it, and no rule of the Owner's own settings widens its sandbox", () => {
     const argv = forkArgvOf("S1", { ...ask, model: null, schema: null }, "/guard.json", true);
 
     expect(argv.slice(9)).toEqual([
