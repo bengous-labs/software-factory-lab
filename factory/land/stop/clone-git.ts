@@ -3,8 +3,9 @@
  * directory the Worker writes. The hook runs outside the sandbox that holds the Worker's code, and the
  * Worker writes its clone. So the hook takes the clone from the session's own directory and from where
  * Dispatch puts the clones, and hands git the repository through its environment: git then reads the
- * config and the hooks of the clone's own git directory, which the sandbox and a deny rule keep from the
- * Worker, and no file that would send it elsewhere.
+ * config and the hooks of the clone's own git directory, and no file that would send it elsewhere. That
+ * directory lies under the clone: Claude Code's sandbox, which holds its `config` and `hooks` read-only
+ * and refuses to rename or replace `.git`, and a deny rule on its file tools keep both from the Worker.
  */
 
 /**

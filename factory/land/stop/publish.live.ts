@@ -58,6 +58,8 @@ export interface Deps {
   readonly checkout: string;
   /** Appends `line` to `.lab/outcomes.log` of the main checkout `checkout`. */
   readonly recordOutcome: (checkout: string, line: string) => void;
+  /** `path` with every link in it resolved; null when it cannot be resolved. */
+  readonly realpath: (path: string) => string | null;
 }
 
 export async function askFork(deps: Deps, input: StopInput, ask: ForkAsk): Promise<ForkResult> {

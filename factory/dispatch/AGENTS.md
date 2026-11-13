@@ -25,7 +25,7 @@ What holds the key is the sandbox, not a rule on a command's text: a Worker runs
   Dispatch clones the main checkout's remote on the Trunk, then creates the branch in the clone and installs its dependencies there, while it holds the Trunk's files alone.
   A background Worker keeps its worktree.
 - **The sandbox.** Every Bash command of the session runs in Claude Code's sandbox, with no retry outside it, and no command runs when the sandbox cannot start.
-  A command writes under its clone alone, where what tells git which config to read and what to run stays read-only (`.git/config`, `.git/hooks`); it reaches GitHub and the package registry and no other host; it sees no other process, and three directories are empty for it, whatever it runs: the one that holds the key, the factory's config directory, which holds the Author's token (`factory/install/AGENTS.md`), and the main checkout.
+  A command writes under its clone alone, where what tells git which config to read and what to run stays read-only (`.git/config`, `.git/hooks`) and `.git` itself can be neither renamed nor replaced; it reaches GitHub and the package registry and no other host; it sees no other process, and three directories are empty for it, whatever it runs: the one that holds the key, the factory's config directory, which holds the Author's token (`factory/install/AGENTS.md`), and the main checkout.
   Deny rules keep Claude Code's own file tools, which run outside the sandbox, from reading or writing those directories, through a symbolic link too, and from writing in the git directory of a clone.
   Since the sandbox bounds every command, the session runs any command and edits any file under its clone, in `dontAsk` mode: a call that would ask is denied, as nobody answers.
 - **What runs outside the sandbox asks the clone nothing.** A hook's command runs outside the sandbox, and the Worker writes its clone, so a hook that trusts it runs the Worker's code.
@@ -56,7 +56,7 @@ Where an API Worker differs from a background Worker:
 
 What this does not hold:
 
-- A clone's `.git/config` and `.git/hooks` are kept from the Worker by Claude Code's sandbox and by a deny rule, not by the factory's own code: the Stop hook's git reads them.
+- The Stop hook's git reads the config and the hooks of the clone's `.git`, a directory under the clone, which the Worker writes. What keeps them from the Worker is no code of the factory: Claude Code's own sandbox holds both read-only and refuses to rename or replace `.git`, and a deny rule holds its file tools. A sandbox that only held the two paths read-only would not do: a command would move `.git` aside and make another, with a config of its own.
 - The hooks an API Worker runs are the copy Dispatch took of the main checkout's: a guard that lands later reaches a running one at the next API dispatch (`factory/hooks/AGENTS.md`).
 - Its commands still read the rest of the machine but those three directories, the Owner's other credentials among them.
 - A hook is safe by what it reads: one added to `.claude/settings.json` that starts a program in the clone, or lets git find its repository from there, runs the Worker's code outside the sandbox.

@@ -252,6 +252,7 @@ export function world(fake: Partial<Fake> = {}): World {
     recordOutcome: (where, line) => {
       outcomes.push({ checkout: where, line: decodeJson(OutcomeLine, "an outcome line", line) });
     },
+    realpath: (path) => path,
   };
 
   return {

@@ -12,7 +12,7 @@
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
@@ -245,14 +245,26 @@ async function placeOf(deps: Deps, cwd: string): Promise<Place> {
   };
 }
 
+/** `path` with every link in it resolved; null when it names nothing, or cannot be resolved. */
+function realPathOf(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Where an API Worker's session stops: the clone its directory `cwd` lies in, among those `clones`
- * holds, with git handed that clone through its environment and run, as gh is, in the main checkout
- * `checkout`, where the hook's state lies too. The hook is outside the Worker's sandbox, so it lets git
- * find nothing from the clone and writes nothing there (`clone-git.ts`). Null when `cwd` lies in no clone.
+ * holds, with git handed that clone through its environment and run, as gh is, in the main checkout,
+ * where the hook's state lies too. The hook is outside the Worker's sandbox, so it lets git find nothing
+ * from the clone and writes nothing there (`clone-git.ts`). Both paths are compared with their links
+ * resolved: a home reached through a link names the same clones. Null when `cwd` lies in no clone.
  */
-function apiPlaceOf(checkout: string, clones: string, cwd: string): Place | null {
-  const worktree = cloneRootOf(clones, cwd);
+function apiPlaceOf({ checkout, realpath }: Deps, clones: string, cwd: string): Place | null {
+  const realClones = realpath(clones);
+  const realCwd = realpath(cwd);
+  const worktree = realClones === null || realCwd === null ? null : cloneRootOf(realClones, realCwd);
 
   if (worktree === null) {
     return null;
@@ -315,7 +327,7 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
 
   const api = isApiWorker(deps.env);
   const clones = api ? apiClonesDirOf(requiredOf(deps.env, "HOME")) : null;
-  const place = clones === null ? await placeOf(deps, cwd) : apiPlaceOf(deps.checkout, clones, cwd);
+  const place = clones === null ? await placeOf(deps, cwd) : apiPlaceOf(deps, clones, cwd);
   const at = new Date(deps.now()).toISOString();
 
   if (place === null) {
@@ -376,7 +388,15 @@ export async function main(ports: Pick<Deps, "run" | "startRelay">): Promise<voi
   };
 
   try {
-    const deps = { ...ports, env: process.env, now: Date.now, checkout: REPO, recordOutcome: appendOutcome };
+    const deps = {
+      ...ports,
+      env: process.env,
+      now: Date.now,
+      checkout: REPO,
+      recordOutcome: appendOutcome,
+      realpath: realPathOf,
+    };
+
     const answer = await stop(input, deps, log);
 
     if (answer.kind === "block") {

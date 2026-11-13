@@ -12,6 +12,7 @@ import {
   commitDirsOf,
   gitDirOfFile,
   refusalFor,
+  unreadableRefusalOf,
 } from "./refuse-commit-on-dev.ts";
 
 const SCRIPT = join(import.meta.dir, "refuse-commit-on-dev.ts");
@@ -109,7 +110,9 @@ describe("gitDirOfFile", () => {
   test("the directory a .git file names, a relative one from the checkout; null when it names none", () => {
     expect(gitDirOfFile("gitdir: /repo/.git/worktrees/x\n", "/repo/wt")).toBe("/repo/.git/worktrees/x");
     expect(gitDirOfFile("gitdir: ../.git/worktrees/x\n", "/repo/wt")).toBe("/repo/.git/worktrees/x");
+    expect(gitDirOfFile("gitdir: ../.git/worktrees/x\r\n", "/repo/wt")).toBe("/repo/.git/worktrees/x");
     expect(gitDirOfFile("", "/repo/wt")).toBeNull();
+    expect(gitDirOfFile("gitdir:  \n", "/repo/wt")).toBeNull();
   });
 });
 
@@ -175,6 +178,49 @@ describe("the hook", () => {
     writeFileSync(join(admin, "HEAD"), "ref: refs/heads/dev\n");
 
     expect((await runHook("git commit -m work", worktree)).stdout.toString()).toContain('"permissionDecision":"deny"');
+  });
+
+  test("refuses a commit where it cannot read the branch: a HEAD that is a link or too large, a .git that is a link, a pipe or names nothing", async () => {
+    const made = (name: string): string => {
+      const dir = join(repo, name);
+
+      mkdirSync(join(dir, ".git"), { recursive: true });
+
+      return dir;
+    };
+
+    const linked = made("head-linked");
+    writeFileSync(join(linked, ".git", "ref"), "ref: refs/heads/feature\n");
+    symlinkSync("ref", join(linked, ".git", "HEAD"));
+
+    const large = made("head-large");
+    writeFileSync(join(large, ".git", "HEAD"), `ref: refs/heads/feature\n${"#".repeat(5000)}`);
+
+    const gitLinked = join(repo, "git-linked");
+    mkdirSync(gitLinked);
+    symlinkSync(join(linked, ".git"), join(gitLinked, ".git"));
+
+    const piped = join(repo, "git-piped");
+    mkdirSync(piped);
+    expect(Bun.spawnSync(["mkfifo", join(piped, ".git")]).exitCode).toBe(0);
+
+    const empty = join(repo, "git-empty");
+    mkdirSync(empty);
+    writeFileSync(join(empty, ".git"), "not a git file\n");
+
+    for (const dir of [linked, large, gitLinked, piped, empty]) {
+      const ran = await runHook("git commit -m work", dir);
+
+      expect(JSON.parse(ran.stdout.toString())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: unreadableRefusalOf(dir),
+        },
+      });
+    }
+
+    expect((await runHook("git status", piped)).stdout.toString()).toBe("");
   });
 
   test("denies a commit that -C or cd sends to a checkout on dev", async () => {

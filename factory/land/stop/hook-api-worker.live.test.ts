@@ -34,6 +34,9 @@ const API_FORK_SETTINGS = JSON.stringify({
   },
 });
 
+/** A home that is a link: every path under it resolves under `/data/me`. */
+const real = (path: string): string => path.replace("/home/me/", "/data/me/");
+
 describe("the stop of an API Worker", () => {
   test("blocks once, leaving the Stop checks to it, and runs none of its code", async () => {
     const found = world({ env: API_WORKER_ENV });
@@ -194,6 +197,32 @@ describe("the stop of an API Worker", () => {
       outcome: "not-published",
       reason: `the stop of an API Worker comes from ${found.root}, which lies in no clone of /home/me/.local/share/software-factory-lab/api-workers`,
     });
+  });
+
+  test("the clone is told with every link resolved: a home reached through a link names the same clones", async () => {
+    const found = world({ env: API_WORKER_ENV });
+
+    expect(await stop(input(join(found.root, "factory")), { ...found.deps, realpath: real }, found.log)).toMatchObject({
+      kind: "block",
+    });
+    expect(found.outcomes[0]?.line).toMatchObject({ worktree: real(found.root), branch: "agent/x" });
+    expect(found.calls.find((call) => call.argv[0] === "git")?.options.env).toEqual({
+      GIT_DIR: join(real(found.root), ".git"),
+      GIT_COMMON_DIR: join(real(found.root), ".git"),
+      GIT_WORK_TREE: real(found.root),
+    });
+  });
+
+  test.each([
+    ["its directory is a link out of the clones", (path: string) => (path.endsWith("/x") ? "/elsewhere/x" : path)],
+    ["its directory cannot be resolved", (path: string) => (path.endsWith("/x") ? null : path)],
+    ["the clones' directory cannot be resolved", (path: string) => (path.endsWith("/x") ? path : null)],
+  ])("a stop whose clone the hook cannot tell (%s) runs no git and publishes nothing", async (_, realpath) => {
+    const found = world({ env: API_WORKER_ENV });
+
+    expect(await stop(input(found.root), { ...found.deps, realpath }, found.log)).toEqual({ kind: "allow" });
+    expect(found.calls).toEqual([]);
+    expect(found.outcomes[0]?.line.outcome).toBe("not-published");
   });
 
   test("another Author's stop runs git and gh in its own directory, with no pinned environment", async () => {

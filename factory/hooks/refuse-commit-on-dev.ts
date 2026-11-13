@@ -8,12 +8,13 @@
  *
  * It reads the branch from the files of the checkout and runs no git: the hook is outside the sandbox of
  * an API Worker, whose commands write the directories a command names, and git would act on what it
- * finds there.
+ * finds there. It refuses a commit where it cannot read the branch: a `.git` or a `HEAD` that is a link,
+ * a pipe or no small file.
  *
  * Reads the PreToolUse input on stdin; prints the deny decision on stdout.
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -174,42 +175,105 @@ export function branchOfHead(head: string): string | null {
 
 /** The git directory a `.git` file's `text` names, for the checkout `root`; null when it names none. */
 export function gitDirOfFile(text: string, root: string): string | null {
-  const named = /^gitdir: (?<path>.+)$/mu.exec(text)?.groups?.["path"];
+  const named = /^gitdir: (?<path>.+)$/mu.exec(text)?.groups?.["path"]?.trim();
 
-  return named === undefined ? null : resolve(root, named);
+  return named === undefined || named === "" ? null : resolve(root, named);
 }
 
-/** The text of `path` when it is a regular file, which a read cannot hang on as it would on a pipe; else null. */
-function textOf(path: string): string | null {
-  return statSync(path, { throwIfNoEntry: false })?.isFile() === true ? readFileSync(path, "utf8") : null;
+/** What the hook reads where it expects a small regular file and finds a link, a pipe, or a file too large. */
+const UNREADABLE = Symbol("unreadable");
+
+type Unreadable = typeof UNREADABLE;
+
+/** More than a `.git` file or a `HEAD` holds. */
+const MAX_BYTES = 4096;
+
+/** Why a commit in `dir` is refused when the hook cannot read the branch checked out there. */
+export function unreadableRefusalOf(dir: string): string {
+  return `Refused: the hook cannot read the branch checked out in ${dir}: its \`.git\` or its \`HEAD\` is a link, a pipe or no small file, so this commit could land on \`${TRUNK}\` unseen. Make them plain files again, then commit.`;
 }
 
-/** The git directory of the checkout `dir` lies in: its nearest `.git`, a directory or a file that names one. */
-function gitDirOf(dir: string): string | null {
+/**
+ * The text of the file at `path`, null when nothing is there, `UNREADABLE` for anything but a regular file
+ * of at most `MAX_BYTES`. It follows no link and waits on no pipe, and it reads through the handle it
+ * took the file's kind from, so the file cannot change between the two.
+ */
+function textOf(path: string): string | null | Unreadable {
+  let file: number;
+
+  try {
+    // oxlint-disable-next-line no-bitwise -- open(2) takes its flags as one number
+    file = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    const absent = Error.isError(error) && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+
+    return absent ? null : UNREADABLE;
+  }
+
+  try {
+    const stat = fstatSync(file);
+
+    if (!stat.isFile() || stat.size > MAX_BYTES) {
+      return UNREADABLE;
+    }
+
+    const bytes = Buffer.alloc(MAX_BYTES);
+
+    return bytes.toString("utf8", 0, readSync(file, bytes, 0, MAX_BYTES, 0));
+  } finally {
+    closeSync(file);
+  }
+}
+
+/**
+ * The git directory of the checkout `dir` lies in: its nearest `.git`, a directory or a file that names
+ * one; null outside a repository. A `.git` that is neither is `UNREADABLE`.
+ */
+function gitDirOf(dir: string): string | null | Unreadable {
   const dotGit = join(dir, ".git");
+  const stat = lstatSync(dotGit, { throwIfNoEntry: false });
 
-  if (statSync(dotGit, { throwIfNoEntry: false })?.isDirectory() === true) {
+  if (stat?.isDirectory() === true) {
     return dotGit;
   }
 
-  const named = gitDirOfFile(textOf(dotGit) ?? "", dir);
+  if (stat !== undefined) {
+    const text = textOf(dotGit);
+
+    return text === null || text === UNREADABLE ? UNREADABLE : (gitDirOfFile(text, dir) ?? UNREADABLE);
+  }
+
   const parent = dirname(dir);
 
-  return named !== null || parent === dir ? named : gitDirOf(parent);
+  return parent === dir ? null : gitDirOf(parent);
 }
 
-/** The branch checked out in `dir`, or null on a detached HEAD, outside a repository, or for a missing `dir`. */
-function branchIn(dir: string): string | null {
-  const gitDir = statSync(dir, { throwIfNoEntry: false })?.isDirectory() === true ? gitDirOf(dir) : null;
+/**
+ * The branch checked out in `dir`: null on a detached HEAD, outside a repository, or for a missing `dir`;
+ * `UNREADABLE` when the hook cannot read it.
+ */
+function branchIn(dir: string): string | null | Unreadable {
+  if (statSync(dir, { throwIfNoEntry: false })?.isDirectory() !== true) {
+    return null;
+  }
 
-  return gitDir === null ? null : branchOfHead(textOf(join(gitDir, "HEAD")) ?? "");
+  const gitDir = gitDirOf(dir);
+
+  if (gitDir === null || gitDir === UNREADABLE) {
+    return gitDir;
+  }
+
+  const head = textOf(join(gitDir, "HEAD"));
+
+  return head === null || head === UNREADABLE ? head : branchOfHead(head);
 }
 
 if (import.meta.main) {
   const { command, cwd } = bashCallOf(await Bun.stdin.text());
 
   for (const dir of commitDirsOf(command, cwd, process.env)) {
-    const reason = refusalFor(branchIn(dir));
+    const branch = branchIn(dir);
+    const reason = branch === UNREADABLE ? unreadableRefusalOf(dir) : refusalFor(branch);
 
     if (reason !== null) {
       console.log(
