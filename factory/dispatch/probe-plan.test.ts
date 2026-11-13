@@ -92,6 +92,7 @@ describe("what the probe writes", () => {
       { label: "home", path: "/home/me/sandbox-probe-canary", text: "T-0" },
     ]);
     expect(canaryContentOf({ label: "home", path: "/p", text: "T-0" })).toBe("sandbox-probe-text T-0\n");
+    expect(canariesOf({ ...FACTS, credentialDirs: [".a_.b/"] })[1]?.label).toBe("a-b");
   });
 
   test("a worktree laid out as a Worker's, its own directory there, one settings file in the config directory, two links into SSH's directory, and a file a touch would leave", () => {
@@ -136,8 +137,8 @@ const text = (allowWrite: readonly string[]): string => JSON.stringify({ sandbox
 describe("userAllowWriteOf", () => {
   test("reads each write path of the Owner's own settings as an absolute path", () => {
     expect(
-      userAllowWriteOf(text(["~/a", "//abs/b", "/abs/c", "./rel", "plain"]), "/home/me", "/home/me/.claude"),
-    ).toEqual(["/home/me/a", "/abs/b", "/abs/c", "/home/me/.claude/rel", "/home/me/.claude/plain"]);
+      userAllowWriteOf(text(["~/a", "//abs/b", "/abs//c", "./rel", "plain/./x"]), "/home/me", "/home/me/.claude"),
+    ).toEqual(["/home/me/a", "/abs/b", "/abs//c", "/home/me/.claude/rel", "/home/me/.claude/plain/./x"]);
   });
 
   test("a home with no such file, or a file with no write path, has none", () => {
@@ -148,7 +149,16 @@ describe("userAllowWriteOf", () => {
   });
 
   test("a file that does not read throws, naming it", () => {
-    expect(() => userAllowWriteOf("{", "/home/me", "/home/me/.claude")).toThrow("the Owner's own settings file: ");
+    for (const unreadable of [
+      "{",
+      '{"sandbox":"x"}',
+      '{"sandbox":{"filesystem":"x"}}',
+      '{"sandbox":{"filesystem":{"allowWrite":[7]}}}',
+    ]) {
+      expect(() => userAllowWriteOf(unreadable, "/home/me", "/home/me/.claude")).toThrow(
+        "the Owner's own settings file: ",
+      );
+    }
   });
 });
 
@@ -350,7 +360,7 @@ describe("gotOf", () => {
   const login: Probe = { ...cat, id: "login", expected: "login", canary: null };
   test("a command that must fail failed when it was run, exited with an error, and its canary's text is nowhere", () => {
     expect(got(cat, { code: 1, output: "Permission denied" })).toBe("fail");
-    expect(got({ ...cat, canary: null }, { code: 2, output: "T-0" }, "T-0")).toBe("fail");
+    expect(got({ ...cat, canary: null }, { code: 2, output: "T-0 null" }, "T-0 null")).toBe("fail");
   });
 
   test("it passed when it exited 0, or when the canary's text shows in what it printed or in the session's output, whatever its exit code", () => {
@@ -386,7 +396,7 @@ describe("gotOf", () => {
     expect(tool(read, `${stream}{"type":"user","message":{"content":[{"type":"tool_result","content":"T-0"}]}}`)).toBe(
       "pass",
     );
-    expect(tool({ ...read, canary: null }, `${stream}T-0`)).toBe("fail");
+    expect(tool({ ...read, canary: null }, `${stream}T-0 null`)).toBe("fail");
   });
 
   test("no attempt was seen when the output holds no such call: another path, another tool, or none", () => {
@@ -396,6 +406,15 @@ describe("gotOf", () => {
       "unseen",
     );
     expect(tool(read, JSON.stringify({ message: { content: "Read /home/me/c" } }))).toBe("unseen");
+
+    const call = { type: "tool_use", name: "Read", input: { file_path: "/home/me/c" } };
+
+    expect(tool(read, JSON.stringify({ message: { content: [call] } }))).toBe("fail");
+    expect(tool(read, JSON.stringify({ message: { content: call } }))).toBe("unseen");
+    expect(tool(read, JSON.stringify({ message: { content: [{ ...call, type: "text" }] } }))).toBe("unseen");
+    expect(tool(read, JSON.stringify({ message: { content: [{ ...call, input: { ...call.input, path: 7 } }] } }))).toBe(
+      "unseen",
+    );
   });
 
   test("a search counts only when it asked for the lines it found, in that directory", () => {

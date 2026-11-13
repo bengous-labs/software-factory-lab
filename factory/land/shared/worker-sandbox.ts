@@ -147,7 +147,8 @@ function denyRulesOf(place: SandboxPlace, kind: WorkerKind): string[] {
 
 /** The settings a sandbox is added to, as far as it reads them: their variables and their rules. */
 export interface SandboxableSettings {
-  readonly env: Readonly<Record<string, string>>;
+  /** Undefined for settings that hold no variable: a fork's. */
+  readonly env?: Readonly<Record<string, string>> | undefined;
   readonly permissions?:
     | ({ readonly allow?: readonly string[]; readonly deny?: readonly string[] } & Readonly<
         Record<string, Schema.Json>

@@ -169,7 +169,7 @@ const FORK_GUARD = "factory/bin/fork-guard.ts";
 export function forkSettingsOf(checkout: string, place: SandboxPlace, api: ApiFork | null): string {
   const command = `cd "${checkout}" && bun "${checkout}/${FORK_GUARD}"`;
   const hooks = { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }] };
-  const { sandbox, permissions } = sandboxedOf({ env: {} }, place, api === null ? "background" : "api");
+  const { sandbox, permissions } = sandboxedOf({}, place, api === null ? "background" : "api");
   const { blockReadsOutsideWorkingDirectories, deny } = permissions;
 
   return JSON.stringify({

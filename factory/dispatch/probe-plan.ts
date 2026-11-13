@@ -278,9 +278,11 @@ function commandProbesOf(facts: ProbeFacts, session: Session): Probe[] {
     ...MUST_PASS,
     ...(facts.runtimeDir === null ? [] : [command("ls-runtime-dir", "recorded", `ls ${quoted(facts.runtimeDir)}`)]),
     ...canaries.flatMap((canary) => canaryCommandsOf(canary)),
-    ...layout.links
-      .slice(0, 1)
-      .map((link) => command("cat-link", "fail", `cat ${quoted(link.path)}`, canaries[1]?.text)),
+    ...canaries
+      .slice(1, 2)
+      .flatMap(({ text }) =>
+        layout.links.slice(0, 1).map((link) => command("cat-link", "fail", `cat ${quoted(link.path)}`, text)),
+      ),
     ...(parent === null ? [] : [command("ls-checkout-parent", "fail", `ls ${quoted(parent)}`)]),
     ...facts.sockets.map(({ name, path }) => command(`connect-${name}`, "fail", `${CONNECT_WITH_BUN} ${quoted(path)}`)),
     command("gpg-clearsign", "fail", "echo x | gpg --clearsign"),
@@ -290,33 +292,34 @@ function commandProbesOf(facts: ProbeFacts, session: Session): Probe[] {
   ];
 }
 
-const read = (id: string, path: string, canary: string | undefined): Probe => ({
+const read = (id: string, path: string, canary: string): Probe => ({
   id,
   expected: "fail",
   step: { kind: "read", path },
-  canary: canary ?? null,
+  canary,
 });
 
-/** What the file tools try: each canary, the link to one, the canary through the linked directory, and a search of that directory. */
+/**
+ * What the file tools try: each canary, the link to one, the canary through the linked directory, and a
+ * search of that directory. The links point into the first probed directory, whose canary is the second.
+ */
 function toolProbesOf(facts: ProbeFacts): Probe[] {
   const canaries = canariesOf(facts);
-  const [file, dir] = layoutOf(facts).links;
-  const linked = canaries[1]?.text;
+  const { links } = layoutOf(facts);
 
   return [
     ...canaries.map(({ label, path, text }) => read(`read-canary-${label}`, path, text)),
-    ...(file === undefined || dir === undefined
-      ? []
-      : [
-          read("read-link", file.path, linked),
-          read("read-through-linked-dir", `${dir.path}/${CANARY_FILE}`, linked),
-          {
-            id: "grep-credential-dir",
-            expected: "fail",
-            step: { kind: "grep", path: dir.target },
-            canary: linked ?? null,
-          } as const,
-        ]),
+    ...canaries
+      .slice(1, 2)
+      .flatMap(({ text }) => [
+        ...links.slice(0, 1).map((file) => read("read-link", file.path, text)),
+        ...links
+          .slice(1)
+          .flatMap((dir): Probe[] => [
+            read("read-through-linked-dir", `${dir.path}/${CANARY_FILE}`, text),
+            { id: "grep-credential-dir", expected: "fail", step: { kind: "grep", path: dir.target }, canary: text },
+          ]),
+      ]),
   ];
 }
 
@@ -404,13 +407,12 @@ const decodeToolUse = Schema.decodeUnknownResult(ToolUse);
 function toolUsesOf(stream: string): Array<typeof ToolUse.Type> {
   return stream
     .split("\n")
-    .flatMap((line) =>
-      Result.getOrElse(
-        Result.map(decodeStreamLine(line), (event) => event.message.content),
-        () => [],
-      ),
-    )
-    .flatMap((block) => Result.match(decodeToolUse(block), { onFailure: () => [], onSuccess: (use) => [use] }));
+    .map((line) => decodeStreamLine(line))
+    .filter((line) => Result.isSuccess(line))
+    .flatMap((line) => line.success.message.content)
+    .map((block) => decodeToolUse(block))
+    .filter((use) => Result.isSuccess(use))
+    .map((use) => use.success);
 }
 
 /** Whether the session made the tool call of `step`: a search counts only when it asked for the lines it found. */
@@ -491,7 +493,7 @@ export function reportOf(runs: readonly SessionRun[]): Report {
       const got = gotOf(probe, run);
       const expected = probe.expected === "login" ? "pass" : probe.expected;
 
-      return { run, probe, expected, got, ok: expected === "recorded" || got === expected };
+      return { run, probe, expected, got, ok: got === expected };
     }),
   );
 
@@ -501,9 +503,7 @@ export function reportOf(runs: readonly SessionRun[]): Report {
       : `${run.session} ${probe.id}: expected ${expected}, got ${got === "unseen" ? "no attempt" : got}`,
   );
 
-  const details = judged.flatMap(({ run, probe, expected, ok }) =>
-    ok && expected !== "recorded" ? [] : detailOf(probe, run),
-  );
+  const details = judged.flatMap(({ run, probe, ok }) => (ok ? [] : detailOf(probe, run)));
 
   const counted = judged.filter(({ expected }) => expected !== "recorded");
   const good = counted.filter(({ ok }) => ok).length;
