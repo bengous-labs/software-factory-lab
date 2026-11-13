@@ -25,7 +25,7 @@ import {
   sessionIdOf,
   sessionNameOf,
   slugOf,
-  untrustedLaunchOf,
+  trustAdviceOf,
   workerSettingsOf,
   workerSettingsProblemOf,
 } from "./dispatch-plan.ts";
@@ -603,19 +603,17 @@ describe("workerSettingsProblemOf", () => {
   });
 });
 
-describe("untrustedLaunchOf", () => {
-  test("a launch Claude Code refused for workspace trust names the way out, an API Worker, and not the clone the dispatch removes", () => {
+describe("trustAdviceOf", () => {
+  test("a launch Claude Code refused for workspace trust gets the way that works, an API Worker, after Claude Code's own words", () => {
     expect(
-      untrustedLaunchOf(
-        "Workspace not trusted. Run `claude` in /clone once and accept the trust prompt, then retry.\n",
+      trustAdviceOf(
+        "claude --bg exited 1: Workspace not trusted. Run `claude` in /clone once and accept the trust prompt, then retry.",
       ),
-    ).toBe(
-      "claude --bg starts no session in a new clone: Claude Code asks a workspace trust the clone does not have. Hand the issue to an API Worker with --api",
-    );
+    ).toBe(" (no new clone has that trust: hand the issue to an API Worker with --api)");
   });
 
-  test("any other failure is not one of trust", () => {
-    expect(untrustedLaunchOf("no such model")).toBeNull();
-    expect(untrustedLaunchOf("")).toBeNull();
+  test("any other failure gets nothing", () => {
+    expect(trustAdviceOf("claude --bg exited 1: no such model")).toBe("");
+    expect(trustAdviceOf("")).toBe("");
   });
 });

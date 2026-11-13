@@ -56,7 +56,9 @@ What this does not hold:
 - A Worker reads what lies outside the home, and writes in the session's temporary directory.
 - Its environment holds the Author's `GH_TOKEN`, and it reaches `github.com`: what it reads, it can send there as the machine account.
 - A hook is safe by what it reads: one added to `.claude/settings.json` that starts a program in the clone, or lets git find its repository from there, runs the Worker's code outside the sandbox.
-- The hooks and the root guide are those of the main checkout's working tree, whatever it has checked out, while a clone starts from the Trunk: keep the main checkout on the Trunk (`git switch dev && git pull --ff-only`, which moves nothing when the checkout holds work of its own).
+- The hooks and the root guide are those of the main checkout's working tree, whatever it has checked out, while a clone starts from the Trunk: keep the main checkout on the Trunk with a clean tree.
+  `git status --porcelain` prints nothing there, then `git switch dev && git pull --ff-only`: an uncommitted edit follows a switch and a fast-forward, so a hook file edited in the main checkout is the hook every Worker runs, reviewed or not.
+  Nothing checks it at a dispatch (issue #214).
 - A session Dispatch did not launch, whose environment holds no `LAB_MAIN_CHECKOUT`, has none of this: it is no Worker in a clone, and its hooks treat it as the Owner's own tree.
 
 ## A background Worker
@@ -64,7 +66,7 @@ What this does not hold:
 The default kind.
 Dispatch launches `claude --bg` in the clone, on `background-worker-settings.json`, with the flags above and the main checkout's root guide (`--append-system-prompt-file`).
 Its settings hold the mode, `dontAsk`: a background session keeps its launch options, and the relay resumes it with the bare `claude --bg --resume`, run in its clone, where Claude Code keeps its conversation (`factory/land/relay/AGENTS.md`).
-Claude Code starts and restarts a background session only in a workspace whose trust the Owner accepted in a terminal, and trust never reaches a clone from the directory that holds it: where no dialog can appear, as in Dispatch, `claude --bg` in a new clone exits with `Workspace not trusted`, and the dispatch fails as any failed launch does: it removes the clone, and says to hand the issue to an API Worker.
+Claude Code starts and restarts a background session only in a workspace whose trust the Owner accepted in a terminal, and trust never reaches a clone from the directory that holds it: where no dialog can appear, as in Dispatch, `claude --bg` in a new clone exits with `Workspace not trusted`, and the dispatch fails as any failed launch does: it removes the clone, or, when that removal fails, leaves it and names it with the command that removes it, since a clone left refuses the next dispatch of its issue. Its error holds Claude Code's own words and adds to hand the issue to an API Worker.
 A headless session asks no trust, so an API Worker launches; issue #212 holds the way out for a background Worker.
 
 ## An API Worker

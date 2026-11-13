@@ -310,12 +310,12 @@ describe("dispatch", () => {
     );
   });
 
-  test("a background launch Claude Code refuses for workspace trust fails with the way out, an API Worker, and removes the clone", async () => {
+  test("a background launch Claude Code refuses for workspace trust fails with Claude Code's own words, its exit code and the way that works, an API Worker, and removes the clone", async () => {
     const refused = "Workspace not trusted. Run `claude` in /clone once and accept the trust prompt, then retry.";
     const { ports, calls } = world({ "claude --bg": { code: 1, stdout: "", stderr: refused } });
 
     expect(await failureOf(dispatch(ports, REQUEST))).toBe(
-      "claude --bg starts no session in a new clone: Claude Code asks a workspace trust the clone does not have. Hand the issue to an API Worker with --api",
+      `claude --bg exited 1: ${refused} (no new clone has that trust: hand the issue to an API Worker with --api)`,
     );
     expect(calls.at(-1)?.argv).toEqual(["rm", "-rf", "--", CLONE]);
   });

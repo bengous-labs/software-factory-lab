@@ -385,14 +385,15 @@ export function launchArgvOf({ issue, model, effort, settings, checkout, prompt 
 const NOT_TRUSTED = "Workspace not trusted";
 
 /**
- * What Dispatch says of a background launch whose output is `output`, when Claude Code refused it for
- * workspace trust; null for any other failure. Trust never reaches a new clone, and Claude Code's own
- * advice, to accept the trust prompt in the clone, names a directory the failed dispatch removes.
+ * What Dispatch adds to `failure`, the failure of a background launch as it tells it, when Claude Code
+ * refused the launch for workspace trust; nothing for any other failure. Claude Code's own words stay:
+ * they advise to accept the trust prompt in the clone, which the failed dispatch removes, and trust
+ * never reaches a new clone, so the advice that works is an API Worker.
  */
-export function untrustedLaunchOf(output: string): string | null {
-  return output.includes(NOT_TRUSTED)
-    ? "claude --bg starts no session in a new clone: Claude Code asks a workspace trust the clone does not have. Hand the issue to an API Worker with --api"
-    : null;
+export function trustAdviceOf(failure: string): string {
+  return failure.includes(NOT_TRUSTED)
+    ? " (no new clone has that trust: hand the issue to an API Worker with --api)"
+    : "";
 }
 
 /** The id of the session `claude --bg` started, read from the `claude stop <id>` hint it prints. */

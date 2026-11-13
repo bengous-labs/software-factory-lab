@@ -34,7 +34,7 @@ import {
   repoOfIssueUrl,
   sessionIdOf,
   sessionNameOf,
-  untrustedLaunchOf,
+  trustAdviceOf,
   workerSettingsOf,
   workerSettingsProblemOf,
 } from "./dispatch-plan.ts";
@@ -229,7 +229,9 @@ async function launchBackground(ports: DispatchPorts, assignment: Assignment, la
   const launched = await ports.launch(argv, { cwd: assignment.worktree, env: sessionEnvOf(env) });
 
   if (launched.code !== 0) {
-    throw new Error(untrustedLaunchOf(`${launched.stderr}${launched.stdout}`) ?? failureOf("claude --bg", launched));
+    const failure = failureOf("claude --bg", launched);
+
+    throw new Error(`${failure}${trustAdviceOf(failure)}`);
   }
 
   return { kind: "background", stdout: launched.stdout };
