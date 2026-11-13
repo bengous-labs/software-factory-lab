@@ -30,10 +30,14 @@ describe("the hook", () => {
   let main = "";
   let worktree = "";
 
-  /** Runs the hook for a session or subagent whose cwd is `cwd`, in the project at `main`. */
+  /**
+   * Runs the hook for a session or subagent whose cwd is `cwd`, in the project at `main`. The session
+   * works in no clone unless `extra` says otherwise: a Worker that runs this test holds the main
+   * checkout's variable, which the hook under test must not inherit.
+   */
   const runHook = (cwd: string, extra: Readonly<Record<string, string>> = {}) =>
     $`bun ${SCRIPT} < ${Buffer.from(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "EnterWorktree", cwd }))}`
-      .env({ ...env, CLAUDE_PROJECT_DIR: main, ...extra })
+      .env({ ...env, LAB_MAIN_CHECKOUT: "", CLAUDE_PROJECT_DIR: main, ...extra })
       .nothrow()
       .quiet();
 
