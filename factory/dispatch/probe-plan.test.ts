@@ -98,9 +98,10 @@ describe("what the probe writes", () => {
     expect(canariesOf({ ...FACTS, credentialDirs: [".a_.b/"] })[1]?.label).toBe("a-b");
   });
 
-  test("the background session: a worktree laid out as a Worker's, its own directory there with its script and its results, one settings file in the config directory, two links into SSH's directory, and a file a touch would leave", () => {
+  test("the background session starts in the main checkout, as a background Worker does, and works in a worktree laid out as a Worker's: its own directory there with its script and its results, one settings file in the config directory, two links into SSH's directory, and a file a touch would leave", () => {
     expect(layoutOf(FACTS, "background")).toEqual({
       tree: WORKTREE,
+      cwd: "/home/me/Work/repo",
       dir: DIR,
       script: `${DIR}/run.sh`,
       results: `${DIR}/results`,
@@ -116,6 +117,7 @@ describe("what the probe writes", () => {
   test("the API session runs where an API Worker works, in a clone under the clones' directory, outside the main checkout, on the same settings file", () => {
     expect(layoutOf(FACTS, "api")).toEqual({
       tree: CLONE,
+      cwd: CLONE,
       dir: API_DIR,
       script: `${API_DIR}/run.sh`,
       results: `${API_DIR}/results`,
@@ -244,7 +246,7 @@ const failRows = (dir: string) => [
   ...canaryRows("ssh", "/home/me/.ssh/sandbox-probe-canary", "T-1"),
   ...canaryRows("config-gh", "/home/me/.config/gh/sandbox-probe-canary", "T-2"),
   ["cat-link", "fail", `cat '${dir}/link-to-canary'`, "T-1"],
-  ["ls-checkout-parent", "fail", "ls '/home/me/Work'", null],
+  ["ls-checkout-parent", "fail", "ls -A '/home/me/Work' | grep -v -x -F 'repo'", null],
   ["connect-bus", "fail", `${CONNECT} '/run/user/1000/bus'`, null],
   ["gpg-clearsign", "fail", "echo x | gpg --clearsign", null],
 ];
@@ -304,12 +306,15 @@ describe("probesOf", () => {
 describe("what a session is given", () => {
   const probes = probesOf({ ...FACTS, credentialDirs: [".ssh"], sockets: [], runtimeDir: null }, "api");
 
-  test("the script runs one command probe by its id, and records what it printed and its exit code", () => {
-    expect(scriptOf(probes.slice(0, 2).concat(probes.slice(-1)), "/w/results-api")).toBe(
+  test("the script runs one command probe by its id, in the session's tree, and records what it printed and its exit code", () => {
+    expect(
+      scriptOf(probes.slice(0, 2).concat(probes.slice(-1)), { tree: "/w/o'neil", results: "/w/results-api" }),
+    ).toBe(
       [
         "#!/bin/sh",
         "results='/w/results-api'",
         'mkdir -p "$results"',
+        String.raw`cd '/w/o'\''neil' || exit 64`,
         'case "$1" in',
         "  bun-install) bun install ;;",
         "  bun-check) bun check ;;",
@@ -341,7 +346,9 @@ describe("what a session is given", () => {
   });
 
   test("neither names a canary's text: what the session prints holds it only when a read went through", () => {
-    expect(`${promptOf(probes, "/w/run-api.sh")}${scriptOf(probes, "/w/r")}`).not.toMatch(/T-\d/u);
+    expect(`${promptOf(probes, "/w/run-api.sh")}${scriptOf(probes, { tree: "/w", results: "/w/r" })}`).not.toMatch(
+      /T-\d/u,
+    );
   });
 });
 

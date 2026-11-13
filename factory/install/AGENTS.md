@@ -39,7 +39,7 @@ A command of a Worker, of either kind, reads:
 
 - under the Owner's home, where it works and this list alone: `~/.local/share/mise/installs`, `~/.bun/install/cache`, `~/.gitconfig`, `~/.config/git/config` and `~/.config/git/ignore`.
   The rest of the home is denied, a secret nobody listed included: SSH and GPG keys, the Owner's `gh` login, Claude Code's own login, shell history, the other checkouts of the machine;
-- where it works: for a background Worker the whole main checkout, with its other worktrees, its `.lab/` and its `.claude/settings.local.json`; for an API Worker the directory of the API Workers' clones, `~/.local/share/software-factory-lab/api-workers`, and never the main checkout, which is hidden from it;
+- where it works: for a background Worker the whole main checkout, with its other worktrees, its `.lab/` and its `.claude/settings.local.json`; for an API Worker its own clone, which is its working directory, and neither another API Worker's clone nor the main checkout, which is hidden from it;
 - what lies outside the home: the system's files and the temporary directory;
 - the Author's `GH_TOKEN`, which its environment holds by design: its `gh` acts as the machine account.
 
@@ -59,6 +59,6 @@ In a background Worker's session `scripts/hooks/install-deps.ts` runs `bun insta
 - The Worker bench (`scripts/lab/bench.ts`) launches its sessions unsandboxed: their commands read what the Owner's user reads.
 
 `bun factory/bin/sandbox-probe.ts` shows this on the machine, with canary files where credentials live and never a real credential.
-It runs one headless session on an API Worker's settings, in a clone under the clones' directory, and one on a background Worker's, in a detached worktree of the main checkout; each tries the reads that must fail, by a command and by a file tool, and the commands a Worker must still pass: `bun install`, `bun check`, `git fetch origin`, `git ls-remote origin`, `gh issue view` and `git commit`.
-It prints every path it writes before it writes one, removes them at its end, and ends with `sandbox-probe: <n>/<n> as expected` under one line per probe.
+It runs one headless session on an API Worker's settings, in a clone under the clones' directory, and one on a background Worker's, started in the main checkout as a background Worker is, on a detached worktree of it; each tries the reads that must fail, by a command and by a file tool, and the commands a Worker must still pass: `bun install`, `bun check`, `git fetch origin`, `git ls-remote origin`, `gh issue view` and `git commit`.
+It prints every path it writes before it writes one, removes them at its end, keeps each session's output in the `.lab/sandbox-probe/` of its checkout, and ends with `sandbox-probe: <n>/<n> as expected` under one line per probe.
 The Owner runs it, never a Worker, since it writes in the home: after a change to `worker-sandbox.ts`, to `sandbox-paths.ts` or to the settings Dispatch writes, and after an update of Claude Code.

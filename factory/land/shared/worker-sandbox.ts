@@ -21,9 +21,9 @@ export interface SandboxPlace {
 
 /**
  * The kind of Worker a sandbox is made for, by where it works. A background Worker works in a worktree
- * of the main checkout, which it reads whole, its other worktrees included. An API Worker works in a
- * clone of its own under the clones' directory, and the main checkout, whose files every hook runs, is
- * hidden from it.
+ * of the main checkout, where its session starts and which it reads whole, its other worktrees
+ * included. An API Worker's session starts in a clone of its own, which is all it reads of the clones'
+ * directory, and the main checkout, whose files every hook runs, is hidden from it.
  */
 export type WorkerKind = "background" | "api";
 
@@ -105,10 +105,12 @@ const GIT_ENV = {
 
 /**
  * The sandbox of the commands of a Worker of `kind`: every Bash command runs in it, with no retry
- * outside it, and none runs when it cannot start. A command reads nothing under the home but where the
- * Worker works, the main checkout or the clones' directory, and the allowed list; it sees no file of
- * the hidden directories whatever it runs, writes under its working directory alone, and reaches the
- * hosts above. No key widens it: no write path, no excluded command, no Unix socket.
+ * outside it, and none runs when it cannot start. A command reads nothing under the home but its
+ * working directory, which the sandbox lets it read and write with no entry, the main checkout for a
+ * background Worker, which starts there, and the allowed list; it sees no file of the hidden directories
+ * whatever it runs, and reaches the hosts above. No entry holds an API Worker's clone: an entry that is
+ * a parent of the working directory makes the sandbox fail to start (`bwrap` cannot place its guards in
+ * a directory bound read-only). No key widens it: no write path, no excluded command, no Unix socket.
  */
 function sandboxOf(place: SandboxPlace, kind: WorkerKind) {
   const { home, checkout } = place;
@@ -120,10 +122,7 @@ function sandboxOf(place: SandboxPlace, kind: WorkerKind) {
     autoAllowBashIfSandboxed: true,
     filesystem: {
       denyRead: [home],
-      allowRead: [
-        kind === "api" ? apiClonesDirOf(home) : checkout,
-        ...READABLE_UNDER_HOME.map((path) => `${home}/${path}`),
-      ],
+      allowRead: [...(kind === "api" ? [] : [checkout]), ...READABLE_UNDER_HOME.map((path) => `${home}/${path}`)],
     },
     credentials: { files: hiddenDirsOf(place, kind).map((path) => ({ path, mode: "deny" })) },
     network: { allowedDomains: ALLOWED_DOMAINS },

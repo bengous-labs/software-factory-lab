@@ -6,7 +6,8 @@
  * headless sessions at `HEAD`, each where a Worker of its kind works: one on an API Worker's settings, in
  * a clone under the clones' directory, and one on a background Worker's, in a detached worktree of the
  * main checkout. They make the probes `factory/dispatch/probe-plan.ts` lists. It prints
- * every path it writes before it writes one, and removes them all at its end, on a failure too. It bills
+ * every path it writes before it writes one, and removes them all at its end, on a failure too, but each
+ * session's output, which it keeps in the ignored `.lab/sandbox-probe/` of its own checkout. It bills
  * the Owner's login for two short sessions on the smallest model. The Owner runs it, never a Worker: it
  * writes in the home.
  *
@@ -196,7 +197,16 @@ function writeOwn(path: string, text: string): void {
   writeFileSync(path, text, { mode: 0o600, flag: "wx" });
 }
 
+/**
+ * Where each session's output is kept, in the ignored `.lab/` of this file's checkout: what a probe that
+ * went another way than expected is read from. It holds a canary's text only where a read went through.
+ */
+const KEPT = join(git("rev-parse", "--show-toplevel"), ".lab", "sandbox-probe");
+
 async function probe(): Promise<SessionRun[]> {
+  mkdirSync(KEPT, { recursive: true });
+  console.log(`sandbox-probe keeps each session's output in ${KEPT}`);
+
   for (const canary of canaries) {
     writtenFiles.push(canary.path);
     writeFileSync(canary.path, canaryContentOf(canary), { mode: 0o600, flag: "wx" });
@@ -208,7 +218,7 @@ async function probe(): Promise<SessionRun[]> {
   // The clone Dispatch makes for an API Worker, then this checkout's own `HEAD` in it: the code under test.
   cloneCreated = true;
   git(...cloneArgvOf(git("remote", "get-url", "origin"), layouts.api.tree).slice(1));
-  git("-C", layouts.api.tree, "fetch", "--quiet", git("rev-parse", "--show-toplevel"), "HEAD");
+  git("-C", layouts.api.tree, "fetch", "--quiet", dirname(dirname(KEPT)), "HEAD");
   git("-C", layouts.api.tree, "checkout", "--quiet", "--detach", "FETCH_HEAD");
 
   const runs: SessionRun[] = [];
@@ -223,12 +233,12 @@ async function probe(): Promise<SessionRun[]> {
       symlinkSync(link.target, link.path);
     }
 
-    writeFileSync(script, scriptOf(probes, results));
+    writeFileSync(script, scriptOf(probes, layout));
     writeOwn(layout.settings, settings[session]);
     console.log(`sandbox-probe: the ${session} session makes its ${probes.length} probes…`);
 
     const ran = await runIsolated(sessionArgvOf(session, layout.settings, promptOf(probes, script)), {
-      cwd: layout.tree,
+      cwd: layout.cwd,
       env: sessionEnvOf(process.env),
       timeoutMs: SESSION_TIMEOUT_MS,
     });
@@ -237,6 +247,7 @@ async function probe(): Promise<SessionRun[]> {
       console.error(`sandbox-probe: the ${session} session exited ${ran.code}: ${ran.stderr.trim().slice(-2000)}`);
     }
 
+    writeFileSync(join(KEPT, `${session}.jsonl`), ran.stdout, { mode: 0o600 });
     runs.push({ session, probes, results: resultsIn(results), stream: ran.stdout });
   }
 

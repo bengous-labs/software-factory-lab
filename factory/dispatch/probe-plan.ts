@@ -97,6 +97,11 @@ export interface ProbeLayout {
    * of the main checkout for the background session, a clone under the clones' directory for the API one.
    */
   readonly tree: string;
+  /**
+   * Where the session starts, as a Worker of its kind does: the main checkout for the background one,
+   * which a headless session cannot leave for its worktree, and the clone for the API one.
+   */
+  readonly cwd: string;
   /** The probe's own directory in that tree, which git ignores. */
   readonly dir: string;
   /** The script that runs the session's command probes, and the directory it records them in. */
@@ -124,6 +129,7 @@ export function layoutOf({ place, credentialDirs, userAllowWrite }: ProbeFacts, 
 
   return {
     tree,
+    cwd: session === "api" ? tree : place.checkout,
     dir,
     script: `${dir}/run.sh`,
     results: `${dir}/results`,
@@ -271,17 +277,25 @@ function canaryCommandsOf({ label, path, text }: Canary): Probe[] {
   ];
 }
 
-/** The parent of the main checkout when it lies under the home: the other checkouts of the machine. */
-function checkoutParentOf({ home, checkout }: SandboxPlace): string | null {
-  const parent = checkout.slice(0, checkout.lastIndexOf("/"));
+/**
+ * The listing of the main checkout's parent, when it lies under the home: the other checkouts of the
+ * machine. The directory itself exists in a sandbox that allows the checkout, as the path to it, so the
+ * listing went through when it shows any entry but the checkout: the command exits 0 on one, and with
+ * an error on none, or on a directory that cannot be listed.
+ */
+function siblingsListingOf({ home, checkout }: SandboxPlace): string | null {
+  const cut = checkout.lastIndexOf("/");
+  const parent = checkout.slice(0, cut);
 
-  return parent.startsWith(`${home}/`) ? parent : null;
+  return parent.startsWith(`${home}/`)
+    ? `ls -A ${quoted(parent)} | grep -v -x -F ${quoted(checkout.slice(cut + 1))}`
+    : null;
 }
 
 function commandProbesOf(facts: ProbeFacts, session: Session): Probe[] {
   const canaries = canariesOf(facts);
   const layout = layoutOf(facts, session);
-  const parent = checkoutParentOf(facts.place);
+  const siblings = siblingsListingOf(facts.place);
 
   return [
     ...MUST_PASS,
@@ -292,7 +306,7 @@ function commandProbesOf(facts: ProbeFacts, session: Session): Probe[] {
       .flatMap(({ text }) =>
         layout.links.slice(0, 1).map((link) => command("cat-link", "fail", `cat ${quoted(link.path)}`, text)),
       ),
-    ...(parent === null ? [] : [command("ls-checkout-parent", "fail", `ls ${quoted(parent)}`)]),
+    ...(siblings === null ? [] : [command("ls-checkout-parent", "fail", siblings)]),
     ...facts.sockets.map(({ name, path }) => command(`connect-${name}`, "fail", `${CONNECT_WITH_BUN} ${quoted(path)}`)),
     command("gpg-clearsign", "fail", "echo x | gpg --clearsign"),
     ...(session === "background"
@@ -338,17 +352,18 @@ export function probesOf(facts: ProbeFacts, session: Session): Probe[] {
 }
 
 /**
- * The script that runs one command probe of `session`, named by its id, in the session's directory, and
- * records what it printed and its exit code under `results`: the probe reads the verdict there, not in
- * what the model says.
+ * The script that runs one command probe of a session, named by its id, in the session's tree `tree`,
+ * and records what it printed and its exit code under `results`: the probe reads the verdict there, not
+ * in what the model says.
  */
-export function scriptOf(probes: readonly Probe[], results: string): string {
+export function scriptOf(probes: readonly Probe[], { tree, results }: Pick<ProbeLayout, "tree" | "results">): string {
   const cases = probes.flatMap(({ id, step }) => (step.kind === "command" ? [`  ${id}) ${step.command} ;;`] : []));
 
   return [
     "#!/bin/sh",
     `results=${quoted(results)}`,
     'mkdir -p "$results"',
+    `cd ${quoted(tree)} || exit 64`,
     'case "$1" in',
     ...cases,
     "  *) exit 64 ;;",

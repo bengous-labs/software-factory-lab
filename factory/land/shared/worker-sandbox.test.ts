@@ -87,24 +87,30 @@ const SANDBOX = {
   network: { allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"] },
 };
 
-/** An API Worker's sandbox: it reads the clones' directory where a background Worker reads the main checkout, which is hidden from it. */
+/** An API Worker's sandbox: no entry for where it works, its clone being its working directory, and the main checkout hidden from it. */
 const API_SANDBOX = {
   ...SANDBOX,
   filesystem: {
     denyRead: ["/home/me"],
-    allowRead: ["/home/me/.local/share/software-factory-lab/api-workers", ...SANDBOX.filesystem.allowRead.slice(1)],
+    allowRead: SANDBOX.filesystem.allowRead.slice(1),
   },
   credentials: { files: [...SANDBOX.credentials.files, { path: "/repo", mode: "deny" }] },
 };
 
 describe("sandboxedOf", () => {
-  test("an API Worker reads the clones' directory and never the main checkout, which is hidden from its commands and its file tools, and its file tools write nothing in a clone's git directory", () => {
+  test("an API Worker is allowed the list alone beside its working directory, never the clones' directory nor the main checkout, which is hidden from its commands and its file tools, and its file tools write nothing in a clone's git directory", () => {
     expect(sandboxedOf({ env: { LAB_AUTHOR: "1" } }, PLACE, "api")).toEqual({
       env: { LAB_AUTHOR: "1", ...GIT_ENV },
       sandbox: API_SANDBOX,
       permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["Edit(./**)", "Bash"], deny: API_DENY },
     });
-    expect(API_SANDBOX.filesystem.allowRead).not.toContain("/repo");
+    expect(API_SANDBOX.filesystem.allowRead).toEqual([
+      "/home/me/.local/share/mise/installs",
+      "/home/me/.bun/install/cache",
+      "/home/me/.gitconfig",
+      "/home/me/.config/git/config",
+      "/home/me/.config/git/ignore",
+    ]);
   });
 
   test("a background Worker: denies the home to every command, allows the checkout and the list again, hides the factory's secrets, and holds the file tools to the working directories", () => {

@@ -21,7 +21,8 @@ Dispatch refuses a home or a main checkout no sandbox can be made for, before it
 `factory/land/shared/worker-sandbox.ts` is the one definition, for a background Worker, an API Worker and the forks of their stops (`factory/land/stop/AGENTS.md`); `factory/install/AGENTS.md` says what a Worker reads, and how the Owner probes it.
 
 - Every Bash command of the session runs in Claude Code's sandbox, with no retry outside it, and no command runs when the sandbox cannot start.
-- A command reads nothing under the Owner's home but where the Worker works, the main checkout for a background Worker and the clones' directory for an API Worker, and a short list: the toolchain, bun's cache, git's configuration.
+- A command reads nothing under the Owner's home but its working directory, the main checkout for a background Worker and its clone for an API Worker, and a short list: the toolchain, bun's cache, git's configuration.
+  The sandbox lets a command read and write its working directory with no entry, and no entry may hold it: with a parent of the working directory allowed to read, `bwrap` does not start (`Can't create file …/.claude/settings.local.json: Read-only file system`).
   Two directories are hidden whatever else is allowed: the one that holds the API key, and the factory's config directory, which holds the Author's token.
 - A command writes under the session's working directory, where git's `config` and `hooks` stay read-only; it reaches GitHub and the package registry and no other host; it sees no other process.
 - Claude Code's own file tools, which run outside the sandbox, read under the working directories alone, and deny rules keep them from reading or writing the hidden directories and from reading each credential path, through a symbolic link too.
@@ -35,7 +36,7 @@ What this does not hold:
 - A background Worker's working directory is the main checkout it starts in, so the sandbox and its `Edit(./**)` rule let it write the main checkout's own files, the hooks' among them, and a hook runs outside the sandbox: a background Worker that edits a hook's file runs code with the Owner's access.
   An API Worker, whose working directory is its clone and from which the main checkout is hidden, cannot.
 - In a background Worker's session `install-deps.ts` still runs `bun install` in the worktree, outside the sandbox (`factory/hooks/AGENTS.md`).
-- A background Worker reads the whole main checkout, an API Worker every API Worker's clone, and both what lies outside the home.
+- A background Worker reads the whole main checkout, and both kinds what lies outside the home.
 - Its environment holds the Author's `GH_TOKEN`, and it reaches `github.com`: what it reads, it can send there as the machine account.
 
 ## An API Worker
@@ -53,7 +54,7 @@ What holds the key is the sandbox of every Worker, above, not a rule on a comman
   A worktree shares the main checkout's git directory, and a command of the Worker would write its branches, each `HEAD` and each index: the main checkout is where every hook's files come from.
   Dispatch clones the main checkout's remote on the Trunk, then creates the branch in the clone and installs its dependencies there, while it holds the Trunk's files alone.
   A background Worker keeps its worktree.
-- **The sandbox.** The sandbox of every Worker, above, as an API Worker has it: a command reads the clones' directory and never the main checkout, which is hidden from it with the two directories of the factory's secrets, whatever it runs.
+- **The sandbox.** The sandbox of every Worker, above, as an API Worker has it: a command reads its clone and never the main checkout, which is hidden from it with the two directories of the factory's secrets, whatever it runs.
   It writes under its clone alone, where what tells git which config to read and what to run stays read-only (`.git/config`, `.git/hooks`) and `.git` itself can be neither renamed nor replaced.
   Deny rules keep Claude Code's own file tools from reading or writing the main checkout, through a symbolic link too, and from writing in the git directory of a clone.
 - **What runs outside the sandbox asks the clone nothing.** A hook's command runs outside the sandbox, and the Worker writes its clone, so a hook that trusts it runs the Worker's code.
