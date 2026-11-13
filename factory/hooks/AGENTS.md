@@ -14,17 +14,19 @@ Two serve this repository's own toolchain and live in `scripts/hooks/`: `fix-edi
   A Worker starts in the main checkout and enters its worktree with `EnterWorktree`, so it runs the hooks of whatever the main checkout has checked out, which need not be the Trunk's latest.
   An API Worker starts in a clone of its own, outside the main checkout, and still runs the main checkout's hooks: it loads no project settings, and its settings file carries the main checkout's hooks, each named through `LAB_MAIN_CHECKOUT` where `.claude/settings.json` says `$CLAUDE_PROJECT_DIR` (`factory/dispatch/AGENTS.md`).
   Each of its hooks starts in the main checkout too (`cd "$LAB_MAIN_CHECKOUT" && bun …`): `bun` reads the `bunfig.toml` and the `.env` of the directory it starts in, and the session's own is the clone.
-  A hook's command runs outside the sandbox that holds such a Worker's code, so a hook that would run a file of the clone, or git in a directory the Worker wrote, does not for it: `fix-edited.ts` and `install-deps.ts` do nothing in its session, the Stop hook runs no `bun check`, and the git it runs is handed the clone through its environment (`factory/land/stop/AGENTS.md`).
+  A hook's command runs outside the sandbox that holds such a Worker's code, so a hook that would run a file of the clone, or git in a directory the Worker wrote, does not for it: `install-deps.ts` does nothing in its session, and the git the Stop hook runs is handed the clone through its environment (`factory/land/stop/AGENTS.md`).
   `refuse-commit-on-dev.ts` runs no git in any session: it reads the branch from the `.git` of the checkout a commit runs in.
+  For every Author, background or API, no hook runs the checks or the format fix on what the Worker wrote: `fix-edited.ts` does nothing in an Author's session, and the Stop hook starts no `bun check` and asks the Worker for it (issue #202 holds how both come back, in a sandbox).
+  In a background Worker's session `install-deps.ts` still runs, outside the sandbox: `bun install` on the worktree's own `bunfig.toml`, `.npmrc` and `bun.lock`, with no lifecycle script.
   A hook added to `.claude/settings.json` needs the same care: it reads the Worker's tree as data, starts no program there, and runs no git that finds its repository from there.
 
 - `fix-edited.ts` and `install-deps.ts` act only on a checkout of the project's repository, found by its git common directory.
-  The Stop hook runs `bun check` in whatever checkout `cwd` is in, except for an API Worker, which it asks to run it.
+  The Stop hook starts no `bun check`: it asks the Worker to run it in its own sandbox.
 
 - A subagent fires `SubagentStop` with `cwd` in its worktree, never `Stop`: the Stop hook does not run for it.
 
 - A Bash command that writes a file fires no `PostToolUse` on `Edit|Write`.
-  The Stop checks catch its format.
+  The Worker's own `bun check`, and CI's, catch its format.
 
 - The hooks that run on every tool call, `refuse-commit-on-dev.ts`, `refuse-author-publish.ts` and `fix-edited.ts`, import no `effect`, directly or through what they import: loading it adds about 85 ms to each call.
   They read their input with `factory/lib/plain-json.ts`, and `scripts/hooks/per-call-imports.test.ts` fails when one loads a package other than `bun` and `node:` modules.
