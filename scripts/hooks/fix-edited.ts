@@ -7,7 +7,8 @@
  * the vendored anti-slop copy and `node_modules` out. The checkout is the file's own, the main one or a
  * worktree, and the hook acts only on a checkout of the project's own repository: it runs that
  * checkout's oxlint and configs, and never another repository's. A path through a symbolic link is read
- * as its real path, the one git names the checkout by. It prints nothing and exits 0, since what a
+ * as its real path, the one git names the checkout by. In an Author's session it does nothing: a Worker
+ * formats its own files, in its sandbox. It prints nothing and exits 0, since what a
  * PostToolUse hook prints goes into the agent's context, unless its input or `bunfig.toml` does not read,
  * or `CLAUDE_PROJECT_DIR` is unset: it then throws, naming which.
  *
@@ -19,7 +20,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, sep } from "nod
 
 import { $ } from "bun";
 
-import { isApiWorker } from "../../factory/lib/author-session.ts";
+import { isAuthor } from "../../factory/lib/author-session.ts";
 import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../../factory/lib/checkout.ts";
 import type { Checkout } from "../../factory/lib/checkout.ts";
 import type { Json } from "../../factory/lib/plain-json.ts";
@@ -98,9 +99,10 @@ async function fixIn(root: string, filePath: string): Promise<void> {
   await $`${process.execPath} fmt ${path}`.cwd(root).nothrow().quiet();
 }
 
-// An API Worker's code runs in its sandbox alone, and a hook's command is outside it: the fix would
-// run the lint config of the worktree, which the Worker edits. Its Stop checks and CI catch the format.
-if (import.meta.main && !isApiWorker(process.env)) {
+// An Author's code runs in its sandbox alone, and a hook's command is outside it: the fix would run the
+// lint config of the worktree, which the Worker edits. The Worker formats its files itself, and CI's
+// check catches what it left.
+if (import.meta.main && !isAuthor(process.env)) {
   const filePath = filePathOf(await Bun.stdin.text());
 
   if (filePath !== null) {

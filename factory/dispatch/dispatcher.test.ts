@@ -10,6 +10,8 @@ const WORKTREE = "/repo/.claude/worktrees/issue-7";
 
 const SETTINGS = "/home/me/.config/software-factory-lab/worker-settings.json";
 
+const BACKGROUND_SETTINGS = "/home/me/.config/software-factory-lab/background-worker-settings.json";
+
 const API_SETTINGS = "/home/me/.config/software-factory-lab/api-worker-settings.json";
 
 const KEY = "/home/me/.api-agent/key";
@@ -40,6 +42,14 @@ interface Left {
   readonly options: LeaveOptions;
 }
 
+/** The two hidden directories, then the first credential path's two rules, which every Worker's settings deny first. */
+const FIRST_DENIES = [
+  "Read(//home/me/.api-agent/**)",
+  "Read(//home/me/.config/software-factory-lab/**)",
+  "Read(//home/me/.ssh)",
+  "Read(//home/me/.ssh/**)",
+];
+
 /** What the fake's machine holds besides its commands: the Worker settings file, the key file's mode, whether a detached launch starts. */
 interface Machine {
   readonly settings: string | null;
@@ -49,7 +59,7 @@ interface Machine {
   readonly firstTurn: number | null;
   /** The main checkout's settings file; null when there is none. */
   readonly project: string | null;
-  /** Whether the API Worker settings file can be written. */
+  /** Whether the settings file Dispatch writes for the Worker can be written. */
   readonly writable: boolean;
   /** The permission bits of the directory an API Worker's clone goes to; null when nothing is there. */
   readonly clone: number | null;
@@ -171,8 +181,8 @@ const API_REQUEST = { ...REQUEST, api: true };
 const commandsOf = (calls: readonly Call[]) => calls.map((call) => call.argv.slice(0, 3).join(" "));
 
 describe("dispatch", () => {
-  test("creates the worktree from origin/dev, launches the Worker in the main checkout, and says what it did", async () => {
-    const { ports, calls, launches } = world();
+  test("creates the worktree from origin/dev, writes the background Worker settings file, launches the Worker on it in the main checkout, and says what it did", async () => {
+    const { ports, calls, launches, written, order } = world();
 
     const dispatched = await dispatch(ports, REQUEST);
 
@@ -195,6 +205,8 @@ describe("dispatch", () => {
     expect(calls[1]?.argv).toEqual(["git", "fetch", "--prune", "origin"]);
     expect(calls[4]?.argv).toEqual(["git", "worktree", "add", "-b", "issue/7-add-a-flag", WORKTREE, "origin/dev"]);
     expect(launches).toHaveLength(1);
+    expect(written.map((file) => file.path)).toEqual([BACKGROUND_SETTINGS]);
+    expect(order.slice(-3)).toEqual(["git worktree add", "write", "claude --bg --model"]);
 
     const launch = launches[0];
     expect(launch?.options.cwd).toBe(CHECKOUT);
@@ -205,7 +217,9 @@ describe("dispatch", () => {
       "--model",
       "opus",
       "--settings",
-      SETTINGS,
+      BACKGROUND_SETTINGS,
+      "--setting-sources",
+      "project",
       "--name",
       "w-issue-7",
       `Implement GitHub issue #7 of o/r (read it with: gh issue view 7 --repo o/r). Your worktree exists: first call EnterWorktree with the path ${WORKTREE} and work there; its branch issue/7-add-a-flag starts at origin/dev.`,
@@ -336,13 +350,73 @@ describe("dispatch", () => {
     expect(commandsOf(calls).at(-1)).toBe("claude --bg --model");
   });
 
-  test("a background Worker writes no API Worker settings, reads no key file, and is left no headless turn", async () => {
+  test("a background Worker reads no key file and is left no headless turn, and the one file written is its own", async () => {
     const { ports, left, written, stats } = world();
 
     await dispatch(ports, REQUEST);
 
-    expect({ left, written, stats }).toEqual({ left: [], written: [], stats: [] });
+    expect({ left, stats, written: written.map((file) => file.path) }).toEqual({
+      left: [],
+      stats: [],
+      written: [BACKGROUND_SETTINGS],
+    });
   });
+
+  test("the settings file it writes makes the Worker an Author, sandboxed with the home denied, that asks nothing, with no key helper and no marker of an API Worker", async () => {
+    const { ports, written } = world();
+
+    await dispatch(ports, REQUEST);
+
+    const settings: unknown = JSON.parse(written[0]?.text ?? "");
+
+    expect(settings).toMatchObject({
+      env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", GIT_CONFIG_COUNT: "3" },
+      sandbox: {
+        enabled: true,
+        allowUnsandboxedCommands: false,
+        filesystem: { denyRead: ["/home/me"] },
+      },
+      permissions: { defaultMode: "dontAsk", blockReadsOutsideWorkingDirectories: true },
+    });
+    expect(settings).toHaveProperty("sandbox.filesystem.allowRead.0", CHECKOUT);
+    expect(settings).toHaveProperty("permissions.deny", expect.arrayContaining(FIRST_DENIES));
+    expect(settings).not.toHaveProperty("apiKeyHelper");
+    expect(settings).not.toHaveProperty("env.LAB_API_WORKER");
+    expect(settings).not.toHaveProperty("hooks");
+  });
+
+  test("removes the worktree and the branch when the background Worker settings file cannot be written, and launches nothing", async () => {
+    const { ports, calls, launches } = world({}, { writable: false });
+
+    expect(await failureOf(dispatch(ports, REQUEST))).toBe(`EACCES: permission denied, open '${BACKGROUND_SETTINGS}'`);
+    expect(launches).toEqual([]);
+    expect(calls.slice(-2).map((call) => call.argv)).toEqual([
+      ["git", "worktree", "remove", WORKTREE],
+      ["git", "branch", "-D", "issue/7-add-a-flag"],
+    ]);
+  });
+
+  test.each([
+    [{ HOME: "/home/m*e" }, CHECKOUT, "the home /home/m*e holds one of * ? [ ]"],
+    [{ HOME: "/home/me" }, "/srv/repo[1]", "the main checkout /srv/repo[1] holds one of * ? [ ]"],
+    [
+      { HOME: "/home/me" },
+      "/home/me/.ssh/repo",
+      "the main checkout /home/me/.ssh/repo holds /home/me/.ssh or lies in it",
+    ],
+  ])(
+    "refuses a place no sandbox can be made for (%j, %s), for either kind of Worker, before it reads a file or creates anything",
+    async (env, checkout, problem) => {
+      for (const request of [REQUEST, API_REQUEST]) {
+        const { ports, calls, written, stats } = world();
+
+        expect(await failureOf(dispatch(ports, { ...request, env, checkout }))).toStartWith(
+          `no Worker can be sandboxed here: ${problem}`,
+        );
+        expect({ calls, written, stats }).toEqual({ calls: [], written: [], stats: [] });
+      }
+    },
+  );
 
   test("fails with what gh printed when the issue cannot be read", async () => {
     const { ports } = world({ "gh issue": { code: 1, stdout: "", stderr: "could not find issue" } });
@@ -455,6 +529,7 @@ describe("the dispatch of an API Worker", () => {
       },
       sandbox: {
         enabled: true,
+        filesystem: { denyRead: ["/home/me"] },
         credentials: {
           files: [
             { path: "/home/me/.api-agent", mode: "deny" },
@@ -463,18 +538,10 @@ describe("the dispatch of an API Worker", () => {
           ],
         },
       },
-      permissions: {
-        deny: [
-          "Read(//home/me/.api-agent/**)",
-          "Edit(//home/me/.api-agent/**)",
-          "Read(//home/me/.config/software-factory-lab/**)",
-          "Edit(//home/me/.config/software-factory-lab/**)",
-          `Read(/${CHECKOUT}/**)`,
-          `Edit(/${CHECKOUT}/**)`,
-          "Edit(//home/me/.local/share/software-factory-lab/api-workers/*/.git/**)",
-        ],
-      },
+      permissions: { blockReadsOutsideWorkingDirectories: true },
     });
+    expect(JSON.parse(written[0]?.text ?? "")).toHaveProperty("permissions.deny", expect.arrayContaining(FIRST_DENIES));
+    expect(JSON.parse(written[0]?.text ?? "")).not.toHaveProperty("permissions.defaultMode");
   });
 
   test("neither the launch nor its environment holds a token: the settings go by their path", async () => {

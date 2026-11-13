@@ -23,7 +23,7 @@ import {
   reviewLabelOf,
   storedLandRouteOf,
 } from "./contract.ts";
-import { CHECKOUT_VARIABLE } from "./dispatch/dispatch-plan.ts";
+import { backgroundWorkerSettingsOf, CHECKOUT_VARIABLE } from "./dispatch/dispatch-plan.ts";
 import { FACTORY_CONFIG_PATH } from "./install/factory-config.ts";
 import { EMPTY_RECORD, recordOfComment, stateCommentOf, storedOfRecord } from "./land/merge-bot/record.ts";
 import type { StateRecord } from "./land/merge-bot/record.ts";
@@ -285,8 +285,11 @@ describe("the names sessions and files hold", () => {
     ]);
   });
 
-  test("an API Worker's settings file under the config directory, and the log of its turns under the main checkout", () => {
+  test("the settings file of each kind of Worker under the config directory, and the log of an API Worker's turns under the main checkout", () => {
     expect(apiWorkerSettingsOf("/home/me")).toBe("/home/me/.config/software-factory-lab/api-worker-settings.json");
+    expect(backgroundWorkerSettingsOf("/home/me")).toBe(
+      "/home/me/.config/software-factory-lab/background-worker-settings.json",
+    );
     expect(apiWorkerLogOf("/repo", "S1")).toBe("/repo/.lab/state/api-worker-S1.log");
   });
 

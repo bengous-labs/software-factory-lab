@@ -10,6 +10,7 @@ import type { Run, RunOptions } from "../../lib/run.port.ts";
 import { pushArgs } from "../shared/author.live.ts";
 import { DONE_SCHEMA } from "./decide.ts";
 import { BODY_REQUEST, doneQuestionOf } from "./done-judge.prompt.ts";
+import { forkSettingsOf } from "./fork.ts";
 import { stop } from "./hook.live.ts";
 import { FORK_FLAG, ListedPrs, StopInput } from "./publish.live.ts";
 import type { Answer } from "./publish.live.ts";
@@ -44,19 +45,21 @@ async function bodyOf(branch: string, forkBody: string): Promise<string | undefi
 
 const REPO = resolve(import.meta.dir, "..", "..", "..");
 
-const FORK_SETTINGS = JSON.stringify({
-  hooks: {
-    PreToolUse: [
-      {
-        matcher: "*",
-        hooks: [{ type: "command", command: `cd "${REPO}" && bun "${REPO}/factory/bin/fork-guard.ts"`, timeout: 30 }],
-      },
-    ],
-  },
-});
+/** What a Worker reads when the hook leaves the Stop checks to it. */
+const LEFT_STOP_CHECKS =
+  "The Stop hook runs no Stop checks on a Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` now, fix what it reports and commit, then stop.";
 
-/** The command line of a fork asked `prompt` on the session's model, with the JSON Schema of its answer, if any. */
-const forkArgv = (prompt: string, schema: string | null): readonly string[] => [
+/**
+ * The settings of the fork of an Author's session that is no API Worker's, whose main checkout is
+ * `checkout`: the guard of this repository, and the sandbox made for the session's home and that checkout.
+ */
+const forkSettings = (checkout: string): string => forkSettingsOf(REPO, { home: "/home/me", checkout }, null);
+
+/**
+ * The command line of a fork asked `prompt` on the session's model, with the JSON Schema of its answer, if
+ * any, in the session whose main checkout is `checkout`.
+ */
+const forkArgv = (prompt: string, schema: string | null, checkout: string): readonly string[] => [
   "claude",
   "-p",
   "--resume",
@@ -67,7 +70,9 @@ const forkArgv = (prompt: string, schema: string | null): readonly string[] => [
   "--permission-mode",
   "dontAsk",
   "--settings",
-  FORK_SETTINGS,
+  forkSettings(checkout),
+  "--setting-sources",
+  "",
   "--strict-mcp-config",
   ...(schema === null ? [] : ["--json-schema", schema]),
   "--output-format",
@@ -173,7 +178,10 @@ async function fixtureRepository(): Promise<{ readonly main: string; readonly wo
   return { main, worktree };
 }
 
-/** One stop in `cwd` of the fixture: git reads the repository for real, GitHub and the forks are the fake's. */
+/**
+ * One stop in `cwd` of the fixture, the one that follows the block asking the Worker for the Stop checks:
+ * git reads the repository for real, GitHub and the forks are the fake's.
+ */
 async function stopAt(cwd: string): Promise<World> {
   const found = world();
 
@@ -182,7 +190,7 @@ async function stopAt(cwd: string): Promise<World> {
       ? git(options.cwd, ...argv.slice(1))
       : found.deps.run(argv, options);
 
-  await stop({ ...input(cwd), cwd }, { ...found.deps, run }, found.log);
+  await stop({ ...input(cwd, true), cwd }, { ...found.deps, run }, found.log);
 
   return found;
 }
@@ -227,8 +235,8 @@ describe("the stop of an Author", () => {
     const forks = found.calls.filter((call) => call.argv[0] === "claude");
 
     expect(forks.map((call) => call.argv)).toEqual([
-      forkArgv(doneQuestionOf([]), JSON.stringify(DONE_SCHEMA)),
-      forkArgv(BODY_REQUEST, null),
+      forkArgv(doneQuestionOf([]), JSON.stringify(DONE_SCHEMA), found.checkout),
+      forkArgv(BODY_REQUEST, null, found.checkout),
     ]);
     expect(forks.every((call) => !(call.argv[call.argv.indexOf("--tools") + 1] ?? "").includes("Monitor"))).toBe(true);
     expect(forks.map((call) => call.options)).toEqual([
@@ -269,12 +277,17 @@ describe("the stop of an Author", () => {
     expect(pushed.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: pushed.checkout }]);
   });
 
-  test("the stop of any other Author: its forks name no key helper, its relay no headless resume, its outcome no API Worker", async () => {
+  test("the stop of any other Author: its forks run in the sandbox made for its main checkout and name no key helper, its relay no headless resume, its outcome no API Worker", async () => {
     const found = world();
 
     await stopIn(found);
 
-    expect(found.calls.find((call) => call.argv[0] === "claude")?.argv).toContain(FORK_SETTINGS);
+    const settings = found.calls.find((call) => call.argv[0] === "claude")?.argv[10] ?? "";
+
+    expect(settings).toBe(forkSettings(found.checkout));
+    expect(JSON.parse(settings)).toMatchObject({ sandbox: { enabled: true, filesystem: { denyRead: ["/home/me"] } } });
+    expect(JSON.parse(settings)).toHaveProperty("sandbox.filesystem.allowRead.0", found.checkout);
+    expect(settings).not.toContain("apiKeyHelper");
     expect(found.relays[0]?.headless).toBeNull();
     expect(found.outcomes[0]?.line.api).toBe(false);
   });
@@ -400,26 +413,25 @@ describe("the stop of an Author", () => {
     }
   });
 
-  test("the block that asked for the commit leaves the Stop checks their own: red after the commit, they block with their report, once", async () => {
-    const dirty = world({ dirty: true });
+  test("the block that asked for the commit leaves the Stop checks their own: after the commit the hook asks the Worker for them, once, then publishes", async () => {
+    const dirty = world({ dirty: true, checksAsked: false });
     await stopIn(dirty);
 
-    const red = { checkout: dirty.checkout, failing: ["bun check"] };
-    const committed = await stopIn(world(red), true);
+    const committed = world({ checkout: dirty.checkout, checksAsked: false });
 
-    expect(committed.kind === "block" ? committed.reason : "").toStartWith(
-      "The Stop checks are red on this head, so nothing was published:",
-    );
-    expect(await stopIn(world(red), true)).toEqual({ kind: "allow" });
+    expect(await stopIn(committed, true)).toEqual({ kind: "block", reason: LEFT_STOP_CHECKS });
+    expect(await stopIn(committed, true)).toEqual({ kind: "allow" });
+    expect(writes(committed.calls)).toEqual(["push", "pr create"]);
   });
 
   test("the commit asked for in one session leaves another session's chain as it was", async () => {
-    const dirty = world({ dirty: true });
+    const dirty = world({ dirty: true, checksAsked: false });
     await stop({ ...input(dirty.root), session_id: "S0" }, dirty.deps, dirty.log);
 
-    const other = world({ checkout: dirty.checkout, failing: ["bun check"] });
+    const other = world({ checkout: dirty.checkout, checksAsked: false, done: [undefined] });
 
     expect(await stopIn(other, true)).toEqual({ kind: "allow" });
+    expect(other.records).toContainEqual({ step: "stop-checks", checks: "left", next: "ask-done-judge" });
   });
 
   test("no Author token: the hook blocks once with the reason, then lets the session end, and runs no Stop check, fork or push", async () => {
@@ -451,38 +463,57 @@ describe("the stop of an Author", () => {
     expect(found.records).toContainEqual({ step: "author-token", found: true, path: TOKEN_FILE });
   });
 
-  test("red Stop checks block once with their report, then let the session end, and no fork runs", async () => {
-    const first = world({ failing: ["bun check"] });
-    const blocked = await stopIn(first);
+  test("a background Author's stop starts no `bun check`: the hook blocks once, asking the Worker for the Stop checks, and runs no fork or push", async () => {
+    const found = world({ checksAsked: false });
 
-    expect(blocked).toEqual({
-      kind: "block",
-      reason:
-        "The Stop checks are red on this head, so nothing was published:\n\nbun failed\n\nFix them and commit, then stop.",
+    expect(await stopIn(found)).toEqual({ kind: "block", reason: LEFT_STOP_CHECKS });
+    expect(
+      found.calls.some((call) => call.argv[0] === "bun" || call.argv[0] === "claude" || call.argv.includes("push")),
+    ).toBe(false);
+    expect(found.records).toContainEqual({ step: "stop-checks", checks: "left", next: "block" });
+    expect(found.outcomes[0]?.line).toMatchObject({
+      api: false,
+      outcome: "not-published",
+      reason: `the Stop checks on ${HEAD} are left to the Worker`,
     });
+  });
 
-    const second = world({ failing: ["bun check"] });
+  test("its next stop goes on to the Done judge and publishes, still with no `bun check`, and a later stop on that head is not asked again", async () => {
+    const found = world({ checksAsked: false });
 
-    expect(await stopIn(second, true)).toEqual({ kind: "allow" });
+    await stopIn(found);
 
-    for (const { calls } of [first, second]) {
-      expect(calls.some((call) => call.argv[0] === "claude" || call.argv.includes("push"))).toBe(false);
-    }
+    expect(await stopIn(found, true)).toEqual({ kind: "allow" });
+    expect(writes(found.calls)).toEqual(["push", "pr create"]);
+    expect(found.calls.some((call) => call.argv[0] === "bun")).toBe(false);
+    expect(existsSync(join(found.root, ".lab", "state", `gates-${HEAD}`))).toBe(true);
+
+    const again = world({ checkout: found.checkout, checksAsked: false, done: [UNFINISHED] });
+
+    expect(await stopIn(again)).toEqual({ kind: "allow" });
+    expect(again.records).toContainEqual({ step: "stop-checks", checks: "green", next: "ask-done-judge" });
+
+    const moved = world({ checkout: found.checkout, checksAsked: false, head: "e".repeat(40) });
+
+    expect(await stopIn(moved)).toEqual({ kind: "block", reason: LEFT_STOP_CHECKS });
   });
 });
 
-/** What one stop of a session finds: its tree, the Author token, the Stop checks, and whether the Done judge answers. */
+/**
+ * What one stop of a session finds: its tree, the Author token, whether the Stop checks are still left to
+ * the Worker on its head, and whether the Done judge answers.
+ */
 interface StopState {
   readonly dirty: boolean;
   readonly token: boolean;
-  readonly checksRed: boolean;
+  readonly checksLeft: boolean;
   readonly doneAnswers: boolean;
 }
 
 const STOP_STATE: fc.Arbitrary<StopState> = fc.record({
   dirty: fc.boolean(),
   token: fc.boolean(),
-  checksRed: fc.boolean(),
+  checksLeft: fc.boolean(),
   doneAnswers: fc.boolean(),
 });
 
@@ -493,18 +524,18 @@ const NO_TOKEN_ENV = {
   LAB_AUTHOR_TOKEN_FILE: join(mkdtempSync(join(tmpdir(), "author-")), "absent"),
 };
 
-/** A clean stop the hook reports a failure on: no Author token, red Stop checks, or a Done judge with no answer. */
-const failsOn = (state: StopState): boolean => !state.dirty && (!state.token || state.checksRed || !state.doneAnswers);
+/** A clean stop the hook blocks with a reason of its own: no Author token, Stop checks left to the Worker, or a Done judge with no answer. */
+const failsOn = (state: StopState): boolean => !state.dirty && (!state.token || state.checksLeft || !state.doneAnswers);
 
 /** The fake of the `index`th stop of a session whose main checkout is `checkout`. */
 const stopWorld = (checkout: string, index: number, state: StopState): World =>
   world({
     checkout,
-    // The hook keeps green Stop checks per head: each stop comes after a commit of its own.
+    // The hook keeps what it asked per head: each stop comes after a commit of its own.
     head: String(index).repeat(40),
     dirty: state.dirty,
     env: state.token ? AUTHOR_ENV : NO_TOKEN_ENV,
-    failing: state.checksRed ? ["bun check"] : [],
+    checksAsked: !state.checksLeft,
     done: state.doneAnswers ? [FINISHED] : [undefined],
   });
 
@@ -677,8 +708,7 @@ describe("the outcome of each stop", () => {
       ],
       [{ env: noToken }, false, `no Author token at ${missing}`],
       [{ env: noToken }, true, "no Author token after a block: nothing is published"],
-      [{ failing: ["bun check"] }, false, `the Stop checks are red on ${HEAD}`],
-      [{ failing: ["bun check"] }, true, "the Stop checks are still red after a block: nothing is published"],
+      [{ checksAsked: false }, false, `the Stop checks on ${HEAD} are left to the Worker`],
       [{ done: ["YES"] }, false, "the Done judge gave no answer"],
       [{ done: ["YES"] }, true, "the Done judge gave no answer after a block: nothing is published"],
       [{ done: [UNFINISHED] }, false, "the Done judge says the change is not finished: a test is missing"],

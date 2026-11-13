@@ -1,7 +1,7 @@
 /**
  * The Stop hook. It does nothing for a session that is not an Author, whose environment holds no
  * `LAB_AUTHOR=1`, nor for a fork it launched. For an Author it reads git and the branch's PR, decides with
- * `decide.ts`, and acts: runs the Stop checks, runs the Done judge, which asks a fork of the session whether
+ * `decide.ts`, and acts: asks the Worker for the Stop checks, runs the Done judge, which asks a fork of the session whether
  * the change is finished and which findings the Author rejects or fixed, then publishes (`publish.live.ts`):
  * posts the rejections, records the fixed findings on the PR, pushes the branch, opens or readies the PR,
  * resolves the App's open Nit threads, and leaves the PR's relay. A stop that leaves a question to the Owner
@@ -64,35 +64,18 @@ import {
 } from "./publish.live.ts";
 import type { Answer, AuthorStop, Deps, Log, StopLogRecord, Stopped } from "./publish.live.ts";
 
-const STOP_CHECKS_TIMEOUT_MS = 300_000;
-
 /** The lines of the transcript at `path`; a missing transcript has none. */
 export function linesOf(path: string): TranscriptLine[] {
   return existsSync(path) ? transcriptLinesOf(readFileSync(path, "utf8"), path) : [];
 }
 
 /**
- * The Stop checks on the head whose record is the file `record`: green when the record is there, left to
- * an API Worker, whose code the hook does not run, else what `bun check` gives.
+ * The Stop checks on the head whose record is the file `record`: green when the record is there, a stop
+ * having asked the Worker for them on this head; else left to the Worker. The hook starts no `bun check`
+ * for any Author: that is the Worker's code, and the hook is outside the sandbox that holds it.
  */
-async function stopChecks(deps: Deps, cwd: string, record: string, api: boolean): Promise<StopChecks> {
-  if (existsSync(record)) {
-    return { kind: "green" };
-  }
-
-  if (api) {
-    return { kind: "left" };
-  }
-
-  const ran = await deps.run(["bun", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
-
-  if (ran.code !== 0) {
-    return { kind: "red", report: `${ran.stdout}\n${ran.stderr}`.trim().slice(-3000) };
-  }
-
-  writeFileSync(record, "green\n");
-
-  return { kind: "green" };
+function stopChecks(record: string): StopChecks {
+  return existsSync(record) ? { kind: "green" } : { kind: "left" };
 }
 
 /** The stop of a decision that publishes nothing: blocked with its reason, or let go. */
@@ -110,14 +93,14 @@ function askDoneJudge(stopping: AuthorStop, findings: readonly OpenFinding[]): P
     })),
   );
 
-  return askFork(stopping.deps, stopping.input, {
+  return askFork(stopping, {
     model: stopping.model,
     prompt: question,
     schema: DONE_SCHEMA,
   });
 }
 
-/** The stop of an Author whose branch may be published: admission, the Stop checks, the Done judge, the Publication. */
+/** The stop of an Author whose branch may be published: admission, the Stop checks it asks for, the Done judge, the Publication. */
 async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopped> {
   const { deps, input, log, branch, head, git } = stopping;
   // Left by the stop that asked for the commit, and read once by the next one.
@@ -176,12 +159,12 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
 
   // An on-disk name: existing state files carry it, so it stays.
   const record = join(stateDir, `gates-${head}`);
-  const checks = await stopChecks(deps, input.cwd, record, stopping.api);
+  const checks = stopChecks(record);
   const next = afterStopChecks(checks, chain.reported);
   log({ step: "stop-checks", checks: checks.kind, next: next.kind });
 
   if (next.kind !== "ask-done-judge") {
-    return stoppedOf(next, stopChecksOutcomeOf(checks, head));
+    return stoppedOf(next, stopChecksOutcomeOf(head));
   }
 
   if (checks.kind === "left") {

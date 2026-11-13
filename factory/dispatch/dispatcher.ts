@@ -1,8 +1,8 @@
 /**
  * Dispatch: hands one issue to a Worker. It creates the Worker's worktree on a new branch from
  * the Trunk, then launches the Worker as a background session in the main checkout, which enters
- * that worktree itself. An API Worker is launched headless in its worktree instead, detached, on the
- * settings file Dispatch writes for it.
+ * that worktree itself. An API Worker is launched headless in its worktree instead, detached. Either
+ * runs on the settings file Dispatch writes for its kind, which holds its sandbox.
  */
 
 import { Schema } from "effect";
@@ -10,7 +10,8 @@ import { Schema } from "effect";
 import { TRUNK } from "../install/host.ts";
 import { OWNER_LOGIN } from "../install/logins.ts";
 import { apiKeyFileOf, apiWorkerLogOf, apiWorkerSettingsOf, firstTurnArgvOf } from "../land/shared/api-worker.ts";
-import type { ApiWorkerPlace } from "../land/shared/api-worker.ts";
+import { sandboxPlaceProblemOf } from "../land/shared/worker-sandbox.ts";
+import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
 import { decodeJson } from "../lib/json.ts";
 import { checked } from "../lib/run.port.ts";
 import type { Leave, Ran, Run, RunOptions } from "../lib/run.port.ts";
@@ -20,6 +21,8 @@ import {
   apiCloneOf,
   apiKeyProblemOf,
   apiWorkerSettingsTextOf,
+  backgroundWorkerSettingsOf,
+  backgroundWorkerSettingsTextOf,
   branchOf,
   cloneArgvOf,
   firstTurnProblemOf,
@@ -128,7 +131,7 @@ async function workerSettingsText(readText: DispatchPorts["readText"], path: str
  * checkout's settings; throws unless the key's file is there and its owner's alone. It writes nothing:
  * the file every running API Worker reads changes only when a Worker is launched.
  */
-async function apiSettingsText(ports: DispatchPorts, place: ApiWorkerPlace, text: string): Promise<string> {
+async function apiSettingsText(ports: DispatchPorts, place: SandboxPlace, text: string): Promise<string> {
   const key = apiKeyFileOf(place.home);
   const problem = apiKeyProblemOf(await ports.modeOf(key));
 
@@ -190,11 +193,15 @@ async function checkFree({ run, modeOf }: DispatchPorts, issue: number, tree: Tr
   }
 }
 
-/** What a launch needs besides the assignment: the model, the effort, the settings file, and the caller's place. */
+/**
+ * What a launch needs besides the assignment: the model, the effort, the settings file Dispatch writes
+ * with its text, and the caller's place.
+ */
 interface Launching {
   readonly model: string;
   readonly effort: DispatchArgs["effort"];
   readonly settings: string;
+  readonly settingsText: string;
   readonly checkout: string;
   readonly env: DispatchRequest["env"];
 }
@@ -204,12 +211,17 @@ type Launched =
   | { readonly kind: "background"; readonly stdout: string }
   | { readonly kind: "headless"; readonly session: string; readonly log: string };
 
-/** Launches the Worker as a background session in the main checkout; throws when the launch fails. */
+/**
+ * Writes the background Worker settings file, then launches the Worker on it as a background session in
+ * the main checkout; throws when the launch fails.
+ */
 async function launchBackground(
-  { launch }: DispatchPorts,
+  { launch, writeSecret }: DispatchPorts,
   assignment: Assignment,
-  { model, effort, settings, checkout, env }: Launching,
+  { model, effort, settings, settingsText, checkout, env }: Launching,
 ): Promise<Launched> {
+  await writeSecret(settings, settingsText);
+
   const argv = launchArgvOf({ issue: assignment.issue, model, effort, settings, prompt: promptOf(assignment, false) });
   const launched = await launch(argv, { cwd: checkout, env: sessionEnvOf(env) });
 
@@ -225,15 +237,14 @@ const FIRST_LOOK_MS = 10_000;
 
 /**
  * Launches the API Worker in its clone, which holds the Trunk's files alone: creates its branch and
- * installs its dependencies there, writes its settings file, whose text is `settingsText`, then leaves
- * its first turn running headless in the clone, its output appended to the session's log in the main
- * checkout. A turn that ends with an error while Dispatch looks, its key refused or its command wrong, throws.
+ * installs its dependencies there, writes its settings file, then leaves its first turn running
+ * headless in the clone, its output appended to the session's log in the main checkout. A turn that
+ * ends with an error while Dispatch looks, its key refused or its command wrong, throws.
  */
 async function launchHeadless(
   { run, leave, newSession, sleep, writeSecret }: DispatchPorts,
   assignment: Assignment,
-  { model, effort, settings, checkout, env }: Launching,
-  settingsText: string,
+  { model, effort, settings, settingsText, checkout, env }: Launching,
 ): Promise<Launched> {
   const { issue, worktree, branch } = assignment;
   await checked(run, ["git", "switch", "--quiet", "--create", branch], { cwd: worktree });
@@ -286,9 +297,15 @@ export async function dispatch(ports: DispatchPorts, request: DispatchRequest): 
     throw new Error("HOME is not set: the Worker settings file lives under it");
   }
 
-  const workerSettings = workerSettingsOf(home);
-  const text = await workerSettingsText(readText, workerSettings);
-  const apiText = api ? await apiSettingsText(ports, { home, checkout }, text) : null;
+  const place = { home, checkout };
+  const placeProblem = sandboxPlaceProblemOf(place);
+
+  if (placeProblem !== null) {
+    throw new Error(`no Worker can be sandboxed here: ${placeProblem}`);
+  }
+
+  const text = await workerSettingsText(readText, workerSettingsOf(home));
+  const settingsText = api ? await apiSettingsText(ports, place, text) : backgroundWorkerSettingsTextOf(text, place);
 
   const at = { cwd: checkout };
   const { title, repo } = await ownersIssue(run, issue, at);
@@ -309,13 +326,13 @@ export async function dispatch(ports: DispatchPorts, request: DispatchRequest): 
   );
 
   const assignment = { issue, repo, worktree, branch };
-  const launching = { model, effort, checkout, env };
+  const launching = { model, effort, settingsText, checkout, env };
   let launched: Launched;
 
   try {
-    launched = await (apiText === null
-      ? launchBackground(ports, assignment, { ...launching, settings: workerSettings })
-      : launchHeadless(ports, assignment, { ...launching, settings: apiWorkerSettingsOf(home) }, apiText));
+    launched = await (api
+      ? launchHeadless(ports, assignment, { ...launching, settings: apiWorkerSettingsOf(home) })
+      : launchBackground(ports, assignment, { ...launching, settings: backgroundWorkerSettingsOf(home) }));
   } catch (error) {
     const failure = error instanceof Error ? error.message : String(error);
 

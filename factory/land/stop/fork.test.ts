@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { sandboxedOf } from "../shared/worker-sandbox.ts";
 import { FORK_MARKER } from "./decide.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
 import {
@@ -194,38 +195,21 @@ describe("forkResultOf", () => {
   });
 });
 
-const API_FORK = {
-  verbose: false,
-  apiKeyHelper: "cat '/home/me/.api-agent/key'",
-  sandbox: {
-    enabled: true,
-    failIfUnavailable: true,
-    allowUnsandboxedCommands: false,
-    autoAllowBashIfSandboxed: true,
-    credentials: {
-      files: [
-        { path: "/home/me/.api-agent", mode: "deny" },
-        { path: "/home/me/.config/software-factory-lab", mode: "deny" },
-        { path: "/work/repo", mode: "deny" },
-      ],
-    },
-    network: { allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"] },
-  },
-};
+const API_FORK = { apiKeyHelper: "cat '/home/me/.api-agent/key'" };
 
 describe("apiForkOf", () => {
-  test("the forks of an API Worker's session bill the key and run their commands in its sandbox, and print one result", () => {
-    expect(apiForkOf({ LAB_API_WORKER: "1", LAB_AUTHOR: "1", HOME: "/home/me" }, "/work/repo")).toEqual(API_FORK);
+  test("the forks of an API Worker's session bill the key: their settings name the helper that prints its file", () => {
+    expect(apiForkOf({ LAB_API_WORKER: "1", LAB_AUTHOR: "1", HOME: "/home/me" })).toEqual(API_FORK);
   });
 
   test("the forks of any other session take its login: nothing is added", () => {
-    expect(apiForkOf({ LAB_AUTHOR: "1", HOME: "/home/me" }, "/work/repo")).toBeNull();
-    expect(apiForkOf({ LAB_API_WORKER: "0", HOME: "/home/me" }, "/work/repo")).toBeNull();
-    expect(apiForkOf({}, "/work/repo")).toBeNull();
+    expect(apiForkOf({ LAB_AUTHOR: "1", HOME: "/home/me" })).toBeNull();
+    expect(apiForkOf({ LAB_API_WORKER: "0", HOME: "/home/me" })).toBeNull();
+    expect(apiForkOf({})).toBeNull();
   });
 
   test("an API Worker's session with no home throws: its fork would bill another credential", () => {
-    expect(() => apiForkOf({ LAB_API_WORKER: "1" }, "/work/repo")).toThrow("HOME is unset");
+    expect(() => apiForkOf({ LAB_API_WORKER: "1" })).toThrow("HOME is unset");
   });
 });
 
@@ -239,12 +223,39 @@ describe("forkSettingsOf", () => {
     ],
   };
 
-  test("a fork's settings put every tool call under the fork guard, started in the checkout that holds it and never in the fork's own directory, and add nothing else", () => {
-    expect(forkSettingsOf("/repo", null)).toBe(JSON.stringify({ hooks: guard }));
+  const place = { home: "/home/me", checkout: "/main" };
+  const { sandbox, permissions } = sandboxedOf({ env: {} }, place, "background");
+  const rules = { blockReadsOutsideWorkingDirectories: true, deny: permissions.deny };
+  const api = sandboxedOf({ env: {} }, place, "api");
+
+  test("every Author's fork prints one result, runs its commands in the sandbox of every Worker, made for the main checkout, reads no credential with its file tools, and has every tool call under the fork guard, started in the checkout that holds it and never in the fork's own directory", () => {
+    expect(forkSettingsOf("/repo", place, null)).toBe(
+      JSON.stringify({ verbose: false, sandbox, permissions: rules, hooks: guard }),
+    );
+    expect(sandbox.filesystem.denyRead).toEqual(["/home/me"]);
+    expect(sandbox.filesystem.allowRead[0]).toBe("/main");
+    expect(rules.deny).toContain("Read(//home/me/.ssh/**)");
   });
 
-  test("the settings of an API Worker's fork add the key helper, which names the key's file and never the key, and the sandbox", () => {
-    expect(forkSettingsOf("/repo", API_FORK)).toBe(JSON.stringify({ ...API_FORK, hooks: guard }));
+  test("a fork takes no allow rule and no variable of a Worker's settings: it is held to reading", () => {
+    const settings: unknown = JSON.parse(forkSettingsOf("/repo", place, null));
+
+    expect(settings).not.toHaveProperty("permissions.allow");
+    expect(settings).not.toHaveProperty("env");
+  });
+
+  test("the settings of an API Worker's fork add the key helper, which names the key's file and never the key, and take an API Worker's sandbox, which hides the main checkout", () => {
+    expect(forkSettingsOf("/repo", place, API_FORK)).toBe(
+      JSON.stringify({
+        verbose: false,
+        ...API_FORK,
+        sandbox: api.sandbox,
+        permissions: { blockReadsOutsideWorkingDirectories: true, deny: api.permissions.deny },
+        hooks: guard,
+      }),
+    );
+    expect(api.sandbox.credentials.files).toContainEqual({ path: "/main", mode: "deny" });
+    expect(api.sandbox.filesystem.allowRead).not.toContain("/main");
   });
 });
 
@@ -252,7 +263,7 @@ describe("forkArgvOf", () => {
   const ask = { model: "claude-opus-5-5", prompt: "are you done?", schema: { type: "object" } };
 
   test("asks a resumed fork with the Done judge's tools under the guard, on the session's model, against the schema", () => {
-    expect(forkArgvOf("S1", ask, "/guard.json", false)).toEqual([
+    expect(forkArgvOf("S1", ask, "/guard.json")).toEqual([
       "claude",
       "-p",
       "--resume",
@@ -264,6 +275,8 @@ describe("forkArgvOf", () => {
       "dontAsk",
       "--settings",
       "/guard.json",
+      "--setting-sources",
+      "",
       "--strict-mcp-config",
       "--json-schema",
       '{"type":"object"}',
@@ -276,13 +289,13 @@ describe("forkArgvOf", () => {
   });
 
   test("with no schema and no model, the fork answers in free text on the default model", () => {
-    const argv = forkArgvOf("S1", { ...ask, model: null, schema: null }, "/guard.json", false);
+    const argv = forkArgvOf("S1", { ...ask, model: null, schema: null }, "/guard.json");
 
-    expect(argv.slice(11)).toEqual(["--strict-mcp-config", "--output-format", "json", "are you done?"]);
+    expect(argv.slice(13)).toEqual(["--strict-mcp-config", "--output-format", "json", "are you done?"]);
   });
 
-  test("the fork of an API Worker's session loads no settings but its own: no hook of the worktree runs in it", () => {
-    const argv = forkArgvOf("S1", { ...ask, model: null, schema: null }, "/guard.json", true);
+  test("a fork loads no settings but its own: no hook of the worktree runs in it, and no rule of the Owner's own settings widens its sandbox", () => {
+    const argv = forkArgvOf("S1", { ...ask, model: null, schema: null }, "/guard.json");
 
     expect(argv.slice(9)).toEqual([
       "--settings",
@@ -294,6 +307,5 @@ describe("forkArgvOf", () => {
       "json",
       "are you done?",
     ]);
-    expect(forkArgvOf("S1", ask, "/guard.json", false)).not.toContain("--setting-sources");
   });
 });

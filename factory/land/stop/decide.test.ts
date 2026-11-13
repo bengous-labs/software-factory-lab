@@ -200,30 +200,16 @@ describe("afterStopChecks", () => {
     expect(afterStopChecks({ kind: "green" }, false)).toEqual({ kind: "ask-done-judge" });
     expect(afterStopChecks({ kind: "green" }, true)).toEqual({ kind: "ask-done-judge" });
   });
-
-  test("red Stop checks block once with their report, then let the session end", () => {
-    const red = { kind: "red", report: "1 fail" } as const;
-
-    expect(afterStopChecks(red, false)).toEqual({
-      kind: "block",
-      reason:
-        "The Stop checks are red on this head, so nothing was published:\n\n1 fail\n\nFix them and commit, then stop.",
-    });
-    expect(afterStopChecks(red, true)).toEqual({
-      kind: "none",
-      reason: "the Stop checks are still red after a block: nothing is published",
-    });
-  });
 });
 
-describe("the Stop checks left to an API Worker", () => {
+describe("the Stop checks left to a Worker", () => {
   const left = { kind: "left" } as const;
 
   test("block once, asking the Worker to run them in its sandbox", () => {
     expect(afterStopChecks(left, false)).toEqual({
       kind: "block",
       reason:
-        "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your clone now, fix what it reports and commit, then stop.",
+        "The Stop hook runs no Stop checks on a Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` now, fix what it reports and commit, then stop.",
     });
   });
 
@@ -231,9 +217,8 @@ describe("the Stop checks left to an API Worker", () => {
     expect(afterStopChecks(left, true)).toEqual({ kind: "ask-done-judge" });
   });
 
-  test("a stop they block says they are left to the Worker, and one red checks block says they are red", () => {
-    expect(stopChecksOutcomeOf(left, "abc")).toBe("the Stop checks on abc are left to the API Worker");
-    expect(stopChecksOutcomeOf({ kind: "red", report: "1 fail" }, "abc")).toBe("the Stop checks are red on abc");
+  test("a stop they block says they are left to the Worker, on its head", () => {
+    expect(stopChecksOutcomeOf("abc")).toBe("the Stop checks on abc are left to the Worker");
   });
 });
 

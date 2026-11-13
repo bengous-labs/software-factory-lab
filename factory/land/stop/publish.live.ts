@@ -11,6 +11,7 @@ import { Schema } from "effect";
 
 import { TRUNK } from "../../install/host.ts";
 import { APP_LOGIN } from "../../install/logins.ts";
+import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
 import type { Run, RunOptions } from "../../lib/run.port.ts";
@@ -62,13 +63,20 @@ export interface Deps {
   readonly realpath: (path: string) => string | null;
 }
 
-export async function askFork(deps: Deps, input: StopInput, ask: ForkAsk): Promise<ForkResult> {
+/**
+ * Asks a fork of the stopping session, in the sandbox of every Worker, made for the home of the session
+ * and the main checkout of the stop.
+ */
+export async function askFork(
+  { deps, input, checkout }: Pick<AuthorStop, "deps" | "input" | "checkout">,
+  ask: ForkAsk,
+): Promise<ForkResult> {
   const started = deps.now();
 
-  const api = apiForkOf(deps.env, REPO);
-  const settings = forkSettingsOf(REPO, api);
+  const place = { home: requiredOf(deps.env, "HOME"), checkout };
+  const settings = forkSettingsOf(REPO, place, apiForkOf(deps.env));
 
-  const ran = await deps.run(forkArgvOf(input.session_id, ask, settings, api !== null), {
+  const ran = await deps.run(forkArgvOf(input.session_id, ask, settings), {
     cwd: input.cwd,
     env: { [FORK_FLAG]: "1" },
     timeoutMs: DONE_JUDGE.timeoutMs,
@@ -275,9 +283,9 @@ function leaveRelay(stopping: AuthorStop, pr: number): void {
 
 /** Opens the PR of the pushed branch, in draft when `draft`, with the title and body a fork writes; returns its number. */
 async function openPr(stopping: AuthorStop, gh: RunOptions, draft: boolean): Promise<number> {
-  const { deps, input, branch } = stopping;
+  const { deps, branch } = stopping;
 
-  const bodyFork = await askFork(deps, input, {
+  const bodyFork = await askFork(stopping, {
     model: stopping.model,
     prompt: BODY_REQUEST,
     schema: null,

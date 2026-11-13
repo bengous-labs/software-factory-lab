@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
+import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
+import type { SandboxableSettings, WorkerKind } from "../land/shared/worker-sandbox.ts";
 import {
   apiCloneOf,
   apiKeyProblemOf,
   apiWorkerSettingsTextOf,
+  backgroundWorkerSettingsOf,
+  backgroundWorkerSettingsTextOf,
   branchOf,
   CHECKOUT_VARIABLE,
   cloneArgvOf,
@@ -234,16 +238,11 @@ const PROJECT = JSON.stringify({
 
 const PLACE = { home: "/home/me", checkout: "/repo" };
 
-/** The deny rules an API Worker's settings add: the two hidden directories, to read and to write. */
-const DENY = [
-  "Read(//home/me/.api-agent/**)",
-  "Edit(//home/me/.api-agent/**)",
-  "Read(//home/me/.config/software-factory-lab/**)",
-  "Edit(//home/me/.config/software-factory-lab/**)",
-  "Read(//repo/**)",
-  "Edit(//repo/**)",
-  "Edit(//home/me/.local/share/software-factory-lab/api-workers/*/.git/**)",
-];
+/** What the sandbox of a Worker of `kind` adds to the Worker settings `settings`, for the home `/home/me` and the checkout `/repo`. */
+const sandboxed = (settings: SandboxableSettings, kind: WorkerKind = "api") => sandboxedOf(settings, PLACE, kind);
+
+/** The deny rules the sandbox of an API Worker adds. */
+const DENY = sandboxed({ env: {} }).permissions.deny;
 
 /** The API Worker settings text made from the Worker settings `json`, for the home `/home/me` and the checkout `/repo`. */
 const textOf = (json: string): string => apiWorkerSettingsTextOf(json, PROJECT, PLACE);
@@ -259,18 +258,19 @@ describe("apiWorkerSettingsTextOf", () => {
     const text = textOf(JSON.stringify(worker));
 
     expect(text).toEndWith("}\n");
+    expect(DENY.slice(0, 8)).toEqual([
+      "Read(//home/me/.api-agent/**)",
+      "Edit(//home/me/.api-agent/**)",
+      "Read(//home/me/.config/software-factory-lab/**)",
+      "Edit(//home/me/.config/software-factory-lab/**)",
+      "Read(//repo/**)",
+      "Edit(//repo/**)",
+      "Edit(//home/me/.local/share/software-factory-lab/api-workers/*/.git/**)",
+      "Read(//home/me/.ssh)",
+    ]);
     expect(JSON.parse(text)).toEqual({
-      env: {
-        LAB_AUTHOR: "1",
-        GH_TOKEN: "ghp_worker",
-        LAB_API_WORKER: "1",
-        LAB_MAIN_CHECKOUT: "/repo",
-        GIT_CONFIG_COUNT: "1",
-        GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf",
-        GIT_CONFIG_VALUE_0: "git@github.com:",
-      },
-      outputStyle: "Proactive",
-      claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"],
+      ...sandboxed(worker),
+      env: { ...sandboxed(worker).env, LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: "/repo" },
       verbose: false,
       apiKeyHelper: "cat '/home/me/.api-agent/key'",
       hooks: {
@@ -299,23 +299,13 @@ describe("apiWorkerSettingsTextOf", () => {
           },
         ],
       },
-      sandbox: {
-        enabled: true,
-        failIfUnavailable: true,
-        allowUnsandboxedCommands: false,
-        autoAllowBashIfSandboxed: true,
-        credentials: {
-          files: [
-            { path: "/home/me/.api-agent", mode: "deny" },
-            { path: "/home/me/.config/software-factory-lab", mode: "deny" },
-            { path: "/repo", mode: "deny" },
-          ],
-        },
-        network: {
-          allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"],
-        },
-      },
-      permissions: { allow: ["Edit(./**)", "Bash"], deny: DENY },
+    });
+    expect(JSON.parse(text)).toMatchObject({
+      env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", GIT_CONFIG_COUNT: "3" },
+      outputStyle: "Proactive",
+      claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"],
+      sandbox: { enabled: true, filesystem: { denyRead: ["/home/me"] } },
+      permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["Edit(./**)", "Bash"], deny: DENY },
     });
   });
 
@@ -417,7 +407,7 @@ describe("apiWorkerSettingsTextOf", () => {
     expect(JSON.parse(settings)).toMatchObject({
       apiKeyHelper: "cat '/home/me/.api-agent/key'",
       verbose: false,
-      env: { LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: "/repo", GIT_CONFIG_COUNT: "1" },
+      env: { LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: "/repo", GIT_CONFIG_COUNT: "3" },
       sandbox: { enabled: true },
     });
     expect(settings).not.toContain("excludedCommands");
@@ -442,6 +432,52 @@ describe("apiWorkerSettingsTextOf", () => {
 
   test("the main checkout's settings file is the one Claude Code reads there", () => {
     expect(projectSettingsOf("/repo")).toBe("/repo/.claude/settings.json");
+  });
+});
+
+describe("the settings of a background Worker", () => {
+  const worker = { env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" }, outputStyle: "Proactive" };
+
+  test("its settings file lies beside the API Worker's, in the config directory", () => {
+    expect(backgroundWorkerSettingsOf("/home/me")).toBe(
+      "/home/me/.config/software-factory-lab/background-worker-settings.json",
+    );
+  });
+
+  test("the text is the Worker settings in the sandbox of every Worker, in a mode that asks nothing, and nothing of an API Worker", () => {
+    const text = backgroundWorkerSettingsTextOf(JSON.stringify(worker), PLACE);
+
+    expect(text).toEndWith("}\n");
+    expect(JSON.parse(text)).toEqual({
+      ...sandboxed(worker, "background"),
+      permissions: { ...sandboxed(worker, "background").permissions, defaultMode: "dontAsk" },
+    });
+    expect(JSON.parse(text)).toMatchObject({
+      env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" },
+      outputStyle: "Proactive",
+      sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false },
+      permissions: { allow: ["Edit(./**)", "Bash"], deny: sandboxed(worker, "background").permissions.deny },
+    });
+    expect(text).not.toContain("apiKeyHelper");
+    expect(text).not.toContain("LAB_API_WORKER");
+    expect(text).not.toContain("EnterWorktree");
+  });
+
+  test("the rules the Worker settings file holds stay, and a mode or a sandbox it holds gives way", () => {
+    const held = {
+      ...worker,
+      sandbox: { enabled: false },
+      permissions: { allow: ["Bash(jq *)"], ask: ["Bash(rm *)"], defaultMode: "bypassPermissions" },
+    };
+
+    expect(JSON.parse(backgroundWorkerSettingsTextOf(JSON.stringify(held), PLACE))).toMatchObject({
+      sandbox: { enabled: true },
+      permissions: { allow: ["Bash(jq *)", "Edit(./**)", "Bash"], ask: ["Bash(rm *)"], defaultMode: "dontAsk" },
+    });
+  });
+
+  test("a Worker settings file that does not read throws, naming it", () => {
+    expect(() => backgroundWorkerSettingsTextOf("{", PLACE)).toThrow("the Worker settings file: ");
   });
 });
 
@@ -485,7 +521,7 @@ describe("the launch of an API Worker", () => {
 });
 
 describe("launchArgvOf", () => {
-  test("launches a named background session with the Worker settings passed by path", () => {
+  test("launches a named background session with its settings passed by path, and the project's settings as the one other source", () => {
     expect(
       launchArgvOf({ issue: 168, model: "opus", effort: undefined, settings: "/h/worker-settings.json", prompt: "P" }),
     ).toEqual([
@@ -495,6 +531,8 @@ describe("launchArgvOf", () => {
       "opus",
       "--settings",
       "/h/worker-settings.json",
+      "--setting-sources",
+      "project",
       "--name",
       "w-issue-168",
       "P",
@@ -513,6 +551,8 @@ describe("launchArgvOf", () => {
       "xhigh",
       "--settings",
       "/h/worker-settings.json",
+      "--setting-sources",
+      "project",
       "--name",
       "w-issue-168",
       "P",

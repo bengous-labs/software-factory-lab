@@ -1,22 +1,17 @@
 /**
  * What Dispatch decides when it hands an issue to a Worker: the branch and the worktree it creates, the
- * one launch prompt, and the `claude --bg` command that starts the Worker in the main checkout. For an
- * API Worker, a headless session that bills the Owner's Console API key: the settings file it writes
- * and the checks it makes on the key's file.
+ * one launch prompt, the settings file it writes for the Worker, sandbox included, and the `claude --bg`
+ * command that starts the Worker in the main checkout. For an API Worker, a headless session that bills
+ * the Owner's Console API key: its own settings file and the checks Dispatch makes on the key's file.
  */
 
 import { Result, Schema } from "effect";
 
 import { branchMadeFor } from "../contract.ts";
-import { CONFIG_DIR, TRUNK } from "../install/host.ts";
-import {
-  apiClonesDirOf,
-  apiKeyHelperOf,
-  apiWorkerDenyRulesOf,
-  apiWorkerSandboxOf,
-  ONE_RESULT,
-} from "../land/shared/api-worker.ts";
-import type { ApiWorkerPlace } from "../land/shared/api-worker.ts";
+import { TRUNK } from "../install/host.ts";
+import { apiClonesDirOf, apiKeyHelperOf, configDirOf, ONE_RESULT } from "../land/shared/api-worker.ts";
+import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
+import type { SandboxPlace, WorkerKind } from "../land/shared/worker-sandbox.ts";
 import { API_WORKER_VARIABLE } from "../lib/author-session.ts";
 import { Effort } from "../lib/effort.ts";
 import { decodeJson } from "../lib/json.ts";
@@ -118,7 +113,7 @@ export function cloneArgvOf(url: string, clone: string): string[] {
 
 /** The Worker settings file `factory/install/AGENTS.md` describes, which the Owner provisions. */
 export function workerSettingsOf(home: string): string {
-  return `${home}/.config/${CONFIG_DIR}/worker-settings.json`;
+  return `${configDirOf(home)}/worker-settings.json`;
 }
 
 /**
@@ -147,7 +142,7 @@ const WorkerSettings = Schema.Struct({
 
 const Rules = Schema.optionalKey(Schema.Array(Schema.String));
 
-/** The Worker settings file whole: what an API Worker's settings add to, and every other key as it stands. */
+/** The Worker settings file whole: what the settings Dispatch writes add to, and every other key as it stands. */
 const WorkerSettingsFile = Schema.StructWithRest(
   Schema.Struct({
     env: Schema.Record(Schema.String, Schema.String),
@@ -157,12 +152,6 @@ const WorkerSettingsFile = Schema.StructWithRest(
   }),
   [Schema.Record(Schema.String, Schema.Json)],
 );
-
-/**
- * What an API Worker may do with no one to ask: edit under its clone, and run any command, since
- * every command runs in the sandbox, which bounds it where no rule on a command's text would.
- */
-const API_WORKER_ALLOW = ["Edit(./**)", "Bash"];
 
 /**
  * The variable that holds the main checkout in an API Worker's session: its hooks are the main
@@ -225,42 +214,53 @@ function mainCheckoutHooksOf(projectSettings: string) {
   );
 }
 
+/** The Worker settings, from the Worker settings file's text `workerSettings`, in the sandbox a Worker of `kind` has in `place`. */
+function sandboxedWorkerSettingsOf(workerSettings: string, place: SandboxPlace, kind: WorkerKind) {
+  return sandboxedOf(decodeJson(WorkerSettingsFile, "the Worker settings file", workerSettings), place, kind);
+}
+
 /**
  * The text of the API Worker settings file, the only settings an API Worker's turn loads, from the
  * Worker settings file's and the main checkout's `.claude/settings.json`: the Worker's identity, token
- * and rules; the helper that prints the key, so the key enters no environment; the marker that makes
- * the session an API Worker; the main checkout's hooks; the sandbox, which hides the key and the
- * factory's own secrets from every command; the allow rules above, and deny rules on the same
- * directories for Claude Code's own file tools. Git reads the repository's remote over HTTPS in such a session: the sandbox holds no SSH agent.
+ * and rules, in the sandbox of an API Worker (`factory/land/shared/worker-sandbox.ts`); the helper that
+ * prints the key, so the key enters no environment; the marker that makes the session an API Worker;
+ * and the main checkout's hooks.
  */
-export function apiWorkerSettingsTextOf(
-  workerSettings: string,
-  projectSettings: string,
-  place: ApiWorkerPlace,
-): string {
-  const { home, checkout } = place;
-  const settings = decodeJson(WorkerSettingsFile, "the Worker settings file", workerSettings);
+export function apiWorkerSettingsTextOf(workerSettings: string, projectSettings: string, place: SandboxPlace): string {
+  const settings = sandboxedWorkerSettingsOf(workerSettings, place, "api");
 
   const added = {
     ...settings,
     ...ONE_RESULT,
-    apiKeyHelper: apiKeyHelperOf(home),
-    env: {
-      ...settings.env,
-      [API_WORKER_VARIABLE]: "1",
-      [CHECKOUT_VARIABLE]: checkout,
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf",
-      GIT_CONFIG_VALUE_0: "git@github.com:",
-    },
+    apiKeyHelper: apiKeyHelperOf(place.home),
+    env: { ...settings.env, [API_WORKER_VARIABLE]: "1", [CHECKOUT_VARIABLE]: place.checkout },
     hooks: mainCheckoutHooksOf(projectSettings),
-    sandbox: apiWorkerSandboxOf(place),
-    permissions: {
-      ...settings.permissions,
-      allow: [...(settings.permissions?.allow ?? []), ...API_WORKER_ALLOW],
-      deny: [...(settings.permissions?.deny ?? []), ...apiWorkerDenyRulesOf(place)],
-    },
   };
+
+  return `${JSON.stringify(added, null, 2)}\n`;
+}
+
+/**
+ * The background Worker settings file, which Dispatch writes from the Worker settings file at each
+ * dispatch of a background Worker. An on-disk name: running sessions were launched on it.
+ */
+export function backgroundWorkerSettingsOf(home: string): string {
+  return `${configDirOf(home)}/background-worker-settings.json`;
+}
+
+/** The permission mode of a background Worker: a call no allow rule covers is denied, since nobody answers a prompt. */
+const BACKGROUND_MODE = "dontAsk";
+
+/**
+ * The text of the background Worker settings file, from the Worker settings file's: the Worker's
+ * identity, token and rules, in the sandbox of every Worker. The session loads the project's settings
+ * beside it, whose hooks are the main checkout's, and asks nothing: it runs any command, in the
+ * sandbox, and edits under the main checkout, where its worktree lies.
+ */
+export function backgroundWorkerSettingsTextOf(workerSettings: string, place: SandboxPlace): string {
+  const settings = sandboxedWorkerSettingsOf(workerSettings, place, "background");
+
+  const added = { ...settings, permissions: { ...settings.permissions, defaultMode: BACKGROUND_MODE } };
 
   return `${JSON.stringify(added, null, 2)}\n`;
 }
@@ -352,11 +352,16 @@ export interface Launch {
   readonly issue: number;
   readonly model: string;
   readonly effort: Effort | undefined;
-  /** The Worker settings file, passed by its path: its token never reaches the command line. */
+  /** The background Worker settings file, passed by its path: its token never reaches the command line. */
   readonly settings: string;
   readonly prompt: string;
 }
 
+/**
+ * The command that starts a background Worker. Beside its settings file the session loads the project's
+ * settings alone, for the main checkout's hooks: the Owner's own settings, user or local, can widen a
+ * sandbox, with a write path or an excluded command.
+ */
 export function launchArgvOf({ issue, model, effort, settings, prompt }: Launch): string[] {
   return [
     "claude",
@@ -366,6 +371,8 @@ export function launchArgvOf({ issue, model, effort, settings, prompt }: Launch)
     ...(effort === undefined ? [] : ["--effort", effort]),
     "--settings",
     settings,
+    "--setting-sources",
+    "project",
     "--name",
     sessionNameOf(issue),
     prompt,
