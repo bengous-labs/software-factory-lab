@@ -31,3 +31,12 @@ export const CREDENTIAL_PATHS = [
   ".git-credentials",
   ".config/git/credentials",
 ];
+
+/**
+ * The credential directories the sandbox probe (`factory/bin/sandbox-probe.ts`) puts a canary file in,
+ * when they exist. The first is the one its symbolic links point into.
+ */
+export const PROBED_CREDENTIAL_DIRS = [".ssh", ".config/gh", ".gnupg"];
+
+/** The Owner's own Claude Code settings file, whose write paths a background Worker's sandbox must not take. */
+export const USER_SETTINGS = ".claude/settings.json";

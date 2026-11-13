@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { CREDENTIAL_PATHS, READABLE_UNDER_HOME } from "./sandbox-paths.ts";
+import { CREDENTIAL_PATHS, PROBED_CREDENTIAL_DIRS, READABLE_UNDER_HOME, USER_SETTINGS } from "./sandbox-paths.ts";
 
 /** Whether the path `inner` is `outer` or lies under it. */
 const within = (outer: string, inner: string): boolean => inner === outer || inner.startsWith(`${outer}/`);
@@ -39,6 +39,12 @@ describe("what a Worker reads under the home", () => {
     );
 
     expect(clashes).toEqual([]);
+  });
+
+  test("the probe puts its canaries in three credential paths, SSH's first, and reads the Owner's own settings file", () => {
+    expect(PROBED_CREDENTIAL_DIRS).toEqual([".ssh", ".config/gh", ".gnupg"]);
+    expect(PROBED_CREDENTIAL_DIRS.filter((dir) => !CREDENTIAL_PATHS.includes(dir))).toEqual([]);
+    expect(USER_SETTINGS).toBe(".claude/settings.json");
   });
 
   test("every entry is a path from the home: no leading slash, no step up", () => {
