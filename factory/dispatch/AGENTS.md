@@ -28,7 +28,7 @@ A hook's command runs outside the sandbox, and the Worker writes its clone, so a
 - That file carries the hooks of the main checkout's `.claude/settings.json`, each rewritten to start in the main checkout and run the main checkout's file, through `LAB_MAIN_CHECKOUT`: `bun` reads the `bunfig.toml` and the `.env` of the directory it starts in, so a hook that started in the clone would run the Worker's preload first.
   A hook command of any other form than `bun "$CLAUDE_PROJECT_DIR"/<file>` fails the dispatch: rewritten by guess, it could still run a file of the clone.
 - The Stop hook runs git in the main checkout, with the clone handed over through git's environment (`factory/land/stop/AGENTS.md`), and keeps its log and its state in the main checkout's `.lab/`.
-- `install-deps.ts`, whose install follows what the clone holds, does nothing for a Worker in a clone; `fix-edited.ts` and the Stop checks, `bun check`, run for no Author.
+- `install-deps.ts`, whose install follows what the clone holds, and `fix-edited.ts`, whose fix runs git and the lint config of the tree, do nothing in an Author's session nor in one that works in a clone; the Stop checks, `bun check`, run for no Author.
   `refuse-commit-on-dev.ts` guards a Worker as any session: it reads the branch from the checkout's files and runs no git.
 - The guide a session is given is the main checkout's `AGENTS.md`, through its system prompt: Claude Code reads that file outside the sandbox, at the session's first request and again after a compaction, and a path of the clone can be a link to a secret.
   The Worker reads the `AGENTS.md` of a directory itself, in its clone, and has no project skill, plugin or MCP server.
@@ -63,6 +63,8 @@ What this does not hold:
 The default kind.
 Dispatch launches `claude --bg` in the clone, on `background-worker-settings.json`, with the flags above and the main checkout's root guide (`--append-system-prompt-file`).
 Its settings hold the mode, `dontAsk`: a background session keeps its launch options, and the relay resumes it with the bare `claude --bg --resume`, run in its clone, where Claude Code keeps its conversation (`factory/land/relay/AGENTS.md`).
+Claude Code starts and restarts a background session only in a workspace whose trust the Owner accepted in a terminal, and trust never reaches a clone from the directory that holds it: where no dialog can appear, as in Dispatch, `claude --bg` in a new clone exits with `Workspace not trusted`, the dispatch fails, and it names the clone to remove.
+A headless session asks no trust, so an API Worker launches; issue #212 holds the way out for a background Worker.
 
 ## An API Worker
 

@@ -491,7 +491,10 @@ export function socketLineOf(text: string): string {
   return `${JSON.stringify({ type: "user", message: { role: "user", content: text } })}\n`;
 }
 
-/** The command that resumes `session` in the background with `text` as its next turn, and no other flag: it keeps its launch options. */
+/**
+ * The command that resumes `session` in the background with `text` as its next turn, and no other flag:
+ * it keeps its launch options, and Claude Code starts a copy of a session whose resume names one.
+ */
 export function resumeArgsOf(session: string, text: string): readonly string[] {
   return ["claude", "--bg", "--resume", session, text];
 }
