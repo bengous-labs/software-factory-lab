@@ -10,13 +10,8 @@ import { Result, Schema } from "effect";
 
 import { branchMadeFor } from "../contract.ts";
 import { TRUNK } from "../install/host.ts";
-import {
-  apiClonesDirOf,
-  apiKeyHelperOf,
-  configDirOf,
-  NO_SETTING_SOURCES,
-  ONE_RESULT,
-} from "../land/shared/api-worker.ts";
+import { clonesDirOf, configDirOf } from "../install/paths.ts";
+import { apiKeyHelperOf, NO_SETTING_SOURCES, ONE_RESULT } from "../land/shared/api-worker.ts";
 import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
 import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
 import { API_WORKER_VARIABLE, CHECKOUT_VARIABLE } from "../lib/author-session.ts";
@@ -106,7 +101,7 @@ export function branchOf(issue: number, title: string): string {
  * checkout, where a worktree would share the git directory of the checkout every hook runs from.
  */
 export function cloneOf(home: string, issue: number): string {
-  return `${apiClonesDirOf(home)}/issue-${issue}`;
+  return `${clonesDirOf(home)}/issue-${issue}`;
 }
 
 /** The command that makes a Worker's clone at `clone`, from the remote at `url`, on the Trunk. */

@@ -9,8 +9,8 @@
 import { Result, Schema } from "effect";
 
 import { AUTHOR_LOGIN } from "../install/logins.ts";
+import { clonesDirOf, configDirOf } from "../install/paths.ts";
 import { PROBED_CREDENTIAL_DIRS } from "../install/sandbox-paths.ts";
-import { apiClonesDirOf, configDirOf } from "../land/shared/api-worker.ts";
 import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
 import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
 import { decodeJson } from "../lib/json.ts";
@@ -114,7 +114,7 @@ export interface ProbeLayout {
 }
 
 export function layoutOf({ place, credentialDirs, userAllowWrite }: ProbeFacts, session: Session): ProbeLayout {
-  const tree = `${apiClonesDirOf(place.home)}/sandbox-probe-${session}`;
+  const tree = `${clonesDirOf(place.home)}/sandbox-probe-${session}`;
   const dir = `${tree}/.lab/sandbox-probe`;
 
   const linked = PROBED_CREDENTIAL_DIRS.slice(0, 1)

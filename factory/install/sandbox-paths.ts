@@ -5,8 +5,6 @@
  * Claude Code's own file tools, which run outside the sandbox.
  */
 
-import { CONFIG_DIR } from "./host.ts";
-
 /**
  * What a Worker's commands need under the home: the toolchain mise installed, bun's install cache, and
  * git's own configuration without its credentials. No entry is the home, a credential path, or a parent
@@ -42,10 +40,3 @@ export const PROBED_CREDENTIAL_DIRS = [".ssh", ".config/gh", ".gnupg"];
 
 /** The Owner's own Claude Code settings file, whose write paths a background Worker's sandbox must not take. */
 export const USER_SETTINGS = ".claude/settings.json";
-
-/**
- * bun's install cache of the Workers alone, by its path from the home: the one directory outside its
- * working directory a Worker's command writes. `bun install` needs a cache it can write, and the Owner's
- * own cache, which every other install of the machine trusts, stays read-only.
- */
-export const WORKERS_BUN_CACHE = `.local/share/${CONFIG_DIR}/bun-cache`;

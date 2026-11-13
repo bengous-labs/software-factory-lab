@@ -9,10 +9,10 @@ import { join } from "node:path";
 
 import { Schema } from "effect";
 
+import { clonesDirOf } from "../../install/paths.ts";
 import { worksInClone } from "../../lib/author-session.ts";
 import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../../lib/run.port.ts";
-import { apiClonesDirOf } from "../shared/api-worker.ts";
 import { conversationArgsOf } from "../shared/conversation.ts";
 import type { RelayStart } from "../shared/relay.port.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
@@ -174,7 +174,7 @@ export function world(fake: Partial<Fake> = {}): World {
   const checkout = fake.checkout ?? mkdtempSync(join(tmpdir(), "stop-"));
 
   const tree = worksInClone(env)
-    ? join(apiClonesDirOf(AUTHOR_ENV.HOME), "x")
+    ? join(clonesDirOf(AUTHOR_ENV.HOME), "x")
     : join(checkout, ".claude", "worktrees", "x");
 
   const root = mainCheckout ? checkout : tree;

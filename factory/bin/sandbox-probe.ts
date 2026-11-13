@@ -47,7 +47,7 @@ import {
 } from "../dispatch/probe-plan.ts";
 import type { CommandResult, ProbeFacts, SessionRun } from "../dispatch/probe-plan.ts";
 import { PROBED_CREDENTIAL_DIRS, USER_SETTINGS } from "../install/sandbox-paths.ts";
-import { sandboxPlaceProblemOf, workersBunCacheOf } from "../land/shared/worker-sandbox.ts";
+import { sandboxPlaceProblemOf } from "../land/shared/worker-sandbox.ts";
 import { requiredOf } from "../lib/env.ts";
 import { runIsolated } from "../lib/run.live.ts";
 import { sessionEnvOf } from "../lib/session-env.ts";
@@ -195,8 +195,6 @@ const KEPT = join(git("rev-parse", "--show-toplevel"), ".lab", "sandbox-probe");
 
 async function probe(): Promise<SessionRun[]> {
   mkdirSync(KEPT, { recursive: true });
-  // What Dispatch makes before a Worker starts, and leaves: the sandbox binds the Workers' own bun cache.
-  mkdirSync(workersBunCacheOf(home), { recursive: true, mode: 0o700 });
   console.log(`sandbox-probe keeps each session's output in ${KEPT}`);
 
   for (const canary of canaries) {

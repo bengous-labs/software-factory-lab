@@ -1,6 +1,6 @@
 # What an installation sets
 
-`factory/install/` holds what names the repository the factory is installed in: the repository, its Trunk, its config directory, its API key file and the directory of its Workers' clones (`host.ts`), its three logins (`logins.ts`), the factory config's schema and path (`factory-config.ts`), and what a Worker reads under the Owner's home (`sandbox-paths.ts`).
+`factory/install/` holds what names the repository the factory is installed in: the repository, its Trunk, its config directory, its API key file and the directory of its Workers' clones (`host.ts`), those places as paths under a home (`paths.ts`), its three logins (`logins.ts`), the factory config's schema and path (`factory-config.ts`), and what a Worker reads under the Owner's home (`sandbox-paths.ts`).
 No source file of the factory outside `install/` spells one of these names, nor a path under a user's home: `host-names.test.ts` fails on one that does.
 It reads no test and no guide, and it lets the release branch's name pass, a common word.
 A change to `logins.ts` waits for the Owner: it says whose word the Land loop obeys.
@@ -56,7 +56,7 @@ No hook installs for a Worker either: Dispatch runs `bun install` in its clone b
   Change the Worker settings file or `worker-sandbox.ts`, never a generated file.
 - Every Worker needs `bubblewrap`, `socat` and the sandbox's seccomp filter on the machine: a session whose sandbox cannot start runs no command.
 - A Worker's commits and tags are unsigned: the home holds the signing key.
-- `bun install` in a Worker's session fills a cache of the Workers' own, `~/.local/share/software-factory-lab/bun-cache`, the one directory outside its working directory a command writes: Dispatch creates it, and the Owner's own cache stays read-only.
+- `bun install` in a Worker's session fills a cache of that Worker's own, `.lab/bun-cache` in its clone, which git ignores: no command writes outside its clone and the session's temporary directory, and no Worker installs a package another one left. The Owner's own cache stays read-only.
 - No command of a Worker makes or reaches a Unix socket: the one test of `bun check` that listens on one, in `factory/land/relay/deliver.live.test.ts`, is skipped there, and runs in CI.
 - The Worker bench (`scripts/lab/bench.ts`) launches its sessions unsandboxed: their commands read what the Owner's user reads.
 

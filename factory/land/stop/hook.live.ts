@@ -17,11 +17,11 @@ import { dirname, join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
 import { TRUNK } from "../../install/host.ts";
+import { clonesDirOf } from "../../install/paths.ts";
 import { isApiWorker, isAuthor, worksInClone } from "../../lib/author-session.ts";
 import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
-import { apiClonesDirOf } from "../shared/api-worker.ts";
 import { questionOpen } from "../shared/author-mark.ts";
 import { authorTokenOf } from "../shared/author.live.ts";
 import { conversationArgsOf, conversationOf } from "../shared/conversation.ts";
@@ -312,7 +312,7 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
 
   const api = isApiWorker(deps.env);
   // A Worker Dispatch launched works in a clone, in a sandbox: the hook lets git find nothing from it.
-  const clones = worksInClone(deps.env) ? apiClonesDirOf(requiredOf(deps.env, "HOME")) : null;
+  const clones = worksInClone(deps.env) ? clonesDirOf(requiredOf(deps.env, "HOME")) : null;
   const place = clones === null ? await placeOf(deps, cwd) : clonePlaceOf(deps, clones, cwd);
   const at = new Date(deps.now()).toISOString();
 

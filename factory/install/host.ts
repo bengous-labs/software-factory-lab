@@ -18,5 +18,9 @@ export const CONFIG_DIR = "software-factory-lab";
 /** The file under the Owner's home that holds the Console API key an API Worker bills, by its path from that home. */
 export const API_KEY_FILE = ".api-agent/key";
 
-/** The directory under the Owner's home that holds the clone of each Worker, background or API, by its path from that home. */
-export const API_CLONES_DIR = `.local/share/${CONFIG_DIR}/api-workers`;
+/**
+ * The directory under the Owner's home that holds the clone of each Worker, background or API, by its
+ * path from that home. An on-disk name: existing clones and running sessions hold it, so it keeps its
+ * spelling, which says `api-workers`, whatever kind of Worker a clone is for.
+ */
+export const CLONES_DIR = `.local/share/${CONFIG_DIR}/api-workers`;

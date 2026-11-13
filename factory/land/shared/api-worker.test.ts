@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  apiClonesDirOf,
-  apiKeyFileOf,
   apiKeyHelperOf,
   apiWorkerLogOf,
   apiWorkerSettingsOf,
@@ -39,17 +37,12 @@ const TAIL = [
 
 describe("the key of an API Worker", () => {
   test("its file lies under the home, and the helper prints it, quoted for the shell", () => {
-    expect(apiKeyFileOf("/home/me")).toBe("/home/me/.api-agent/key");
     expect(apiKeyHelperOf("/home/me")).toBe("cat '/home/me/.api-agent/key'");
     expect(apiKeyHelperOf("/home/my home")).toBe("cat '/home/my home/.api-agent/key'");
   });
 
   test("a quote in the home cannot close the helper's quote", () => {
     expect(apiKeyHelperOf("/home/o'neil")).toBe(String.raw`cat '/home/o'\''neil/.api-agent/key'`);
-  });
-
-  test("the clones of the API Workers lie in one directory under the home, outside the main checkout", () => {
-    expect(apiClonesDirOf("/home/me")).toBe("/home/me/.local/share/software-factory-lab/api-workers");
   });
 });
 

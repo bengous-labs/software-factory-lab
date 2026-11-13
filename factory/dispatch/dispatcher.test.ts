@@ -102,7 +102,6 @@ function world(answers: Partial<Record<string, Ran>> = {}, machine: Partial<Mach
   const left: Left[] = [];
   const written: Array<{ path: string; text: string }> = [];
   const stats: string[] = [];
-  const made: string[] = [];
   const sleeps: number[] = [];
 
   const ports: DispatchPorts = {
@@ -142,11 +141,6 @@ function world(answers: Partial<Record<string, Ran>> = {}, machine: Partial<Mach
 
       return Promise.resolve();
     },
-    makeDir: (path) => {
-      made.push(path);
-
-      return Promise.resolve();
-    },
     modeOf: (path) => {
       stats.push(path);
 
@@ -160,7 +154,7 @@ function world(answers: Partial<Record<string, Ran>> = {}, machine: Partial<Mach
     },
   };
 
-  return { ports, calls, launches, left, written, stats, sleeps, order, made };
+  return { ports, calls, launches, left, written, stats, sleeps, order };
 }
 
 /** The message a dispatch rejects with; it fails the test when the dispatch resolves. */
@@ -239,16 +233,6 @@ describe("dispatch", () => {
     ]);
     expect(launch?.argv.join(" ")).not.toContain("secret");
     expect(calls.some((call) => call.argv[1] === "worktree")).toBe(false);
-  });
-
-  test("makes the Workers' own bun cache before either kind of Worker starts: its sandbox binds it", async () => {
-    for (const request of [REQUEST, API_REQUEST]) {
-      const { ports, made } = world();
-
-      await dispatch(ports, request);
-
-      expect(made).toEqual(["/home/me/.local/share/software-factory-lab/bun-cache"]);
-    }
   });
 
   test("launches the Worker at the effort the request names", async () => {

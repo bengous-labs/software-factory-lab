@@ -10,13 +10,8 @@
  * it printed to one log of the main checkout.
  */
 
-import { API_CLONES_DIR, API_KEY_FILE, CONFIG_DIR } from "../../install/host.ts";
+import { apiKeyFileOf, configDirOf } from "../../install/paths.ts";
 import type { Effort } from "../../lib/effort.ts";
-
-/** The file that holds the Console API key, under the home `home`. */
-export function apiKeyFileOf(home: string): string {
-  return `${home}/${API_KEY_FILE}`;
-}
 
 /**
  * The `apiKeyHelper` command of an API Worker and of its forks: it prints the key file, which Claude
@@ -24,16 +19,6 @@ export function apiKeyFileOf(home: string): string {
  */
 export function apiKeyHelperOf(home: string): string {
   return `cat '${apiKeyFileOf(home).replaceAll("'", String.raw`'\''`)}'`;
-}
-
-/** The factory's config directory, which holds the Author's token and the Worker settings files. */
-export function configDirOf(home: string): string {
-  return `${home}/.config/${CONFIG_DIR}`;
-}
-
-/** The directory that holds the clone of each Worker, background or API, under the home `home`. */
-export function apiClonesDirOf(home: string): string {
-  return `${home}/${API_CLONES_DIR}`;
 }
 
 /**

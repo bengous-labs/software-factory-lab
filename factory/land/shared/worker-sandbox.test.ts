@@ -58,7 +58,7 @@ const SANDBOX_ENV = {
   GIT_CONFIG_VALUE_1: "false",
   GIT_CONFIG_KEY_2: "tag.gpgsign",
   GIT_CONFIG_VALUE_2: "false",
-  BUN_INSTALL_CACHE_DIR: "/home/me/.local/share/software-factory-lab/bun-cache",
+  BUN_INSTALL_CACHE_DIR: ".lab/bun-cache",
 };
 
 const SANDBOX = {
@@ -74,9 +74,7 @@ const SANDBOX = {
       "/home/me/.gitconfig",
       "/home/me/.config/git/config",
       "/home/me/.config/git/ignore",
-      "/home/me/.local/share/software-factory-lab/bun-cache",
     ],
-    allowWrite: ["/home/me/.local/share/software-factory-lab/bun-cache"],
   },
   credentials: {
     files: [
@@ -89,14 +87,13 @@ const SANDBOX = {
 };
 
 describe("sandboxedOf", () => {
-  test("a command is allowed the list and the Workers' own bun cache alone beside its working directory: no entry for its clone, and none for the main checkout, which is hidden", () => {
+  test("a command is allowed the list alone beside its working directory, where bun's cache lies too: no entry for its clone, and none for the main checkout, which is hidden", () => {
     expect(SANDBOX.filesystem.allowRead).toEqual([
       "/home/me/.local/share/mise/installs",
       "/home/me/.bun/install/cache",
       "/home/me/.gitconfig",
       "/home/me/.config/git/config",
       "/home/me/.config/git/ignore",
-      "/home/me/.local/share/software-factory-lab/bun-cache",
     ]);
     expect(SANDBOX.credentials.files).toContainEqual({ path: "/repo", mode: "deny" });
     expect(sandboxedOf({ env: {} }, PLACE).sandbox).toEqual(SANDBOX);
@@ -144,7 +141,7 @@ describe("sandboxedOf", () => {
     });
   });
 
-  test("the sandbox widens nothing: it holds those keys alone, with no excluded command or Unix socket, and one write path, the Workers' own bun cache", () => {
+  test("the sandbox widens nothing: it holds those keys alone, with no write path, excluded command or Unix socket", () => {
     const { sandbox } = sandboxedOf({ env: {} }, PLACE);
 
     expect(Object.keys(sandbox).toSorted()).toEqual([
@@ -156,8 +153,7 @@ describe("sandboxedOf", () => {
       "filesystem",
       "network",
     ]);
-    expect(Object.keys(sandbox.filesystem).toSorted()).toEqual(["allowRead", "allowWrite", "denyRead"]);
-    expect(sandbox.filesystem.allowWrite).toEqual(["/home/me/.local/share/software-factory-lab/bun-cache"]);
+    expect(Object.keys(sandbox.filesystem).toSorted()).toEqual(["allowRead", "denyRead"]);
     expect(Object.keys(sandbox.network)).toEqual(["allowedDomains"]);
   });
 });

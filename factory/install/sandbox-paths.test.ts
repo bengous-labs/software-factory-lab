@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  CREDENTIAL_PATHS,
-  PROBED_CREDENTIAL_DIRS,
-  READABLE_UNDER_HOME,
-  USER_SETTINGS,
-  WORKERS_BUN_CACHE,
-} from "./sandbox-paths.ts";
+import { CREDENTIAL_PATHS, PROBED_CREDENTIAL_DIRS, READABLE_UNDER_HOME, USER_SETTINGS } from "./sandbox-paths.ts";
 
 /** Whether the path `inner` is `outer` or lies under it. */
 const within = (outer: string, inner: string): boolean => inner === outer || inner.startsWith(`${outer}/`);
@@ -51,15 +45,6 @@ describe("what a Worker reads under the home", () => {
     expect(PROBED_CREDENTIAL_DIRS).toEqual([".ssh", ".config/gh", ".gnupg"]);
     expect(PROBED_CREDENTIAL_DIRS.filter((dir) => !CREDENTIAL_PATHS.includes(dir))).toEqual([]);
     expect(USER_SETTINGS).toBe(".claude/settings.json");
-  });
-
-  test("the Workers' own bun cache lies beside the API Workers' clones, in no credential path and not in the Owner's cache", () => {
-    expect(WORKERS_BUN_CACHE).toBe(".local/share/software-factory-lab/bun-cache");
-    expect(
-      [...CREDENTIAL_PATHS, ...READABLE_UNDER_HOME].filter(
-        (path) => within(path, WORKERS_BUN_CACHE) || within(WORKERS_BUN_CACHE, path),
-      ),
-    ).toEqual([]);
   });
 
   test("every entry is a path from the home: no leading slash, no step up", () => {
