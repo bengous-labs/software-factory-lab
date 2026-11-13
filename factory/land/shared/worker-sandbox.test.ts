@@ -70,7 +70,6 @@ const SANDBOX = {
     denyRead: ["/home/me"],
     allowRead: [
       "/home/me/.local/share/mise/installs",
-      "/home/me/.bun/install/cache",
       "/home/me/.gitconfig",
       "/home/me/.config/git/config",
       "/home/me/.config/git/ignore",
@@ -87,10 +86,9 @@ const SANDBOX = {
 };
 
 describe("sandboxedOf", () => {
-  test("a command is allowed the list alone beside its working directory, where bun's cache lies too: no entry for its clone, and none for the main checkout, which is hidden", () => {
+  test("a command is allowed the list alone beside its working directory, where its bun cache lies: no entry for its clone, and none for the main checkout, which is hidden", () => {
     expect(SANDBOX.filesystem.allowRead).toEqual([
       "/home/me/.local/share/mise/installs",
-      "/home/me/.bun/install/cache",
       "/home/me/.gitconfig",
       "/home/me/.config/git/config",
       "/home/me/.config/git/ignore",

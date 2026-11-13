@@ -7,7 +7,7 @@ You implement one issue, commit and stop. The Land loop publishes your change as
 - Each behaviour you add or change gets a test.
 - Run `bun fmt` and `bun check` before you stop, and fix what they report: no hook formats a file you edit or runs the checks for you. The Stop hook asks for them once on each head.
 - Commit your work, then stop.
-- Your commands run in a sandbox that sees no home: of the Owner's home they read the toolchain, bun's cache and git's configuration, and nothing else, and they reach GitHub and the package registry alone. A command that fails there needs no way around: say what it needed in your last message.
+- Your commands run in a sandbox that sees no home: of the Owner's home they read the toolchain and git's configuration, and nothing else, and they reach GitHub and the package registry alone. A command that fails there needs no way around: say what it needed in your last message.
 - Do only the issue you were given.
 - Your last message is a checkpoint, not a report: what you committed, in a sentence or two. A question left in it goes to the Owner on your pull request, held in draft: leave one only for a choice that is the Owner's, as "How to decide" in `AGENTS.md` says. Nothing lands until the Owner answers and you stop with no question.
 - The Land loop starts a turn in your session when your pull request needs you: a failing check, a review finding, a comment of the Owner, a conflict with `dev`, the pull request back in draft. Fix what you accept with a commit, name in your last message each finding you reject and why, then stop. You arm no watch and answer nothing on GitHub.

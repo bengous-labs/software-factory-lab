@@ -46,11 +46,16 @@ function credentialPathsOf(home: string): string[] {
   return CREDENTIAL_PATHS.map((path) => `${home}/${path}`);
 }
 
+/** The variable that names bun's install cache. Dispatch keeps it from every hook, which runs outside the sandbox. */
+export const BUN_CACHE_VARIABLE = "BUN_INSTALL_CACHE_DIR";
+
 /**
- * bun's install cache in a Worker's session, by its path from the project a `bun install` runs in: a
- * directory of the Worker's own clone, which git ignores. `bun install` needs a cache it can write, and
- * one the Workers shared would let a Worker leave a package the next one installs. So each has its own,
- * under its working directory, where the sandbox lets it write with no entry.
+ * bun's install cache in a Worker's session: a path bun reads from the directory it starts in, so the
+ * `.lab/bun-cache` of the clone, which git ignores, for a command run at the clone's root, and a cache
+ * of its own for a `bun` started elsewhere, a test's fixture in the temporary directory. `bun install`
+ * needs a cache it can write, and one the Workers shared would let a Worker leave a package the next one
+ * installs. The settings file is one for every Worker of a kind, so it cannot name a clone: a relative
+ * path is what gives each its own, where the sandbox lets it write with no entry.
  */
 const BUN_CACHE_IN_CLONE = ".lab/bun-cache";
 
@@ -158,7 +163,7 @@ export interface SandboxableSettings {
 export function sandboxedOf<Settings extends SandboxableSettings>(settings: Settings, place: SandboxPlace) {
   return {
     ...settings,
-    env: { ...settings.env, ...GIT_ENV, BUN_INSTALL_CACHE_DIR: BUN_CACHE_IN_CLONE },
+    env: { ...settings.env, ...GIT_ENV, [BUN_CACHE_VARIABLE]: BUN_CACHE_IN_CLONE },
     sandbox: sandboxOf(place),
     permissions: {
       ...settings.permissions,

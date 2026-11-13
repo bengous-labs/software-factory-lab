@@ -6,13 +6,13 @@
  */
 
 /**
- * What a Worker's commands need under the home: the toolchain mise installed, bun's install cache, and
- * git's own configuration without its credentials. No entry is the home, a credential path, or a parent
- * of one (`sandbox-paths.test.ts`).
+ * What a Worker's commands need under the home: the toolchain mise installed, and git's own configuration
+ * without its credentials. Not bun's install cache, which holds the packages of the Owner's other
+ * projects: a Worker's `bun` fills a cache of its own (`worker-sandbox.ts`). No entry is the home, a
+ * credential path, or a parent of one (`sandbox-paths.test.ts`).
  */
 export const READABLE_UNDER_HOME = [
   ".local/share/mise/installs",
-  ".bun/install/cache",
   ".gitconfig",
   ".config/git/config",
   ".config/git/ignore",

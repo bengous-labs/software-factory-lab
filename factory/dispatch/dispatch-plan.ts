@@ -12,7 +12,7 @@ import { branchMadeFor } from "../contract.ts";
 import { TRUNK } from "../install/host.ts";
 import { clonesDirOf, configDirOf } from "../install/paths.ts";
 import { apiKeyHelperOf, NO_SETTING_SOURCES, ONE_RESULT } from "../land/shared/api-worker.ts";
-import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
+import { BUN_CACHE_VARIABLE, sandboxedOf } from "../land/shared/worker-sandbox.ts";
 import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
 import { API_WORKER_VARIABLE, CHECKOUT_VARIABLE } from "../lib/author-session.ts";
 import { Effort } from "../lib/effort.ts";
@@ -172,8 +172,10 @@ const HOOK_COMMAND = new RegExp(String.raw`^bun "\$${PROJECT_VARIABLE}"/([\w./-]
  * The command of a hook for an API Worker, from the one `.claude/settings.json` writes: it starts in the
  * main checkout and runs the main checkout's file. The start matters as much as the file: `bun` reads
  * the `bunfig.toml` and the `.env` of the directory it starts in, and a session's hooks start in its own
- * checkout, which is the worktree the Worker edits. A command of any other form throws: rewritten by
- * guess, it could still run a file of the worktree.
+ * checkout, which is the worktree the Worker edits. It drops the variable that names the Worker's bun
+ * cache first: a hook and what it starts run outside the sandbox, and never read a cache the Worker
+ * writes. A command of any other form throws: rewritten by guess, it could still run a file of the
+ * worktree.
  */
 function mainCheckoutCommandOf(command: string): string {
   const file = HOOK_COMMAND.exec(command)?.[1];
@@ -184,7 +186,7 @@ function mainCheckoutCommandOf(command: string): string {
     );
   }
 
-  return `cd "$${CHECKOUT_VARIABLE}" && bun "$${CHECKOUT_VARIABLE}"/${file}`;
+  return `cd "$${CHECKOUT_VARIABLE}" && unset ${BUN_CACHE_VARIABLE} && bun "$${CHECKOUT_VARIABLE}"/${file}`;
 }
 
 /**
@@ -377,6 +379,20 @@ export function launchArgvOf({ issue, model, effort, settings, checkout, prompt 
     sessionNameOf(issue),
     prompt,
   ];
+}
+
+/** What Claude Code prints when it starts no background session in a workspace nobody trusted. */
+const NOT_TRUSTED = "Workspace not trusted";
+
+/**
+ * What Dispatch says of a background launch whose output is `output`, when Claude Code refused it for
+ * workspace trust; null for any other failure. Trust never reaches a new clone, and Claude Code's own
+ * advice, to accept the trust prompt in the clone, names a directory the failed dispatch removes.
+ */
+export function untrustedLaunchOf(output: string): string | null {
+  return output.includes(NOT_TRUSTED)
+    ? "claude --bg starts no session in a new clone: Claude Code asks a workspace trust the clone does not have. Hand the issue to an API Worker with --api"
+    : null;
 }
 
 /** The id of the session `claude --bg` started, read from the `claude stop <id>` hint it prints. */

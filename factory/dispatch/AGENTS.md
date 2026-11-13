@@ -26,6 +26,7 @@ A hook's command runs outside the sandbox, and the Worker writes its clone, so a
 
 - A Worker's session loads no settings but the file Dispatch wrote for its kind (`--setting-sources ""`) and no MCP server but those its command names, which are none (`--strict-mcp-config`): no hook, plugin or MCP server of the clone, and no rule of the Owner's own settings, which could widen the sandbox.
 - That file carries the hooks of the main checkout's `.claude/settings.json`, each rewritten to start in the main checkout and run the main checkout's file, through `LAB_MAIN_CHECKOUT`: `bun` reads the `bunfig.toml` and the `.env` of the directory it starts in, so a hook that started in the clone would run the Worker's preload first.
+  Each also drops `BUN_INSTALL_CACHE_DIR` before it starts `bun`: the settings' `env` reaches a hook, and nothing a hook starts reads the cache a Worker writes.
   A hook command of any other form than `bun "$CLAUDE_PROJECT_DIR"/<file>` fails the dispatch: rewritten by guess, it could still run a file of the clone.
 - The Stop hook runs git in the main checkout, with the clone handed over through git's environment (`factory/land/stop/AGENTS.md`), and keeps its log and its state in the main checkout's `.lab/`.
 - `install-deps.ts`, whose install follows what the clone holds, and `fix-edited.ts`, whose fix runs git and the lint config of the tree, do nothing in an Author's session nor in one that works in a clone; the Stop checks, `bun check`, run for no Author.
@@ -40,7 +41,7 @@ A hook's command runs outside the sandbox, and the Worker writes its clone, so a
 `factory/land/shared/worker-sandbox.ts` is the one definition, for a background Worker, an API Worker and the forks of their stops (`factory/land/stop/AGENTS.md`); `factory/install/AGENTS.md` says what a Worker reads, and how the Owner probes it.
 
 - Every Bash command of the session runs in Claude Code's sandbox, with no retry outside it, and no command runs when the sandbox cannot start.
-- A command reads nothing under the Owner's home but its working directory, its clone, and a short list: the toolchain, bun's cache, git's configuration.
+- A command reads nothing under the Owner's home but its working directory, its clone, and a short list: the toolchain and git's configuration.
   The sandbox lets a command read and write its working directory with no entry, and no entry may hold it: with a parent of the working directory allowed to read, `bwrap` does not start (`Can't create file …/.claude/settings.local.json: Read-only file system`).
 - Three directories are hidden whatever else is allowed: the one that holds the API key, the factory's config directory, which holds the Author's token, and the main checkout.
 - A command writes under its clone alone, where what tells git which config to read and what to run stays read-only (`.git/config`, `.git/hooks`) and `.git` itself can be neither renamed nor replaced; bun's install cache lies there too, one per Worker (`factory/install/AGENTS.md`); it reaches GitHub and the package registry and no other host; it sees no other process.
@@ -55,7 +56,7 @@ What this does not hold:
 - A Worker reads what lies outside the home, and writes in the session's temporary directory.
 - Its environment holds the Author's `GH_TOKEN`, and it reaches `github.com`: what it reads, it can send there as the machine account.
 - A hook is safe by what it reads: one added to `.claude/settings.json` that starts a program in the clone, or lets git find its repository from there, runs the Worker's code outside the sandbox.
-- The hooks and the root guide are those of the main checkout's working tree, whatever it has checked out, while a clone starts from the Trunk: keep the main checkout on the Trunk (`git fetch origin && git reset --hard origin/dev`).
+- The hooks and the root guide are those of the main checkout's working tree, whatever it has checked out, while a clone starts from the Trunk: keep the main checkout on the Trunk (`git switch dev && git pull --ff-only`, which moves nothing when the checkout holds work of its own).
 - A session Dispatch did not launch, whose environment holds no `LAB_MAIN_CHECKOUT`, has none of this: it is no Worker in a clone, and its hooks treat it as the Owner's own tree.
 
 ## A background Worker
@@ -63,7 +64,7 @@ What this does not hold:
 The default kind.
 Dispatch launches `claude --bg` in the clone, on `background-worker-settings.json`, with the flags above and the main checkout's root guide (`--append-system-prompt-file`).
 Its settings hold the mode, `dontAsk`: a background session keeps its launch options, and the relay resumes it with the bare `claude --bg --resume`, run in its clone, where Claude Code keeps its conversation (`factory/land/relay/AGENTS.md`).
-Claude Code starts and restarts a background session only in a workspace whose trust the Owner accepted in a terminal, and trust never reaches a clone from the directory that holds it: where no dialog can appear, as in Dispatch, `claude --bg` in a new clone exits with `Workspace not trusted`, the dispatch fails, and it names the clone to remove.
+Claude Code starts and restarts a background session only in a workspace whose trust the Owner accepted in a terminal, and trust never reaches a clone from the directory that holds it: where no dialog can appear, as in Dispatch, `claude --bg` in a new clone exits with `Workspace not trusted`, and the dispatch fails as any failed launch does: it removes the clone, and says to hand the issue to an API Worker.
 A headless session asks no trust, so an API Worker launches; issue #212 holds the way out for a background Worker.
 
 ## An API Worker

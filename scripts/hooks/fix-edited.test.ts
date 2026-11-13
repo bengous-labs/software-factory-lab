@@ -153,6 +153,11 @@ describe("the hook", () => {
     await runHook(path, ROOT, { LAB_AUTHOR: "" });
 
     expect(await Bun.file(path).text()).toBe(FIXED);
+
+    writeFileSync(path, UNFORMATTED);
+    await runHook(path, ROOT, { LAB_AUTHOR: "0" });
+
+    expect(await Bun.file(path).text()).toBe(FIXED);
   });
 
   test("leaves a file git ignores as it is", async () => {

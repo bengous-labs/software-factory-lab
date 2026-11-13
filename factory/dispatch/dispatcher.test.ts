@@ -310,6 +310,16 @@ describe("dispatch", () => {
     );
   });
 
+  test("a background launch Claude Code refuses for workspace trust fails with the way out, an API Worker, and removes the clone", async () => {
+    const refused = "Workspace not trusted. Run `claude` in /clone once and accept the trust prompt, then retry.";
+    const { ports, calls } = world({ "claude --bg": { code: 1, stdout: "", stderr: refused } });
+
+    expect(await failureOf(dispatch(ports, REQUEST))).toBe(
+      "claude --bg starts no session in a new clone: Claude Code asks a workspace trust the clone does not have. Hand the issue to an API Worker with --api",
+    );
+    expect(calls.at(-1)?.argv).toEqual(["rm", "-rf", "--", CLONE]);
+  });
+
   test("removes the clone it made when the launch fails", async () => {
     const { ports, calls } = world({ "claude --bg": { code: 1, stdout: "", stderr: "no such model" } });
 
@@ -373,7 +383,14 @@ describe("dispatch", () => {
       env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", GIT_CONFIG_COUNT: "3", LAB_MAIN_CHECKOUT: CHECKOUT },
       hooks: {
         Stop: [
-          { hooks: [{ command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts' }] },
+          {
+            hooks: [
+              {
+                command:
+                  'cd "$LAB_MAIN_CHECKOUT" && unset BUN_INSTALL_CACHE_DIR && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts',
+              },
+            ],
+          },
         ],
       },
       sandbox: {
@@ -530,7 +547,14 @@ describe("the dispatch of an API Worker", () => {
       apiKeyHelper: `cat '${KEY}'`,
       hooks: {
         Stop: [
-          { hooks: [{ command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts' }] },
+          {
+            hooks: [
+              {
+                command:
+                  'cd "$LAB_MAIN_CHECKOUT" && unset BUN_INSTALL_CACHE_DIR && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts',
+              },
+            ],
+          },
         ],
       },
       sandbox: {

@@ -25,6 +25,7 @@ import {
   sessionIdOf,
   sessionNameOf,
   slugOf,
+  untrustedLaunchOf,
   workerSettingsOf,
   workerSettingsProblemOf,
 } from "./dispatch-plan.ts";
@@ -258,7 +259,8 @@ describe("apiWorkerSettingsTextOf", () => {
             hooks: [
               {
                 type: "command",
-                command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts',
+                command:
+                  'cd "$LAB_MAIN_CHECKOUT" && unset BUN_INSTALL_CACHE_DIR && bun "$LAB_MAIN_CHECKOUT"/factory/bin/stop-hook.ts',
                 timeout: 900,
               },
             ],
@@ -270,7 +272,8 @@ describe("apiWorkerSettingsTextOf", () => {
             hooks: [
               {
                 type: "command",
-                command: 'cd "$LAB_MAIN_CHECKOUT" && bun "$LAB_MAIN_CHECKOUT"/factory/hooks/refuse-author-publish.ts',
+                command:
+                  'cd "$LAB_MAIN_CHECKOUT" && unset BUN_INSTALL_CACHE_DIR && bun "$LAB_MAIN_CHECKOUT"/factory/hooks/refuse-author-publish.ts',
                 timeout: 30,
                 onFailure: "block",
               },
@@ -299,7 +302,11 @@ describe("apiWorkerSettingsTextOf", () => {
     );
 
     expect(commands).toHaveLength(2);
-    expect(commands.every((command) => command.startsWith(String.raw`cd \"$LAB_MAIN_CHECKOUT\" && bun `))).toBe(true);
+    expect(
+      commands.every((command) =>
+        command.startsWith(String.raw`cd \"$LAB_MAIN_CHECKOUT\" && unset BUN_INSTALL_CACHE_DIR && bun `),
+      ),
+    ).toBe(true);
   });
 
   test.each([
@@ -442,7 +449,7 @@ describe("the settings of a background Worker", () => {
       permissions: { allow: ["Edit(./**)", "Bash"], deny: DENY },
     });
     expect(text).toContain(
-      String.raw`cd \"$LAB_MAIN_CHECKOUT\" && bun \"$LAB_MAIN_CHECKOUT\"/factory/bin/stop-hook.ts`,
+      String.raw`cd \"$LAB_MAIN_CHECKOUT\" && unset BUN_INSTALL_CACHE_DIR && bun \"$LAB_MAIN_CHECKOUT\"/factory/bin/stop-hook.ts`,
     );
     expect(text).not.toContain("CLAUDE_PROJECT_DIR");
     expect(text).not.toContain("apiKeyHelper");
@@ -593,5 +600,22 @@ describe("workerSettingsProblemOf", () => {
   test("never quotes the file, which holds the token", () => {
     expect(workerSettingsProblemOf('{"env":{"LAB_AUTHOR":"0","GH_TOKEN":"ghp_secret"}}')).not.toContain("ghp_secret");
     expect(workerSettingsProblemOf('{"env":{"GH_TOKEN":"ghp_secret"')).not.toContain("ghp_secret");
+  });
+});
+
+describe("untrustedLaunchOf", () => {
+  test("a launch Claude Code refused for workspace trust names the way out, an API Worker, and not the clone the dispatch removes", () => {
+    expect(
+      untrustedLaunchOf(
+        "Workspace not trusted. Run `claude` in /clone once and accept the trust prompt, then retry.\n",
+      ),
+    ).toBe(
+      "claude --bg starts no session in a new clone: Claude Code asks a workspace trust the clone does not have. Hand the issue to an API Worker with --api",
+    );
+  });
+
+  test("any other failure is not one of trust", () => {
+    expect(untrustedLaunchOf("no such model")).toBeNull();
+    expect(untrustedLaunchOf("")).toBeNull();
   });
 });

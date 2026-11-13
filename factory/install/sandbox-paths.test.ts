@@ -6,10 +6,9 @@ import { CREDENTIAL_PATHS, PROBED_CREDENTIAL_DIRS, READABLE_UNDER_HOME, USER_SET
 const within = (outer: string, inner: string): boolean => inner === outer || inner.startsWith(`${outer}/`);
 
 describe("what a Worker reads under the home", () => {
-  test("is the toolchain, bun's cache and git's configuration, and nothing else", () => {
+  test("is the toolchain and git's configuration, and nothing else: not the Owner's bun cache", () => {
     expect(READABLE_UNDER_HOME).toEqual([
       ".local/share/mise/installs",
-      ".bun/install/cache",
       ".gitconfig",
       ".config/git/config",
       ".config/git/ignore",

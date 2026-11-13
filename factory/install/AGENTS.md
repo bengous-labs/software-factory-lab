@@ -37,7 +37,7 @@ A Worker runs code, so what holds a secret is the sandbox of its commands and th
 
 A command of a Worker, of either kind, reads:
 
-- under the Owner's home, its own clone, which is its working directory, and this list alone: `~/.local/share/mise/installs`, `~/.bun/install/cache`, `~/.gitconfig`, `~/.config/git/config` and `~/.config/git/ignore`.
+- under the Owner's home, its own clone, which is its working directory, and this list alone: `~/.local/share/mise/installs`, `~/.gitconfig`, `~/.config/git/config` and `~/.config/git/ignore`.
   The rest of the home is denied, a secret nobody listed included: SSH and GPG keys, the Owner's `gh` login, Claude Code's own login, shell history, the other checkouts of the machine;
 - never the main checkout, whose files every hook runs, nor another Worker's clone: the main checkout is hidden from it;
 - what lies outside the home: the system's files and the temporary directory;
@@ -56,7 +56,7 @@ No hook installs for a Worker either: Dispatch runs `bun install` in its clone b
   Change the Worker settings file or `worker-sandbox.ts`, never a generated file.
 - Every Worker needs `bubblewrap`, `socat` and the sandbox's seccomp filter on the machine: a session whose sandbox cannot start runs no command.
 - A Worker's commits and tags are unsigned: the home holds the signing key.
-- `bun install` in a Worker's session fills a cache of that Worker's own, `.lab/bun-cache` in its clone, which git ignores: no command writes outside its clone and the session's temporary directory, and no Worker installs a package another one left. The Owner's own cache stays read-only.
+- `bun install` in a Worker's session fills a cache of that Worker's own, `.lab/bun-cache` in its clone, which git ignores: no command writes outside its clone and the session's temporary directory, and no Worker installs a package another one left. The path is relative, since one settings file serves every Worker of a kind: a `bun` started elsewhere than the clone's root, in a test's fixture, fills a `.lab/bun-cache` of the directory it starts in. The Owner's own cache, which holds the packages of other projects, is not read.
 - No command of a Worker makes or reaches a Unix socket: the one test of `bun check` that listens on one, in `factory/land/relay/deliver.live.test.ts`, is skipped there, and runs in CI.
 - The Worker bench (`scripts/lab/bench.ts`) launches its sessions unsandboxed: their commands read what the Owner's user reads.
 
