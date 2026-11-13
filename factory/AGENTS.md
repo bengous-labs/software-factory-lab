@@ -73,6 +73,6 @@ A test the mutation job runs starts no process: a process takes its time from th
 
 ## Commands
 
-- `bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <level>]`, or `/dispatch <issue>` in the Owner's session, hands an issue to a Worker.
+- `bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <level>] [--api]`, or `/dispatch <issue>` in the Owner's session, hands an issue to a Worker; `--api` makes it an API Worker, which bills the Owner's Console API key (`factory/dispatch/AGENTS.md`).
 - `bun factory/bin/watch.ts [--standing] [<issue>...]`, or `/watch` in the Owner's session, follows the Workers.
 - `bun factory/bin/measure.ts --since YYYY-MM-DD` prints the Land loop's measure for the Owner.

@@ -7,3 +7,4 @@
 - `finding.ts`, `findings.ts` and `threads.ts`: a finding's vocabulary, its marker, and the review threads that hold the findings.
 - `conversation.ts` and `review-round.ts`: a PR's conversation, and the names of the Review rounds.
 - `relay.port.ts`: the port through which the Stop hook leaves a PR's relay.
+- `api-worker.ts`: what an API Worker is made of, for Dispatch, the Stop hook and the relay: its key helper, its sandbox, its settings file and log, and the command of a headless turn; `factory/dispatch/AGENTS.md` says what an API Worker is.

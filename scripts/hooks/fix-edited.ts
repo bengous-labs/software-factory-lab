@@ -19,6 +19,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, sep } from "nod
 
 import { $ } from "bun";
 
+import { isApiWorker } from "../../factory/lib/author-session.ts";
 import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../../factory/lib/checkout.ts";
 import type { Checkout } from "../../factory/lib/checkout.ts";
 import type { Json } from "../../factory/lib/plain-json.ts";
@@ -97,7 +98,9 @@ async function fixIn(root: string, filePath: string): Promise<void> {
   await $`${process.execPath} fmt ${path}`.cwd(root).nothrow().quiet();
 }
 
-if (import.meta.main) {
+// An API Worker's code runs in its sandbox alone, and a hook's command is outside it: the fix would
+// run the lint config of the worktree, which the Worker edits. Its Stop checks and CI catch the format.
+if (import.meta.main && !isApiWorker(process.env)) {
   const filePath = filePathOf(await Bun.stdin.text());
 
   if (filePath !== null) {

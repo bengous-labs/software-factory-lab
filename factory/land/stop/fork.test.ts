@@ -5,7 +5,16 @@ import { join } from "node:path";
 
 import { FORK_MARKER } from "./decide.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
-import { forkArgvOf, forkResultOf, hasForkMarker, modelOf, prTextOf, transcriptLinesOf } from "./fork.ts";
+import {
+  apiForkOf,
+  forkArgvOf,
+  forkResultOf,
+  forkSettingsOf,
+  hasForkMarker,
+  modelOf,
+  prTextOf,
+  transcriptLinesOf,
+} from "./fork.ts";
 import { linesOf, stop } from "./hook.live.ts";
 import { FINISHED, UNFINISHED, world } from "./stop.fixtures.ts";
 
@@ -185,11 +194,65 @@ describe("forkResultOf", () => {
   });
 });
 
+const API_FORK = {
+  verbose: false,
+  apiKeyHelper: "cat '/home/me/.api-agent/key'",
+  sandbox: {
+    enabled: true,
+    failIfUnavailable: true,
+    allowUnsandboxedCommands: false,
+    autoAllowBashIfSandboxed: true,
+    credentials: {
+      files: [
+        { path: "/home/me/.api-agent", mode: "deny" },
+        { path: "/home/me/.config/software-factory-lab", mode: "deny" },
+        { path: "/work/repo", mode: "deny" },
+      ],
+    },
+    network: { allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"] },
+  },
+};
+
+describe("apiForkOf", () => {
+  test("the forks of an API Worker's session bill the key and run their commands in its sandbox, and print one result", () => {
+    expect(apiForkOf({ LAB_API_WORKER: "1", LAB_AUTHOR: "1", HOME: "/home/me" }, "/work/repo")).toEqual(API_FORK);
+  });
+
+  test("the forks of any other session take its login: nothing is added", () => {
+    expect(apiForkOf({ LAB_AUTHOR: "1", HOME: "/home/me" }, "/work/repo")).toBeNull();
+    expect(apiForkOf({ LAB_API_WORKER: "0", HOME: "/home/me" }, "/work/repo")).toBeNull();
+    expect(apiForkOf({}, "/work/repo")).toBeNull();
+  });
+
+  test("an API Worker's session with no home throws: its fork would bill another credential", () => {
+    expect(() => apiForkOf({ LAB_API_WORKER: "1" }, "/work/repo")).toThrow("HOME is unset");
+  });
+});
+
+describe("forkSettingsOf", () => {
+  const guard = {
+    PreToolUse: [
+      {
+        matcher: "*",
+        hooks: [{ type: "command", command: 'cd "/repo" && bun "/repo/factory/bin/fork-guard.ts"', timeout: 30 }],
+      },
+    ],
+  };
+
+  test("a fork's settings put every tool call under the fork guard, started in the checkout that holds it and never in the fork's own directory, and add nothing else", () => {
+    expect(forkSettingsOf("/repo", null)).toBe(JSON.stringify({ hooks: guard }));
+  });
+
+  test("the settings of an API Worker's fork add the key helper, which names the key's file and never the key, and the sandbox", () => {
+    expect(forkSettingsOf("/repo", API_FORK)).toBe(JSON.stringify({ ...API_FORK, hooks: guard }));
+  });
+});
+
 describe("forkArgvOf", () => {
   const ask = { model: "claude-opus-5-5", prompt: "are you done?", schema: { type: "object" } };
 
   test("asks a resumed fork with the Done judge's tools under the guard, on the session's model, against the schema", () => {
-    expect(forkArgvOf("S1", ask, "/guard.json")).toEqual([
+    expect(forkArgvOf("S1", ask, "/guard.json", false)).toEqual([
       "claude",
       "-p",
       "--resume",
@@ -213,8 +276,24 @@ describe("forkArgvOf", () => {
   });
 
   test("with no schema and no model, the fork answers in free text on the default model", () => {
-    const argv = forkArgvOf("S1", { ...ask, model: null, schema: null }, "/guard.json");
+    const argv = forkArgvOf("S1", { ...ask, model: null, schema: null }, "/guard.json", false);
 
     expect(argv.slice(11)).toEqual(["--strict-mcp-config", "--output-format", "json", "are you done?"]);
+  });
+
+  test("the fork of an API Worker's session loads no settings but its own: no hook of the worktree runs in it", () => {
+    const argv = forkArgvOf("S1", { ...ask, model: null, schema: null }, "/guard.json", true);
+
+    expect(argv.slice(9)).toEqual([
+      "--settings",
+      "/guard.json",
+      "--setting-sources",
+      "",
+      "--strict-mcp-config",
+      "--output-format",
+      "json",
+      "are you done?",
+    ]);
+    expect(forkArgvOf("S1", ask, "/guard.json", false)).not.toContain("--setting-sources");
   });
 });

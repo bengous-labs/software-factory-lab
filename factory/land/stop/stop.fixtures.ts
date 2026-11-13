@@ -11,6 +11,7 @@ import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../../lib/run.port.ts";
+import { apiClonesDirOf } from "../shared/api-worker.ts";
 import { conversationArgsOf } from "../shared/conversation.ts";
 import type { RelayStart } from "../shared/relay.port.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
@@ -33,6 +34,9 @@ export const TOKEN_FILE = tokenFile();
 /** The environment of an Author's session: the marker the launcher's settings file gives, and the token's file. */
 export const AUTHOR_ENV = { LAB_AUTHOR: "1", LAB_AUTHOR_TOKEN_FILE: TOKEN_FILE };
 
+/** The environment of an API Worker's session: an Author's, the marker of its settings file, and the home its key lies under. */
+export const API_WORKER_ENV = { ...AUTHOR_ENV, LAB_API_WORKER: "1", HOME: "/home/me" };
+
 export interface Call {
   readonly argv: readonly string[];
   readonly options: RunOptions;
@@ -50,6 +54,7 @@ const MODEL_USAGE = {
 export const OutcomeLine = Schema.Struct({
   at: Schema.String,
   session: Schema.String,
+  api: Schema.Boolean,
   worktree: Schema.String,
   branch: Schema.NullOr(Schema.String),
   head: Schema.NullOr(Schema.String),
@@ -154,9 +159,16 @@ export function world(fake: Partial<Fake> = {}): World {
   } = fake;
 
   const checkout = fake.checkout ?? mkdtempSync(join(tmpdir(), "stop-"));
-  const root = mainCheckout ? checkout : join(checkout, ".claude", "worktrees", "x");
+
+  const tree =
+    env === API_WORKER_ENV
+      ? join(apiClonesDirOf(API_WORKER_ENV.HOME), "x")
+      : join(checkout, ".claude", "worktrees", "x");
+
+  const root = mainCheckout ? checkout : tree;
   const calls: Call[] = [];
   const relays: RelayStart[] = [];
+
   const outcomes: Array<{ checkout: string; line: OutcomeLine }> = [];
   const records: StopLogRecord[] = [];
   let asked = 0;
@@ -166,7 +178,7 @@ export function world(fake: Partial<Fake> = {}): World {
     ["git rev-parse --absolute-git-dir", mainCheckout ? `${checkout}/.git\n` : `${checkout}/.git/worktrees/x\n`],
     ["git rev-parse --path-format=absolute --git-common-dir", `${checkout}/.git\n`],
     ["git rev-parse HEAD", `${head}\n`],
-    ["git status --porcelain", dirty ? " M app/src/cli.ts\n" : ""],
+    ["git status --porcelain --ignore-submodules=all", dirty ? " M app/src/cli.ts\n" : ""],
     [conversationArgsOf(12).join(" "), conversation],
   ]);
 
@@ -231,6 +243,7 @@ export function world(fake: Partial<Fake> = {}): World {
     run,
     env,
     now: () => 0,
+    checkout,
     startRelay: (relay) => {
       relays.push(relay);
 
@@ -239,6 +252,7 @@ export function world(fake: Partial<Fake> = {}): World {
     recordOutcome: (where, line) => {
       outcomes.push({ checkout: where, line: decodeJson(OutcomeLine, "an outcome line", line) });
     },
+    realpath: (path) => path,
   };
 
   return {

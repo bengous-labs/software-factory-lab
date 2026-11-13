@@ -6,9 +6,14 @@
 
 import { Predicate, Result, Schema } from "effect";
 
+import { isApiWorker } from "../../lib/author-session.ts";
+import { requiredOf } from "../../lib/env.ts";
+import type { Env } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { ModelUsage, tokensOf } from "../../lib/tokens.ts";
 import type { TokenCounts } from "../../lib/tokens.ts";
+import { apiKeyHelperOf, apiWorkerSandboxOf, ONE_RESULT } from "../shared/api-worker.ts";
+import type { ApiWorkerPlace } from "../shared/api-worker.ts";
 import { FORK_MARKER } from "./decide.ts";
 import { DONE_JUDGE } from "./done-judge.actor.ts";
 
@@ -133,11 +138,48 @@ export interface ForkAsk {
   readonly schema: Schema.JsonObject | null;
 }
 
+/** What the fork of an API Worker's session has that another fork has not: its key helper and its sandbox. */
+export type ApiFork = ReturnType<typeof apiForkIn>;
+
+function apiForkIn(place: ApiWorkerPlace) {
+  return { ...ONE_RESULT, apiKeyHelper: apiKeyHelperOf(place.home), sandbox: apiWorkerSandboxOf(place) };
+}
+
+/**
+ * What the forks of the session whose environment is `env` add to their settings. An API Worker's forks
+ * bill the key their session bills, so a stop publishes while the subscription has no usage left, and a
+ * fork reads the prompt cache its session wrote; their commands run in the session's sandbox, since a
+ * fork carries on from what the Worker's session read; `checkout` is the main checkout, which that
+ * sandbox hides. Null for any other session: its forks take its login.
+ */
+export function apiForkOf(env: Env, checkout: string): ApiFork | null {
+  return isApiWorker(env) ? apiForkIn({ home: requiredOf(env, "HOME"), checkout }) : null;
+}
+
+/** The fork guard's door, by its path from the checkout that holds the hook's own files. */
+const FORK_GUARD = "factory/bin/fork-guard.ts";
+
+/**
+ * The settings of a fork, as the JSON its command passes: every tool call under the fork guard of
+ * `checkout`, the checkout that holds the hook's own files, and what an API Worker's fork adds. The
+ * guard starts in that checkout: a fork runs in the Author's worktree, and `bun` reads the `bunfig.toml`
+ * of the directory it starts in. The helper names the key's file, never the key.
+ */
+export function forkSettingsOf(checkout: string, api: ApiFork | null): string {
+  const command = `cd "${checkout}" && bun "${checkout}/${FORK_GUARD}"`;
+  const hooks = { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }] };
+
+  return JSON.stringify({ ...api, hooks });
+}
+
 /**
  * The command that asks a fork of `session`: a resumed fork of it, with the Done judge's tools, each call
- * under the guard `settings` wire, and its answer printed as JSON.
+ * under the guard `settings` wire, and its answer printed as JSON. An `isolated` fork, an API Worker's,
+ * loads no settings but those, as its session's turns do (`shared/api-worker.ts`): the worktree's own
+ * would run the hooks of the branch the Worker edits. The flag is written here, where `local/judges`
+ * reads the whole command.
  */
-export function forkArgvOf(session: string, ask: ForkAsk, settings: string): string[] {
+export function forkArgvOf(session: string, ask: ForkAsk, settings: string, isolated: boolean): string[] {
   return [
     "claude",
     "-p",
@@ -150,6 +192,7 @@ export function forkArgvOf(session: string, ask: ForkAsk, settings: string): str
     DONE_JUDGE.permissionMode,
     "--settings",
     settings,
+    ...(isolated ? ["--setting-sources", ""] : []),
     "--strict-mcp-config",
     ...(ask.schema === null ? [] : ["--json-schema", JSON.stringify(ask.schema)]),
     "--output-format",

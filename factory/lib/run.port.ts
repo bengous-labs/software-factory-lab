@@ -24,3 +24,21 @@ export async function checked(runner: Run, argv: readonly string[], options: Run
 
   return ran.stdout;
 }
+
+export interface LeaveOptions {
+  readonly cwd: string;
+  /** The child's whole environment. */
+  readonly env: Readonly<Record<string, string>>;
+  /** The file its output is appended to, created for its owner alone; its directory is created. */
+  readonly log: string;
+}
+
+/** A process left running. */
+interface Left {
+  readonly pid: number;
+  /** Its exit code once it ends, 1 when a signal ended it. It does not keep this process alive. */
+  readonly exited: Promise<number>;
+}
+
+/** Leaves `argv` running detached, so it outlives this process. */
+export type Leave = (argv: readonly string[], options: LeaveOptions) => Left;

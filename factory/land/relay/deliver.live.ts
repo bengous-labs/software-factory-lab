@@ -2,6 +2,7 @@
  * How a Wake's text reaches the Author's session: one line on its messaging socket while the session
  * runs, else `claude --bg --resume <session-id> "<text>"`, which wakes it with its saved launch options.
  * The Owner's words reach a running background session by `claude stop <id>`, then that resume.
+ * An API Worker's session is resumed headless, left running detached in its clone.
  * The socket's path is the one Claude Code was observed to bind, with the directory its documentation
  * names as the fallback.
  */
@@ -10,9 +11,10 @@ import { connect } from "node:net";
 import { join } from "node:path";
 
 import type { Env } from "../../lib/env.ts";
-import type { Run } from "../../lib/run.port.ts";
+import type { Leave, Run } from "../../lib/run.port.ts";
 import { checked } from "../../lib/run.port.ts";
-import { NotStopped } from "./main.ts";
+import { sessionEnvOf } from "../../lib/session-env.ts";
+import { NotStopped, TurnFailed } from "./main.ts";
 import type { Delivery } from "./main.ts";
 import type { Delivered } from "./wakes.ts";
 
@@ -40,9 +42,13 @@ export function postToSocket(path: string, line: string): Promise<boolean> {
   });
 }
 
-/** What `deliverer` needs: the commands it runs, the socket it writes, its wait, and what the socket's path is made of. */
+/**
+ * What `deliverer` needs: the commands it runs, the headless turn it leaves running, the socket it
+ * writes, its wait, and its environment, which the socket's path is made of and a headless turn takes whole.
+ */
 export interface DeliverIo {
   readonly run: Run;
+  readonly leave: Leave;
   readonly post: (path: string, line: string) => Promise<boolean>;
   readonly sleep: (ms: number) => Promise<void>;
   readonly env: Env;
@@ -68,6 +74,13 @@ async function stoppedWithin(io: DeliverIo, stopped: Delivery["stopped"]): Promi
   return false;
 }
 
+/**
+ * How long the relay looks at a headless turn it left running. A turn that ends with an error in that
+ * time failed at its start, its key refused, its credits spent or its settings unread; one that still
+ * runs after it works, and the relay goes back to its PR.
+ */
+const TURN_START_MS = 60_000;
+
 async function onSocket(io: DeliverIo, pid: number, line: string): Promise<Delivered | null> {
   for (const path of socketPathsOf(pid, io.env, io.uid)) {
     if (await io.post(path, line)) {
@@ -85,7 +98,12 @@ async function onSocket(io: DeliverIo, pid: number, line: string): Promise<Deliv
  * resumes the session once the listing shows it stopped: a resume right after the stop still finds it
  * running and starts a copy. A stop that fails throws, and so does a session still listed running after
  * the looks: its process is ending, and its socket may never read a line; the Wakes stay pending, and a
- * later poll resumes the session once it is stopped. A wait delivers nothing.
+ * later poll resumes the session once it is stopped. A wait delivers nothing. A headless resume is left
+ * running with what a session needs of the relay's environment, which holds no credential: the turn takes
+ * its key and the Worker's identity from the settings file its command names. The relay looks at that
+ * turn for a minute: one that ends with an error in that time throws, delivered nothing, and a later
+ * poll resumes the session again; one that works is delivered, whatever its end, so a turn that fails
+ * late is not given the same Wakes twice, and one that hangs does not hold the relay.
  */
 export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delivered | null> {
   return async ({ route, socketLine, resumeArgs, stopped }) => {
@@ -95,6 +113,19 @@ export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delive
 
     if (route.kind === "socket") {
       return onSocket(io, route.pid, socketLine);
+    }
+
+    if (route.kind === "headless") {
+      const turn = io.leave(resumeArgs, { cwd: route.worktree, env: sessionEnvOf(io.env), log: route.log });
+      const code = await Promise.race([turn.exited, io.sleep(TURN_START_MS).then(() => null)]);
+
+      if (code !== null && code !== 0) {
+        throw new TurnFailed(
+          `the headless turn ended with exit ${code} at its start: ${route.log} holds what it printed`,
+        );
+      }
+
+      return "headless";
     }
 
     if (route.kind === "stop") {

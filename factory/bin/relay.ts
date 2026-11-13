@@ -11,6 +11,6 @@
  */
 
 import { main } from "../land/relay/relay.live.ts";
-import { run } from "../lib/run.live.ts";
+import { leave, run } from "../lib/run.live.ts";
 
-await main({ run });
+await main({ run, leave });

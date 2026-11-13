@@ -17,9 +17,11 @@ import { TRUNK } from "../../install/host.ts";
 import { APP_LOGIN } from "../../install/logins.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { unescapeHtml } from "../../lib/markdown.ts";
+import { apiWorkerLogOf, apiWorkerSettingsOf, resumedTurnArgvOf } from "../shared/api-worker.ts";
 import { byOwner, questionOpen } from "../shared/author-mark.ts";
 import { conversationOf } from "../shared/conversation.ts";
 import { severityOfBody } from "../shared/findings.ts";
+import type { HeadlessSession } from "../shared/relay.port.ts";
 
 /** One check as `gh pr checks --json name,bucket,link` prints it. */
 const Check = Schema.Struct({ name: Schema.String, bucket: Schema.String, link: Schema.String });
@@ -301,12 +303,14 @@ const Agent = Schema.Struct({
 
 /**
  * How a Wake reaches the Author's session: its messaging socket while it runs, a resume when it no
- * longer does; for the Owner's words, a stop then a resume, or nothing yet.
+ * longer does; for the Owner's words, a stop then a resume, or nothing yet. An API Worker's session gets
+ * a headless resume, left running in its clone with its output appended to `log`.
  */
 export type Route =
   | { readonly kind: "socket"; readonly pid: number }
   | { readonly kind: "resume" }
   | { readonly kind: "stop"; readonly id: string }
+  | { readonly kind: "headless"; readonly worktree: string; readonly log: string }
   | { readonly kind: "wait" };
 
 /**
@@ -342,7 +346,7 @@ export function routeOf(agents: string, session: string, ownerWords: boolean): R
 }
 
 /** How a text was delivered. */
-export type Delivered = "socket" | "resume";
+export type Delivered = "socket" | "resume" | "headless";
 
 /** How many stops in a row may fail to show before the Owner's words take the socket. */
 const MAX_FAILED_STOPS = 3;
@@ -357,6 +361,106 @@ export const stopWanted = (ownerWords: boolean, failedStops: number): boolean =>
 /** Whether what `claude agents --json` printed shows `session` stopped: listed without a pid, or not listed. */
 export const stoppedIn = (agents: string, session: string): boolean =>
   routeOf(agents, session, false).kind === "resume";
+
+/**
+ * The session a PR's Wakes go to, as `relay-<pr>.session` holds it: the session of the PR's latest
+ * Publication, and what a headless resume needs when it is an API Worker's.
+ */
+export interface Target {
+  readonly session: string;
+  readonly headless: HeadlessSession | null;
+}
+
+const Headless = Schema.Struct({ model: Schema.NullOr(Schema.String), worktree: Schema.String });
+
+/**
+ * The text of `relay-<pr>.session`: the session's id on the first line, and for an API Worker a second
+ * line of JSON. An on-disk format: the Stop hook writes it at each Publication and a running relay reads it.
+ */
+export function targetTextOf({ session, headless }: Target): string {
+  return headless === null ? `${session}\n` : `${session}\n${JSON.stringify(headless)}\n`;
+}
+
+/** The target `relay-<pr>.session` holds, from its text. */
+export function targetOf(text: string): Target {
+  const [session = "", second = ""] = text.split("\n");
+
+  return {
+    session,
+    headless: second === "" ? null : decodeJson(Headless, "the second line of the relay's session file", second),
+  };
+}
+
+/** What one delivery sends, whichever way it goes: the route, the line for a socket, the command of a resume. */
+export interface Sending {
+  readonly route: Route;
+  readonly socketLine: string;
+  readonly resumeArgs: readonly string[];
+}
+
+/** What a delivery sends, and what holds it back. */
+export interface WakeSending {
+  readonly text: string;
+  /** The Owner's words still seek a stop of a background session. */
+  readonly stop: boolean;
+  /** A headless turn failed at its start a moment ago: none is started before `retryDelayOf` has passed. */
+  readonly held: boolean;
+}
+
+/** The longest the relay waits before it tries a headless turn again. */
+const RETRY_MAX_MS = 30 * 60_000;
+
+/**
+ * How long the relay waits before it starts a headless turn again, after `failures` turns in a row that
+ * failed at their start, its key refused or its credits spent: one minute, then twice as long each
+ * time, up to half an hour. No count ends the tries: a key the Owner fixes heals the PR's Wakes.
+ */
+export function retryDelayOf(failures: number): number {
+  return Math.min(60_000 * 2 ** Math.max(0, failures - 1), RETRY_MAX_MS);
+}
+
+/** The main checkout the relay runs in, and the home that holds the API Worker settings file. */
+export interface RelayPlace {
+  readonly checkout: string;
+  readonly home: string;
+}
+
+/**
+ * How `text` reaches `target`, from what `claude agents --json` printed. An API Worker's session has no
+ * socket and takes every turn as its user's: it waits while the listing shows its turn running, since a
+ * second resume would start a copy of the conversation, and is resumed headless, with the API Worker
+ * settings file and its model, once the listing shows it stopped and no failed start holds it back. Any other session takes `routeOf`,
+ * where `stop` says whether the Owner's words still seek a stop.
+ */
+export function sendingOf(
+  agents: string,
+  target: Target,
+  { text, stop, held }: WakeSending,
+  { checkout, home }: RelayPlace,
+): Sending {
+  const { session, headless } = target;
+  const socketLine = socketLineOf(text);
+
+  if (headless === null) {
+    return { route: routeOf(agents, session, stop), socketLine, resumeArgs: resumeArgsOf(session, text) };
+  }
+
+  return {
+    route:
+      !held && stoppedIn(agents, session)
+        ? { kind: "headless", worktree: headless.worktree, log: apiWorkerLogOf(checkout, session) }
+        : { kind: "wait" },
+    socketLine,
+    resumeArgs: resumedTurnArgvOf({
+      session,
+      model: headless.model,
+      effort: null,
+      settings: apiWorkerSettingsOf(home),
+      checkout,
+      prompt: text,
+    }),
+  };
+}
 
 /** The line the relay writes on a session's messaging socket: one user message. An external format: Claude Code reads it. */
 export function socketLineOf(text: string): string {

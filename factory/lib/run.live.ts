@@ -1,9 +1,47 @@
-import type { Ran, Run, RunOptions } from "./run.port.ts";
+import { spawn } from "node:child_process";
+import { closeSync, mkdirSync, openSync } from "node:fs";
+import { dirname } from "node:path";
+
+import type { Leave, Ran, Run, RunOptions } from "./run.port.ts";
 
 export const run: Run = (argv, options) => spawned(argv, options, { ...process.env, ...options.env });
 
 /** Like `run`, but `options.env` is the child's whole environment: nothing of this process's reaches it. */
 export const runIsolated: Run = (argv, options) => spawned(argv, options, { ...options.env });
+
+export const leave: Leave = (argv, options) => {
+  mkdirSync(dirname(options.log), { recursive: true });
+
+  const log = openSync(options.log, "a", 0o600);
+  const [command = "", ...args] = argv;
+
+  const child = spawn(command, args, {
+    cwd: options.cwd,
+    env: { ...options.env },
+    detached: true,
+    stdio: ["ignore", log, log],
+  });
+
+  // The child holds its own copy of the log's descriptor.
+  closeSync(log);
+
+  // A command that does not start also emits `error` a tick later, which would end the process with no
+  // listener: the missing pid below is what reports it.
+  child.on("error", () => {});
+  child.unref();
+
+  if (child.pid === undefined) {
+    throw new Error(`the process did not start: ${argv.join(" ")}`);
+  }
+
+  const exited = new Promise<number>((settle) => {
+    child.once("exit", (code) => {
+      settle(code ?? 1);
+    });
+  });
+
+  return { pid: child.pid, exited };
+};
 
 async function spawned(
   argv: readonly string[],

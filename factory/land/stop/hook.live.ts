@@ -12,18 +12,21 @@
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
 import { TRUNK } from "../../install/host.ts";
-import { isAuthor } from "../../lib/author-session.ts";
+import { isApiWorker, isAuthor } from "../../lib/author-session.ts";
+import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
+import { apiClonesDirOf } from "../shared/api-worker.ts";
 import { questionOpen } from "../shared/author-mark.ts";
 import { authorTokenOf } from "../shared/author.live.ts";
 import { conversationArgsOf, conversationOf } from "../shared/conversation.ts";
 import type { OpenFinding } from "../shared/findings.ts";
+import { cloneRootOf, pinnedGitEnvOf } from "./clone-git.ts";
 import {
   admit,
   afterClosed,
@@ -38,6 +41,7 @@ import {
   noDoneAnswer,
   outcomeLineOf,
   quotedQuestionOf,
+  stopChecksOutcomeOf,
 } from "./decide.ts";
 import type { Refusal, Snapshot, StopChecks, StopFacts } from "./decide.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
@@ -55,6 +59,7 @@ import {
   openFindings,
   prOf,
   publish,
+  REPO,
   StopInput,
 } from "./publish.live.ts";
 import type { Answer, AuthorStop, Deps, Log, StopLogRecord, Stopped } from "./publish.live.ts";
@@ -66,12 +71,17 @@ export function linesOf(path: string): TranscriptLine[] {
   return existsSync(path) ? transcriptLinesOf(readFileSync(path, "utf8"), path) : [];
 }
 
-async function stopChecks(deps: Deps, cwd: string, stateDir: string, head: string): Promise<StopChecks> {
-  // An on-disk name: existing state files carry it, so it stays.
-  const record = join(stateDir, `gates-${head}`);
-
+/**
+ * The Stop checks on the head whose record is the file `record`: green when the record is there, left to
+ * an API Worker, whose code the hook does not run, else what `bun check` gives.
+ */
+async function stopChecks(deps: Deps, cwd: string, record: string, api: boolean): Promise<StopChecks> {
   if (existsSync(record)) {
     return { kind: "green" };
+  }
+
+  if (api) {
+    return { kind: "left" };
   }
 
   const ran = await deps.run(["bun", "check"], { cwd, timeoutMs: STOP_CHECKS_TIMEOUT_MS });
@@ -109,24 +119,28 @@ function askDoneJudge(stopping: AuthorStop, findings: readonly OpenFinding[]): P
 
 /** The stop of an Author whose branch may be published: admission, the Stop checks, the Done judge, the Publication. */
 async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopped> {
-  const { deps, input, log, branch, head } = stopping;
-  const { cwd } = input;
+  const { deps, input, log, branch, head, git } = stopping;
   // Left by the stop that asked for the commit, and read once by the next one.
   const commitAsked = join(stateDir, `commit-asked-${input.session_id}`);
   const chain = chainOf(input.stop_hook_active === true, existsSync(commitAsked));
   rmSync(commitAsked, { force: true });
 
-  await deps.run(["git", "fetch", "--quiet", "origin", TRUNK], { cwd, timeoutMs: 60_000 });
+  // No fetch in a submodule: it would be git run in a directory of the worktree, under the config found there.
+  await deps.run(["git", "fetch", "--quiet", "--no-recurse-submodules", "origin", TRUNK], {
+    ...git,
+    timeoutMs: 60_000,
+  });
 
   // Read before the PR list, which the Author's credential reads too; only publishing needs the token.
   const token = authorTokenOf(deps.env);
-  const gh = ghOptions(cwd, token);
+  const gh = ghOptions(stopping.ghCwd, token);
 
   const snapshot: Snapshot = {
     branch,
     head,
-    treeClean: (await gitOut(deps, cwd, ["status", "--porcelain"])) === "",
-    ahead: Number(await gitOut(deps, cwd, ["rev-list", "--count", `origin/${TRUNK}..HEAD`])),
+    // A submodule's status is git run in a directory of the worktree, under the config found there.
+    treeClean: (await gitOut(deps, git, ["status", "--porcelain", "--ignore-submodules=all"])) === "",
+    ahead: Number(await gitOut(deps, git, ["rev-list", "--count", `origin/${TRUNK}..HEAD`])),
     pr: await prOf(deps, gh, branch),
   };
 
@@ -160,11 +174,19 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     return stoppedOf(noAuthorToken(token.path, chain.reported), `no Author token at ${token.path}`);
   }
 
-  const next = afterStopChecks(await stopChecks(deps, cwd, stateDir, head), chain.reported);
-  log({ step: "stop-checks", next: next.kind });
+  // An on-disk name: existing state files carry it, so it stays.
+  const record = join(stateDir, `gates-${head}`);
+  const checks = await stopChecks(deps, input.cwd, record, stopping.api);
+  const next = afterStopChecks(checks, chain.reported);
+  log({ step: "stop-checks", checks: checks.kind, next: next.kind });
 
   if (next.kind !== "ask-done-judge") {
-    return stoppedOf(next, `the Stop checks are red on ${head}`);
+    return stoppedOf(next, stopChecksOutcomeOf(checks, head));
+  }
+
+  if (checks.kind === "left") {
+    // The Worker was asked on this head: a later stop on it is not asked again.
+    writeFileSync(record, "left\n");
   }
 
   const findings = snapshot.pr === null ? [] : await openFindings(deps, gh, snapshot.pr.number);
@@ -198,26 +220,71 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
   );
 }
 
-/** Where a session stops: its worktree, the repository's main checkout, and whether they are the same. */
-interface Place {
-  readonly worktree: string;
-  readonly checkout: string;
+/**
+ * Where a session stops: its worktree, the repository's main checkout, whether they are the same, and
+ * where the hook runs git and gh and keeps its state for this stop.
+ */
+interface Place extends Pick<AuthorStop, "worktree" | "checkout" | "git" | "ghCwd"> {
   readonly mainCheckout: boolean;
+  readonly stateDir: string;
 }
 
 async function placeOf(deps: Deps, cwd: string): Promise<Place> {
-  const worktree = await gitOut(deps, cwd, ["rev-parse", "--show-toplevel"]);
-  const gitDir = await gitOut(deps, cwd, ["rev-parse", "--absolute-git-dir"]);
-  const commonDir = await gitOut(deps, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const git = { cwd };
+  const worktree = await gitOut(deps, git, ["rev-parse", "--show-toplevel"]);
+  const gitDir = await gitOut(deps, git, ["rev-parse", "--absolute-git-dir"]);
+  const commonDir = await gitOut(deps, git, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
 
-  return { worktree, checkout: dirname(commonDir), mainCheckout: gitDir === commonDir };
+  return {
+    worktree,
+    checkout: dirname(commonDir),
+    mainCheckout: gitDir === commonDir,
+    git,
+    ghCwd: cwd,
+    stateDir: join(worktree, ".lab", "state"),
+  };
+}
+
+/** `path` with every link in it resolved; null when it names nothing, or cannot be resolved. */
+function realPathOf(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where an API Worker's session stops: the clone its directory `cwd` lies in, among those `clones`
+ * holds, with git handed that clone through its environment and run, as gh is, in the main checkout,
+ * where the hook's state lies too. The hook is outside the Worker's sandbox, so it lets git find nothing
+ * from the clone and writes nothing there (`clone-git.ts`). Both paths are compared with their links
+ * resolved: a home reached through a link names the same clones. Null when `cwd` lies in no clone.
+ */
+function apiPlaceOf({ checkout, realpath }: Deps, clones: string, cwd: string): Place | null {
+  const realClones = realpath(clones);
+  const realCwd = realpath(cwd);
+  const worktree = realClones === null || realCwd === null ? null : cloneRootOf(realClones, realCwd);
+
+  if (worktree === null) {
+    return null;
+  }
+
+  return {
+    worktree,
+    checkout,
+    mainCheckout: false,
+    git: { cwd: checkout, env: pinnedGitEnvOf(worktree) },
+    ghCwd: checkout,
+    stateDir: join(checkout, ".lab", "state"),
+  };
 }
 
 /** The stop of an Author in `place`, on `branch` at `head`: what git alone refuses, then `authorStop`. */
 function stopIn(
   place: Place,
   { branch, head }: { readonly branch: string | null; readonly head: string },
-  stopping: Pick<AuthorStop, "deps" | "input" | "log" | "model">,
+  stopping: Pick<AuthorStop, "deps" | "input" | "log" | "model" | "api">,
 ): Promise<Stopped> {
   const checkout = checkoutOf({ mainCheckout: place.mainCheckout, branch });
 
@@ -227,10 +294,14 @@ function stopIn(
     return Promise.resolve(notPublished(checkout.reason));
   }
 
-  const stateDir = join(place.worktree, ".lab", "state");
-  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(place.stateDir, { recursive: true });
 
-  return authorStop({ ...stopping, branch: checkout.branch, head, checkout: place.checkout }, stateDir);
+  const { worktree, git, ghCwd } = place;
+
+  return authorStop(
+    { ...stopping, branch: checkout.branch, head, checkout: place.checkout, worktree, git, ghCwd },
+    place.stateDir,
+  );
 }
 
 /** Appends `line` to `.lab/outcomes.log` of the main checkout `checkout`. */
@@ -254,24 +325,35 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
     return ALLOW;
   }
 
-  const place = await placeOf(deps, cwd);
+  const api = isApiWorker(deps.env);
+  const clones = api ? apiClonesDirOf(requiredOf(deps.env, "HOME")) : null;
+  const place = clones === null ? await placeOf(deps, cwd) : apiPlaceOf(deps, clones, cwd);
+  const at = new Date(deps.now()).toISOString();
 
-  let facts: StopFacts = {
-    at: new Date(deps.now()).toISOString(),
-    session: input.session_id,
-    worktree: place.worktree,
-    branch: null,
-    head: null,
-  };
+  if (place === null) {
+    const reason = `the stop of an API Worker comes from ${cwd}, which lies in no clone of ${clones}`;
+    log({ step: "admit", kind: "none", reason });
+    deps.recordOutcome(
+      deps.checkout,
+      outcomeLineOf(
+        { at, session: input.session_id, api, worktree: cwd, branch: null, head: null },
+        { kind: "not-published", reason },
+      ),
+    );
+
+    return ALLOW;
+  }
+
+  let facts: StopFacts = { at, session: input.session_id, api, worktree: place.worktree, branch: null, head: null };
 
   let stopped: Stopped;
   let failure: { readonly error: unknown } | null = null;
 
   try {
-    const branch = (await deps.run(["git", "symbolic-ref", "--short", "-q", "HEAD"], { cwd })).stdout.trim() || null;
-    const head = await gitOut(deps, cwd, ["rev-parse", "HEAD"]);
+    const branch = (await deps.run(["git", "symbolic-ref", "--short", "-q", "HEAD"], place.git)).stdout.trim() || null;
+    const head = await gitOut(deps, place.git, ["rev-parse", "HEAD"]);
     facts = { ...facts, branch, head };
-    stopped = await stopIn(place, { branch, head }, { deps, input, log, model: modelOf(transcript) });
+    stopped = await stopIn(place, { branch, head }, { deps, input, log, model: modelOf(transcript), api });
   } catch (error) {
     failure = { error };
     stopped = notPublished(`the Stop hook failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -292,8 +374,11 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
  */
 export async function main(ports: Pick<Deps, "run" | "startRelay">): Promise<void> {
   const input = decodeJson(StopInput, "the Stop input", await Bun.stdin.text());
-  const logFile = join(input.cwd, ".lab", "stop.log");
-  mkdirSync(join(input.cwd, ".lab"), { recursive: true });
+  // An API Worker's log lies in the main checkout: the hook writes nothing in a directory the Worker
+  // prepares, where a file it appends to can be a link to any file of the Owner's.
+  const logDir = join(isApiWorker(process.env) ? REPO : input.cwd, ".lab");
+  const logFile = join(logDir, "stop.log");
+  mkdirSync(logDir, { recursive: true });
 
   const log = (record: StopLogRecord): void => {
     appendFileSync(
@@ -303,7 +388,16 @@ export async function main(ports: Pick<Deps, "run" | "startRelay">): Promise<voi
   };
 
   try {
-    const answer = await stop(input, { ...ports, env: process.env, now: Date.now, recordOutcome: appendOutcome }, log);
+    const deps = {
+      ...ports,
+      env: process.env,
+      now: Date.now,
+      checkout: REPO,
+      recordOutcome: appendOutcome,
+      realpath: realPathOf,
+    };
+
+    const answer = await stop(input, deps, log);
 
     if (answer.kind === "block") {
       console.log(JSON.stringify({ decision: "block", reason: answer.reason }));

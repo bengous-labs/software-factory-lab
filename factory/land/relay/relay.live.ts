@@ -10,20 +10,27 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
+import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
-import type { Run, RunOptions } from "../../lib/run.port.ts";
+import type { Leave, Run, RunOptions } from "../../lib/run.port.ts";
 import { ghEnv, requiredAuthorToken } from "../shared/author.live.ts";
 import { deliverer, postToSocket } from "./deliver.live.ts";
 import { readPr, relayDeliverer, turn } from "./main.ts";
 import type { RelayIo } from "./main.ts";
 import { relayFilesOf } from "./relay-start.live.ts";
-import { relayLineOf, SeenKeys } from "./wakes.ts";
+import { relayLineOf, SeenKeys, targetOf } from "./wakes.ts";
 
 const POLL_MS = 30_000;
 
+/** What the relay's process takes from its door: the commands it runs, and the headless turn it leaves running. */
+export interface RelayPorts {
+  readonly run: Run;
+  readonly leave: Leave;
+}
+
 /** The relay of the PR `process.argv[2]`, in the current directory, until the PR is landed or closed. */
-export async function main({ run }: { readonly run: Run }): Promise<void> {
+export async function main({ run, leave }: RelayPorts): Promise<void> {
   const pr = Number(process.argv[2]);
 
   if (!Number.isInteger(pr)) {
@@ -48,11 +55,14 @@ export async function main({ run }: { readonly run: Run }): Promise<void> {
 
   const io: RelayIo = {
     read: () => readPr(run, gh, pr),
-    session: () => readFileSync(files.session, "utf8").trim(),
+    session: () => targetOf(readFileSync(files.session, "utf8")),
     deliver: relayDeliverer({
       agents: () => checked(run, ["claude", "agents", "--json"], { cwd }),
+      place: { checkout: cwd, home: requiredOf(process.env, "HOME") },
+      now: Date.now,
       deliver: deliverer({
         run,
+        leave,
         post: postToSocket,
         sleep: (ms) => Bun.sleep(ms),
         env: process.env,

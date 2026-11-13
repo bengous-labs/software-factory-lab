@@ -1,6 +1,6 @@
 /**
  * No file of the factory outside `install/` spells a name of the repository it is installed in: its
- * logins, its name, its Trunk, its config directory, or a path of one machine. Installing the factory
+ * logins, its name, its Trunk, its config directory, its API key file, the directory of its API Workers' clones, or a path of one machine. Installing the factory
  * elsewhere then changes `install/` alone. A test file may: it tells what happens on this host.
  */
 
@@ -32,8 +32,10 @@ const spelled = (name: string): RegExp =>
 const HOME_PATH = /\/(?:home|Users)\/[\w.-]+\//u;
 
 describe("the names of this host", () => {
-  test("install/ holds the repository, its Trunk, its release branch, its config directory and its three logins", () => {
+  test("install/ holds the repository, its Trunk, its release branch, its config directory, its API key file, the directory of its API Workers' clones and its three logins", () => {
     expect(Object.keys(NAMES).toSorted()).toEqual([
+      "API_CLONES_DIR",
+      "API_KEY_FILE",
       "APP_LOGIN",
       "AUTHOR_LOGIN",
       "CONFIG_DIR",

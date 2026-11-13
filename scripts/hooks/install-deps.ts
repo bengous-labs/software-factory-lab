@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { $ } from "bun";
 import { Schema } from "effect";
 
+import { isApiWorker } from "../../factory/lib/author-session.ts";
 import { checkoutFromRevParse, projectDirOf, trustedRoot } from "../../factory/lib/checkout.ts";
 import type { Checkout } from "../../factory/lib/checkout.ts";
 import { decodeJson } from "../../factory/lib/json.ts";
@@ -44,7 +45,10 @@ async function checkoutOf(dir: string): Promise<Checkout | null> {
   return checkoutFromRevParse(ran.stdout.toString(), ran.exitCode);
 }
 
-if (import.meta.main && process.env[STOP_FORK_FLAG] !== "1") {
+// Not for an API Worker: the hook is outside its sandbox, and an install in its clone follows what
+// the Worker left there, a `node_modules` that is a link to the main checkout's included. Dispatch
+// installs its clone before it starts.
+if (import.meta.main && process.env[STOP_FORK_FLAG] !== "1" && !isApiWorker(process.env)) {
   const cwd = cwdOf(await Bun.stdin.text());
   const root = trustedRoot(await checkoutOf(cwd), await checkoutOf(projectDirOf(process.env)));
 

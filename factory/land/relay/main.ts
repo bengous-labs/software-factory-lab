@@ -2,7 +2,8 @@
  * One turn of the relay of a pull request (`bin/relay.ts`): it reads the PR as the Author's machine
  * account and delivers the Wakes it has not delivered yet, as one turn in the session of the PR's latest
  * Publication: on that session's messaging socket while it runs, else by resuming it. The Owner's words
- * reach an idle background session as its user's: the relay stops it, then resumes it with them.
+ * reach an idle background session as its user's: the relay stops it, then resumes it with them. An API
+ * Worker's session is resumed headless once its turn has ended.
  */
 
 import { checked } from "../../lib/run.port.ts";
@@ -12,15 +13,14 @@ import {
   ownerWordsIn,
   prStateOf,
   readingOf,
-  resumeArgsOf,
-  routeOf,
-  socketLineOf,
+  retryDelayOf,
+  sendingOf,
   stoppedIn,
   stopWanted,
   wakeTextOf,
   wakeThreadsQueryOf,
 } from "./wakes.ts";
-import type { Delivered, PrState, Reading, Route } from "./wakes.ts";
+import type { Delivered, PrState, Reading, RelayPlace, Sending, Target } from "./wakes.ts";
 
 /** Reads the PR's state with `gh`, under `options`. */
 export async function readPr(runner: Run, options: RunOptions, pr: number): Promise<PrState> {
@@ -46,17 +46,17 @@ export async function readPr(runner: Run, options: RunOptions, pr: number): Prom
 /** What one turn of the relay needs from outside: the PR's state, the session its Wakes go to, and their delivery. */
 export interface RelayIo {
   readonly read: () => Promise<PrState>;
-  /** The session of the PR's latest Publication. */
-  readonly session: () => string;
-  /** Delivers `text` to `session`, as the Owner's words when `ownerWords`; null when it did not go through. */
-  readonly deliver: (session: string, text: string, ownerWords: boolean) => Promise<Delivered | null>;
+  /** The session of the PR's latest Publication, and what a headless resume needs when it is an API Worker's. */
+  readonly session: () => Target;
+  /** Delivers `text` to `target`, as the Owner's words when `ownerWords`; null when it did not go through. */
+  readonly deliver: (target: Target, text: string, ownerWords: boolean) => Promise<Delivered | null>;
 }
 
 /** What one turn of the relay did: the keys it delivered, and whether the relay ends. */
 export interface Turn {
   /** The keys of the Wakes this turn delivered. */
   readonly delivered: readonly string[];
-  /** How they went: on the session's socket or by a resume; null when nothing went through. */
+  /** How they went: on the session's socket, by a resume or by a headless one; null when nothing went through. */
   readonly via: Delivered | null;
   /** The Wakes the turn had to deliver. */
   readonly pending: number;
@@ -84,10 +84,7 @@ export async function turn(pr: number, seen: ReadonlySet<string>, io: RelayIo): 
  * What a deliverer sends: the route, the line for a socket, the command for a resume, and whether the
  * listing of sessions shows the session stopped.
  */
-export interface Delivery {
-  readonly route: Route;
-  readonly socketLine: string;
-  readonly resumeArgs: readonly string[];
+export interface Delivery extends Sending {
   readonly stopped: () => Promise<boolean>;
 }
 
@@ -96,38 +93,61 @@ export class NotStopped extends Error {
   override readonly name = "NotStopped";
 }
 
-/** What `relayDeliverer` needs: the listing of sessions, and the deliverer that sends a delivery. */
+/**
+ * A headless turn of an API Worker's session that failed at its start, its key refused, its credits
+ * spent or its settings unread: the relay counts these to space its tries.
+ */
+export class TurnFailed extends Error {
+  override readonly name = "TurnFailed";
+}
+
+/**
+ * What `relayDeliverer` needs: the listing of sessions, the deliverer that sends a delivery, where the
+ * relay runs, and its clock.
+ */
 export interface DeliverPorts {
   /** What `claude agents --json` prints. */
   readonly agents: () => Promise<string>;
   readonly deliver: (delivery: Delivery) => Promise<Delivered | null>;
+  readonly place: RelayPlace;
+  /** The time, in milliseconds. */
+  readonly now: () => number;
 }
 
 /**
  * The relay's delivery over `ports`: it routes each text from the listing of sessions, and counts the
  * stops in a row that throw `NotStopped`, which a delivery that goes through resets. Past the bound of
- * `stopWanted`, the Owner's words take the socket rather than another stop.
+ * `stopWanted`, the Owner's words take the socket rather than another stop. It counts the same way the
+ * headless turns in a row that throw `TurnFailed`, and holds the next one back for `retryDelayOf` after
+ * each: a key refused or credits spent would otherwise start a turn at every poll.
  */
 export function relayDeliverer(ports: DeliverPorts): RelayIo["deliver"] {
   const stops = { failed: 0 };
+  const turns = { failed: 0, notBefore: 0 };
 
-  return async (session, text, ownerWords) => {
+  return async (target, text, ownerWords) => {
+    const wake = { text, stop: stopWanted(ownerWords, stops.failed), held: ports.now() < turns.notBefore };
+
     try {
       const via = await ports.deliver({
-        route: routeOf(await ports.agents(), session, stopWanted(ownerWords, stops.failed)),
-        socketLine: socketLineOf(text),
-        resumeArgs: resumeArgsOf(session, text),
-        stopped: async () => stoppedIn(await ports.agents(), session),
+        ...sendingOf(await ports.agents(), target, wake, ports.place),
+        stopped: async () => stoppedIn(await ports.agents(), target.session),
       });
 
       if (via !== null) {
         stops.failed = 0;
+        turns.failed = 0;
       }
 
       return via;
     } catch (error) {
       if (error instanceof NotStopped) {
         stops.failed += 1;
+      }
+
+      if (error instanceof TurnFailed) {
+        turns.failed += 1;
+        turns.notBefore = ports.now() + retryDelayOf(turns.failed);
       }
 
       throw error;

@@ -5,7 +5,7 @@
  * relay left. A stop that leaves a question puts it to the Owner on a draft PR instead.
  */
 
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import { Schema } from "effect";
 
@@ -32,30 +32,13 @@ import {
 import type { Action, ClosedPullRequest, DoneAnswer, FixedRecord, Outcome, PullRequest, Rejection } from "./decide.ts";
 import { DONE_JUDGE } from "./done-judge.actor.ts";
 import { BODY_REQUEST } from "./done-judge.prompt.ts";
-import { forkArgvOf, forkResultOf, prTextOf } from "./fork.ts";
+import { apiForkOf, forkArgvOf, forkResultOf, forkSettingsOf, prTextOf } from "./fork.ts";
 import type { ForkAsk, ForkResult } from "./fork.ts";
 
 export const FORK_FLAG = "LAB_STOP_FORK";
 
 /** The repository of the hook's own files, where the fork guard lives; the Author's cwd may be another checkout. */
-const REPO = resolve(import.meta.dir, "..", "..", "..");
-
-const FORK_SETTINGS = JSON.stringify({
-  hooks: {
-    PreToolUse: [
-      {
-        matcher: "*",
-        hooks: [
-          {
-            type: "command",
-            command: `bun "${join(REPO, "factory", "bin", "fork-guard.ts")}"`,
-            timeout: 30,
-          },
-        ],
-      },
-    ],
-  },
-});
+export const REPO = resolve(import.meta.dir, "..", "..", "..");
 
 export const StopInput = Schema.Struct({
   session_id: Schema.String,
@@ -71,14 +54,21 @@ export interface Deps {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly now: () => number;
   readonly startRelay: StartRelay;
+  /** The checkout that holds the hook's own files: the main checkout, for a session that runs its hooks. */
+  readonly checkout: string;
   /** Appends `line` to `.lab/outcomes.log` of the main checkout `checkout`. */
   readonly recordOutcome: (checkout: string, line: string) => void;
+  /** `path` with every link in it resolved; null when it cannot be resolved. */
+  readonly realpath: (path: string) => string | null;
 }
 
 export async function askFork(deps: Deps, input: StopInput, ask: ForkAsk): Promise<ForkResult> {
   const started = deps.now();
 
-  const ran = await deps.run(forkArgvOf(input.session_id, ask, FORK_SETTINGS), {
+  const api = apiForkOf(deps.env, REPO);
+  const settings = forkSettingsOf(REPO, api);
+
+  const ran = await deps.run(forkArgvOf(input.session_id, ask, settings, api !== null), {
     cwd: input.cwd,
     env: { [FORK_FLAG]: "1" },
     timeoutMs: DONE_JUDGE.timeoutMs,
@@ -87,8 +77,9 @@ export async function askFork(deps: Deps, input: StopInput, ask: ForkAsk): Promi
   return forkResultOf(ran.stdout, ran.code, deps.now() - started);
 }
 
-export async function gitOut(deps: Deps, cwd: string, args: readonly string[]): Promise<string> {
-  return (await checked(deps.run, ["git", ...args], { cwd })).trim();
+/** What `git` prints for `args`, run where and how `at` says. */
+export async function gitOut(deps: Deps, at: RunOptions, args: readonly string[]): Promise<string> {
+  return (await checked(deps.run, ["git", ...args], at)).trim();
 }
 
 export const ListedPrs = Schema.Array(
@@ -223,7 +214,18 @@ export interface AuthorStop {
   readonly head: string;
   /** The main checkout, where the relay runs. */
   readonly checkout: string;
+  /** The tree the stop comes from: a worktree of the main checkout, or the clone of an API Worker. */
+  readonly worktree: string;
+  /**
+   * Where and how the hook runs git for this stop: in the session's directory, or, for an API Worker, in
+   * the main checkout with the clone handed over through git's environment (`clone-git.ts`).
+   */
+  readonly git: RunOptions;
+  /** The directory the hook runs gh in: the session's, or the main checkout for an API Worker. */
+  readonly ghCwd: string;
   readonly model: string | null;
+  /** The session is an API Worker's: the relay resumes it headless. */
+  readonly api: boolean;
 }
 
 /** The Author's credential, found. */
@@ -257,8 +259,9 @@ export async function closeNits(stopping: AuthorStop, gh: RunOptions, findings: 
 /** Leaves the PR's relay, when none watches it. A failure is logged: the PR is published either way. */
 function leaveRelay(stopping: AuthorStop, pr: number): void {
   try {
-    const { input, checkout } = stopping;
-    const started = stopping.deps.startRelay({ pr, session: input.session_id, checkout });
+    const { input, checkout, worktree, model, api } = stopping;
+    const headless = api ? { model, worktree } : null;
+    const started = stopping.deps.startRelay({ pr, session: input.session_id, headless, checkout });
     stopping.log({ step: "relay", pr, relay: started });
   } catch (error) {
     stopping.log({
@@ -280,7 +283,7 @@ async function openPr(stopping: AuthorStop, gh: RunOptions, draft: boolean): Pro
     schema: null,
   });
 
-  const subject = await gitOut(deps, input.cwd, ["log", "-1", "--format=%s"]);
+  const subject = await gitOut(deps, stopping.git, ["log", "-1", "--format=%s"]);
   const text = prTextOf(bodyFork.text) ?? { title: subject, body: "" };
   stopping.log({
     step: "body-fork",
@@ -327,8 +330,8 @@ interface Judged {
 
 async function push(stopping: AuthorStop, author: Credential): Promise<void> {
   await checked(stopping.deps.run, pushArgs(stopping.branch), {
-    cwd: stopping.input.cwd,
-    env: { LAB_AUTHOR_TOKEN: author.token },
+    cwd: stopping.git.cwd,
+    env: { ...stopping.git.env, LAB_AUTHOR_TOKEN: author.token },
     timeoutMs: 120_000,
   });
 }

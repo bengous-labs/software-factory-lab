@@ -23,6 +23,7 @@ import {
   quotedQuestionOf,
   rejectionReplyOf,
   rejectionsOf,
+  stopChecksOutcomeOf,
 } from "./decide.ts";
 import type { Admission, DoneAnswer, Snapshot } from "./decide.ts";
 
@@ -212,6 +213,27 @@ describe("afterStopChecks", () => {
       kind: "none",
       reason: "the Stop checks are still red after a block: nothing is published",
     });
+  });
+});
+
+describe("the Stop checks left to an API Worker", () => {
+  const left = { kind: "left" } as const;
+
+  test("block once, asking the Worker to run them in its sandbox", () => {
+    expect(afterStopChecks(left, false)).toEqual({
+      kind: "block",
+      reason:
+        "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your clone now, fix what it reports and commit, then stop.",
+    });
+  });
+
+  test("after that block the stop goes on to the Done judge: CI's run of the checks holds the change", () => {
+    expect(afterStopChecks(left, true)).toEqual({ kind: "ask-done-judge" });
+  });
+
+  test("a stop they block says they are left to the Worker, and one red checks block says they are red", () => {
+    expect(stopChecksOutcomeOf(left, "abc")).toBe("the Stop checks on abc are left to the API Worker");
+    expect(stopChecksOutcomeOf({ kind: "red", report: "1 fail" }, "abc")).toBe("the Stop checks are red on abc");
   });
 });
 
@@ -571,7 +593,14 @@ describe("the findings the Author fixed", () => {
 });
 
 describe("outcomeLineOf", () => {
-  const facts = { at: "2026-11-10T10:00:00.000Z", session: "S1", worktree: "/w", branch: "feat/1-x", head: HEAD };
+  const facts = {
+    at: "2026-11-10T10:00:00.000Z",
+    session: "S1",
+    api: false,
+    worktree: "/w",
+    branch: "feat/1-x",
+    head: HEAD,
+  };
 
   test("a Publication names its PR", () => {
     expect(JSON.parse(outcomeLineOf(facts, { kind: "published", pr: 12 }))).toEqual({
@@ -593,6 +622,13 @@ describe("outcomeLineOf", () => {
       outcome: "asked",
       pr: 12,
       reason: "a question",
+    });
+  });
+
+  test("the stop of an API Worker says so, for the watch", () => {
+    expect(JSON.parse(outcomeLineOf({ ...facts, api: true }, { kind: "published", pr: 12 }))).toMatchObject({
+      api: true,
+      outcome: "published",
     });
   });
 

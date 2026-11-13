@@ -28,7 +28,7 @@ function world(watching: ReadonlyMap<number, number> = new Map()) {
     leave: (argv, options) => {
       left.push({ argv, options });
 
-      return 4242;
+      return { pid: 4242, exited: Promise.resolve(0) };
     },
   };
 
@@ -53,7 +53,7 @@ describe("relayStarter", () => {
   test("a Publication starts one relay for its PR in the main checkout, and names its session", () => {
     const { checkout, left, start } = world();
 
-    expect(start({ pr: 12, session: "S1", checkout })).toBe("started");
+    expect(start({ pr: 12, session: "S1", headless: null, checkout })).toBe("started");
     expect(left).toEqual([
       {
         argv: ["bun", RELAY, "12"],
@@ -67,12 +67,29 @@ describe("relayStarter", () => {
     expect(readFileSync(relayFilesOf(checkout, 12).session, "utf8")).toBe("S1\n");
   });
 
+  test("a Publication of an API Worker names, with its session, what the relay's headless resume needs", () => {
+    const { checkout, start } = world();
+    const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7" };
+
+    expect(start({ pr: 12, session: "S1", headless, checkout })).toBe("started");
+    expect(readFileSync(relayFilesOf(checkout, 12).session, "utf8")).toBe(`S1\n${JSON.stringify(headless)}\n`);
+  });
+
+  test("a later Publication of another session names it alone: what an API Worker's left is gone", () => {
+    const { checkout, start } = world();
+
+    start({ pr: 12, session: "S1", headless: { model: null, worktree: "/w" }, checkout });
+    start({ pr: 12, session: "S2", headless: null, checkout });
+
+    expect(readFileSync(relayFilesOf(checkout, 12).session, "utf8")).toBe("S2\n");
+  });
+
   test("a later Publication of the same PR starts none while that one runs, and names the new session", () => {
     const { checkout, left, asked, start } = world(new Map([[777, 12]]));
     mkdirSync(join(checkout, ".lab", "state"), { recursive: true });
     writeFileSync(relayFilesOf(checkout, 12).pid, "777\n");
 
-    expect(start({ pr: 12, session: "S2", checkout })).toBe("running");
+    expect(start({ pr: 12, session: "S2", headless: null, checkout })).toBe("running");
     expect(left).toEqual([]);
     expect(asked).toEqual([[777, 12]]);
     expect(readFileSync(relayFilesOf(checkout, 12).session, "utf8")).toBe("S2\n");
@@ -89,7 +106,7 @@ describe("relayStarter", () => {
       mkdirSync(join(checkout, ".lab", "state"), { recursive: true });
       writeFileSync(relayFilesOf(checkout, 12).pid, pidFile);
 
-      expect(start({ pr: 12, session: "S1", checkout })).toBe("started");
+      expect(start({ pr: 12, session: "S1", headless: null, checkout })).toBe("started");
       expect(left).toHaveLength(1);
     }
   });
@@ -99,13 +116,13 @@ describe("relayStarter", () => {
     mkdirSync(join(checkout, ".lab", "state"), { recursive: true });
     writeFileSync(relayFilesOf(checkout, 12).pid, "777\n");
 
-    expect(start({ pr: 13, session: "S1", checkout })).toBe("started");
+    expect(start({ pr: 13, session: "S1", headless: null, checkout })).toBe("started");
     expect(left.map((one) => one.argv)).toEqual([["bun", RELAY, "13"]]);
   });
 });
 
 describe("relayEnvOf", () => {
-  test("the relay keeps what it needs to run and to find the token, never the Author's marker, its token or the fork flag", () => {
+  test("the relay keeps what it and a headless turn need to run and to reach the API, and where the token lies, never the Author's marker, its token or the fork flag", () => {
     const env = relayEnvOf({
       HOME: "/home/a",
       PATH: "/bin",
@@ -114,6 +131,7 @@ describe("relayEnvOf", () => {
       LANG: "C.UTF-8",
       XDG_RUNTIME_DIR: "/run/user/1000",
       CLAUDE_CONFIG_DIR: "/c",
+      HTTPS_PROXY: "http://p",
       LAB_AUTHOR_TOKEN_FILE: "/h/token",
       LAB_AUTHOR: "1",
       GH_TOKEN: "t0k",
@@ -129,6 +147,7 @@ describe("relayEnvOf", () => {
       LANG: "C.UTF-8",
       XDG_RUNTIME_DIR: "/run/user/1000",
       CLAUDE_CONFIG_DIR: "/c",
+      HTTPS_PROXY: "http://p",
       LAB_AUTHOR_TOKEN_FILE: "/h/token",
     });
   });

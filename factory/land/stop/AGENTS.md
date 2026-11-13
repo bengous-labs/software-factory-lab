@@ -16,4 +16,14 @@ On a finished change that leaves none it replies in the thread of each rejected 
 That comment is written before the push, so the Merge bot run the push starts reads it for its ledger; a failure to write it is logged, and the PR is published.
 No reply it posts cites a commit, and none declares a fix: the Author's word on a fix goes to that comment alone, and closes no finding.
 It logs each step to `.lab/stop.log`, and one line per stop of an Author to `.lab/outcomes.log` of the main checkout: `published` with the PR, `asked` with the draft PR and its reason, or `not-published` with its reason.
+In the session of an API Worker, whose environment holds `LAB_API_WORKER=1` (`factory/dispatch/AGENTS.md`), the forks bill the API key too: their settings name the same key helper, so a stop publishes while the subscription has no usage left, and a fork reads the prompt cache its session wrote.
+Such a fork loads no settings but its own and runs its commands in the session's sandbox.
+The fork guard of every fork starts in the checkout that holds the hook's files, never in the fork's own directory.
+An API Worker works in a clone of its own, outside the main checkout; the hook is outside its sandbox, and the Worker writes that clone, so the hook lets git find nothing from it (`clone-git.ts`).
+It takes the clone from the session's directory and from where Dispatch puts the clones, runs git in the main checkout with that clone handed over through `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE`, so git reads the config and the hooks of the clone's own `.git`, and enters no submodule; it runs gh in the main checkout, and keeps its log and its state in the main checkout's `.lab/`.
+That `.git` lies under the clone the Worker writes: Claude Code's sandbox, which holds its `config` and `hooks` read-only and refuses to rename or replace `.git`, and a deny rule on its file tools are what keep them from the Worker (`factory/dispatch/AGENTS.md`).
+The hook compares the session's directory and the clones' with their links resolved, and a stop that comes from no clone publishes nothing.
+The hook runs no Stop checks there: `bun check` is the Worker's code.
+It blocks the stop once, asking the Worker to run `bun check` itself, then goes on to the Done judge at the next stop, and does not ask again on that head; CI's own run of the checks is what holds the change.
+The hook then hands the relay the session's model and worktree, which a headless resume needs, and its line in `.lab/outcomes.log` says `"api":true`, which the watch reads.
 In a Worker's session, an Author's or one the Worker bench launches with `LAB_ROLE=worker`, a PreToolUse guard (`factory/hooks/refuse-author-publish.ts`) refuses `git push`, `gh pr create` and `gh pr ready`.
