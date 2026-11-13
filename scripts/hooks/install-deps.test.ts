@@ -32,12 +32,12 @@ describe("the hook", () => {
 
   /**
    * Runs the hook for a session or subagent whose cwd is `cwd`, in the project at `main`. The session
-   * works in no clone unless `extra` says otherwise: a Worker that runs this test holds the main
-   * checkout's variable, which the hook under test must not inherit.
+   * is no Author and works in no clone unless `extra` says otherwise: a Worker that runs this test holds
+   * both variables, which the hook under test must not inherit.
    */
   const runHook = (cwd: string, extra: Readonly<Record<string, string>> = {}) =>
     $`bun ${SCRIPT} < ${Buffer.from(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "EnterWorktree", cwd }))}`
-      .env({ ...env, LAB_MAIN_CHECKOUT: "", CLAUDE_PROJECT_DIR: main, ...extra })
+      .env({ ...env, LAB_AUTHOR: "", LAB_MAIN_CHECKOUT: "", CLAUDE_PROJECT_DIR: main, ...extra })
       .nothrow()
       .quiet();
 
@@ -100,12 +100,15 @@ describe("the hook", () => {
     expect(existsSync(join(fork, "node_modules"))).toBe(false);
   });
 
-  test("does nothing in the session of a Worker that works in a clone, background or API: an install by a hook, outside its sandbox, would follow what the Worker left in its tree", async () => {
+  test("does nothing in an Author's session nor in one that works in a clone: an install by a hook, outside its sandbox, would follow what the Worker left in its tree", async () => {
     const api = join(main, ".claude", "worktrees", "api");
 
     await $`git worktree add -q -b api ${api}`.cwd(main).env(env).quiet();
 
     expect((await runHook(api, { LAB_MAIN_CHECKOUT: main })).exitCode).toBe(0);
+    expect(existsSync(join(api, "node_modules"))).toBe(false);
+
+    expect((await runHook(api, { LAB_AUTHOR: "1" })).exitCode).toBe(0);
     expect(existsSync(join(api, "node_modules"))).toBe(false);
 
     expect((await runHook(api, { LAB_MAIN_CHECKOUT: "" })).exitCode).toBe(0);

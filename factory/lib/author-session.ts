@@ -48,3 +48,12 @@ export const CHECKOUT_VARIABLE = "LAB_MAIN_CHECKOUT";
 export function worksInClone(env: Env): boolean {
   return (env[CHECKOUT_VARIABLE] ?? "") !== "";
 }
+
+/**
+ * Whether a session's tree holds a Worker's code, which runs in its sandbox alone: an Author's session,
+ * or one that works in a clone. A hook's command is outside that sandbox: for such a session it starts
+ * no program that reads the tree's own config, a format fix or an install.
+ */
+export function isSandboxedWorker(env: Env): boolean {
+  return isAuthor(env) || worksInClone(env);
+}

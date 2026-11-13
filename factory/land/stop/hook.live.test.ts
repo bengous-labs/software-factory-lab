@@ -484,7 +484,7 @@ describe("the stop of an Author", () => {
     const again = world({ checkout: found.checkout, checksAsked: false, done: [UNFINISHED] });
 
     expect(await stopIn(again)).toEqual({ kind: "allow" });
-    expect(again.records).toContainEqual({ step: "stop-checks", checks: "green", next: "ask-done-judge" });
+    expect(again.records).toContainEqual({ step: "stop-checks", checks: "asked", next: "ask-done-judge" });
 
     const moved = world({ checkout: found.checkout, checksAsked: false, head: "e".repeat(40) });
 

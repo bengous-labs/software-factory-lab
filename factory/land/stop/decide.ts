@@ -130,9 +130,9 @@ export type Admission =
 /**
  * The Stop checks' result. The hook runs none: `bun check` is the Worker's code, and a hook's command is
  * outside the session's sandbox. `left`: they are left to the Worker, which no stop asked for them on
- * this head yet. `green`: a stop asked for them on this head already.
+ * this head yet. `asked`: a stop asked for them on this head already; nothing says they ran or passed.
  */
-export type StopChecks = { readonly kind: "green" } | { readonly kind: "left" };
+export type StopChecks = { readonly kind: "asked" } | { readonly kind: "left" };
 
 /** A stop that publishes nothing: let go, or blocked once with a reason the Author reads. */
 export type Refusal =
@@ -252,7 +252,7 @@ export function stopChecksOutcomeOf(head: string): string {
  * (`Chain.reported`) the stop goes on, and CI's own run of the checks is what holds the change.
  */
 export function afterStopChecks(stopChecks: StopChecks, reported: boolean): Next {
-  return stopChecks.kind === "green" || reported
+  return stopChecks.kind === "asked" || reported
     ? { kind: "ask-done-judge" }
     : { kind: "block", reason: LEFT_STOP_CHECKS };
 }

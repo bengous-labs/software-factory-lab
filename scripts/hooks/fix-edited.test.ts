@@ -12,6 +12,12 @@ const ROOT = join(import.meta.dir, "..", "..");
 
 const SCRIPT = join(import.meta.dir, "fix-edited.ts");
 
+/**
+ * What makes the hook's session neither an Author nor one that works in a clone: a Worker that runs
+ * these tests holds both variables, which the hook under test must not inherit.
+ */
+const NO_WORKER = { LAB_AUTHOR: "", LAB_MAIN_CHECKOUT: "" };
+
 const UNFORMATTED = "export function f(x: number) {\n  if (x > 0) return   'positive'\n  return 'other'\n}\n";
 
 const FIXED = 'export function f(x: number) {\n  if (x > 0) {\n    return "positive";\n  }\n\n  return "other";\n}\n';
@@ -85,7 +91,7 @@ const runHook = (filePath: string, project = ROOT, session: Readonly<Record<stri
       cwd: project,
     }),
   )}`
-    .env({ ...fixtureEnv(process.env), LAB_AUTHOR: "0", CLAUDE_PROJECT_DIR: project, ...session })
+    .env({ ...fixtureEnv(process.env), ...NO_WORKER, CLAUDE_PROJECT_DIR: project, ...session })
     .nothrow()
     .quiet();
 
@@ -119,6 +125,19 @@ describe("the hook", () => {
     writeFileSync(path, UNFORMATTED);
 
     const ran = await runHook(path, ROOT, { LAB_AUTHOR: "1" });
+
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout.toString()).toBe("");
+    expect(await Bun.file(path).text()).toBe(UNFORMATTED);
+  });
+
+  test("in a session that works in a clone and is no Author, it leaves the unformatted file as written: the clone holds a Worker's code", async () => {
+    const path = join(import.meta.dir, `.fix-edited-fixture-clone-${process.pid}.ts`);
+
+    fixtures.push(path);
+    writeFileSync(path, UNFORMATTED);
+
+    const ran = await runHook(path, ROOT, { LAB_MAIN_CHECKOUT: ROOT });
 
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout.toString()).toBe("");
@@ -227,7 +246,7 @@ describe("the hook, on a file in a worktree", () => {
     writeFileSync(path, BARE);
 
     const ran = await $`bun ${SCRIPT} < ${Buffer.from(JSON.stringify({ tool_input: { file_path: path } }))}`
-      .env(fixtureEnv({ ...process.env, CLAUDE_PROJECT_DIR: undefined }))
+      .env(fixtureEnv({ ...process.env, ...NO_WORKER, CLAUDE_PROJECT_DIR: undefined }))
       .nothrow()
       .quiet();
 

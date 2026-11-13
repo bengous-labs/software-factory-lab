@@ -196,9 +196,9 @@ describe("noAuthorToken", () => {
 });
 
 describe("afterStopChecks", () => {
-  test("green Stop checks ask the Done judge", () => {
-    expect(afterStopChecks({ kind: "green" }, false)).toEqual({ kind: "ask-done-judge" });
-    expect(afterStopChecks({ kind: "green" }, true)).toEqual({ kind: "ask-done-judge" });
+  test("Stop checks a stop already asked for on this head ask the Done judge", () => {
+    expect(afterStopChecks({ kind: "asked" }, false)).toEqual({ kind: "ask-done-judge" });
+    expect(afterStopChecks({ kind: "asked" }, true)).toEqual({ kind: "ask-done-judge" });
   });
 });
 

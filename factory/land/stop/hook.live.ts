@@ -70,12 +70,12 @@ export function linesOf(path: string): TranscriptLine[] {
 }
 
 /**
- * The Stop checks on the head whose record is the file `record`: green when the record is there, a stop
+ * The Stop checks on the head whose record is the file `record`: asked when the record is there, a stop
  * having asked the Worker for them on this head; else left to the Worker. The hook starts no `bun check`
  * for any Author: that is the Worker's code, and the hook is outside the sandbox that holds it.
  */
 function stopChecks(record: string): StopChecks {
-  return existsSync(record) ? { kind: "green" } : { kind: "left" };
+  return existsSync(record) ? { kind: "asked" } : { kind: "left" };
 }
 
 /** The stop of a decision that publishes nothing: blocked with its reason, or let go. */
