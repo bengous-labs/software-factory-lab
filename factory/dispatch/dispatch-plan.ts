@@ -7,9 +7,16 @@
 
 import { Result, Schema } from "effect";
 
-import { branchMadeFor, WORKTREES_DIR } from "../contract.ts";
+import { branchMadeFor } from "../contract.ts";
 import { CONFIG_DIR, TRUNK } from "../install/host.ts";
-import { apiKeyHelperOf, apiWorkerDenyRulesOf, apiWorkerSandboxOf, ONE_RESULT } from "../land/shared/api-worker.ts";
+import {
+  apiClonesDirOf,
+  apiKeyHelperOf,
+  apiWorkerDenyRulesOf,
+  apiWorkerSandboxOf,
+  ONE_RESULT,
+} from "../land/shared/api-worker.ts";
+import type { ApiWorkerPlace } from "../land/shared/api-worker.ts";
 import { API_WORKER_VARIABLE } from "../lib/author-session.ts";
 import { Effort } from "../lib/effort.ts";
 import { decodeJson } from "../lib/json.ts";
@@ -93,7 +100,20 @@ export function branchOf(issue: number, title: string): string {
 }
 
 export function worktreeOf(checkout: string, issue: number): string {
-  return `${checkout}/${WORKTREES_DIR}/issue-${issue}`;
+  return `${checkout}/.claude/worktrees/issue-${issue}`;
+}
+
+/**
+ * The clone an API Worker works in, under the home `home`: a repository of its own outside the main
+ * checkout, where a worktree would share the git directory of the checkout every hook runs from.
+ */
+export function apiCloneOf(home: string, issue: number): string {
+  return `${apiClonesDirOf(home)}/issue-${issue}`;
+}
+
+/** The command that makes an API Worker's clone at `clone`, from the remote at `url`, on the Trunk. */
+export function cloneArgvOf(url: string, clone: string): string[] {
+  return ["git", "clone", "--quiet", "--branch", TRUNK, url, clone];
 }
 
 /** The Worker settings file `factory/install/AGENTS.md` describes, which the Owner provisions. */
@@ -139,7 +159,7 @@ const WorkerSettingsFile = Schema.StructWithRest(
 );
 
 /**
- * What an API Worker may do with no one to ask: edit under its worktree, and run any command, since
+ * What an API Worker may do with no one to ask: edit under its clone, and run any command, since
  * every command runs in the sandbox, which bounds it where no rule on a command's text would.
  */
 const API_WORKER_ALLOW = ["Edit(./**)", "Bash"];
@@ -205,12 +225,6 @@ function mainCheckoutHooksOf(projectSettings: string) {
   );
 }
 
-/** Where an API Worker's settings are made for: the Owner's home and the repository's main checkout. */
-export interface ApiWorkerPlace {
-  readonly home: string;
-  readonly checkout: string;
-}
-
 /**
  * The text of the API Worker settings file, the only settings an API Worker's turn loads, from the
  * Worker settings file's and the main checkout's `.claude/settings.json`: the Worker's identity, token
@@ -222,8 +236,9 @@ export interface ApiWorkerPlace {
 export function apiWorkerSettingsTextOf(
   workerSettings: string,
   projectSettings: string,
-  { home, checkout }: ApiWorkerPlace,
+  place: ApiWorkerPlace,
 ): string {
+  const { home, checkout } = place;
   const settings = decodeJson(WorkerSettingsFile, "the Worker settings file", workerSettings);
 
   const added = {
@@ -239,11 +254,11 @@ export function apiWorkerSettingsTextOf(
       GIT_CONFIG_VALUE_0: "git@github.com:",
     },
     hooks: mainCheckoutHooksOf(projectSettings),
-    sandbox: apiWorkerSandboxOf(home),
+    sandbox: apiWorkerSandboxOf(place),
     permissions: {
       ...settings.permissions,
       allow: [...(settings.permissions?.allow ?? []), ...API_WORKER_ALLOW],
-      deny: [...(settings.permissions?.deny ?? []), ...apiWorkerDenyRulesOf(home)],
+      deny: [...(settings.permissions?.deny ?? []), ...apiWorkerDenyRulesOf(place)],
     },
   };
 
@@ -291,18 +306,19 @@ export function worktreeListed(listing: string, path: string): boolean {
 export interface Assignment {
   readonly issue: number;
   readonly repo: string;
+  /** The tree the Worker works in: its worktree of the main checkout, or the clone of an API Worker. */
   readonly worktree: string;
   readonly branch: string;
 }
 
 /**
- * The one launch prompt. It names the issue and the worktree; what a Worker does comes from its own
+ * The one launch prompt. It names the issue and the Worker's tree; what a Worker does comes from its own
  * instructions, `AGENTS.md`, never from here. A Worker launched in the main checkout enters its worktree
- * itself; one `launchedInWorktree`, an API Worker, is told it is there.
+ * itself; one `launchedInClone`, an API Worker, is told it is in its clone.
  */
-export function promptOf({ issue, repo, worktree, branch }: Assignment, launchedInWorktree: boolean): string {
-  const place = launchedInWorktree
-    ? `You are in your worktree ${worktree}: work there`
+export function promptOf({ issue, repo, worktree, branch }: Assignment, launchedInClone: boolean): string {
+  const place = launchedInClone
+    ? `You are in your own clone of the repository, ${worktree}: work there`
     : `Your worktree exists: first call EnterWorktree with the path ${worktree} and work there`;
 
   return `Implement GitHub issue #${issue} of ${repo} (read it with: gh issue view ${issue} --repo ${repo}). ${place}; its branch ${branch} starts at origin/${TRUNK}.`;
@@ -319,8 +335,8 @@ export function firstTurnProblemOf(code: number | null, log: string): string | n
 }
 
 /**
- * The install that gives an API Worker's worktree its dependencies, run by Dispatch before the Worker
- * exists, while the worktree holds the Trunk's files alone. No hook installs for an API Worker: a hook
+ * The install that gives an API Worker's clone its dependencies, run by Dispatch before the Worker
+ * exists, while the clone holds the Trunk's files alone. No hook installs for an API Worker: a hook
  * runs outside the sandbox, and an install in a directory the Worker has written follows what it left
  * there. The command of `scripts/hooks/install-deps.ts`: copies, never hardlinks into bun's cache, and
  * no lifecycle script.

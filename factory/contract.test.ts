@@ -22,9 +22,8 @@ import {
   REVIEW_CHECK,
   reviewLabelOf,
   storedLandRouteOf,
-  WORKTREES_DIR,
 } from "./contract.ts";
-import { CHECKOUT_VARIABLE, worktreeOf } from "./dispatch/dispatch-plan.ts";
+import { CHECKOUT_VARIABLE } from "./dispatch/dispatch-plan.ts";
 import { FACTORY_CONFIG_PATH } from "./install/factory-config.ts";
 import { EMPTY_RECORD, recordOfComment, stateCommentOf, storedOfRecord } from "./land/merge-bot/record.ts";
 import type { StateRecord } from "./land/merge-bot/record.ts";
@@ -238,11 +237,6 @@ describe("the names sessions and files hold", () => {
 
   test("the variable through which an API Worker's hooks name the main checkout", () => {
     expect(CHECKOUT_VARIABLE).toBe("LAB_MAIN_CHECKOUT");
-  });
-
-  test("the directory of the main checkout that holds the Workers' worktrees", () => {
-    expect(WORKTREES_DIR).toBe(".claude/worktrees");
-    expect(worktreeOf("/repo", 7)).toBe("/repo/.claude/worktrees/issue-7");
   });
 
   test("the marker of a question put to a fork, and Claude Code's own names for the review's fork and its answer", () => {

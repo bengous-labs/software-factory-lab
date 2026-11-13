@@ -1,6 +1,6 @@
 # What an installation sets
 
-`factory/install/` holds what names the repository the factory is installed in: the repository, its Trunk, its config directory and its API key file (`host.ts`), its three logins (`logins.ts`), and the factory config's schema and path (`factory-config.ts`).
+`factory/install/` holds what names the repository the factory is installed in: the repository, its Trunk, its config directory, its API key file and the directory of its API Workers' clones (`host.ts`), its three logins (`logins.ts`), and the factory config's schema and path (`factory-config.ts`).
 No source file of the factory outside `install/` spells one of these names, nor a path under a user's home: `host-names.test.ts` fails on one that does.
 It reads no test and no guide, and it lets the release branch's name pass, a common word.
 A change to `logins.ts` waits for the Owner: it says whose word the Land loop obeys.
@@ -29,5 +29,5 @@ An API Worker (`factory/dispatch/AGENTS.md`) bills a Claude Console API key the 
 No code of the factory reads that file: Dispatch reads its mode, and Claude Code runs the helper that prints it.
 Dispatch writes `~/.config/software-factory-lab/api-worker-settings.json` itself, from the Worker settings file, whose token it copies there, and the main checkout's hooks: after a change to either, the next API dispatch writes it again, and a session launched before keeps what it was launched with until then.
 The sandbox of an API Worker needs `bubblewrap` and `socat` on the machine: without them its session runs no command.
-It hides `~/.api-agent` and `~/.config/software-factory-lab` from the Worker's commands; a background Worker's commands read both.
+It hides `~/.api-agent`, `~/.config/software-factory-lab` and the main checkout from the Worker's commands; a background Worker's commands read both.
 The key pays the turns of the API Worker and the forks of its stops; the Merge bot's Judges run in CI on their own credential.

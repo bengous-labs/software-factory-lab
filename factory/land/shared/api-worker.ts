@@ -3,12 +3,14 @@
  * session, `claude -p`, whose turns bill the Owner's Console API key. The key stays in its file: the API
  * Worker settings file names a helper command that prints it, so it reaches no command line and no
  * environment, and the sandbox of the session's commands hides its directory from them. A turn loads no
- * settings but that file: the worktree's own would run the hooks of the branch the Worker edits.
+ * settings but that file: the clone's own would run the hooks of the branch the Worker edits. The
+ * Worker works in a clone of its own, outside the main checkout: it shares no git directory with the
+ * checkout every hook runs from.
  * Dispatch launches the first turn, the relay each later one, both detached, and each turn appends what
  * it printed to one log of the main checkout.
  */
 
-import { API_KEY_FILE, CONFIG_DIR } from "../../install/host.ts";
+import { API_CLONES_DIR, API_KEY_FILE, CONFIG_DIR } from "../../install/host.ts";
 import type { Effort } from "../../lib/effort.ts";
 
 /** The file that holds the Console API key, under the home `home`. */
@@ -29,14 +31,26 @@ function configDirOf(home: string): string {
   return `${home}/.config/${CONFIG_DIR}`;
 }
 
+/** The directory that holds the clone of each API Worker, under the home `home`. */
+export function apiClonesDirOf(home: string): string {
+  return `${home}/${API_CLONES_DIR}`;
+}
+
+/** Where an API Worker's settings are made for: the Owner's home and the repository's main checkout. */
+export interface ApiWorkerPlace {
+  readonly home: string;
+  readonly checkout: string;
+}
+
 /**
  * The directories an API Worker's commands and file tools never see: the one that holds the key's file,
- * and the factory's own config, whose secrets would land a change around the Land gate.
+ * the factory's own config, whose secrets would land a change around the Land gate, and the main
+ * checkout, whose files every hook runs.
  */
-function hiddenDirsOf(home: string): string[] {
+function hiddenDirsOf({ home, checkout }: ApiWorkerPlace): string[] {
   const file = apiKeyFileOf(home);
 
-  return [file.slice(0, file.lastIndexOf("/")), configDirOf(home)];
+  return [file.slice(0, file.lastIndexOf("/")), configDirOf(home), checkout];
 }
 
 /** The hosts an API Worker's commands reach: GitHub, for `git` and `gh`, and the registry `bun install` reads. */
@@ -44,27 +58,31 @@ const ALLOWED_DOMAINS = ["github.com", "*.github.com", "*.githubusercontent.com"
 
 /**
  * The sandbox of an API Worker's commands and of its forks': every Bash command runs in it, with no
- * retry outside it, writes under the worktree and git's own directory alone, the network through the
+ * retry outside it, writes under the Worker's clone alone, the network through the
  * hosts above, and no sight of the hidden directories nor of another process. It holds against a command
  * that runs code, which no permission rule does. A session whose sandbox cannot start runs no command.
  */
-export function apiWorkerSandboxOf(home: string) {
+export function apiWorkerSandboxOf(place: ApiWorkerPlace) {
   return {
     enabled: true,
     failIfUnavailable: true,
     allowUnsandboxedCommands: false,
     autoAllowBashIfSandboxed: true,
-    credentials: { files: hiddenDirsOf(home).map((path) => ({ path, mode: "deny" })) },
+    credentials: { files: hiddenDirsOf(place).map((path) => ({ path, mode: "deny" })) },
     network: { allowedDomains: ALLOWED_DOMAINS },
   };
 }
 
 /**
- * The deny rules that keep Claude Code's own file tools, which run outside the sandbox, from the hidden
- * directories, to read or to write, through a symbolic link too.
+ * The deny rules on Claude Code's own file tools, which run outside the sandbox: they neither read nor
+ * write the hidden directories, through a symbolic link too, and write nothing in the git directory of
+ * a clone, whose config and hooks the Stop hook's git reads.
  */
-export function apiWorkerDenyRulesOf(home: string): string[] {
-  return hiddenDirsOf(home).flatMap((dir) => [`Read(/${dir}/**)`, `Edit(/${dir}/**)`]);
+export function apiWorkerDenyRulesOf(place: ApiWorkerPlace): string[] {
+  return [
+    ...hiddenDirsOf(place).flatMap((dir) => [`Read(/${dir}/**)`, `Edit(/${dir}/**)`]),
+    `Edit(/${apiClonesDirOf(place.home)}/*/.git/**)`,
+  ];
 }
 
 /**
@@ -99,8 +117,8 @@ export interface HeadlessTurn {
   /** The API Worker settings file, passed by its path at every turn: a headless session saves no launch option. */
   readonly settings: string;
   /**
-   * The main checkout, whose root guide every turn is given. Never the worktree's own: Claude Code reads
-   * that file outside the sandbox, and a path of the worktree is what the Worker makes of it, a
+   * The main checkout, whose root guide every turn is given. Never the clone's own: Claude Code reads
+   * that file outside the sandbox, and a path of the clone is what the Worker makes of it, a
    * symbolic link to a secret included.
    */
   readonly checkout: string;
@@ -109,13 +127,13 @@ export interface HeadlessTurn {
 
 /**
  * The settings sources of a turn and of a fork: none. The settings file its command names is all it
- * loads: no hook, plugin or MCP server of the worktree, which the Worker edits, and no rule of the
+ * loads: no hook, plugin or MCP server of the clone, which the Worker edits, and no rule of the
  * Owner's own settings, which could widen the sandbox.
  */
 export const NO_SETTING_SOURCES = ["--setting-sources", ""];
 
 /**
- * Claude Code starts an MCP server outside the sandbox, and a `.mcp.json` of the worktree names the
+ * Claude Code starts an MCP server outside the sandbox, and a `.mcp.json` of the clone names the
  * command of one: a turn takes the servers its own command names, which are none.
  */
 const NO_PROJECT_MCP = "--strict-mcp-config";
@@ -155,7 +173,7 @@ export function firstTurnArgvOf(turn: HeadlessTurn, name: string): string[] {
 }
 
 /**
- * The command of a later turn: a headless resume of the session, run in the worktree it was launched in.
+ * The command of a later turn: a headless resume of the session, run in the clone it was launched in.
  * Never `claude --bg --resume`: a background session does not bill the key.
  */
 export function resumedTurnArgvOf(turn: HeadlessTurn): string[] {

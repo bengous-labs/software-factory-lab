@@ -240,7 +240,7 @@ export function noAuthorToken(path: string, reported: boolean): Refusal {
 
 /** What an API Worker reads when the hook leaves the Stop checks to it. */
 const LEFT_STOP_CHECKS =
-  "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your worktree now, fix what it reports and commit, then stop.";
+  "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your clone now, fix what it reports and commit, then stop.";
 
 /** Why a stop the Stop checks block publishes nothing, on the head `head`. */
 export function stopChecksOutcomeOf(stopChecks: StopChecks, head: string): string {

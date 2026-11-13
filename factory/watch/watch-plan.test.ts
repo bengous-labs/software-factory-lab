@@ -430,7 +430,7 @@ describe("a Worker idle on the Author's turn", () => {
 
     expect(stepOf([7], reading, EMPTY_MEMORY, NOW).lines).toEqual([
       expect.stringMatching(
-        /^Issue #7 has no open PR, and its API Worker \(session s-worker, .*\) is not running; .*"\. No relay resumes it without a PR: look at its worktree and at the log of its turns, or remove its worktree and its branch and dispatch the issue again\.$/u,
+        /^Issue #7 has no open PR, and its API Worker \(session s-worker, .*\) is not running; .*"\. No relay resumes it without a PR: look at its clone and at the log of its turns, or delete its clone and dispatch the issue again\.$/u,
       ),
     ]);
   });

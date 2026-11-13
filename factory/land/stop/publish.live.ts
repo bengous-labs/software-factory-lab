@@ -63,7 +63,7 @@ export interface Deps {
 export async function askFork(deps: Deps, input: StopInput, ask: ForkAsk): Promise<ForkResult> {
   const started = deps.now();
 
-  const api = apiForkOf(deps.env);
+  const api = apiForkOf(deps.env, REPO);
   const settings = forkSettingsOf(REPO, api);
 
   const ran = await deps.run(forkArgvOf(input.session_id, ask, settings, api !== null), {
@@ -212,11 +212,11 @@ export interface AuthorStop {
   readonly head: string;
   /** The main checkout, where the relay runs. */
   readonly checkout: string;
-  /** The worktree the stop comes from. */
+  /** The tree the stop comes from: a worktree of the main checkout, or the clone of an API Worker. */
   readonly worktree: string;
   /**
    * Where and how the hook runs git for this stop: in the session's directory, or, for an API Worker, in
-   * the main checkout with the worktree handed over through git's environment (`worktree-git.ts`).
+   * the main checkout with the clone handed over through git's environment (`clone-git.ts`).
    */
   readonly git: RunOptions;
   /** The directory the hook runs gh in: the session's, or the main checkout for an API Worker. */

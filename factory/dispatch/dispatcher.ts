@@ -10,15 +10,18 @@ import { Schema } from "effect";
 import { TRUNK } from "../install/host.ts";
 import { OWNER_LOGIN } from "../install/logins.ts";
 import { apiKeyFileOf, apiWorkerLogOf, apiWorkerSettingsOf, firstTurnArgvOf } from "../land/shared/api-worker.ts";
+import type { ApiWorkerPlace } from "../land/shared/api-worker.ts";
 import { decodeJson } from "../lib/json.ts";
 import { checked } from "../lib/run.port.ts";
 import type { Leave, Ran, Run, RunOptions } from "../lib/run.port.ts";
 import { sessionEnvOf } from "../lib/session-env.ts";
 import { printableOf } from "../lib/terminal.ts";
 import {
+  apiCloneOf,
   apiKeyProblemOf,
   apiWorkerSettingsTextOf,
   branchOf,
+  cloneArgvOf,
   firstTurnProblemOf,
   INSTALL_ARGV,
   issueBranchesIn,
@@ -33,7 +36,7 @@ import {
   worktreeListed,
   worktreeOf,
 } from "./dispatch-plan.ts";
-import type { ApiWorkerPlace, Assignment, DispatchArgs } from "./dispatch-plan.ts";
+import type { Assignment, DispatchArgs } from "./dispatch-plan.ts";
 
 export interface DispatchPorts {
   readonly run: Run;
@@ -61,6 +64,7 @@ export interface Dispatched {
   readonly issue: number;
   /** The issue's title, without its control characters. */
   readonly title: string;
+  /** The tree the Worker works in: its worktree of the main checkout, or the clone of an API Worker. */
   readonly worktree: string;
   readonly branch: string;
   readonly session: string;
@@ -153,11 +157,21 @@ async function ownersIssue(run: Run, issue: number, at: RunOptions): Promise<{ t
   return { title: printableOf(title), repo: repoOfIssueUrl(url) };
 }
 
-/** Throws, naming what to remove, when the issue already has a worktree or a branch. */
-async function checkFree(run: Run, issue: number, worktree: string, at: RunOptions): Promise<void> {
-  if (worktreeListed(await checked(run, ["git", "worktree", "list", "--porcelain"], at), worktree)) {
+/** Where a Worker works: its worktree of the main checkout, or the clone of an API Worker. */
+type Tree = { readonly kind: "worktree" | "clone"; readonly path: string };
+
+/** Throws, naming what to remove, when the issue already has a worktree, a clone or a branch. */
+async function checkFree({ run, modeOf }: DispatchPorts, issue: number, tree: Tree, at: RunOptions): Promise<void> {
+  const { kind, path } = tree;
+
+  const taken =
+    kind === "clone"
+      ? (await modeOf(path)) !== null
+      : worktreeListed(await checked(run, ["git", "worktree", "list", "--porcelain"], at), path);
+
+  if (taken) {
     throw new Error(
-      `issue #${issue} already has a worktree: ${worktree}. Remove it first (git worktree remove ${worktree})`,
+      `issue #${issue} already has a ${kind}: ${path}. Remove it first (${kind === "clone" ? "rm -rf" : "git worktree remove"} ${path})`,
     );
   }
 
@@ -210,10 +224,10 @@ async function launchBackground(
 const FIRST_LOOK_MS = 10_000;
 
 /**
- * Launches the API Worker: installs the dependencies of its worktree, which holds the Trunk's files
- * alone, writes its settings file, whose text is `settingsText`, then leaves its first turn running
- * headless in that worktree, its output appended to the session's log in the main checkout. A turn that
- * ends with an error while Dispatch looks, its key refused or its command wrong, throws.
+ * Launches the API Worker in its clone, which holds the Trunk's files alone: creates its branch and
+ * installs its dependencies there, writes its settings file, whose text is `settingsText`, then leaves
+ * its first turn running headless in the clone, its output appended to the session's log in the main
+ * checkout. A turn that ends with an error while Dispatch looks, its key refused or its command wrong, throws.
  */
 async function launchHeadless(
   { run, leave, newSession, sleep, writeSecret }: DispatchPorts,
@@ -221,7 +235,8 @@ async function launchHeadless(
   { model, effort, settings, checkout, env }: Launching,
   settingsText: string,
 ): Promise<Launched> {
-  const { issue, worktree } = assignment;
+  const { issue, worktree, branch } = assignment;
+  await checked(run, ["git", "switch", "--quiet", "--create", branch], { cwd: worktree });
   await checked(run, INSTALL_ARGV, { cwd: worktree });
   await writeSecret(settings, settingsText);
 
@@ -239,19 +254,26 @@ async function launchHeadless(
   return { kind: "headless", session, log };
 }
 
-/** What a failed launch leaves, said after its failure: nothing, or the worktree and the branch with how to remove them. */
-async function leftoverOf(run: Run, { worktree, branch }: Assignment, at: RunOptions): Promise<string> {
-  const left = await removalFailures(
-    run,
-    [
-      ["git", "worktree", "remove", worktree],
-      ["git", "branch", "-D", branch],
-    ],
-    at,
-  );
+/**
+ * What a failed launch leaves, said after its failure: nothing, or the worktree and the branch, or the
+ * clone of an API Worker, with how to remove them.
+ */
+async function leftoverOf(run: Run, { worktree, branch }: Assignment, api: boolean, at: RunOptions): Promise<string> {
+  const removals = api
+    ? [["rm", "-rf", "--", worktree]]
+    : [
+        ["git", "worktree", "remove", worktree],
+        ["git", "branch", "-D", branch],
+      ];
 
-  return left.length === 0
-    ? ""
+  const left = await removalFailures(run, removals, at);
+
+  if (left.length === 0) {
+    return "";
+  }
+
+  return api
+    ? `. Its clone is left (${left.join("; ")}): remove it with rm -rf ${worktree}`
     : `. Its worktree and branch are left (${left.join("; ")}): remove them with git worktree remove --force ${worktree} && git branch -D ${branch}`;
 }
 
@@ -273,11 +295,18 @@ export async function dispatch(ports: DispatchPorts, request: DispatchRequest): 
 
   await checked(run, ["git", "fetch", "--prune", "origin"], at);
 
-  const worktree = worktreeOf(checkout, issue);
-  await checkFree(run, issue, worktree, at);
+  const worktree = api ? apiCloneOf(home, issue) : worktreeOf(checkout, issue);
+  await checkFree(ports, issue, { kind: api ? "clone" : "worktree", path: worktree }, at);
 
   const branch = branchOf(issue, title);
-  await checked(run, ["git", "worktree", "add", "-b", branch, worktree, `origin/${TRUNK}`], at);
+
+  await checked(
+    run,
+    api
+      ? cloneArgvOf((await checked(run, ["git", "remote", "get-url", "origin"], at)).trim(), worktree)
+      : ["git", "worktree", "add", "-b", branch, worktree, `origin/${TRUNK}`],
+    at,
+  );
 
   const assignment = { issue, repo, worktree, branch };
   const launching = { model, effort, checkout, env };
@@ -290,7 +319,7 @@ export async function dispatch(ports: DispatchPorts, request: DispatchRequest): 
   } catch (error) {
     const failure = error instanceof Error ? error.message : String(error);
 
-    throw new Error(`${failure}${await leftoverOf(run, assignment, at)}`, { cause: error });
+    throw new Error(`${failure}${await leftoverOf(run, assignment, api, at)}`, { cause: error });
   }
 
   return launched.kind === "headless"

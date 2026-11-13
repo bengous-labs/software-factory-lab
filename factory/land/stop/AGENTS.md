@@ -19,10 +19,9 @@ It logs each step to `.lab/stop.log`, and one line per stop of an Author to `.la
 In the session of an API Worker, whose environment holds `LAB_API_WORKER=1` (`factory/dispatch/AGENTS.md`), the forks bill the API key too: their settings name the same key helper, so a stop publishes while the subscription has no usage left, and a fork reads the prompt cache its session wrote.
 Such a fork loads no settings but its own and runs its commands in the session's sandbox.
 The fork guard of every fork starts in the checkout that holds the hook's files, never in the fork's own directory.
-The hook is outside that sandbox, and the Worker writes its worktree and most of the repository's git directory.
-The sandbox keeps read-only the files that tell git where a worktree's repository and config are, and the hook does not rest on that: there it asks the worktree nothing (`worktree-git.ts`).
-It takes the worktree from the session's directory and Dispatch's layout, runs git in the main checkout with that worktree handed over through `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE`, so git reads the main checkout's config and hooks, which the sandbox keeps read-only, and enters no submodule; it runs gh in the main checkout, and keeps its log and its state in the main checkout's `.lab/`.
-A stop whose worktree it cannot tell publishes nothing.
+An API Worker works in a clone of its own, outside the main checkout; the hook is outside its sandbox, and the Worker writes that clone, so the hook lets git find nothing from it (`clone-git.ts`).
+It takes the clone from the session's directory and from where Dispatch puts the clones, runs git in the main checkout with that clone handed over through `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE`, so git reads the config and the hooks of the clone's own `.git`, which the sandbox and a deny rule keep from the Worker, and enters no submodule; it runs gh in the main checkout, and keeps its log and its state in the main checkout's `.lab/`.
+A stop that comes from no clone publishes nothing.
 The hook runs no Stop checks there: `bun check` is the Worker's code.
 It blocks the stop once, asking the Worker to run `bun check` itself, then goes on to the Done judge at the next stop, and does not ask again on that head; CI's own run of the checks is what holds the change.
 The hook then hands the relay the session's model and worktree, which a headless resume needs, and its line in `.lab/outcomes.log` says `"api":true`, which the watch reads.

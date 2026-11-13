@@ -223,7 +223,7 @@ describe("the Stop checks left to an API Worker", () => {
     expect(afterStopChecks(left, false)).toEqual({
       kind: "block",
       reason:
-        "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your worktree now, fix what it reports and commit, then stop.",
+        "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your clone now, fix what it reports and commit, then stop.",
     });
   });
 

@@ -13,6 +13,7 @@ import { decodeJson } from "../../lib/json.ts";
 import { ModelUsage, tokensOf } from "../../lib/tokens.ts";
 import type { TokenCounts } from "../../lib/tokens.ts";
 import { apiKeyHelperOf, apiWorkerSandboxOf, ONE_RESULT } from "../shared/api-worker.ts";
+import type { ApiWorkerPlace } from "../shared/api-worker.ts";
 import { FORK_MARKER } from "./decide.ts";
 import { DONE_JUDGE } from "./done-judge.actor.ts";
 
@@ -138,20 +139,21 @@ export interface ForkAsk {
 }
 
 /** What the fork of an API Worker's session has that another fork has not: its key helper and its sandbox. */
-export type ApiFork = ReturnType<typeof apiForkOfHome>;
+export type ApiFork = ReturnType<typeof apiForkIn>;
 
-function apiForkOfHome(home: string) {
-  return { ...ONE_RESULT, apiKeyHelper: apiKeyHelperOf(home), sandbox: apiWorkerSandboxOf(home) };
+function apiForkIn(place: ApiWorkerPlace) {
+  return { ...ONE_RESULT, apiKeyHelper: apiKeyHelperOf(place.home), sandbox: apiWorkerSandboxOf(place) };
 }
 
 /**
  * What the forks of the session whose environment is `env` add to their settings. An API Worker's forks
  * bill the key their session bills, so a stop publishes while the subscription has no usage left, and a
  * fork reads the prompt cache its session wrote; their commands run in the session's sandbox, since a
- * fork carries on from what the Worker's session read. Null for any other session: its forks take its login.
+ * fork carries on from what the Worker's session read; `checkout` is the main checkout, which that
+ * sandbox hides. Null for any other session: its forks take its login.
  */
-export function apiForkOf(env: Env): ApiFork | null {
-  return isApiWorker(env) ? apiForkOfHome(requiredOf(env, "HOME")) : null;
+export function apiForkOf(env: Env, checkout: string): ApiFork | null {
+  return isApiWorker(env) ? apiForkIn({ home: requiredOf(env, "HOME"), checkout }) : null;
 }
 
 /** The fork guard's door, by its path from the checkout that holds the hook's own files. */

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  apiClonesDirOf,
   apiKeyFileOf,
   apiKeyHelperOf,
   apiWorkerDenyRulesOf,
@@ -38,6 +39,8 @@ const TAIL = [
   "the prompt",
 ];
 
+const PLACE = { home: "/home/me", checkout: "/work/repo" };
+
 describe("the key of an API Worker", () => {
   test("its file lies under the home, and the helper prints it, quoted for the shell", () => {
     expect(apiKeyFileOf("/home/me")).toBe("/home/me/.api-agent/key");
@@ -49,19 +52,26 @@ describe("the key of an API Worker", () => {
     expect(apiKeyHelperOf("/home/o'neil")).toBe(String.raw`cat '/home/o'\''neil/.api-agent/key'`);
   });
 
-  test("Claude Code's own file tools are denied the directory that holds it, and the factory's own secrets, to read and to write, by their absolute paths", () => {
-    expect(apiWorkerDenyRulesOf("/home/me")).toEqual([
+  test("Claude Code's own file tools are denied the directory that holds it, the factory's own secrets and the main checkout, to read and to write, by their absolute paths, and every write in the git directory of a clone", () => {
+    expect(apiWorkerDenyRulesOf(PLACE)).toEqual([
       "Read(//home/me/.api-agent/**)",
       "Edit(//home/me/.api-agent/**)",
       "Read(//home/me/.config/software-factory-lab/**)",
       "Edit(//home/me/.config/software-factory-lab/**)",
+      "Read(//work/repo/**)",
+      "Edit(//work/repo/**)",
+      "Edit(//home/me/.local/share/software-factory-lab/api-workers/*/.git/**)",
     ]);
+  });
+
+  test("the clones of the API Workers lie in one directory under the home, outside the main checkout", () => {
+    expect(apiClonesDirOf("/home/me")).toBe("/home/me/.local/share/software-factory-lab/api-workers");
   });
 });
 
 describe("the sandbox of an API Worker", () => {
   test("every command runs in it, with no way out, and none runs when it cannot start", () => {
-    expect(apiWorkerSandboxOf("/home/me")).toMatchObject({
+    expect(apiWorkerSandboxOf(PLACE)).toMatchObject({
       enabled: true,
       failIfUnavailable: true,
       allowUnsandboxedCommands: false,
@@ -69,23 +79,24 @@ describe("the sandbox of an API Worker", () => {
     });
   });
 
-  test("it hides the whole directory of the key, and the factory's config with the Author's token and the App's key, from every command, whatever the command runs", () => {
-    expect(apiWorkerSandboxOf("/home/me").credentials).toEqual({
+  test("it hides the whole directory of the key, the factory's config with the Author's token and the App's key, and the main checkout, from every command, whatever the command runs", () => {
+    expect(apiWorkerSandboxOf(PLACE).credentials).toEqual({
       files: [
         { path: "/home/me/.api-agent", mode: "deny" },
         { path: "/home/me/.config/software-factory-lab", mode: "deny" },
+        { path: "/work/repo", mode: "deny" },
       ],
     });
   });
 
   test("its commands reach GitHub and the package registry, and no other host", () => {
-    expect(apiWorkerSandboxOf("/home/me").network).toEqual({
+    expect(apiWorkerSandboxOf(PLACE).network).toEqual({
       allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"],
     });
   });
 
   test("it excludes no command and widens no path: the settings hold those keys alone", () => {
-    expect(Object.keys(apiWorkerSandboxOf("/home/me")).toSorted()).toEqual([
+    expect(Object.keys(apiWorkerSandboxOf(PLACE)).toSorted()).toEqual([
       "allowUnsandboxedCommands",
       "autoAllowBashIfSandboxed",
       "credentials",

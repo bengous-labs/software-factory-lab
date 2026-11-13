@@ -69,10 +69,3 @@ export const OUTCOMES_LOG = ".lab/outcomes.log";
 export function branchMadeFor(ref: string, issue: number): boolean {
   return new RegExp(`^(?:origin/)?[a-z]+/${issue}-`, "u").test(ref);
 }
-
-/**
- * The directory of the main checkout that holds the Workers' worktrees, by its path from that checkout.
- * An external name: Dispatch creates each worktree there, and the Stop hook tells an API Worker's
- * worktree by it.
- */
-export const WORKTREES_DIR = ".claude/worktrees";

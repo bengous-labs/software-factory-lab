@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  apiCloneOf,
   apiKeyProblemOf,
   apiWorkerSettingsTextOf,
   branchOf,
   CHECKOUT_VARIABLE,
+  cloneArgvOf,
   dispatchArgsOf,
   firstTurnProblemOf,
   INSTALL_ARGV,
@@ -183,10 +185,26 @@ describe("promptOf", () => {
     );
   });
 
-  test("a Worker launched in its worktree is told it is there, and enters nothing", () => {
-    expect(promptOf(assignment, true)).toBe(
-      "Implement GitHub issue #168 of o/r (read it with: gh issue view 168 --repo o/r). You are in your worktree /repo/.claude/worktrees/issue-168: work there; its branch issue/168-x starts at origin/dev.",
+  test("an API Worker, launched in its clone, is told it is there, and enters nothing", () => {
+    const clone = apiCloneOf("/home/me", 168);
+
+    expect(clone).toBe("/home/me/.local/share/software-factory-lab/api-workers/issue-168");
+    expect(promptOf({ ...assignment, worktree: clone }, true)).toBe(
+      `Implement GitHub issue #168 of o/r (read it with: gh issue view 168 --repo o/r). You are in your own clone of the repository, ${clone}: work there; its branch issue/168-x starts at origin/dev.`,
     );
+  });
+
+  test("a background Worker's worktree lies under the main checkout, an API Worker's clone outside it, cloned on the Trunk", () => {
+    expect(worktreeOf("/repo", 7)).toBe("/repo/.claude/worktrees/issue-7");
+    expect(cloneArgvOf("git@github.com:o/r.git", "/clones/issue-7")).toEqual([
+      "git",
+      "clone",
+      "--quiet",
+      "--branch",
+      "dev",
+      "git@github.com:o/r.git",
+      "/clones/issue-7",
+    ]);
   });
 });
 
@@ -222,6 +240,9 @@ const DENY = [
   "Edit(//home/me/.api-agent/**)",
   "Read(//home/me/.config/software-factory-lab/**)",
   "Edit(//home/me/.config/software-factory-lab/**)",
+  "Read(//repo/**)",
+  "Edit(//repo/**)",
+  "Edit(//home/me/.local/share/software-factory-lab/api-workers/*/.git/**)",
 ];
 
 /** The API Worker settings text made from the Worker settings `json`, for the home `/home/me` and the checkout `/repo`. */
@@ -287,6 +308,7 @@ describe("apiWorkerSettingsTextOf", () => {
           files: [
             { path: "/home/me/.api-agent", mode: "deny" },
             { path: "/home/me/.config/software-factory-lab", mode: "deny" },
+            { path: "/repo", mode: "deny" },
           ],
         },
         network: {

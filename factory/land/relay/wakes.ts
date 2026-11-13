@@ -304,7 +304,7 @@ const Agent = Schema.Struct({
 /**
  * How a Wake reaches the Author's session: its messaging socket while it runs, a resume when it no
  * longer does; for the Owner's words, a stop then a resume, or nothing yet. An API Worker's session gets
- * a headless resume, left running in its worktree with its output appended to `log`.
+ * a headless resume, left running in its clone with its output appended to `log`.
  */
 export type Route =
   | { readonly kind: "socket"; readonly pid: number }

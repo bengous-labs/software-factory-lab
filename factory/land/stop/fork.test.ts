@@ -206,6 +206,7 @@ const API_FORK = {
       files: [
         { path: "/home/me/.api-agent", mode: "deny" },
         { path: "/home/me/.config/software-factory-lab", mode: "deny" },
+        { path: "/work/repo", mode: "deny" },
       ],
     },
     network: { allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"] },
@@ -214,17 +215,17 @@ const API_FORK = {
 
 describe("apiForkOf", () => {
   test("the forks of an API Worker's session bill the key and run their commands in its sandbox, and print one result", () => {
-    expect(apiForkOf({ LAB_API_WORKER: "1", LAB_AUTHOR: "1", HOME: "/home/me" })).toEqual(API_FORK);
+    expect(apiForkOf({ LAB_API_WORKER: "1", LAB_AUTHOR: "1", HOME: "/home/me" }, "/work/repo")).toEqual(API_FORK);
   });
 
   test("the forks of any other session take its login: nothing is added", () => {
-    expect(apiForkOf({ LAB_AUTHOR: "1", HOME: "/home/me" })).toBeNull();
-    expect(apiForkOf({ LAB_API_WORKER: "0", HOME: "/home/me" })).toBeNull();
-    expect(apiForkOf({})).toBeNull();
+    expect(apiForkOf({ LAB_AUTHOR: "1", HOME: "/home/me" }, "/work/repo")).toBeNull();
+    expect(apiForkOf({ LAB_API_WORKER: "0", HOME: "/home/me" }, "/work/repo")).toBeNull();
+    expect(apiForkOf({}, "/work/repo")).toBeNull();
   });
 
   test("an API Worker's session with no home throws: its fork would bill another credential", () => {
-    expect(() => apiForkOf({ LAB_API_WORKER: "1" })).toThrow("HOME is unset");
+    expect(() => apiForkOf({ LAB_API_WORKER: "1" }, "/work/repo")).toThrow("HOME is unset");
   });
 });
 

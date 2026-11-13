@@ -12,18 +12,21 @@
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
 import { TRUNK } from "../../install/host.ts";
 import { isApiWorker, isAuthor } from "../../lib/author-session.ts";
+import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
+import { apiClonesDirOf } from "../shared/api-worker.ts";
 import { questionOpen } from "../shared/author-mark.ts";
 import { authorTokenOf } from "../shared/author.live.ts";
 import { conversationArgsOf, conversationOf } from "../shared/conversation.ts";
 import type { OpenFinding } from "../shared/findings.ts";
+import { cloneRootOf, pinnedGitEnvOf } from "./clone-git.ts";
 import {
   admit,
   afterClosed,
@@ -60,8 +63,6 @@ import {
   StopInput,
 } from "./publish.live.ts";
 import type { Answer, AuthorStop, Deps, Log, StopLogRecord, Stopped } from "./publish.live.ts";
-import { adminIdOf, pinnedGitEnvOf, worktreeRootOf } from "./worktree-git.ts";
-import type { AdminDir } from "./worktree-git.ts";
 
 const STOP_CHECKS_TIMEOUT_MS = 300_000;
 
@@ -244,30 +245,16 @@ async function placeOf(deps: Deps, cwd: string): Promise<Place> {
   };
 }
 
-/** The directories of the `worktrees/` of `checkout`'s repository, each with the text of its `gitdir` file. */
-function adminDirsOf(checkout: string): AdminDir[] {
-  const worktrees = join(checkout, ".git", "worktrees");
-
-  return existsSync(worktrees)
-    ? readdirSync(worktrees).map((id) => {
-        const gitdir = join(worktrees, id, "gitdir");
-
-        return { id, gitdir: existsSync(gitdir) ? readFileSync(gitdir, "utf8") : null };
-      })
-    : [];
-}
-
 /**
- * Where an API Worker's session stops, in the main checkout `checkout`: the worktree its directory `cwd`
- * lies in, with git handed that worktree through its environment and run, as gh is, in the main
- * checkout, where the hook's state lies too. The hook is outside the Worker's sandbox, so it asks the
- * worktree nothing and writes nothing there (`worktree-git.ts`). Null when the hook cannot tell the worktree.
+ * Where an API Worker's session stops: the clone its directory `cwd` lies in, among those `clones`
+ * holds, with git handed that clone through its environment and run, as gh is, in the main checkout
+ * `checkout`, where the hook's state lies too. The hook is outside the Worker's sandbox, so it lets git
+ * find nothing from the clone and writes nothing there (`clone-git.ts`). Null when `cwd` lies in no clone.
  */
-function apiPlaceOf(checkout: string, cwd: string): Place | null {
-  const worktree = worktreeRootOf(checkout, cwd);
-  const id = worktree === null ? null : adminIdOf(adminDirsOf(checkout), worktree);
+function apiPlaceOf(checkout: string, clones: string, cwd: string): Place | null {
+  const worktree = cloneRootOf(clones, cwd);
 
-  if (worktree === null || id === null) {
+  if (worktree === null) {
     return null;
   }
 
@@ -275,7 +262,7 @@ function apiPlaceOf(checkout: string, cwd: string): Place | null {
     worktree,
     checkout,
     mainCheckout: false,
-    git: { cwd: checkout, env: pinnedGitEnvOf(checkout, id, worktree) },
+    git: { cwd: checkout, env: pinnedGitEnvOf(worktree) },
     ghCwd: checkout,
     stateDir: join(checkout, ".lab", "state"),
   };
@@ -327,11 +314,12 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
   }
 
   const api = isApiWorker(deps.env);
-  const place = api ? apiPlaceOf(deps.checkout, cwd) : await placeOf(deps, cwd);
+  const clones = api ? apiClonesDirOf(requiredOf(deps.env, "HOME")) : null;
+  const place = clones === null ? await placeOf(deps, cwd) : apiPlaceOf(deps.checkout, clones, cwd);
   const at = new Date(deps.now()).toISOString();
 
   if (place === null) {
-    const reason = `the stop of an API Worker comes from ${cwd}, no worktree of ${deps.checkout} the hook can tell`;
+    const reason = `the stop of an API Worker comes from ${cwd}, which lies in no clone of ${clones}`;
     log({ step: "admit", kind: "none", reason });
     deps.recordOutcome(
       deps.checkout,

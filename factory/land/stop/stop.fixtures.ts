@@ -3,7 +3,7 @@
  * it reads and the calls, log records and outcomes it leaves, and a git repository with a worktree.
  */
 
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ import { Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../../lib/run.port.ts";
+import { apiClonesDirOf } from "../shared/api-worker.ts";
 import { conversationArgsOf } from "../shared/conversation.ts";
 import type { RelayStart } from "../shared/relay.port.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
@@ -158,15 +159,15 @@ export function world(fake: Partial<Fake> = {}): World {
   } = fake;
 
   const checkout = fake.checkout ?? mkdtempSync(join(tmpdir(), "stop-"));
-  const root = mainCheckout ? checkout : join(checkout, ".claude", "worktrees", "x");
+
+  const tree =
+    env === API_WORKER_ENV
+      ? join(apiClonesDirOf(API_WORKER_ENV.HOME), "x")
+      : join(checkout, ".claude", "worktrees", "x");
+
+  const root = mainCheckout ? checkout : tree;
   const calls: Call[] = [];
   const relays: RelayStart[] = [];
-
-  // What `git worktree add` leaves in the repository for the worktree: the hook tells an API Worker's by it.
-  if (!mainCheckout) {
-    mkdirSync(join(checkout, ".git", "worktrees", "x"), { recursive: true });
-    writeFileSync(join(checkout, ".git", "worktrees", "x", "gitdir"), `${root}/.git\n`);
-  }
 
   const outcomes: Array<{ checkout: string; line: OutcomeLine }> = [];
   const records: StopLogRecord[] = [];

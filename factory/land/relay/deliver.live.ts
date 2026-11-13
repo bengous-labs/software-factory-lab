@@ -2,7 +2,7 @@
  * How a Wake's text reaches the Author's session: one line on its messaging socket while the session
  * runs, else `claude --bg --resume <session-id> "<text>"`, which wakes it with its saved launch options.
  * The Owner's words reach a running background session by `claude stop <id>`, then that resume.
- * An API Worker's session is resumed headless, left running detached in its worktree.
+ * An API Worker's session is resumed headless, left running detached in its clone.
  * The socket's path is the one Claude Code was observed to bind, with the directory its documentation
  * names as the fallback.
  */

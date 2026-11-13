@@ -45,9 +45,9 @@ async function checkoutOf(dir: string): Promise<Checkout | null> {
   return checkoutFromRevParse(ran.stdout.toString(), ran.exitCode);
 }
 
-// Not for an API Worker: the hook is outside its sandbox, and an install in the worktree follows what
+// Not for an API Worker: the hook is outside its sandbox, and an install in its clone follows what
 // the Worker left there, a `node_modules` that is a link to the main checkout's included. Dispatch
-// installs its worktree before it starts.
+// installs its clone before it starts.
 if (import.meta.main && process.env[STOP_FORK_FLAG] !== "1" && !isApiWorker(process.env)) {
   const cwd = cwdOf(await Bun.stdin.text());
   const root = trustedRoot(await checkoutOf(cwd), await checkoutOf(projectDirOf(process.env)));

@@ -273,7 +273,7 @@ const API_TURN =
 
 /** What the reader can do for an API Worker with no PR, which no relay resumes. */
 const NO_PR_API_ACT =
-  "No relay resumes it without a PR: look at its worktree and at the log of its turns, or remove its worktree and its branch and dispatch the issue again.";
+  "No relay resumes it without a PR: look at its clone and at the log of its turns, or delete its clone and dispatch the issue again.";
 
 const workerTextOf = (worker: Worker): string =>
   `its ${worker.lastStop.api ? "API Worker" : "Worker"} (session ${flatTo(worker.session, 64)}${worker.lastStop.api ? API_TURN : ""}) ${worker.state === "unread" ? `runs with the status ${worker.status ?? "none"}` : STATE_TEXT[worker.state]}`;

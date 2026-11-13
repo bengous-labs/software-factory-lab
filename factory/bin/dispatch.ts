@@ -3,7 +3,8 @@
 /**
  * Hands an issue to a Worker: creates its worktree under `.claude/worktrees/` on a new branch from
  * the Trunk, and launches it as a background session in the main checkout. With `--api` the Worker is
- * an API Worker: a headless session in that worktree, which bills the Owner's Console API key.
+ * an API Worker: a headless session in a clone of its own, outside the main checkout, which bills the
+ * Owner's Console API key.
  *
  *   bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <level>] [--api]
  *
@@ -65,6 +66,6 @@ const dispatched = await dispatch(ports, {
 });
 
 console.log(`issue:    #${dispatched.issue} ${dispatched.title}
-worktree: ${dispatched.worktree}
+${dispatched.log === null ? "worktree:" : "clone:   "} ${dispatched.worktree}
 branch:   ${dispatched.branch}
 session:  ${dispatched.session}${dispatched.log === null ? "" : `\nlog:      ${dispatched.log}`}`);

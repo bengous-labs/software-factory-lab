@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { stop } from "./hook.live.ts";
@@ -19,6 +19,7 @@ const API_FORK_SETTINGS = JSON.stringify({
       files: [
         { path: "/home/me/.api-agent", mode: "deny" },
         { path: "/home/me/.config/software-factory-lab", mode: "deny" },
+        { path: REPO, mode: "deny" },
       ],
     },
     network: { allowedDomains: ["github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org"] },
@@ -40,7 +41,7 @@ describe("the stop of an API Worker", () => {
     expect(await stopIn(found)).toEqual({
       kind: "block",
       reason:
-        "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your worktree now, fix what it reports and commit, then stop.",
+        "The Stop hook runs no Stop checks on an API Worker's head: your code runs in your sandbox alone, so they are yours to run. Run `bun check` in your clone now, fix what it reports and commit, then stop.",
     });
     expect(found.calls.some((call) => call.argv[0] === "bun" || call.argv[0] === "claude")).toBe(false);
     expect(writes(found.calls)).toEqual([]);
@@ -96,17 +97,19 @@ describe("the stop of an API Worker", () => {
     expect(await stopIn(moved)).toMatchObject({ kind: "block" });
   });
 
-  test("the hook asks the worktree nothing: git runs in the main checkout, handed the worktree through its environment, and gh runs there too", async () => {
+  test("the hook lets git find nothing from the clone: git runs in the main checkout, handed the clone through its environment, and gh runs there too", async () => {
     const found = world({ env: API_WORKER_ENV });
 
     await stopIn(found);
     await stopIn(found, true);
 
     const pinned = {
-      GIT_DIR: join(found.checkout, ".git", "worktrees", "x"),
-      GIT_COMMON_DIR: join(found.checkout, ".git"),
+      GIT_DIR: join(found.root, ".git"),
+      GIT_COMMON_DIR: join(found.root, ".git"),
       GIT_WORK_TREE: found.root,
     };
+
+    expect(found.root).toBe("/home/me/.local/share/software-factory-lab/api-workers/x");
 
     const gits = found.calls.filter((call) => call.argv[0] === "git");
     const ghs = found.calls.filter((call) => call.argv[0] === "gh");
@@ -140,8 +143,8 @@ describe("the stop of an API Worker", () => {
 
     expect(push?.options.cwd).toBe(found.checkout);
     expect(push?.options.env).toEqual({
-      GIT_DIR: join(found.checkout, ".git", "worktrees", "x"),
-      GIT_COMMON_DIR: join(found.checkout, ".git"),
+      GIT_DIR: join(found.root, ".git"),
+      GIT_COMMON_DIR: join(found.root, ".git"),
       GIT_WORK_TREE: found.root,
       LAB_AUTHOR_TOKEN: "t0k",
     });
@@ -151,7 +154,7 @@ describe("the stop of an API Worker", () => {
     );
   });
 
-  test("it writes nothing in the worktree, where a file can be a link to any file of the Owner's: its state lies in the main checkout", async () => {
+  test("it writes nothing in the clone, where a file can be a link to any file of the Owner's: its state lies in the main checkout", async () => {
     const found = world({ env: API_WORKER_ENV });
 
     await stopIn(found);
@@ -161,7 +164,7 @@ describe("the stop of an API Worker", () => {
     expect(existsSync(join(found.checkout, ".lab", "state", `gates-${HEAD}`))).toBe(true);
   });
 
-  test("its forks still run in the worktree, as sessions the sandbox holds", async () => {
+  test("its forks still run in the clone, as sessions the sandbox holds", async () => {
     const found = world({ env: API_WORKER_ENV });
 
     await stopIn(found);
@@ -172,7 +175,7 @@ describe("the stop of an API Worker", () => {
     expect(forks.map((call) => call.options.cwd)).toEqual([found.root, found.root]);
   });
 
-  test("a stop in a subdirectory of the worktree is the worktree's", async () => {
+  test("a stop in a subdirectory of the clone is the clone's", async () => {
     const found = world({ env: API_WORKER_ENV });
 
     expect(await stop(input(join(found.root, "factory", "land")), found.deps, found.log)).toMatchObject({
@@ -181,49 +184,16 @@ describe("the stop of an API Worker", () => {
     expect(found.outcomes[0]?.line).toMatchObject({ worktree: found.root, branch: "agent/x" });
   });
 
-  test.each([
-    [
-      "the repository knows no such worktree",
-      (checkout: string) => {
-        rmSync(join(checkout, ".git", "worktrees"), { recursive: true });
-      },
-    ],
-    [
-      "two of the repository's worktrees claim it",
-      (checkout: string, root: string) => {
-        mkdirSync(join(checkout, ".git", "worktrees", "y"), { recursive: true });
-        writeFileSync(join(checkout, ".git", "worktrees", "y", "gitdir"), `${root}/.git\n`);
-      },
-    ],
-    [
-      "its own entry names another directory",
-      (checkout: string) => {
-        writeFileSync(join(checkout, ".git", "worktrees", "x", "gitdir"), `${checkout}/.git\n`);
-      },
-    ],
-  ])(
-    "a stop whose worktree the hook cannot tell (%s) runs no git, publishes nothing and says why",
-    async (_, tamper) => {
-      const found = world({ env: API_WORKER_ENV });
-
-      tamper(found.checkout, found.root);
-
-      expect(await stopIn(found)).toEqual({ kind: "allow" });
-      expect(found.calls).toEqual([]);
-      expect(found.outcomes[0]?.line).toMatchObject({
-        api: true,
-        outcome: "not-published",
-        reason: `the stop of an API Worker comes from ${found.root}, no worktree of ${found.checkout} the hook can tell`,
-      });
-    },
-  );
-
-  test("a stop outside the worktrees Dispatch lays out, the main checkout among them, is told the same way", async () => {
+  test("a stop outside the clones, the main checkout among them, runs no git, publishes nothing and says why", async () => {
     const found = world({ env: API_WORKER_ENV, mainCheckout: true });
 
     expect(await stopIn(found)).toEqual({ kind: "allow" });
     expect(found.calls).toEqual([]);
-    expect(found.outcomes[0]?.line.outcome).toBe("not-published");
+    expect(found.outcomes[0]?.line).toMatchObject({
+      api: true,
+      outcome: "not-published",
+      reason: `the stop of an API Worker comes from ${found.root}, which lies in no clone of /home/me/.local/share/software-factory-lab/api-workers`,
+    });
   });
 
   test("another Author's stop runs git and gh in its own directory, with no pinned environment", async () => {
