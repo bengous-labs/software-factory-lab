@@ -11,9 +11,7 @@ import {
   probesOf,
   promptOf,
   reportOf,
-  resultsDirOf,
   scriptOf,
-  scriptPathOf,
   sessionArgvOf,
   SESSIONS,
   socketCandidatesOf,
@@ -36,6 +34,10 @@ const FACTS: ProbeFacts = {
 const WORKTREE = "/home/me/Work/repo/.claude/worktrees/sandbox-probe";
 
 const DIR = `${WORKTREE}/.lab/sandbox-probe`;
+
+const CLONE = "/home/me/.local/share/software-factory-lab/api-workers/sandbox-probe";
+
+const API_DIR = `${CLONE}/.lab/sandbox-probe`;
 
 const READ = `bun -e 'console.log(require("node:fs").readFileSync(process.argv[1], "utf8"))'`;
 
@@ -65,12 +67,13 @@ const canaryRows = (label: string, path: string, text: string) => [
   [`git-diff-canary-${label}`, "fail", `git diff --no-index /dev/null '${path}'`, text],
 ];
 
-const TOOL_ROWS = [
+/** The file tools' probes of a session whose own directory is `dir`. */
+const toolRows = (dir: string) => [
   ["read-canary-home", "fail", "read /home/me/sandbox-probe-canary", "T-0"],
   ["read-canary-ssh", "fail", "read /home/me/.ssh/sandbox-probe-canary", "T-1"],
   ["read-canary-config-gh", "fail", "read /home/me/.config/gh/sandbox-probe-canary", "T-2"],
-  ["read-link", "fail", `read ${DIR}/link-to-canary`, "T-1"],
-  ["read-through-linked-dir", "fail", `read ${DIR}/link-to-dir/sandbox-probe-canary`, "T-1"],
+  ["read-link", "fail", `read ${dir}/link-to-canary`, "T-1"],
+  ["read-through-linked-dir", "fail", `read ${dir}/link-to-dir/sandbox-probe-canary`, "T-1"],
   ["grep-credential-dir", "fail", "grep /home/me/.ssh", "T-1"],
 ];
 
@@ -95,12 +98,12 @@ describe("what the probe writes", () => {
     expect(canariesOf({ ...FACTS, credentialDirs: [".a_.b/"] })[1]?.label).toBe("a-b");
   });
 
-  test("a worktree laid out as a Worker's, its own directory there, one settings file in the config directory, two links into SSH's directory, and a file a touch would leave", () => {
-    const layout = layoutOf(FACTS);
-
-    expect(layout).toEqual({
-      worktree: WORKTREE,
+  test("the background session: a worktree laid out as a Worker's, its own directory there with its script and its results, one settings file in the config directory, two links into SSH's directory, and a file a touch would leave", () => {
+    expect(layoutOf(FACTS, "background")).toEqual({
+      tree: WORKTREE,
       dir: DIR,
+      script: `${DIR}/run.sh`,
+      results: `${DIR}/results`,
       settings: "/home/me/.config/software-factory-lab/sandbox-probe-settings.json",
       links: [
         { path: `${DIR}/link-to-canary`, target: "/home/me/.ssh/sandbox-probe-canary" },
@@ -108,22 +111,36 @@ describe("what the probe writes", () => {
       ],
       touched: ["/home/me/scratch/sandbox-probe-touch"],
     });
-    expect(scriptPathOf(layout, "api")).toBe(`${DIR}/run-api.sh`);
-    expect(resultsDirOf(layout, "background")).toBe(`${DIR}/results-background`);
+  });
+
+  test("the API session runs where an API Worker works, in a clone under the clones' directory, outside the main checkout, on the same settings file", () => {
+    expect(layoutOf(FACTS, "api")).toEqual({
+      tree: CLONE,
+      dir: API_DIR,
+      script: `${API_DIR}/run.sh`,
+      results: `${API_DIR}/results`,
+      settings: "/home/me/.config/software-factory-lab/sandbox-probe-settings.json",
+      links: [
+        { path: `${API_DIR}/link-to-canary`, target: "/home/me/.ssh/sandbox-probe-canary" },
+        { path: `${API_DIR}/link-to-dir`, target: "/home/me/.ssh" },
+      ],
+      touched: ["/home/me/scratch/sandbox-probe-touch"],
+    });
   });
 
   test("no link when SSH's directory does not exist, whatever other directory does", () => {
-    expect(layoutOf({ ...FACTS, credentialDirs: [".config/gh"], userAllowWrite: [] })).toMatchObject({
+    expect(layoutOf({ ...FACTS, credentialDirs: [".config/gh"], userAllowWrite: [] }, "api")).toMatchObject({
       links: [],
       touched: [],
     });
   });
 
-  test("the paths it prints first are every one it writes or a probe could: the canaries, the worktree, the settings file, the touched files", () => {
+  test("the paths it prints first are every one it writes or a probe could: the canaries, the clone, the worktree, the settings file once, the touched files once", () => {
     expect(writtenPathsOf(FACTS)).toEqual([
       "/home/me/sandbox-probe-canary",
       "/home/me/.ssh/sandbox-probe-canary",
       "/home/me/.config/gh/sandbox-probe-canary",
+      CLONE,
       WORKTREE,
       "/home/me/.config/software-factory-lab/sandbox-probe-settings.json",
       "/home/me/scratch/sandbox-probe-touch",
@@ -169,7 +186,9 @@ describe("the sessions of the probe", () => {
     const settings = probeSettingsOf(worker, PLACE);
 
     expect(SESSIONS).toEqual(["api", "background"]);
-    expect(settings.api).toBe(`${JSON.stringify(sandboxedOf({ env: { GH_TOKEN: "ghp_worker" } }, PLACE), null, 2)}\n`);
+    expect(settings.api).toBe(
+      `${JSON.stringify(sandboxedOf({ env: { GH_TOKEN: "ghp_worker" } }, PLACE, "api"), null, 2)}\n`,
+    );
     expect(settings.background).toBe(backgroundWorkerSettingsTextOf('{"env":{"GH_TOKEN":"ghp_worker"}}', PLACE));
     expect(JSON.parse(settings.background)).toMatchObject({ permissions: { defaultMode: "dontAsk" } });
     expect(`${settings.api}${settings.background}`).not.toContain("LAB_AUTHOR");
@@ -190,6 +209,7 @@ describe("the sessions of the probe", () => {
       "/s.json",
       "--setting-sources",
       "",
+      "--strict-mcp-config",
       "--permission-mode",
       "dontAsk",
       "--verbose",
@@ -218,23 +238,24 @@ describe("the sessions of the probe", () => {
 const ids = (checkout: string): string[] =>
   probesOf({ ...FACTS, place: { home: "/home/me", checkout } }, "api").map((probe) => probe.id);
 
-describe("probesOf", () => {
-  const FAIL_ROWS = [
-    ...canaryRows("home", "/home/me/sandbox-probe-canary", "T-0"),
-    ...canaryRows("ssh", "/home/me/.ssh/sandbox-probe-canary", "T-1"),
-    ...canaryRows("config-gh", "/home/me/.config/gh/sandbox-probe-canary", "T-2"),
-    ["cat-link", "fail", `cat '${DIR}/link-to-canary'`, "T-1"],
-    ["ls-checkout-parent", "fail", "ls '/home/me/Work'", null],
-    ["connect-bus", "fail", `${CONNECT} '/run/user/1000/bus'`, null],
-    ["gpg-clearsign", "fail", "echo x | gpg --clearsign", null],
-  ];
+/** The commands that must fail in a session whose own directory is `dir`. */
+const failRows = (dir: string) => [
+  ...canaryRows("home", "/home/me/sandbox-probe-canary", "T-0"),
+  ...canaryRows("ssh", "/home/me/.ssh/sandbox-probe-canary", "T-1"),
+  ...canaryRows("config-gh", "/home/me/.config/gh/sandbox-probe-canary", "T-2"),
+  ["cat-link", "fail", `cat '${dir}/link-to-canary'`, "T-1"],
+  ["ls-checkout-parent", "fail", "ls '/home/me/Work'", null],
+  ["connect-bus", "fail", `${CONNECT} '/run/user/1000/bus'`, null],
+  ["gpg-clearsign", "fail", "echo x | gpg --clearsign", null],
+];
 
+describe("probesOf", () => {
   test("the API session: what must pass, the Author's login, the runtime directory's listing, then every read that must fail, by a command and by a file tool", () => {
     expect(probesOf(FACTS, "api").map((probe) => rowOf(probe))).toEqual([
       ...PASS_ROWS,
       ["ls-runtime-dir", "recorded", "ls '/run/user/1000'", null],
-      ...FAIL_ROWS,
-      ...TOOL_ROWS,
+      ...failRows(API_DIR),
+      ...toolRows(API_DIR),
     ]);
   });
 
@@ -242,9 +263,9 @@ describe("probesOf", () => {
     expect(probesOf(FACTS, "background").map((probe) => rowOf(probe))).toEqual([
       ...PASS_ROWS,
       ["ls-runtime-dir", "recorded", "ls '/run/user/1000'", null],
-      ...FAIL_ROWS,
+      ...failRows(DIR),
       ["touch-allow-write-0", "fail", "touch '/home/me/scratch/sandbox-probe-touch'", null],
-      ...TOOL_ROWS,
+      ...toolRows(DIR),
     ]);
   });
 
@@ -311,7 +332,7 @@ describe("what a session is given", () => {
         "Do each step below exactly once, in order, with exactly the tool and the arguments it names. A step that fails, is denied or prints an error has given its result: go on to the next one, and never retry it, work around it or replace it with another call.",
         "",
         "1. Call the Bash tool, this command alone in its own call, with `timeout` set to 600000: `sh '/w/run-api.sh' bun-install`",
-        `2. Call the Read tool with \`file_path\` set to \`${DIR}/link-to-canary\`.`,
+        `2. Call the Read tool with \`file_path\` set to \`${API_DIR}/link-to-canary\`.`,
         "3. Call the Grep tool with `pattern` set to `sandbox-probe-text`, `path` set to `/home/me/.ssh`, `glob` set to `sandbox-probe-canary` and `output_mode` set to `content`.",
         "",
         "Then answer with the one word `done`.",

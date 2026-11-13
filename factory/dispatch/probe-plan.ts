@@ -8,10 +8,9 @@
 
 import { Result, Schema } from "effect";
 
-import { WORKTREES_DIR } from "../contract.ts";
 import { AUTHOR_LOGIN } from "../install/logins.ts";
 import { PROBED_CREDENTIAL_DIRS } from "../install/sandbox-paths.ts";
-import { configDirOf } from "../land/shared/api-worker.ts";
+import { apiClonesDirOf, configDirOf } from "../land/shared/api-worker.ts";
 import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
 import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
 import { decodeJson } from "../lib/json.ts";
@@ -85,18 +84,25 @@ export function canariesOf({ place, token, credentialDirs }: ProbeFacts): Canary
   ];
 }
 
-/** A symbolic link the probe leaves in its worktree. */
+/** A symbolic link the probe leaves in a session's tree. */
 interface Link {
   readonly path: string;
   readonly target: string;
 }
 
-/** Where the probe writes: its worktree, its own directory there, which git ignores, and its settings file. */
+/** Where one session of the probe runs and what the probe writes for it. */
 export interface ProbeLayout {
-  /** The detached worktree the two sessions run in, laid out as Dispatch lays a Worker's. */
-  readonly worktree: string;
+  /**
+   * The tree the session runs in, laid out as Dispatch lays a Worker's of that kind: a detached worktree
+   * of the main checkout for the background session, a clone under the clones' directory for the API one.
+   */
+  readonly tree: string;
+  /** The probe's own directory in that tree, which git ignores. */
   readonly dir: string;
-  /** The settings file of the session that runs, in the factory's config directory. */
+  /** The script that runs the session's command probes, and the directory it records them in. */
+  readonly script: string;
+  readonly results: string;
+  /** The settings file of the session that runs, in the factory's config directory: one file, written for each in turn. */
   readonly settings: string;
   /** A link to the canary of the first probed credential directory, then one to that directory; none when it does not exist. */
   readonly links: readonly Link[];
@@ -104,17 +110,23 @@ export interface ProbeLayout {
   readonly touched: readonly string[];
 }
 
-export function layoutOf({ place, credentialDirs, userAllowWrite }: ProbeFacts): ProbeLayout {
-  const worktree = `${place.checkout}/${WORKTREES_DIR}/sandbox-probe`;
-  const dir = `${worktree}/.lab/sandbox-probe`;
+export function layoutOf({ place, credentialDirs, userAllowWrite }: ProbeFacts, session: Session): ProbeLayout {
+  const tree =
+    session === "api"
+      ? `${apiClonesDirOf(place.home)}/sandbox-probe`
+      : `${place.checkout}/.claude/worktrees/sandbox-probe`;
+
+  const dir = `${tree}/.lab/sandbox-probe`;
 
   const linked = PROBED_CREDENTIAL_DIRS.slice(0, 1)
     .filter((probed) => credentialDirs.includes(probed))
     .map((probed) => `${place.home}/${probed}`);
 
   return {
-    worktree,
+    tree,
     dir,
+    script: `${dir}/run.sh`,
+    results: `${dir}/results`,
     settings: `${configDirOf(place.home)}/sandbox-probe-settings.json`,
     links: linked.flatMap((target) => [
       { path: `${dir}/link-to-canary`, target: `${target}/${CANARY_FILE}` },
@@ -124,20 +136,15 @@ export function layoutOf({ place, credentialDirs, userAllowWrite }: ProbeFacts):
   };
 }
 
-/** The script that runs the command probes of `session`, and the directory it records them in. */
-export function scriptPathOf(layout: ProbeLayout, session: Session): string {
-  return `${layout.dir}/run-${session}.sh`;
-}
-
-export function resultsDirOf(layout: ProbeLayout, session: Session): string {
-  return `${layout.dir}/results-${session}`;
-}
-
 /** Every path the probe writes, or that a probe would write where the sandbox did not hold, to print before it starts. */
 export function writtenPathsOf(facts: ProbeFacts): string[] {
-  const layout = layoutOf(facts);
+  const layouts = SESSIONS.map((session) => layoutOf(facts, session));
 
-  return [...canariesOf(facts).map((canary) => canary.path), layout.worktree, layout.settings, ...layout.touched];
+  return [
+    ...canariesOf(facts).map((canary) => canary.path),
+    ...layouts.map((layout) => layout.tree),
+    ...layouts.slice(0, 1).flatMap((layout) => [layout.settings, ...layout.touched]),
+  ];
 }
 
 const UserSettings = Schema.Struct({
@@ -181,19 +188,21 @@ export function probeSettingsOf(workerSettings: string, place: SandboxPlace): Re
   const settings = { env: { GH_TOKEN } };
 
   return {
-    api: `${JSON.stringify(sandboxedOf(settings, place), null, 2)}\n`,
+    api: `${JSON.stringify(sandboxedOf(settings, place, "api"), null, 2)}\n`,
     background: backgroundWorkerSettingsTextOf(JSON.stringify(settings), place),
   };
 }
 
 /**
  * The command of a session: headless, on the smallest model, on the settings file `settings`, printing
- * every event. The API one loads no other settings and asks nothing, as an API Worker's turn; the
+ * every event. The API one loads no other settings and no MCP server and asks nothing, as an API Worker's turn; the
  * background one loads the project's, as Dispatch launches a background Worker.
  */
 export function sessionArgvOf(session: Session, settings: string, prompt: string): string[] {
   const sources =
-    session === "api" ? ["--setting-sources", "", "--permission-mode", "dontAsk"] : ["--setting-sources", "project"];
+    session === "api"
+      ? ["--setting-sources", "", "--strict-mcp-config", "--permission-mode", "dontAsk"]
+      : ["--setting-sources", "project"];
 
   return [
     "claude",
@@ -271,7 +280,7 @@ function checkoutParentOf({ home, checkout }: SandboxPlace): string | null {
 
 function commandProbesOf(facts: ProbeFacts, session: Session): Probe[] {
   const canaries = canariesOf(facts);
-  const layout = layoutOf(facts);
+  const layout = layoutOf(facts, session);
   const parent = checkoutParentOf(facts.place);
 
   return [
@@ -303,9 +312,9 @@ const read = (id: string, path: string, canary: string): Probe => ({
  * What the file tools try: each canary, the link to one, the canary through the linked directory, and a
  * search of that directory. The links point into the first probed directory, whose canary is the second.
  */
-function toolProbesOf(facts: ProbeFacts): Probe[] {
+function toolProbesOf(facts: ProbeFacts, session: Session): Probe[] {
   const canaries = canariesOf(facts);
-  const { links } = layoutOf(facts);
+  const { links } = layoutOf(facts, session);
 
   return [
     ...canaries.map(({ label, path, text }) => read(`read-canary-${label}`, path, text)),
@@ -325,7 +334,7 @@ function toolProbesOf(facts: ProbeFacts): Probe[] {
 
 /** The probes of `session`, in the order it makes them. */
 export function probesOf(facts: ProbeFacts, session: Session): Probe[] {
-  return [...commandProbesOf(facts, session), ...toolProbesOf(facts)];
+  return [...commandProbesOf(facts, session), ...toolProbesOf(facts, session)];
 }
 
 /**

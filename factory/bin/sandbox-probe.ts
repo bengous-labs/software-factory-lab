@@ -2,9 +2,10 @@
 
 /**
  * The sandbox probe: shows on this machine that the sandbox of a Worker holds, and that a Worker still
- * works in it. It writes canary files where credentials live, never reading a real one, creates a
- * detached worktree at `HEAD`, and runs two headless sessions there, one on an API Worker's settings and
- * one on a background Worker's, which make the probes `factory/dispatch/probe-plan.ts` lists. It prints
+ * works in it. It writes canary files where credentials live, never reading a real one, and runs two
+ * headless sessions at `HEAD`, each where a Worker of its kind works: one on an API Worker's settings, in
+ * a clone under the clones' directory, and one on a background Worker's, in a detached worktree of the
+ * main checkout. They make the probes `factory/dispatch/probe-plan.ts` lists. It prints
  * every path it writes before it writes one, and removes them all at its end, on a failure too. It bills
  * the Owner's login for two short sessions on the smallest model. The Owner runs it, never a Worker: it
  * writes in the home.
@@ -27,7 +28,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { workerSettingsOf } from "../dispatch/dispatch-plan.ts";
+import { cloneArgvOf, workerSettingsOf } from "../dispatch/dispatch-plan.ts";
 import {
   canariesOf,
   canaryContentOf,
@@ -36,9 +37,7 @@ import {
   probesOf,
   promptOf,
   reportOf,
-  resultsDirOf,
   scriptOf,
-  scriptPathOf,
   sessionArgvOf,
   SESSIONS,
   socketCandidatesOf,
@@ -52,7 +51,7 @@ import { requiredOf } from "../lib/env.ts";
 import { runIsolated } from "../lib/run.live.ts";
 import { sessionEnvOf } from "../lib/session-env.ts";
 
-/** How long one session may take: it installs the worktree's dependencies and runs `bun check`. */
+/** How long one session may take: it installs its tree's dependencies and runs `bun check`. */
 const SESSION_TIMEOUT_MS = 2_700_000;
 
 /** What `git` prints for `args`, run in this file's checkout; throws when git fails. */
@@ -117,13 +116,16 @@ if (problem !== null) {
   throw new Error(`no Worker can be sandboxed here: ${problem}`);
 }
 
-const layout = layoutOf(facts);
+const layouts = { api: layoutOf(facts, "api"), background: layoutOf(facts, "background") };
 
 const canaries = canariesOf(facts);
 
-const taken = [...canaries.map((canary) => canary.path), layout.worktree, ...layout.touched].filter((path) =>
-  existsSync(path),
-);
+const taken = [
+  ...canaries.map((canary) => canary.path),
+  layouts.api.tree,
+  layouts.background.tree,
+  ...layouts.background.touched,
+].filter((path) => existsSync(path));
 
 if (taken.length > 0) {
   throw new Error(`sandbox-probe: these paths exist already, and the probe overwrites nothing: ${taken.join(", ")}`);
@@ -138,15 +140,17 @@ console.log(
     .join("\n")}`,
 );
 
-/** The files this run wrote outside the worktree. */
+/** The files this run wrote outside the sessions' trees. */
 const writtenFiles: string[] = [];
 
-/** Whether this run created the worktree. */
+/** Whether this run created the API session's clone, and the background session's worktree. */
+let cloneCreated = false;
+
 let worktreeCreated = false;
 
 /** Removes what this run wrote, and what a probe would have written where the sandbox did not hold; a removal that fails is said, and stops no other. */
 function cleanUp(): void {
-  for (const path of [...writtenFiles.splice(0), ...layout.touched]) {
+  for (const path of [...writtenFiles.splice(0), ...layouts.background.touched]) {
     try {
       rmSync(path, { force: true });
     } catch (error) {
@@ -154,12 +158,25 @@ function cleanUp(): void {
     }
   }
 
+  if (cloneCreated) {
+    cloneCreated = false;
+
+    try {
+      rmSync(layouts.api.tree, { recursive: true, force: true });
+    } catch (error) {
+      console.error(
+        `sandbox-probe: the clone ${layouts.api.tree} is left: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   if (worktreeCreated) {
     worktreeCreated = false;
-    const removed = Bun.spawnSync(["git", "worktree", "remove", "--force", layout.worktree], { cwd: import.meta.dir });
+    const { tree } = layouts.background;
+    const removed = Bun.spawnSync(["git", "worktree", "remove", "--force", tree], { cwd: import.meta.dir });
 
     if (removed.exitCode !== 0) {
-      console.error(`sandbox-probe: the worktree ${layout.worktree} is left: ${removed.stderr.toString().trim()}`);
+      console.error(`sandbox-probe: the worktree ${tree} is left: ${removed.stderr.toString().trim()}`);
     }
   }
 }
@@ -186,25 +203,32 @@ async function probe(): Promise<SessionRun[]> {
   }
 
   worktreeCreated = true;
-  git("worktree", "add", "--detach", layout.worktree, "HEAD");
-  mkdirSync(layout.dir, { recursive: true });
+  git("worktree", "add", "--detach", layouts.background.tree, "HEAD");
 
-  for (const link of layout.links) {
-    symlinkSync(link.target, link.path);
-  }
+  // The clone Dispatch makes for an API Worker, then this checkout's own `HEAD` in it: the code under test.
+  cloneCreated = true;
+  git(...cloneArgvOf(git("remote", "get-url", "origin"), layouts.api.tree).slice(1));
+  git("-C", layouts.api.tree, "fetch", "--quiet", git("rev-parse", "--show-toplevel"), "HEAD");
+  git("-C", layouts.api.tree, "checkout", "--quiet", "--detach", "FETCH_HEAD");
 
   const runs: SessionRun[] = [];
 
   for (const session of SESSIONS) {
+    const layout = layouts[session];
     const probes = probesOf(facts, session);
-    const script = scriptPathOf(layout, session);
-    const results = resultsDirOf(layout, session);
+    const { script, results } = layout;
+    mkdirSync(layout.dir, { recursive: true });
+
+    for (const link of layout.links) {
+      symlinkSync(link.target, link.path);
+    }
+
     writeFileSync(script, scriptOf(probes, results));
     writeOwn(layout.settings, settings[session]);
     console.log(`sandbox-probe: the ${session} session makes its ${probes.length} probes…`);
 
     const ran = await runIsolated(sessionArgvOf(session, layout.settings, promptOf(probes, script)), {
-      cwd: layout.worktree,
+      cwd: layout.tree,
       env: sessionEnvOf(process.env),
       timeoutMs: SESSION_TIMEOUT_MS,
     });
