@@ -370,6 +370,7 @@ const runOf = (
   stream = "",
 ): SessionRun => ({
   session: "api",
+  landed: [],
   probes,
   results: new Map(results),
   stream,
@@ -395,6 +396,21 @@ describe("gotOf", () => {
     expect(got(cat, { code: 0, output: "" })).toBe("pass");
     expect(got(cat, { code: 1, output: "+sandbox-probe-text T-0" })).toBe("pass");
     expect(got(cat, { code: 1, output: "" }, "the file holds T-0")).toBe("pass");
+  });
+
+  test("a write that must fail is judged on the disk, whatever its exit code: under a denied home a command writes into an empty copy that goes with the sandbox", () => {
+    const touch: Probe = { ...cat, id: "touch", canary: null, lands: "/home/me/scratch/x" };
+    const ran = runOf([touch], [["touch", { code: 0, output: "" }]]);
+    const refused = runOf([touch], [["touch", { code: 1, output: "" }]]);
+
+    expect(gotOf(touch, ran)).toBe("fail");
+    expect(gotOf(touch, { ...ran, landed: ["/home/me/scratch/x"] })).toBe("pass");
+    expect(gotOf(touch, { ...ran, landed: ["/home/me/scratch/other"] })).toBe("fail");
+    expect(gotOf(touch, { ...refused, landed: ["/home/me/scratch/x"] })).toBe("pass");
+    expect(gotOf(touch, { ...runOf([touch], []), landed: ["/home/me/scratch/x"] })).toBe("unseen");
+    expect(probesOf(FACTS, "background").find((probe) => probe.id === "touch-allow-write-0")?.lands).toBe(
+      "/home/me/scratch/sandbox-probe-touch",
+    );
   });
 
   test("no attempt was seen when it recorded nothing, or when the shell did not find its command", () => {

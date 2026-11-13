@@ -248,7 +248,13 @@ async function probe(): Promise<SessionRun[]> {
     }
 
     writeFileSync(join(KEPT, `${session}.jsonl`), ran.stdout, { mode: 0o600 });
-    runs.push({ session, probes, results: resultsIn(results), stream: ran.stdout });
+    runs.push({
+      session,
+      probes,
+      results: resultsIn(results),
+      stream: ran.stdout,
+      landed: layout.touched.filter((path) => existsSync(path)),
+    });
   }
 
   return runs;

@@ -241,6 +241,12 @@ export interface Probe {
   readonly step: ProbeStep;
   /** The text whose sight voids a denial; null for a probe that reads no canary. */
   readonly canary: string | null;
+  /**
+   * The file a write probe would leave. Its verdict is read on the real disk, not in its exit code: the
+   * sandbox puts an empty copy in place of a denied home, where a command writes without an error and
+   * nothing reaches the disk.
+   */
+  readonly lands?: string;
 }
 
 const quoted = (word: string): string => `'${word.replaceAll("'", String.raw`'\''`)}'`;
@@ -310,7 +316,10 @@ function commandProbesOf(facts: ProbeFacts, session: Session): Probe[] {
     ...facts.sockets.map(({ name, path }) => command(`connect-${name}`, "fail", `${CONNECT_WITH_BUN} ${quoted(path)}`)),
     command("gpg-clearsign", "fail", "echo x | gpg --clearsign"),
     ...(session === "background"
-      ? layout.touched.map((path, index) => command(`touch-allow-write-${index}`, "fail", `touch ${quoted(path)}`))
+      ? layout.touched.map((path, index) => ({
+          ...command(`touch-allow-write-${index}`, "fail", `touch ${quoted(path)}`),
+          lands: path,
+        }))
       : []),
   ];
 }
@@ -409,6 +418,8 @@ export interface SessionRun {
   readonly probes: readonly Probe[];
   readonly results: ReadonlyMap<string, CommandResult>;
   readonly stream: string;
+  /** The files of the write probes that are on the disk once the session ended. */
+  readonly landed: readonly string[];
 }
 
 const StreamLine = Schema.Struct({ message: Schema.Struct({ content: Schema.Array(Schema.Unknown) }) });
@@ -454,11 +465,15 @@ const NOT_FOUND = 127;
 /** What a probe got. `unseen`: the probe saw no attempt, so it proves nothing. */
 export type Got = "fail" | "pass" | "unseen";
 
-function commandGot({ id, expected, canary }: Probe, { results, stream }: SessionRun): Got {
+function commandGot({ id, expected, canary, lands }: Probe, { results, stream, landed }: SessionRun): Got {
   const result = results.get(id);
 
   if (result === undefined) {
     return "unseen";
+  }
+
+  if (lands !== undefined) {
+    return landed.includes(lands) ? "pass" : "fail";
   }
 
   if (expected === "login") {
