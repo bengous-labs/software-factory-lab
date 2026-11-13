@@ -7,6 +7,7 @@ import {
   isAuthor,
   isWorker,
   ROLE_VARIABLE,
+  worksInClone,
 } from "./author-session.ts";
 
 describe("isAuthor", () => {
@@ -38,5 +39,19 @@ describe("isWorker", () => {
   test("any other role, or none, plays no Worker", () => {
     expect(isWorker({ [ROLE_VARIABLE]: "owner" })).toBe(false);
     expect(isWorker({})).toBe(false);
+  });
+});
+
+describe("worksInClone", () => {
+  test("a session Dispatch gave the main checkout works in a clone of its own", () => {
+    expect(worksInClone({ LAB_MAIN_CHECKOUT: "/repo" })).toBe(true);
+    expect(worksInClone({ LAB_AUTHOR: "1", LAB_API_WORKER: "1", LAB_MAIN_CHECKOUT: "/repo" })).toBe(true);
+  });
+
+  test("a session with no main checkout, or an empty one, does not: an Author Dispatch did not launch", () => {
+    expect(worksInClone({})).toBe(false);
+    expect(worksInClone({ LAB_AUTHOR: "1" })).toBe(false);
+    expect(worksInClone({ LAB_MAIN_CHECKOUT: "" })).toBe(false);
+    expect(worksInClone({ LAB_MAIN_CHECKOUT: undefined })).toBe(false);
   });
 });

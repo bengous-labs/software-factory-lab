@@ -426,7 +426,7 @@ const StreamLine = Schema.Struct({ message: Schema.Struct({ content: Schema.Arra
 const ToolUse = Schema.Struct({
   type: Schema.Literal("tool_use"),
   name: Schema.String,
-  input: Schema.Struct({ file_path: Schema.optionalKey(Schema.String) }),
+  input: Schema.Record(Schema.String, Schema.Json),
 });
 
 const decodeStreamLine = Schema.decodeResult(Schema.fromJsonString(StreamLine));
@@ -447,7 +447,7 @@ function toolUsesOf(stream: string): Array<typeof ToolUse.Type> {
 
 /** Whether the session's output holds a call of the Read tool on `path`. */
 function attempted(path: string, stream: string): boolean {
-  return toolUsesOf(stream).some(({ name, input }) => name === "Read" && input.file_path === path);
+  return toolUsesOf(stream).some(({ name, input }) => name === "Read" && input["file_path"] === path);
 }
 
 /** The exit code of a command the shell did not find: no attempt was made. */
