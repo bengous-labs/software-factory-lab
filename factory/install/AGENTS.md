@@ -56,6 +56,8 @@ In a background Worker's session `scripts/hooks/install-deps.ts` runs `bun insta
   Change the Worker settings file or `worker-sandbox.ts`, never a generated file.
 - Every Worker needs `bubblewrap`, `socat` and the sandbox's seccomp filter on the machine: a session whose sandbox cannot start runs no command.
 - A Worker's commits and tags are unsigned: the home holds the signing key.
+- `bun install` in a Worker's session fills a cache of the Workers' own, `~/.local/share/software-factory-lab/bun-cache`, the one directory outside its working directory a command writes: Dispatch creates it, and the Owner's own cache stays read-only.
+- No command of a Worker makes or reaches a Unix socket: the one test of `bun check` that listens on one, in `factory/land/relay/deliver.live.test.ts`, is skipped there, and runs in CI.
 - The Worker bench (`scripts/lab/bench.ts`) launches its sessions unsandboxed: their commands read what the Owner's user reads.
 
 `bun factory/bin/sandbox-probe.ts` shows this on the machine, with canary files where credentials live and never a real credential.

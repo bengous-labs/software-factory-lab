@@ -104,6 +104,7 @@ function world(answers: Partial<Record<string, Ran>> = {}, machine: Partial<Mach
   const left: Left[] = [];
   const written: Array<{ path: string; text: string }> = [];
   const stats: string[] = [];
+  const made: string[] = [];
   const sleeps: number[] = [];
 
   const ports: DispatchPorts = {
@@ -143,6 +144,11 @@ function world(answers: Partial<Record<string, Ran>> = {}, machine: Partial<Mach
 
       return Promise.resolve();
     },
+    makeDir: (path) => {
+      made.push(path);
+
+      return Promise.resolve();
+    },
     modeOf: (path) => {
       stats.push(path);
 
@@ -156,7 +162,7 @@ function world(answers: Partial<Record<string, Ran>> = {}, machine: Partial<Mach
     },
   };
 
-  return { ports, calls, launches, left, written, stats, sleeps, order };
+  return { ports, calls, launches, left, written, stats, sleeps, order, made };
 }
 
 /** The message a dispatch rejects with; it fails the test when the dispatch resolves. */
@@ -225,6 +231,16 @@ describe("dispatch", () => {
       `Implement GitHub issue #7 of o/r (read it with: gh issue view 7 --repo o/r). Your worktree exists: first call EnterWorktree with the path ${WORKTREE} and work there; its branch issue/7-add-a-flag starts at origin/dev.`,
     ]);
     expect(launch?.argv.join(" ")).not.toContain("secret");
+  });
+
+  test("makes the Workers' own bun cache before either kind of Worker starts: its sandbox binds it", async () => {
+    for (const request of [REQUEST, API_REQUEST]) {
+      const { ports, made } = world();
+
+      await dispatch(ports, request);
+
+      expect(made).toEqual(["/home/me/.local/share/software-factory-lab/bun-cache"]);
+    }
   });
 
   test("launches the Worker at the effort the request names", async () => {

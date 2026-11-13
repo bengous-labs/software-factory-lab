@@ -52,7 +52,7 @@ const API_DENY = [
   ...CREDENTIAL_RULES,
 ];
 
-const GIT_ENV = {
+const SANDBOX_ENV = {
   GIT_CONFIG_COUNT: "3",
   GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf",
   GIT_CONFIG_VALUE_0: "git@github.com:",
@@ -60,6 +60,7 @@ const GIT_ENV = {
   GIT_CONFIG_VALUE_1: "false",
   GIT_CONFIG_KEY_2: "tag.gpgsign",
   GIT_CONFIG_VALUE_2: "false",
+  BUN_INSTALL_CACHE_DIR: "/home/me/.local/share/software-factory-lab/bun-cache",
 };
 
 const SANDBOX = {
@@ -76,7 +77,9 @@ const SANDBOX = {
       "/home/me/.gitconfig",
       "/home/me/.config/git/config",
       "/home/me/.config/git/ignore",
+      "/home/me/.local/share/software-factory-lab/bun-cache",
     ],
+    allowWrite: ["/home/me/.local/share/software-factory-lab/bun-cache"],
   },
   credentials: {
     files: [
@@ -90,17 +93,14 @@ const SANDBOX = {
 /** An API Worker's sandbox: no entry for where it works, its clone being its working directory, and the main checkout hidden from it. */
 const API_SANDBOX = {
   ...SANDBOX,
-  filesystem: {
-    denyRead: ["/home/me"],
-    allowRead: SANDBOX.filesystem.allowRead.slice(1),
-  },
+  filesystem: { ...SANDBOX.filesystem, allowRead: SANDBOX.filesystem.allowRead.slice(1) },
   credentials: { files: [...SANDBOX.credentials.files, { path: "/repo", mode: "deny" }] },
 };
 
 describe("sandboxedOf", () => {
   test("an API Worker is allowed the list alone beside its working directory, never the clones' directory nor the main checkout, which is hidden from its commands and its file tools, and its file tools write nothing in a clone's git directory", () => {
     expect(sandboxedOf({ env: { LAB_AUTHOR: "1" } }, PLACE, "api")).toEqual({
-      env: { LAB_AUTHOR: "1", ...GIT_ENV },
+      env: { LAB_AUTHOR: "1", ...SANDBOX_ENV },
       sandbox: API_SANDBOX,
       permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["Edit(./**)", "Bash"], deny: API_DENY },
     });
@@ -110,12 +110,13 @@ describe("sandboxedOf", () => {
       "/home/me/.gitconfig",
       "/home/me/.config/git/config",
       "/home/me/.config/git/ignore",
+      "/home/me/.local/share/software-factory-lab/bun-cache",
     ]);
   });
 
   test("a background Worker: denies the home to every command, allows the checkout and the list again, hides the factory's secrets, and holds the file tools to the working directories", () => {
     expect(sandboxedOf({ env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" } }, PLACE, "background")).toEqual({
-      env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", ...GIT_ENV },
+      env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker", ...SANDBOX_ENV },
       sandbox: SANDBOX,
       permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["Edit(./**)", "Bash"], deny: DENY },
     });
@@ -129,7 +130,7 @@ describe("sandboxedOf", () => {
     };
 
     expect(sandboxedOf(held, PLACE, "background")).toEqual({
-      env: { LAB_AUTHOR: "1", ...GIT_ENV },
+      env: { LAB_AUTHOR: "1", ...SANDBOX_ENV },
       outputStyle: "Proactive",
       sandbox: SANDBOX,
       permissions: {
@@ -149,13 +150,13 @@ describe("sandboxedOf", () => {
     };
 
     expect(sandboxedOf(held, PLACE, "background")).toEqual({
-      env: GIT_ENV,
+      env: SANDBOX_ENV,
       sandbox: SANDBOX,
       permissions: { blockReadsOutsideWorkingDirectories: true, allow: ["Edit(./**)", "Bash"], deny: DENY },
     });
   });
 
-  test("the sandbox widens nothing: it holds those keys alone, with no write path, excluded command or Unix socket", () => {
+  test("the sandbox widens nothing: it holds those keys alone, with no excluded command or Unix socket, and one write path, the Workers' own bun cache", () => {
     const { sandbox } = sandboxedOf({ env: {} }, PLACE, "background");
 
     expect(Object.keys(sandbox).toSorted()).toEqual([
@@ -167,7 +168,8 @@ describe("sandboxedOf", () => {
       "filesystem",
       "network",
     ]);
-    expect(Object.keys(sandbox.filesystem).toSorted()).toEqual(["allowRead", "denyRead"]);
+    expect(Object.keys(sandbox.filesystem).toSorted()).toEqual(["allowRead", "allowWrite", "denyRead"]);
+    expect(sandbox.filesystem.allowWrite).toEqual(["/home/me/.local/share/software-factory-lab/bun-cache"]);
     expect(Object.keys(sandbox.network)).toEqual(["allowedDomains"]);
   });
 });

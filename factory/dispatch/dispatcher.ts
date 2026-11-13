@@ -10,7 +10,7 @@ import { Schema } from "effect";
 import { TRUNK } from "../install/host.ts";
 import { OWNER_LOGIN } from "../install/logins.ts";
 import { apiKeyFileOf, apiWorkerLogOf, apiWorkerSettingsOf, firstTurnArgvOf } from "../land/shared/api-worker.ts";
-import { sandboxPlaceProblemOf } from "../land/shared/worker-sandbox.ts";
+import { sandboxPlaceProblemOf, workersBunCacheOf } from "../land/shared/worker-sandbox.ts";
 import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
 import { decodeJson } from "../lib/json.ts";
 import { checked } from "../lib/run.port.ts";
@@ -50,6 +50,8 @@ export interface DispatchPorts {
   readonly readText: (path: string) => Promise<string>;
   /** Writes `text` to the file at `path`, which only its owner may read. */
   readonly writeSecret: (path: string, text: string) => Promise<void>;
+  /** Creates the directory at `path` for its owner alone, with its parents; one that is there stays as it is. */
+  readonly makeDir: (path: string) => Promise<void>;
   /** The permission bits of the file at `path`, null when there is none. */
   readonly modeOf: (path: string) => Promise<number | null>;
   /** A new session id. */
@@ -330,6 +332,9 @@ export async function dispatch(ports: DispatchPorts, request: DispatchRequest): 
   let launched: Launched;
 
   try {
+    // The sandbox binds the Workers' own bun cache: it must be there before a session's first command.
+    await ports.makeDir(workersBunCacheOf(home));
+
     launched = await (api
       ? launchHeadless(ports, assignment, { ...launching, settings: apiWorkerSettingsOf(home) })
       : launchBackground(ports, assignment, { ...launching, settings: backgroundWorkerSettingsOf(home) }));

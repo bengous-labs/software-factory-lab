@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { dispatchArgsOf } from "../dispatch/dispatch-plan.ts";
@@ -43,6 +43,9 @@ const ports: DispatchPorts = {
     const fresh = `${path}.${process.pid}.new`;
     await writeFile(fresh, text, { mode: 0o600, flag: "wx" });
     await rename(fresh, path);
+  },
+  makeDir: async (path) => {
+    await mkdir(path, { recursive: true, mode: 0o700 });
   },
   modeOf: async (path) => {
     try {

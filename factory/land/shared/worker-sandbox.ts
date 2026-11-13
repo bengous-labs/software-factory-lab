@@ -10,7 +10,7 @@
 
 import type { Schema } from "effect";
 
-import { CREDENTIAL_PATHS, READABLE_UNDER_HOME } from "../../install/sandbox-paths.ts";
+import { CREDENTIAL_PATHS, READABLE_UNDER_HOME, WORKERS_BUN_CACHE } from "../../install/sandbox-paths.ts";
 import { apiClonesDirOf, apiKeyFileOf, configDirOf } from "./api-worker.ts";
 
 /** Where a Worker's sandbox is made for: the Owner's home and the repository's main checkout. */
@@ -49,6 +49,14 @@ function hiddenDirsOf({ home, checkout }: SandboxPlace, kind: WorkerKind): strin
 /** The credential paths under the home `home`, by their absolute paths. */
 function credentialPathsOf(home: string): string[] {
   return CREDENTIAL_PATHS.map((path) => `${home}/${path}`);
+}
+
+/**
+ * bun's install cache of the Workers alone, under the home `home`, which Dispatch creates: the one
+ * directory outside its working directory a Worker's command writes.
+ */
+export function workersBunCacheOf(home: string): string {
+  return `${home}/${WORKERS_BUN_CACHE}`;
 }
 
 /** The characters that make Claude Code read a path of the settings as a pattern. */
@@ -110,7 +118,9 @@ const GIT_ENV = {
  * background Worker, which starts there, and the allowed list; it sees no file of the hidden directories
  * whatever it runs, and reaches the hosts above. No entry holds an API Worker's clone: an entry that is
  * a parent of the working directory makes the sandbox fail to start (`bwrap` cannot place its guards in
- * a directory bound read-only). No key widens it: no write path, no excluded command, no Unix socket.
+ * a directory bound read-only). One write path is added, bun's install cache of the Workers alone:
+ * `bun install` needs a cache it can write, and never the Owner's own. No other key widens the sandbox:
+ * no excluded command, no Unix socket.
  */
 function sandboxOf(place: SandboxPlace, kind: WorkerKind) {
   const { home, checkout } = place;
@@ -122,7 +132,12 @@ function sandboxOf(place: SandboxPlace, kind: WorkerKind) {
     autoAllowBashIfSandboxed: true,
     filesystem: {
       denyRead: [home],
-      allowRead: [...(kind === "api" ? [] : [checkout]), ...READABLE_UNDER_HOME.map((path) => `${home}/${path}`)],
+      allowRead: [
+        ...(kind === "api" ? [] : [checkout]),
+        ...READABLE_UNDER_HOME.map((path) => `${home}/${path}`),
+        workersBunCacheOf(home),
+      ],
+      allowWrite: [workersBunCacheOf(home)],
     },
     credentials: { files: hiddenDirsOf(place, kind).map((path) => ({ path, mode: "deny" })) },
     network: { allowedDomains: ALLOWED_DOMAINS },
@@ -157,7 +172,7 @@ export interface SandboxableSettings {
 
 /**
  * `settings`, the Worker settings, with the sandbox a Worker of `kind` has in `place` merged in: git's
- * configuration in the environment, the sandbox, which replaces any the settings held, and the rules of
+ * configuration and bun's cache in the environment, the sandbox, which replaces any the settings held, and the rules of
  * the file tools, which read under the working directories alone. The allow and deny rules add to those
  * the settings hold; every other key stays as it stands.
  */
@@ -168,7 +183,7 @@ export function sandboxedOf<Settings extends SandboxableSettings>(
 ) {
   return {
     ...settings,
-    env: { ...settings.env, ...GIT_ENV },
+    env: { ...settings.env, ...GIT_ENV, BUN_INSTALL_CACHE_DIR: workersBunCacheOf(place.home) },
     sandbox: sandboxOf(place, kind),
     permissions: {
       ...settings.permissions,
