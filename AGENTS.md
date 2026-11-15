@@ -34,7 +34,7 @@ The factory is young and its design moves: a rule serves the goal, it is not the
 - `bun check` is the one check: CI's `validate` job runs it, and a Worker runs it before it stops, at the Stop hook's asking. It chains the typecheck, oxlint, the format check, the gates in `scripts/gates/`, knip, the tests with coverage, then the coverage floor. `scripts/ci/check.ts` holds the stages: green prints one line, red prints the failing stage's output and names it last.
 - `bun run mods` validates and tests the mods under `.claude/plugins/` with the Claude Code that `bun install` puts in `node_modules`; `bun check` runs it.
 - `bun test <file>` runs one test file; add `-t <name>` to run the tests whose name matches.
-- `bun scripts/ci/mutation.ts run` is CI's `mutation` job: Stryker on each module `stryker.config.ts` lists that your branch changes, through its lines or its tests. `bun check` does not run it; run it before you stop when your change reaches one of those modules.
+- `bun scripts/ci/mutation.ts run` is CI's `mutation` job: Stryker on each module `stryker.config.ts` lists that your branch changes, through its lines or its tests. `bun check` does not run it. A session that is no Worker runs it before it stops when its change reaches one of those modules; a Worker leaves it to CI, because Stryker copies the whole clone and the Worker's sandbox refuses the read of paths it guards there (`factory/roles/worker.md` names one).
 - `bun app/src/cli.ts <command>` runs the CLI on `todo.json`, or on the file `TODO_FILE` names.
 
 ## The app
