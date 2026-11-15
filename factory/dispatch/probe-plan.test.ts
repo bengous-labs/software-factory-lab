@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
-import { backgroundWorkerSettingsTextOf } from "./dispatch-plan.ts";
+import { subscriptionWorkerSettingsTextOf } from "./dispatch-plan.ts";
 import {
   canariesOf,
   canaryContentOf,
@@ -33,15 +33,15 @@ const FACTS: ProbeFacts = {
 
 const CLONES = "/home/me/.local/share/software-factory-lab/api-workers";
 
-const BACKGROUND_CLONE = `${CLONES}/sandbox-probe-background`;
+const WORKER_CLONE = `${CLONES}/sandbox-probe-worker`;
 
-const DIR = `${BACKGROUND_CLONE}/.lab/sandbox-probe`;
+const DIR = `${WORKER_CLONE}/.lab/sandbox-probe`;
 
-const CLONE = `${CLONES}/sandbox-probe-api`;
+const CLONE = `${CLONES}/sandbox-probe-sandbox`;
 
 const API_DIR = `${CLONE}/.lab/sandbox-probe`;
 
-/** The main checkout's settings file, as far as a background Worker's settings read it: its hooks. */
+/** The main checkout's settings file, as far as a Worker's settings read it: its hooks. */
 const PROJECT = JSON.stringify({
   hooks: { Stop: [{ hooks: [{ type: "command", command: 'bun "$CLAUDE_PROJECT_DIR"/factory/bin/stop-hook.ts' }] }] },
 });
@@ -109,8 +109,8 @@ describe("what the probe writes", () => {
 
   test("each session runs where a Worker works, in a clone of its own under the clones' directory, outside the main checkout: its own directory there with its script and its results, one settings file in the config directory, two links into SSH's directory, and a file a touch would leave", () => {
     for (const [session, tree, dir] of [
-      ["background", BACKGROUND_CLONE, DIR],
-      ["api", CLONE, API_DIR],
+      ["worker", WORKER_CLONE, DIR],
+      ["sandbox", CLONE, API_DIR],
     ] as const) {
       expect(layoutOf(FACTS, session)).toEqual({
         tree,
@@ -128,7 +128,7 @@ describe("what the probe writes", () => {
   });
 
   test("no link when SSH's directory does not exist, whatever other directory does", () => {
-    expect(layoutOf({ ...FACTS, credentialDirs: [".config/gh"], userAllowWrite: [] }, "api")).toMatchObject({
+    expect(layoutOf({ ...FACTS, credentialDirs: [".config/gh"], userAllowWrite: [] }, "sandbox")).toMatchObject({
       links: [],
       touched: [],
     });
@@ -141,7 +141,7 @@ describe("what the probe writes", () => {
       "/home/me/.config/gh/sandbox-probe-canary",
       "/home/me/Work/repo/.lab/sandbox-probe-canary",
       CLONE,
-      BACKGROUND_CLONE,
+      WORKER_CLONE,
       "/home/me/.config/software-factory-lab/sandbox-probe-settings.json",
       "/home/me/scratch/sandbox-probe-touch",
     ]);
@@ -182,27 +182,26 @@ describe("userAllowWriteOf", () => {
 describe("the sessions of the probe", () => {
   const worker = JSON.stringify({ env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" }, outputStyle: "Proactive" });
 
-  test("each runs on the Worker's token alone, in the sandbox of every Worker, the background one with the main checkout's hooks as Dispatch writes them, and neither is an Author", () => {
+  test("each runs on the Worker's token alone, in the sandbox of every Worker, the second with the main checkout's hooks as Dispatch writes them, and neither is an Author", () => {
     const settings = probeSettingsOf(worker, PROJECT, PLACE);
 
-    expect(SESSIONS).toEqual(["api", "background"]);
-    expect(settings.api).toBe(`${JSON.stringify(sandboxedOf({ env: { GH_TOKEN: "ghp_worker" } }, PLACE), null, 2)}\n`);
-    expect(settings.background).toBe(
-      backgroundWorkerSettingsTextOf('{"env":{"GH_TOKEN":"ghp_worker"}}', PROJECT, PLACE),
+    expect(SESSIONS).toEqual(["sandbox", "worker"]);
+    expect(settings.sandbox).toBe(
+      `${JSON.stringify(sandboxedOf({ env: { GH_TOKEN: "ghp_worker" } }, PLACE), null, 2)}\n`,
     );
-    expect(JSON.parse(settings.background)).toMatchObject({ permissions: { defaultMode: "dontAsk" } });
-    expect(settings.background).toContain("stop-hook.ts");
-    expect(settings.api).not.toContain("hooks");
-    expect(`${settings.api}${settings.background}`).not.toContain("LAB_AUTHOR");
-    expect(`${settings.api}${settings.background}`).not.toContain("Proactive");
+    expect(settings.worker).toBe(subscriptionWorkerSettingsTextOf('{"env":{"GH_TOKEN":"ghp_worker"}}', PROJECT, PLACE));
+    expect(settings.worker).toContain("stop-hook.ts");
+    expect(settings.sandbox).not.toContain("hooks");
+    expect(`${settings.sandbox}${settings.worker}`).not.toContain("LAB_AUTHOR");
+    expect(`${settings.sandbox}${settings.worker}`).not.toContain("Proactive");
   });
 
   test("a Worker settings file with no token throws, naming it", () => {
     expect(() => probeSettingsOf('{"env":{}}', PROJECT, PLACE)).toThrow("the Worker settings file: ");
   });
 
-  test("each loads no other settings and no MCP server, as a Worker's session; the API one asks nothing by its command, the background one by its settings", () => {
-    expect(sessionArgvOf("api", "/s.json", "P")).toEqual([
+  test("each loads no other settings and no MCP server and asks nothing, as a Worker's turn", () => {
+    expect(sessionArgvOf("/s.json", "P")).toEqual([
       "claude",
       "-p",
       "--model",
@@ -219,27 +218,12 @@ describe("the sessions of the probe", () => {
       "stream-json",
       "P",
     ]);
-    expect(sessionArgvOf("background", "/s.json", "P")).toEqual([
-      "claude",
-      "-p",
-      "--model",
-      "haiku",
-      "--settings",
-      "/s.json",
-      "--setting-sources",
-      "",
-      "--strict-mcp-config",
-      "--verbose",
-      "--output-format",
-      "stream-json",
-      "P",
-    ]);
   });
 });
 
-/** The ids of the API session's probes for a main checkout at `checkout`. */
+/** The ids of the first session's probes for a main checkout at `checkout`. */
 const ids = (checkout: string): string[] =>
-  probesOf({ ...FACTS, place: { home: "/home/me", checkout } }, "api").map((probe) => probe.id);
+  probesOf({ ...FACTS, place: { home: "/home/me", checkout } }, "sandbox").map((probe) => probe.id);
 
 /** The commands that must fail in a session whose own directory is `dir`. */
 const failRows = (dir: string) => [
@@ -260,8 +244,8 @@ const failRows = (dir: string) => [
 ];
 
 describe("probesOf", () => {
-  test("the API session: what must pass, the Author's login, the runtime directory's listing, then every read that must fail, by a command and by a file tool", () => {
-    expect(probesOf(FACTS, "api").map((probe) => rowOf(probe))).toEqual([
+  test("the session on the sandbox alone: what must pass, the Author's login, the runtime directory's listing, then every read that must fail, by a command and by a file tool", () => {
+    expect(probesOf(FACTS, "sandbox").map((probe) => rowOf(probe))).toEqual([
       ...PASS_ROWS,
       ["ls-runtime-dir", "recorded", "ls '/run/user/1000'", null],
       ...failRows(API_DIR),
@@ -269,8 +253,8 @@ describe("probesOf", () => {
     ]);
   });
 
-  test("the background session adds a touch under each write path of the Owner's own settings, which it must not have taken", () => {
-    expect(probesOf(FACTS, "background").map((probe) => rowOf(probe))).toEqual([
+  test("the session on a Worker's settings adds a touch under each write path of the Owner's own settings, which it must not have taken", () => {
+    expect(probesOf(FACTS, "worker").map((probe) => rowOf(probe))).toEqual([
       ...PASS_ROWS,
       ["ls-runtime-dir", "recorded", "ls '/run/user/1000'", null],
       ...failRows(DIR),
@@ -288,7 +272,7 @@ describe("probesOf", () => {
       runtimeDir: null,
     };
 
-    expect(probesOf(bare, "api").map((probe) => rowOf(probe))).toEqual([
+    expect(probesOf(bare, "sandbox").map((probe) => rowOf(probe))).toEqual([
       ...PASS_ROWS,
       ...canaryRows("home", "/home/me/sandbox-probe-canary", "T-0"),
       ...canaryRows("checkout", "/srv/repo/.lab/sandbox-probe-canary", "T-1"),
@@ -305,7 +289,7 @@ describe("probesOf", () => {
   });
 
   test("a path with a quote cannot close the quote of its command", () => {
-    const quoted = probesOf({ ...FACTS, runtimeDir: "/run/o'neil" }, "api").find(
+    const quoted = probesOf({ ...FACTS, runtimeDir: "/run/o'neil" }, "sandbox").find(
       (probe) => probe.id === "ls-runtime-dir",
     );
 
@@ -314,7 +298,7 @@ describe("probesOf", () => {
 });
 
 describe("what a session is given", () => {
-  const probes = probesOf({ ...FACTS, credentialDirs: [".ssh"], sockets: [], runtimeDir: null }, "api");
+  const probes = probesOf({ ...FACTS, credentialDirs: [".ssh"], sockets: [], runtimeDir: null }, "sandbox");
 
   test("the script runs one command probe by its id, in the session's tree, and records what it printed and its exit code", () => {
     expect(
@@ -379,7 +363,7 @@ const runOf = (
   results: ReadonlyArray<readonly [string, CommandResult]>,
   stream = "",
 ): SessionRun => ({
-  session: "api",
+  session: "sandbox",
   landed: [],
   probes,
   results: new Map(results),
@@ -418,7 +402,7 @@ describe("gotOf", () => {
     expect(gotOf(touch, { ...ran, landed: ["/home/me/scratch/other"] })).toBe("fail");
     expect(gotOf(touch, { ...refused, landed: ["/home/me/scratch/x"] })).toBe("pass");
     expect(gotOf(touch, { ...runOf([touch], []), landed: ["/home/me/scratch/x"] })).toBe("unseen");
-    expect(probesOf(FACTS, "background").find((probe) => probe.id === "touch-allow-write-0")?.lands).toBe(
+    expect(probesOf(FACTS, "worker").find((probe) => probe.id === "touch-allow-write-0")?.lands).toBe(
       "/home/me/scratch/sandbox-probe-touch",
     );
   });
@@ -490,22 +474,22 @@ describe("reportOf", () => {
       stream,
     );
 
-    expect(reportOf([run, { ...run, session: "background" }])).toEqual({
+    expect(reportOf([run, { ...run, session: "worker" }])).toEqual({
       text: [
-        "--- api ls-runtime-dir: exit 0",
+        "--- sandbox ls-runtime-dir: exit 0",
         "bus\ngnupg",
-        "--- background ls-runtime-dir: exit 0",
+        "--- worker ls-runtime-dir: exit 0",
         "bus\ngnupg",
-        "api bun-check: expected pass, got pass",
-        "api gh-login: expected pass, got pass",
-        "api ls-runtime-dir: recorded",
-        "api cat-canary-home: expected fail, got fail",
-        "api read-canary-home: expected fail, got fail",
-        "background bun-check: expected pass, got pass",
-        "background gh-login: expected pass, got pass",
-        "background ls-runtime-dir: recorded",
-        "background cat-canary-home: expected fail, got fail",
-        "background read-canary-home: expected fail, got fail",
+        "sandbox bun-check: expected pass, got pass",
+        "sandbox gh-login: expected pass, got pass",
+        "sandbox ls-runtime-dir: recorded",
+        "sandbox cat-canary-home: expected fail, got fail",
+        "sandbox read-canary-home: expected fail, got fail",
+        "worker bun-check: expected pass, got pass",
+        "worker gh-login: expected pass, got pass",
+        "worker ls-runtime-dir: recorded",
+        "worker cat-canary-home: expected fail, got fail",
+        "worker read-canary-home: expected fail, got fail",
         "sandbox-probe: 8/8 as expected",
       ].join("\n"),
       asExpected: true,
@@ -525,17 +509,17 @@ describe("reportOf", () => {
 
     expect(reportOf([run])).toEqual({
       text: [
-        "--- api bun-check: exit 1",
+        "--- sandbox bun-check: exit 1",
         `${"x".repeat(1986)}\nfailed: lint`,
-        "--- api gh-login: exit 0",
+        "--- sandbox gh-login: exit 0",
         "bengous",
-        "--- api cat-canary-home: exit 0",
+        "--- sandbox cat-canary-home: exit 0",
         "sandbox-probe-text T-0",
-        "api bun-check: expected pass, got fail",
-        "api gh-login: expected pass, got fail",
-        "api ls-runtime-dir: recorded",
-        "api cat-canary-home: expected fail, got pass",
-        "api read-canary-home: expected fail, got no attempt",
+        "sandbox bun-check: expected pass, got fail",
+        "sandbox gh-login: expected pass, got fail",
+        "sandbox ls-runtime-dir: recorded",
+        "sandbox cat-canary-home: expected fail, got pass",
+        "sandbox read-canary-home: expected fail, got no attempt",
         "sandbox-probe: 0/4 as expected",
       ].join("\n"),
       asExpected: false,

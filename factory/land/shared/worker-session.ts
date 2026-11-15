@@ -1,13 +1,17 @@
 /**
- * What an API Worker is made of, for the steps that launch one, resume it or fork it: a headless
- * session, `claude -p`, whose turns bill the Owner's Console API key. The key stays in its file: the API
- * Worker settings file names a helper command that prints it, so it reaches no command line and no
- * environment, and the sandbox of a Worker's commands (`worker-sandbox.ts`) hides its directory from
- * them. A turn loads no settings but that file: the clone's own would run the hooks of the branch the
- * Worker edits. The Worker works in a clone of its own, outside the main checkout: it shares no git
- * directory with the checkout every hook runs from.
- * Dispatch launches the first turn, the relay each later one, both detached, and each turn appends what
- * it printed to one log of the main checkout.
+ * What a Worker's session is made of, for the steps that launch it, resume it or fork it: a headless
+ * session, `claude -p`, one turn at a time. Never a background session, `claude --bg`: Claude Code
+ * starts one only in a workspace somebody trusted in a terminal, which a new clone never is, and a
+ * headless turn asks no trust and names its settings again each time. A turn loads no settings but the
+ * file Dispatch wrote for its kind: the clone's own would run the hooks of the branch the Worker edits.
+ * The Worker works in a clone of its own, outside the main checkout: it shares no git directory with the
+ * checkout every hook runs from. Dispatch launches the first turn, the relay each later one, both
+ * detached, and each turn appends what it printed to one log of the main checkout.
+ *
+ * A Worker's turns bill the login Claude Code holds, the Owner's subscription. An API Worker's bill the
+ * Owner's Console API key instead. The key stays in its file: the API Worker settings file names a
+ * helper command that prints it, so it reaches no command line and no environment, and the sandbox of a
+ * Worker's commands (`worker-sandbox.ts`) hides its directory from them.
  */
 
 import { apiKeyFileOf, configDirOf } from "../../install/paths.ts";
@@ -27,20 +31,24 @@ export function apiKeyHelperOf(home: string): string {
  */
 export const ONE_RESULT = { verbose: false };
 
-/** The API Worker settings file, which Dispatch writes from the Worker settings file at each API dispatch. */
-export function apiWorkerSettingsOf(home: string): string {
-  return `${configDirOf(home)}/api-worker-settings.json`;
+/**
+ * The settings file of a Worker's session, the API Worker's when `api`: Dispatch writes it from the
+ * Worker settings file at each dispatch of that kind, and every turn of such a Worker names it. On-disk
+ * names: running relays name them.
+ */
+export function sessionSettingsOf(home: string, api: boolean): string {
+  return `${configDirOf(home)}/${api ? "api-worker" : "subscription-worker"}-settings.json`;
 }
 
 /**
- * The log of the main checkout `checkout` that every turn of the API Worker's session `session` appends
- * its output to. An on-disk name: Dispatch and a running relay write it, and the Owner reads it.
+ * The log of the main checkout `checkout` that every turn of the Worker's session `session` appends its
+ * output to. An on-disk name: Dispatch and a running relay write it, and the Owner reads it.
  */
-export function apiWorkerLogOf(checkout: string, session: string): string {
-  return `${checkout}/.lab/state/api-worker-${session}.log`;
+export function workerLogOf(checkout: string, session: string): string {
+  return `${checkout}/.lab/state/worker-${session}.log`;
 }
 
-/** One headless turn of an API Worker's session. */
+/** One headless turn of a Worker's session. */
 export interface HeadlessTurn {
   readonly session: string;
   /** The model the turn runs on; null leaves Claude Code's default, since a headless resume keeps none. */
@@ -50,7 +58,7 @@ export interface HeadlessTurn {
    * nor its transcript keeps the effort of its launch.
    */
   readonly effort: Effort | null;
-  /** The API Worker settings file, passed by its path at every turn: a headless session saves no launch option. */
+  /** The settings file of its kind, passed by its path at every turn: a headless session saves no launch option. */
   readonly settings: string;
   /**
    * The main checkout, whose root guide every turn is given. Never the clone's own: Claude Code reads
@@ -103,14 +111,14 @@ function turnArgvOf(start: readonly string[], turn: HeadlessTurn): string[] {
   ];
 }
 
-/** The command of the first turn of an API Worker: a new session with the id `turn.session`, named `name`. */
+/** The command of a Worker's first turn: a new session with the id `turn.session`, named `name`. */
 export function firstTurnArgvOf(turn: HeadlessTurn, name: string): string[] {
   return turnArgvOf(["--session-id", turn.session, "--name", name], turn);
 }
 
 /**
  * The command of a later turn: a headless resume of the session, run in the clone it was launched in.
- * Never `claude --bg --resume`: a background session does not bill the key.
+ * Never `claude --bg --resume`: a background session asks a trust no clone has, and bills no key.
  */
 export function resumedTurnArgvOf(turn: HeadlessTurn): string[] {
   return turnArgvOf(["--resume", turn.session], turn);

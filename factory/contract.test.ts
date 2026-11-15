@@ -23,7 +23,6 @@ import {
   reviewLabelOf,
   storedLandRouteOf,
 } from "./contract.ts";
-import { backgroundWorkerSettingsOf } from "./dispatch/dispatch-plan.ts";
 import { FACTORY_CONFIG_PATH } from "./install/factory-config.ts";
 import { EMPTY_RECORD, recordOfComment, stateCommentOf, storedOfRecord } from "./land/merge-bot/record.ts";
 import type { StateRecord } from "./land/merge-bot/record.ts";
@@ -36,10 +35,10 @@ import {
   REVIEW_WORKFLOW,
 } from "./land/review/review-report.ts";
 import { FORK_PARENT } from "./land/review/review-session.live.ts";
-import { apiKeyHelperOf, apiWorkerLogOf, apiWorkerSettingsOf } from "./land/shared/api-worker.ts";
 import { STRUCTURED_OUTPUT } from "./land/shared/ask.live.ts";
 import { AUTHOR_MARK, FIXED_MARK, QUESTION_MARK, REJECT_MARK } from "./land/shared/author-mark.ts";
 import { markerOf, movedLineOf, reviewMarkerOf, reviewOfBody, severityOfBody } from "./land/shared/findings.ts";
+import { apiKeyHelperOf, sessionSettingsOf, workerLogOf } from "./land/shared/worker-session.ts";
 import { FORK_MARKER, outcomeLineOf } from "./land/stop/decide.ts";
 import { FORK_FLAG } from "./land/stop/publish.live.ts";
 import {
@@ -269,21 +268,14 @@ describe("the names sessions and files hold", () => {
     });
   });
 
-  test("a relay's session file: the session's id, and a second line with what an API Worker's headless resume needs, or with a background Worker's clone", () => {
-    const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7" };
+  test("a relay's session file: the session's id, and a second line with what the headless resume of a Worker in a clone needs", () => {
+    const headless = { model: "claude-opus-5-5", worktree: "/home/me/clones/issue-7", api: false };
 
-    expect(targetTextOf({ session: "S1", headless: null, clone: null })).toBe("S1\n");
-    expect(targetTextOf({ session: "S1", headless, clone: null })).toBe(
-      'S1\n{"model":"claude-opus-5-5","worktree":"/repo/.claude/worktrees/issue-7"}\n',
+    expect(targetTextOf({ session: "S1", headless: null })).toBe("S1\n");
+    expect(targetTextOf({ session: "S1", headless })).toBe(
+      'S1\n{"model":"claude-opus-5-5","worktree":"/home/me/clones/issue-7","api":false}\n',
     );
-    expect(targetOf(targetTextOf({ session: "S1", headless, clone: null }))).toEqual({
-      session: "S1",
-      headless,
-      clone: null,
-    });
-    expect(targetTextOf({ session: "S1", headless: null, clone: "/home/me/clones/issue-7" })).toBe(
-      'S1\n{"clone":"/home/me/clones/issue-7"}\n',
-    );
+    expect(targetOf(targetTextOf({ session: "S1", headless }))).toEqual({ session: "S1", headless });
   });
 
   test("the key helper an API Worker's settings and its forks' name: it prints the key's file under the home", () => {
@@ -291,23 +283,40 @@ describe("the names sessions and files hold", () => {
   });
 
   test("a stop's line in the outcomes log: its keys as the Stop hook writes them, which the watch reads back", () => {
-    const facts = { at: "t1", session: "S1", api: true, worktree: "/w", branch: "issue/7-x", head: "h" };
+    const facts = {
+      at: "t1",
+      session: "S1",
+      api: true,
+      headless: true,
+      worktree: "/w",
+      branch: "issue/7-x",
+      head: "h",
+    };
+
     const line = outcomeLineOf(facts, { kind: "not-published", reason: "why" });
 
     expect(line).toBe(
-      '{"at":"t1","session":"S1","api":true,"worktree":"/w","branch":"issue/7-x","head":"h","outcome":"not-published","reason":"why"}',
+      '{"at":"t1","session":"S1","api":true,"headless":true,"worktree":"/w","branch":"issue/7-x","head":"h","outcome":"not-published","reason":"why"}',
     );
     expect(stopsOf(line)).toEqual([
-      { at: "t1", session: "S1", api: true, branch: "issue/7-x", outcome: "not-published", reason: "why" },
+      {
+        at: "t1",
+        session: "S1",
+        api: true,
+        headless: true,
+        branch: "issue/7-x",
+        outcome: "not-published",
+        reason: "why",
+      },
     ]);
   });
 
-  test("the settings file of each kind of Worker under the config directory, and the log of an API Worker's turns under the main checkout", () => {
-    expect(apiWorkerSettingsOf("/home/me")).toBe("/home/me/.config/software-factory-lab/api-worker-settings.json");
-    expect(backgroundWorkerSettingsOf("/home/me")).toBe(
-      "/home/me/.config/software-factory-lab/background-worker-settings.json",
+  test("the settings file of each kind of Worker under the config directory, and the log of a Worker's turns under the main checkout", () => {
+    expect(sessionSettingsOf("/home/me", true)).toBe("/home/me/.config/software-factory-lab/api-worker-settings.json");
+    expect(sessionSettingsOf("/home/me", false)).toBe(
+      "/home/me/.config/software-factory-lab/subscription-worker-settings.json",
     );
-    expect(apiWorkerLogOf("/repo", "S1")).toBe("/repo/.lab/state/api-worker-S1.log");
+    expect(workerLogOf("/repo", "S1")).toBe("/repo/.lab/state/worker-S1.log");
   });
 
   test("the review job's workflow, the files its processes share, and the variables that carry its request", () => {

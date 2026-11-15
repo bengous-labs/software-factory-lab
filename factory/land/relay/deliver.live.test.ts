@@ -19,7 +19,6 @@ const delivery = (route: Delivery["route"], stoppedAt: number | null = 1): Deliv
     route,
     socketLine: "LINE\n",
     resumeArgs: RESUME,
-    resumeIn: null,
     stopped: () => {
       looks.count += 1;
 
@@ -138,13 +137,12 @@ describe("deliverer", () => {
     expect(found.posts).toEqual([]);
   });
 
-  test("a background resume runs in the relay's checkout, or in the clone the session works in, where Claude Code keeps its conversation", async () => {
+  test("a background resume runs in the relay's checkout", async () => {
     const found = world([]);
 
     await found.deliver(delivery({ kind: "resume" }));
-    await found.deliver({ ...delivery({ kind: "resume" }), resumeIn: "/home/me/clones/issue-7" });
 
-    expect(found.cwds).toEqual(["/main", "/home/me/clones/issue-7"]);
+    expect(found.cwds).toEqual(["/main"]);
   });
 
   test("a resume that fails delivered nothing", async () => {

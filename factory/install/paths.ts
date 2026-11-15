@@ -16,7 +16,7 @@ export function apiKeyFileOf(home: string): string {
   return `${home}/${API_KEY_FILE}`;
 }
 
-/** The directory that holds the clone of each Worker, background or API, under the home `home`. */
+/** The directory that holds the clone of each Worker, under the home `home`. */
 export function clonesDirOf(home: string): string {
   return `${home}/${CLONES_DIR}`;
 }

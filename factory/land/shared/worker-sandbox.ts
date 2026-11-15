@@ -1,5 +1,5 @@
 /**
- * The sandbox of a Worker, API or background, and of the forks of its stops: the one definition of what
+ * The sandbox of a Worker and of the forks of its stops: the one definition of what
  * its commands and Claude Code's own file tools reach. A Worker runs code, so what holds a secret is
  * never a rule on a command's text. Every Bash command runs in Claude Code's sandbox, where the Owner's
  * whole home is denied to read and a short list under it is allowed again

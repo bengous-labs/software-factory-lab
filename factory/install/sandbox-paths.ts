@@ -38,5 +38,5 @@ export const CREDENTIAL_PATHS = [
  */
 export const PROBED_CREDENTIAL_DIRS = [".ssh", ".config/gh", ".gnupg"];
 
-/** The Owner's own Claude Code settings file, whose write paths a background Worker's sandbox must not take. */
+/** The Owner's own Claude Code settings file, whose write paths a Worker's sandbox must not take. */
 export const USER_SETTINGS = ".claude/settings.json";

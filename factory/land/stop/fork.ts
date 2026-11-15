@@ -12,9 +12,9 @@ import type { Env } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { ModelUsage, tokensOf } from "../../lib/tokens.ts";
 import type { TokenCounts } from "../../lib/tokens.ts";
-import { apiKeyHelperOf, ONE_RESULT } from "../shared/api-worker.ts";
 import { sandboxedOf } from "../shared/worker-sandbox.ts";
 import type { SandboxPlace } from "../shared/worker-sandbox.ts";
+import { apiKeyHelperOf, ONE_RESULT } from "../shared/worker-session.ts";
 import { FORK_MARKER } from "./decide.ts";
 import { DONE_JUDGE } from "./done-judge.actor.ts";
 

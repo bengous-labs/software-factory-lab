@@ -225,7 +225,7 @@ export interface AuthorStop {
   readonly checkout: string;
   /** The tree the stop comes from: the clone of a Worker Dispatch launched, or a worktree of the main checkout. */
   readonly worktree: string;
-  /** That tree when it is a Worker's clone, where the relay resumes its session; null for a worktree. */
+  /** That tree when it is a Worker's clone, where the relay resumes its session, headless; null for a worktree. */
   readonly clone: string | null;
   /**
    * Where and how the hook runs git for this stop: in the session's directory, or, for an API Worker, in
@@ -235,7 +235,7 @@ export interface AuthorStop {
   /** The directory the hook runs gh in: the session's, or the main checkout for an API Worker. */
   readonly ghCwd: string;
   readonly model: string | null;
-  /** The session is an API Worker's: the relay resumes it headless. */
+  /** The session is an API Worker's: its turns and its forks bill the Owner's API key. */
   readonly api: boolean;
 }
 
@@ -271,9 +271,8 @@ export async function closeNits(stopping: AuthorStop, gh: RunOptions, findings: 
 function leaveRelay(stopping: AuthorStop, pr: number): void {
   try {
     const { input, checkout, worktree, model, api } = stopping;
-    const headless = api ? { model, worktree } : null;
-    const clone = api ? null : stopping.clone;
-    const started = stopping.deps.startRelay({ pr, session: input.session_id, headless, clone, checkout });
+    const headless = stopping.clone === null ? null : { model, worktree, api };
+    const started = stopping.deps.startRelay({ pr, session: input.session_id, headless, checkout });
     stopping.log({ step: "relay", pr, relay: started });
   } catch (error) {
     stopping.log({

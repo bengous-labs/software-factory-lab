@@ -582,6 +582,7 @@ describe("outcomeLineOf", () => {
     at: "2026-11-10T10:00:00.000Z",
     session: "S1",
     api: false,
+    headless: false,
     worktree: "/w",
     branch: "feat/1-x",
     head: HEAD,
@@ -610,11 +611,10 @@ describe("outcomeLineOf", () => {
     });
   });
 
-  test("the stop of an API Worker says so, for the watch", () => {
-    expect(JSON.parse(outcomeLineOf({ ...facts, api: true }, { kind: "published", pr: 12 }))).toMatchObject({
-      api: true,
-      outcome: "published",
-    });
+  test("the stop of an API Worker, and of a Worker in a clone, which is headless, says so, for the watch", () => {
+    expect(
+      JSON.parse(outcomeLineOf({ ...facts, api: true, headless: true }, { kind: "published", pr: 12 })),
+    ).toMatchObject({ api: true, headless: true, outcome: "published" });
   });
 
   test("the line is one line", () => {

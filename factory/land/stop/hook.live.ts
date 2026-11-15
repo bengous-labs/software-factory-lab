@@ -313,6 +313,7 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
   const api = isApiWorker(deps.env);
   // A Worker Dispatch launched works in a clone, in a sandbox: the hook lets git find nothing from it.
   const clones = worksInClone(deps.env) ? clonesDirOf(requiredOf(deps.env, "HOME")) : null;
+  const headless = clones !== null;
   const place = clones === null ? await placeOf(deps, cwd) : clonePlaceOf(deps, clones, cwd);
   const at = new Date(deps.now()).toISOString();
 
@@ -322,7 +323,7 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
     deps.recordOutcome(
       deps.checkout,
       outcomeLineOf(
-        { at, session: input.session_id, api, worktree: cwd, branch: null, head: null },
+        { at, session: input.session_id, api, headless, worktree: cwd, branch: null, head: null },
         { kind: "not-published", reason },
       ),
     );
@@ -330,7 +331,15 @@ export async function stop(input: StopInput, deps: Deps, log: Log): Promise<Answ
     return ALLOW;
   }
 
-  let facts: StopFacts = { at, session: input.session_id, api, worktree: place.worktree, branch: null, head: null };
+  let facts: StopFacts = {
+    at,
+    session: input.session_id,
+    api,
+    headless,
+    worktree: place.worktree,
+    branch: null,
+    head: null,
+  };
 
   let stopped: Stopped;
   let failure: { readonly error: unknown } | null = null;

@@ -1,6 +1,6 @@
 /**
  * What the sandbox probe (`factory/bin/sandbox-probe.ts`) decides: the files it writes, the settings of
- * its two sessions, one on the sandbox alone and one on a background Worker's settings, the probes each session
+ * its two sessions, one on the sandbox alone and one on a Worker's settings, the probes each session
  * makes, and what their results say. A probe that must fail reads a canary, a file the probe itself
  * wrote where a credential lives, never a real credential. Its denial counts only when the attempt was
  * seen and the canary's text is nowhere in what the session printed.
@@ -14,10 +14,10 @@ import { PROBED_CREDENTIAL_DIRS } from "../install/sandbox-paths.ts";
 import { sandboxedOf } from "../land/shared/worker-sandbox.ts";
 import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
 import { decodeJson } from "../lib/json.ts";
-import { backgroundWorkerSettingsTextOf } from "./dispatch-plan.ts";
+import { subscriptionWorkerSettingsTextOf } from "./dispatch-plan.ts";
 
 /** The two sessions of a probe, by the kind of Worker whose settings each runs on. */
-export const SESSIONS = ["api", "background"] as const;
+export const SESSIONS = ["sandbox", "worker"] as const;
 
 export type Session = (typeof SESSIONS)[number];
 
@@ -180,8 +180,8 @@ const TokenHolder = Schema.Struct({ env: Schema.Struct({ GH_TOKEN: Schema.String
 /**
  * The settings text of each session, from the Worker settings file's text and the main checkout's
  * `.claude/settings.json`: the Worker's `GH_TOKEN` alone, so neither session is an Author and no stop
- * publishes. The API one is the sandbox of every Worker alone; the background one is what Dispatch
- * writes for a background Worker, the main checkout's hooks included.
+ * publishes. The first is the sandbox of every Worker alone; the second is what Dispatch writes for a
+ * Worker, the main checkout's hooks included.
  */
 export function probeSettingsOf(
   workerSettings: string,
@@ -192,17 +192,16 @@ export function probeSettingsOf(
   const settings = { env: { GH_TOKEN } };
 
   return {
-    api: `${JSON.stringify(sandboxedOf(settings, place), null, 2)}\n`,
-    background: backgroundWorkerSettingsTextOf(JSON.stringify(settings), projectSettings, place),
+    sandbox: `${JSON.stringify(sandboxedOf(settings, place), null, 2)}\n`,
+    worker: subscriptionWorkerSettingsTextOf(JSON.stringify(settings), projectSettings, place),
   };
 }
 
 /**
  * The command of a session: headless, on the smallest model, on the settings file `settings`, printing
- * every event. It loads no other settings and no MCP server, as a Worker's session; the API one asks
- * nothing by its command, the background one by its settings.
+ * every event. It loads no other settings and no MCP server and asks nothing, as a Worker's turn.
  */
-export function sessionArgvOf(session: Session, settings: string, prompt: string): string[] {
+export function sessionArgvOf(settings: string, prompt: string): string[] {
   return [
     "claude",
     "-p",
@@ -213,7 +212,8 @@ export function sessionArgvOf(session: Session, settings: string, prompt: string
     "--setting-sources",
     "",
     "--strict-mcp-config",
-    ...(session === "api" ? ["--permission-mode", "dontAsk"] : []),
+    "--permission-mode",
+    "dontAsk",
     "--verbose",
     "--output-format",
     "stream-json",
@@ -320,7 +320,7 @@ function commandProbesOf(facts: ProbeFacts, session: Session): Probe[] {
     ...(siblings === null ? [] : [command("ls-checkout-parent", "fail", siblings)]),
     ...facts.sockets.map(({ name, path }) => command(`connect-${name}`, "fail", `${CONNECT_WITH_BUN} ${quoted(path)}`)),
     command("gpg-clearsign", "fail", "echo x | gpg --clearsign"),
-    ...(session === "background"
+    ...(session === "worker"
       ? layout.touched.map((path, index) => ({
           ...command(`touch-allow-write-${index}`, "fail", `touch ${quoted(path)}`),
           lands: path,

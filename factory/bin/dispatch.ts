@@ -2,8 +2,8 @@
 
 /**
  * Hands an issue to a Worker: makes it a clone of its own, outside the main checkout, on a new branch
- * from the Trunk, and launches it there as a background session. With `--api` the Worker is an API
- * Worker: a headless session in its clone, which bills the Owner's Console API key.
+ * from the Trunk, and leaves its first turn running there, a headless session on the Owner's
+ * subscription. With `--api` the Worker is an API Worker, whose turns bill the Owner's Console API key.
  *
  *   bun factory/bin/dispatch.ts <issue> [--model <model>] [--effort <level>] [--api]
  *
@@ -17,7 +17,7 @@ import { dirname } from "node:path";
 import { dispatchArgsOf } from "../dispatch/dispatch-plan.ts";
 import { dispatch } from "../dispatch/dispatcher.ts";
 import type { DispatchPorts } from "../dispatch/dispatcher.ts";
-import { leave, run, runIsolated } from "../lib/run.live.ts";
+import { leave, run } from "../lib/run.live.ts";
 
 const args = dispatchArgsOf(process.argv.slice(2));
 
@@ -33,7 +33,6 @@ if (commonDir.exitCode !== 0) {
 
 const ports: DispatchPorts = {
   run,
-  launch: runIsolated,
   leave,
   readText: (path) => readFile(path, "utf8"),
   writeSecret: async (path, text) => {
@@ -67,4 +66,5 @@ const dispatched = await dispatch(ports, {
 console.log(`issue:    #${dispatched.issue} ${dispatched.title}
 clone:    ${dispatched.worktree}
 branch:   ${dispatched.branch}
-session:  ${dispatched.session}${dispatched.log === null ? "" : `\nlog:      ${dispatched.log}`}`);
+session:  ${dispatched.session}
+log:      ${dispatched.log}`);

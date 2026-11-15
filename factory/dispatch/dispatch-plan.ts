@@ -1,9 +1,8 @@
 /**
  * What Dispatch decides when it hands an issue to a Worker: the branch and the clone it makes, the one
- * launch prompt, the settings file it writes for the Worker, sandbox and main checkout's hooks included,
- * and the `claude --bg` command that starts the Worker in its clone. For an API Worker, a headless
- * session that bills the Owner's Console API key: its own settings file and the checks Dispatch makes on
- * the key's file.
+ * launch prompt, and the settings file it writes for the Worker's session, sandbox and main checkout's
+ * hooks included. For an API Worker, whose turns bill the Owner's Console API key: its own settings file
+ * and the checks Dispatch makes on the key's file.
  */
 
 import { Result, Schema } from "effect";
@@ -11,9 +10,9 @@ import { Result, Schema } from "effect";
 import { branchMadeFor } from "../contract.ts";
 import { TRUNK } from "../install/host.ts";
 import { clonesDirOf, configDirOf } from "../install/paths.ts";
-import { apiKeyHelperOf, NO_SETTING_SOURCES, ONE_RESULT } from "../land/shared/api-worker.ts";
 import { BUN_CACHE_VARIABLE, sandboxedOf } from "../land/shared/worker-sandbox.ts";
 import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
+import { apiKeyHelperOf, ONE_RESULT } from "../land/shared/worker-session.ts";
 import { API_WORKER_VARIABLE, CHECKOUT_VARIABLE } from "../lib/author-session.ts";
 import { Effort } from "../lib/effort.ts";
 import { decodeJson } from "../lib/json.ts";
@@ -192,7 +191,7 @@ function mainCheckoutCommandOf(command: string): string {
 /**
  * The hooks of the main checkout's `.claude/settings.json`, from its text, each command rewritten by
  * `mainCheckoutCommandOf`: the guards, the Stop hook and the relay it leaves then run from files the
- * Worker cannot edit, in a directory it cannot write, as a background Worker's do.
+ * Worker cannot edit, in a directory it cannot write.
  */
 function mainCheckoutHooksOf(projectSettings: string) {
   const { hooks } = decodeJson(ProjectSettings, PROJECT_SETTINGS, projectSettings);
@@ -244,33 +243,21 @@ export function apiWorkerSettingsTextOf(workerSettings: string, projectSettings:
 }
 
 /**
- * The background Worker settings file, which Dispatch writes from the Worker settings file at each
- * dispatch of a background Worker. An on-disk name: running sessions were launched on it.
+ * The text of the settings file of a Worker on the Owner's subscription, the only settings its turns
+ * load: what every Worker's settings are made of, and one result printed per turn. No key helper: a turn
+ * bills the login Claude Code holds.
  */
-export function backgroundWorkerSettingsOf(home: string): string {
-  return `${configDirOf(home)}/background-worker-settings.json`;
-}
-
-/** The permission mode of a background Worker: a call no allow rule covers is denied, since nobody answers a prompt. */
-const BACKGROUND_MODE = "dontAsk";
-
-/**
- * The text of the background Worker settings file, the only settings a background Worker's session
- * loads: what every Worker's settings are made of, in a mode that asks nothing. It runs any command, in
- * the sandbox, and edits under its clone.
- */
-export function backgroundWorkerSettingsTextOf(
+export function subscriptionWorkerSettingsTextOf(
   workerSettings: string,
   projectSettings: string,
   place: SandboxPlace,
 ): string {
-  const settings = cloneWorkerSettingsOf(workerSettings, projectSettings, place);
-  const added = { ...settings, permissions: { ...settings.permissions, defaultMode: BACKGROUND_MODE } };
+  const settings = { ...cloneWorkerSettingsOf(workerSettings, projectSettings, place), ...ONE_RESULT };
 
-  return `${JSON.stringify(added, null, 2)}\n`;
+  return `${JSON.stringify(settings, null, 2)}\n`;
 }
 
-/** The main checkout's settings file, whose hooks an API Worker runs. */
+/** The main checkout's settings file, whose hooks a Worker runs. */
 export function projectSettingsOf(checkout: string): string {
   return `${checkout}/.claude/settings.json`;
 }
@@ -320,13 +307,13 @@ export function promptOf({ issue, repo, worktree, branch }: Assignment): string 
 }
 
 /**
- * Why an API Worker's first turn did not start working, from the exit code it ended with while Dispatch
+ * Why a Worker's first turn did not start working, from the exit code it ended with while Dispatch
  * looked, null while it still runs; or null when nothing says so. `log` holds what the turn printed.
  */
 export function firstTurnProblemOf(code: number | null, log: string): string | null {
   return code === null || code === 0
     ? null
-    : `the API Worker's first turn ended at once with exit ${code}: ${log} holds what it printed`;
+    : `the Worker's first turn ended at once with exit ${code}: ${log} holds what it printed`;
 }
 
 /**
@@ -341,68 +328,4 @@ export const INSTALL_ARGV = ["bun", "install", "--frozen-lockfile", "--ignore-sc
 /** The name of the Worker's session, which Claude Code shows where it lists sessions. */
 export function sessionNameOf(issue: number): string {
   return `w-issue-${issue}`;
-}
-
-export interface Launch {
-  readonly issue: number;
-  readonly model: string;
-  readonly effort: Effort | undefined;
-  /** The background Worker settings file, passed by its path: its token never reaches the command line. */
-  readonly settings: string;
-  /** The main checkout, whose root guide the session is given: it loads no project settings. */
-  readonly checkout: string;
-  readonly prompt: string;
-}
-
-/**
- * The command that starts a background Worker, in its clone. The session loads no settings but its
- * file, and no MCP server but those its command names, which are none: the clone's own settings would
- * run the hooks of the branch the Worker edits, a `.mcp.json` of the clone names a command Claude Code
- * starts outside the sandbox, and the Owner's own settings can widen a sandbox. The guide it is given is
- * the main checkout's: Claude Code reads that file outside the sandbox, and a path of the clone can be
- * a link to a secret.
- */
-export function launchArgvOf({ issue, model, effort, settings, checkout, prompt }: Launch): string[] {
-  return [
-    "claude",
-    "--bg",
-    "--model",
-    model,
-    ...(effort === undefined ? [] : ["--effort", effort]),
-    "--settings",
-    settings,
-    ...NO_SETTING_SOURCES,
-    "--strict-mcp-config",
-    "--append-system-prompt-file",
-    `${checkout}/AGENTS.md`,
-    "--name",
-    sessionNameOf(issue),
-    prompt,
-  ];
-}
-
-/** What Claude Code prints when it starts no background session in a workspace nobody trusted. */
-const NOT_TRUSTED = "Workspace not trusted";
-
-/**
- * What Dispatch adds to `failure`, the failure of a background launch as it tells it, when Claude Code
- * refused the launch for workspace trust; nothing for any other failure. Claude Code's own words stay:
- * they advise to accept the trust prompt in the clone, which the failed dispatch removes, and trust
- * never reaches a new clone, so the advice that works is an API Worker.
- */
-export function trustAdviceOf(failure: string): string {
-  return failure.includes(NOT_TRUSTED)
-    ? " (no new clone has that trust: hand the issue to an API Worker with --api)"
-    : "";
-}
-
-/** The id of the session `claude --bg` started, read from the `claude stop <id>` hint it prints. */
-export function sessionIdOf(stdout: string): string {
-  const id = /^\s*claude stop (\S+)/mu.exec(stdout)?.[1];
-
-  if (id === undefined) {
-    throw new Error(`claude --bg printed no session id: ${stdout.trim()}`);
-  }
-
-  return id;
 }

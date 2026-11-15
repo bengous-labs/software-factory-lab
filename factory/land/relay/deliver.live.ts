@@ -2,7 +2,7 @@
  * How a Wake's text reaches the Author's session: one line on its messaging socket while the session
  * runs, else `claude --bg --resume <session-id> "<text>"`, which wakes it with its saved launch options.
  * The Owner's words reach a running background session by `claude stop <id>`, then that resume.
- * An API Worker's session is resumed headless, left running detached in its clone.
+ * The session of a Worker in a clone is resumed headless, left running detached in its clone.
  * The socket's path is the one Claude Code was observed to bind, with the directory its documentation
  * names as the fallback.
  */
@@ -106,7 +106,7 @@ async function onSocket(io: DeliverIo, pid: number, line: string): Promise<Deliv
  * late is not given the same Wakes twice, and one that hangs does not hold the relay.
  */
 export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delivered | null> {
-  return async ({ route, socketLine, resumeArgs, resumeIn, stopped }) => {
+  return async ({ route, socketLine, resumeArgs, stopped }) => {
     if (route.kind === "wait") {
       return null;
     }
@@ -136,7 +136,7 @@ export function deliverer(io: DeliverIo): (delivery: Delivery) => Promise<Delive
       }
     }
 
-    const resumed = await io.run(resumeArgs, { cwd: resumeIn ?? io.cwd, timeoutMs: 120_000 });
+    const resumed = await io.run(resumeArgs, { cwd: io.cwd, timeoutMs: 120_000 });
 
     return resumed.code === 0 ? "resume" : null;
   };

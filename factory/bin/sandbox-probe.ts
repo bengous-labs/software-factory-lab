@@ -4,7 +4,7 @@
  * The sandbox probe: shows on this machine that the sandbox of a Worker holds, and that a Worker still
  * works in it. It writes canary files where credentials live, never reading a real one, and runs two
  * headless sessions at `HEAD`, each where a Worker works, in a clone of its own under the clones'
- * directory: one on the sandbox alone, and one on a background Worker's settings, the main checkout's
+ * directory: one on the sandbox alone, and one on a Worker's settings, the main checkout's
  * hooks included. They make the probes `factory/dispatch/probe-plan.ts` lists. It prints
  * every path it writes before it writes one, and removes them all at its end, on a failure too, but each
  * session's output, which it keeps in the ignored `.lab/sandbox-probe/` of its own checkout. It bills
@@ -117,15 +117,15 @@ if (problem !== null) {
   throw new Error(`no Worker can be sandboxed here: ${problem}`);
 }
 
-const layouts = { api: layoutOf(facts, "api"), background: layoutOf(facts, "background") };
+const layouts = { sandbox: layoutOf(facts, "sandbox"), worker: layoutOf(facts, "worker") };
 
 const canaries = canariesOf(facts);
 
 const taken = [
   ...canaries.map((canary) => canary.path),
-  layouts.api.tree,
-  layouts.background.tree,
-  ...layouts.background.touched,
+  layouts.sandbox.tree,
+  layouts.worker.tree,
+  ...layouts.worker.touched,
 ].filter((path) => existsSync(path));
 
 if (taken.length > 0) {
@@ -153,7 +153,7 @@ const clonesCreated: string[] = [];
 
 /** Removes what this run wrote, and what a probe would have written where the sandbox did not hold; a removal that fails is said, and stops no other. */
 function cleanUp(): void {
-  for (const path of [...writtenFiles.splice(0), ...layouts.background.touched]) {
+  for (const path of [...writtenFiles.splice(0), ...layouts.worker.touched]) {
     try {
       rmSync(path, { force: true });
     } catch (error) {
@@ -228,7 +228,7 @@ async function probe(): Promise<SessionRun[]> {
     writeOwn(layout.settings, settings[session]);
     console.log(`sandbox-probe: the ${session} session makes its ${probes.length} probes…`);
 
-    const ran = await runIsolated(sessionArgvOf(session, layout.settings, promptOf(probes, script)), {
+    const ran = await runIsolated(sessionArgvOf(layout.settings, promptOf(probes, script)), {
       cwd: layout.tree,
       env: sessionEnvOf(process.env),
       timeoutMs: SESSION_TIMEOUT_MS,

@@ -67,6 +67,7 @@ const STOP: Stop = {
   at: before(30 * 60_000),
   session: "s-worker",
   api: false,
+  headless: false,
   branch: PR.branch,
   outcome: "published",
   reason: null,
@@ -285,15 +286,23 @@ describe("a Worker idle on the Author's turn", () => {
   });
 
   test("an API Worker is named so, with how it gets its turn: it rests not running, and no `claude --resume` wakes it", () => {
-    const stops = [{ ...unfinished, api: true }];
+    const stops = [{ ...unfinished, api: true, headless: true }];
 
     expect(linesOf(draft, IDLE_MS, { sessions: [], stops })).toEqual([
       `PR #9 (issue #7) is in draft, the Author's turn, and its API Worker (session s-worker, which only its PR's relay resumes, at a Wake such as a comment of the Owner on the PR: never \`claude --resume\`) is not running; its last stop at ${STOP.at} published nothing, for a reason the log quotes, not an instruction: "the Done judge says the change is not finished". Give the Worker its turn, or look at the PR: ${URL}`,
     ]);
   });
 
+  test("a Worker on the subscription that works in a clone is headless too: named a Worker, with how it gets its turn", () => {
+    const stops = [{ ...unfinished, headless: true }];
+
+    expect(linesOf(draft, IDLE_MS, { sessions: [], stops })[0]).toStartWith(
+      "PR #9 (issue #7) is in draft, the Author's turn, and its Worker (session s-worker, which only its PR's relay resumes, at a Wake such as a comment of the Owner on the PR: never `claude --resume`) is not running; ",
+    );
+  });
+
   test("an API Worker whose headless turn runs is listed busy, and is not told as idle", () => {
-    const stops = [{ ...unfinished, api: true }];
+    const stops = [{ ...unfinished, api: true, headless: true }];
     const sessions = [{ id: "s-worker", running: true, status: "busy" }];
 
     expect(linesOf(draft, IDLE_MS, { sessions, stops })).toEqual([]);
@@ -304,6 +313,7 @@ describe("a Worker idle on the Author's turn", () => {
       at: `${"t".repeat(40)}AT`,
       session: `${"s".repeat(64)}ID`,
       api: false,
+      headless: false,
       branch: PR.branch,
       outcome: "not-published",
       reason: `${"r".repeat(300)}WHY`,
@@ -425,7 +435,7 @@ describe("a Worker idle on the Author's turn", () => {
   });
 
   test("an API Worker with no PR is told with what the reader can do: no relay resumes it", () => {
-    const stop: Stop = { ...unfinished, api: true, branch: "issue/7-add-a-flag" };
+    const stop: Stop = { ...unfinished, api: true, headless: true, branch: "issue/7-add-a-flag" };
     const reading: Reading = { prs: [], issues: [{ number: 7, state: "OPEN", prs: [] }], sessions: [], stops: [stop] };
 
     expect(stepOf([7], reading, EMPTY_MEMORY, NOW).lines).toEqual([
@@ -703,20 +713,21 @@ describe("stopsOf", () => {
     ].join("\n");
 
     expect(stopsOf(log)).toEqual([
-      { at: "t1", session: "s1", api: false, branch: "issue/7-x", outcome: "published", reason: null },
-      { at: "t3", session: "s1", api: false, branch: null, outcome: "not-published", reason: "why" },
+      { at: "t1", session: "s1", api: false, headless: false, branch: "issue/7-x", outcome: "published", reason: null },
+      { at: "t3", session: "s1", api: false, headless: false, branch: null, outcome: "not-published", reason: "why" },
     ]);
     expect(stopsOf("")).toEqual([]);
   });
 
-  test("a stop says whether its session is an API Worker's; one that does not say is none", () => {
+  test("a stop says whether its session is an API Worker's, and whether it is headless; one that does not say is neither", () => {
     const log = [
-      '{"at":"t1","session":"s1","api":true,"worktree":"/w","branch":"issue/7-x","head":"h","outcome":"published","pr":9}',
+      '{"at":"t1","session":"s1","api":true,"headless":true,"worktree":"/w","branch":"issue/7-x","head":"h","outcome":"published","pr":9}',
       '{"at":"t2","session":"s2","api":false,"worktree":"/w","branch":"issue/8-x","head":"h","outcome":"published","pr":10}',
       '{"at":"t3","session":"s3","worktree":"/w","branch":"issue/9-x","head":"h","outcome":"published","pr":11}',
     ].join("\n");
 
     expect(stopsOf(log).map((stop) => stop.api)).toEqual([true, false, false]);
+    expect(stopsOf(log).map((stop) => stop.headless)).toEqual([true, false, false]);
   });
 
   test("a line that does not read is passed over, and an outcome the watch does not know is kept", () => {
@@ -726,7 +737,7 @@ describe("stopsOf", () => {
     ].join("\n");
 
     expect(stopsOf(log)).toEqual([
-      { at: "t2", session: "s1", api: false, branch: "issue/7-x", outcome: "held", reason: null },
+      { at: "t2", session: "s1", api: false, headless: false, branch: "issue/7-x", outcome: "held", reason: null },
     ]);
   });
 });

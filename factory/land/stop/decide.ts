@@ -500,8 +500,10 @@ export type Outcome =
 export interface StopFacts {
   readonly at: string;
   readonly session: string;
-  /** The session is an API Worker's: the watch tells how such a Worker gets its turn. */
+  /** The session is an API Worker's, whose turns bill the Owner's API key: the watch names it so. */
   readonly api: boolean;
+  /** The session is a Worker's in a clone, which is headless: the watch tells how such a Worker gets its turn. */
+  readonly headless: boolean;
   readonly worktree: string;
   readonly branch: string | null;
   readonly head: string | null;

@@ -9,8 +9,6 @@ import { decodeJson } from "../lib/json.ts";
 import {
   apiKeyProblemOf,
   apiWorkerSettingsTextOf,
-  backgroundWorkerSettingsOf,
-  backgroundWorkerSettingsTextOf,
   branchOf,
   cloneArgvOf,
   cloneOf,
@@ -18,14 +16,12 @@ import {
   firstTurnProblemOf,
   INSTALL_ARGV,
   issueBranchesIn,
-  launchArgvOf,
   projectSettingsOf,
   promptOf,
   repoOfIssueUrl,
-  sessionIdOf,
   sessionNameOf,
   slugOf,
-  trustAdviceOf,
+  subscriptionWorkerSettingsTextOf,
   workerSettingsOf,
   workerSettingsProblemOf,
 } from "./dispatch-plan.ts";
@@ -421,17 +417,11 @@ describe("apiWorkerSettingsTextOf", () => {
   });
 });
 
-describe("the settings of a background Worker", () => {
+describe("the settings of a Worker on the subscription", () => {
   const worker = { env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" }, outputStyle: "Proactive" };
 
-  test("its settings file lies beside the API Worker's, in the config directory", () => {
-    expect(backgroundWorkerSettingsOf("/home/me")).toBe(
-      "/home/me/.config/software-factory-lab/background-worker-settings.json",
-    );
-  });
-
-  test("the text is what every Worker's settings are made of, the main checkout's hooks included, in a mode that asks nothing, and nothing of an API Worker", () => {
-    const text = backgroundWorkerSettingsTextOf(JSON.stringify(worker), PROJECT, PLACE);
+  test("the text is what every Worker's settings are made of, the main checkout's hooks included, with one result per turn, and nothing of an API Worker", () => {
+    const text = subscriptionWorkerSettingsTextOf(JSON.stringify(worker), PROJECT, PLACE);
     const apiText = apiWorkerSettingsTextOf(JSON.stringify(worker), PROJECT, PLACE);
     const { hooks } = decodeJson(Schema.Struct({ hooks: Schema.Json }), "the API Worker settings", apiText);
 
@@ -440,7 +430,7 @@ describe("the settings of a background Worker", () => {
       ...sandboxed(worker),
       env: { ...sandboxed(worker).env, LAB_MAIN_CHECKOUT: "/repo" },
       hooks,
-      permissions: { ...sandboxed(worker).permissions, defaultMode: "dontAsk" },
+      verbose: false,
     });
     expect(JSON.parse(text)).toMatchObject({
       env: { LAB_AUTHOR: "1", GH_TOKEN: "ghp_worker" },
@@ -454,31 +444,32 @@ describe("the settings of a background Worker", () => {
     expect(text).not.toContain("CLAUDE_PROJECT_DIR");
     expect(text).not.toContain("apiKeyHelper");
     expect(text).not.toContain("LAB_API_WORKER");
-    expect(text).not.toContain("verbose");
   });
 
-  test("the rules the Worker settings file holds stay, and a mode, a sandbox, hooks or a main checkout it holds give way", () => {
+  test("the rules the Worker settings file holds stay, and verbose output, a sandbox, hooks or a main checkout it holds give way", () => {
     const held = {
       ...worker,
+      verbose: true,
       env: { ...worker.env, LAB_MAIN_CHECKOUT: "/elsewhere" },
       hooks: { Stop: [] },
       sandbox: { enabled: false },
-      permissions: { allow: ["Bash(jq *)"], ask: ["Bash(rm *)"], defaultMode: "bypassPermissions" },
+      permissions: { allow: ["Bash(jq *)"], ask: ["Bash(curl *)"] },
     };
 
-    const text = backgroundWorkerSettingsTextOf(JSON.stringify(held), PROJECT, PLACE);
+    const text = subscriptionWorkerSettingsTextOf(JSON.stringify(held), PROJECT, PLACE);
 
     expect(JSON.parse(text)).toMatchObject({
+      verbose: false,
       env: { LAB_MAIN_CHECKOUT: "/repo" },
       sandbox: { enabled: true },
-      permissions: { allow: ["Bash(jq *)", "Edit(./**)", "Bash"], ask: ["Bash(rm *)"], defaultMode: "dontAsk" },
+      permissions: { allow: ["Bash(jq *)", "Edit(./**)", "Bash"], ask: ["Bash(curl *)"] },
     });
     expect(text).toContain("stop-hook.ts");
   });
 
   test("a Worker settings file that does not read, or a main checkout whose settings hold no hooks, throws, naming it: a Worker with no Stop hook publishes nothing", () => {
-    expect(() => backgroundWorkerSettingsTextOf("{", PROJECT, PLACE)).toThrow("the Worker settings file: ");
-    expect(() => backgroundWorkerSettingsTextOf(JSON.stringify(worker), '{"enabledPlugins":{}}', PLACE)).toThrow(
+    expect(() => subscriptionWorkerSettingsTextOf("{", PROJECT, PLACE)).toThrow("the Worker settings file: ");
+    expect(() => subscriptionWorkerSettingsTextOf(JSON.stringify(worker), '{"enabledPlugins":{}}', PLACE)).toThrow(
       "the main checkout's .claude/settings.json: ",
     );
   });
@@ -502,8 +493,8 @@ describe("apiKeyProblemOf", () => {
   );
 });
 
-describe("the launch of an API Worker", () => {
-  test("its session carries the issue's name, as a background Worker's does", () => {
+describe("the launch of a Worker", () => {
+  test("its session carries the issue's name", () => {
     expect(sessionNameOf(168)).toBe("w-issue-168");
   });
 
@@ -515,69 +506,11 @@ describe("the launch of an API Worker", () => {
     expect(firstTurnProblemOf(null, "/repo/.lab/state/s.log")).toBeNull();
     expect(firstTurnProblemOf(0, "/repo/.lab/state/s.log")).toBeNull();
     expect(firstTurnProblemOf(1, "/repo/.lab/state/s.log")).toBe(
-      "the API Worker's first turn ended at once with exit 1: /repo/.lab/state/s.log holds what it printed",
+      "the Worker's first turn ended at once with exit 1: /repo/.lab/state/s.log holds what it printed",
     );
     expect(firstTurnProblemOf(124, "/l")).toBe(
-      "the API Worker's first turn ended at once with exit 124: /l holds what it printed",
+      "the Worker's first turn ended at once with exit 124: /l holds what it printed",
     );
-  });
-});
-
-describe("launchArgvOf", () => {
-  const launch = {
-    issue: 168,
-    model: "opus",
-    settings: "/h/background-worker-settings.json",
-    checkout: "/repo",
-    prompt: "P",
-  };
-
-  /** What the command ends with, after its model and its effort. */
-  const TAIL = [
-    "--settings",
-    "/h/background-worker-settings.json",
-    "--setting-sources",
-    "",
-    "--strict-mcp-config",
-    "--append-system-prompt-file",
-    "/repo/AGENTS.md",
-    "--name",
-    "w-issue-168",
-    "P",
-  ];
-
-  test("launches a named background session on its settings file alone, with no settings source and no MCP server of its clone, and the main checkout's root guide", () => {
-    expect(launchArgvOf({ ...launch, effort: undefined })).toEqual(["claude", "--bg", "--model", "opus", ...TAIL]);
-  });
-
-  test("passes the effort after the model when one is named", () => {
-    expect(launchArgvOf({ ...launch, effort: "xhigh" })).toEqual([
-      "claude",
-      "--bg",
-      "--model",
-      "opus",
-      "--effort",
-      "xhigh",
-      ...TAIL,
-    ]);
-  });
-});
-
-describe("sessionIdOf", () => {
-  test("is the id in the `claude stop <id>` hint `claude --bg` prints last", () => {
-    expect(sessionIdOf("claude stop 393c369e      stop this session\n")).toBe("393c369e");
-  });
-
-  test("finds the hint among the other lines `claude --bg` prints", () => {
-    expect(
-      sessionIdOf(
-        "Started w-issue-171 in the background.\n  claude attach 393c369e    attach\n  claude stop 393c369e      stop this session\n",
-      ),
-    ).toBe("393c369e");
-  });
-
-  test("refuses an output with no `claude stop` hint", () => {
-    expect(() => sessionIdOf("Started.\n393c369e\n")).toThrow("printed no session id");
   });
 });
 
@@ -600,20 +533,5 @@ describe("workerSettingsProblemOf", () => {
   test("never quotes the file, which holds the token", () => {
     expect(workerSettingsProblemOf('{"env":{"LAB_AUTHOR":"0","GH_TOKEN":"ghp_secret"}}')).not.toContain("ghp_secret");
     expect(workerSettingsProblemOf('{"env":{"GH_TOKEN":"ghp_secret"')).not.toContain("ghp_secret");
-  });
-});
-
-describe("trustAdviceOf", () => {
-  test("a launch Claude Code refused for workspace trust gets the way that works, an API Worker, after Claude Code's own words", () => {
-    expect(
-      trustAdviceOf(
-        "claude --bg exited 1: Workspace not trusted. Run `claude` in /clone once and accept the trust prompt, then retry.",
-      ),
-    ).toBe(" (no new clone has that trust: hand the issue to an API Worker with --api)");
-  });
-
-  test("any other failure gets nothing", () => {
-    expect(trustAdviceOf("claude --bg exited 1: no such model")).toBe("");
-    expect(trustAdviceOf("")).toBe("");
   });
 });

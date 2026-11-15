@@ -65,6 +65,7 @@ export const OutcomeLine = Schema.Struct({
   at: Schema.String,
   session: Schema.String,
   api: Schema.Boolean,
+  headless: Schema.Boolean,
   worktree: Schema.String,
   branch: Schema.NullOr(Schema.String),
   head: Schema.NullOr(Schema.String),

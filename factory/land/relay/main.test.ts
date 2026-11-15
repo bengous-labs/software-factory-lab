@@ -30,8 +30,7 @@ const NIT = {
 /** The session of the PR's latest Publication, an API Worker's, so a turn is seen to hand it on whole. */
 const TARGET: Target = {
   session: "S1",
-  headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7" },
-  clone: null,
+  headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7", api: true },
 };
 
 interface Sent {
@@ -233,7 +232,7 @@ describe("readPr", () => {
 const IDLE = JSON.stringify([{ sessionId: "S1", pid: 34_502, id: "725ecfab", status: "idle" }]);
 
 /** The background session S1, as the relay's session file names it. */
-const BACKGROUND: Target = { session: "S1", headless: null, clone: null };
+const BACKGROUND: Target = { session: "S1", headless: null };
 
 const PLACE = { checkout: "/repo", home: "/home/me" };
 
@@ -360,8 +359,7 @@ describe("relayDeliverer, to an API Worker's session", () => {
   /** An API Worker's session that no longer runs: the listing holds none. */
   const API: Target = {
     session: "S9",
-    headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7" },
-    clone: null,
+    headless: { model: "opus", worktree: "/repo/.claude/worktrees/issue-7", api: true },
   };
 
   const MINUTE = 60_000;
@@ -391,7 +389,7 @@ describe("relayDeliverer, to an API Worker's session", () => {
     expect(sent[0]?.route).toEqual({
       kind: "headless",
       worktree: "/repo/.claude/worktrees/issue-7",
-      log: "/repo/.lab/state/api-worker-S9.log",
+      log: "/repo/.lab/state/worker-S9.log",
     });
     expect(sent[0]?.resumeArgs.slice(0, 4)).toEqual(["claude", "-p", "--resume", "S9"]);
     expect(sent[0]?.resumeArgs).toContain("/home/me/.config/software-factory-lab/api-worker-settings.json");

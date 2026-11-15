@@ -215,7 +215,7 @@ describe("the checkout a stop comes from, as git reads it", () => {
       expect(found.outcomes).toMatchObject([
         { checkout: main, line: { worktree, branch: "feat/in-a-worktree", outcome: "published", pr: 12 } },
       ]);
-      expect(found.relays).toEqual([{ pr: 12, session: "S1", headless: null, clone: null, checkout: main }]);
+      expect(found.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: main }]);
     }
   });
 });
@@ -260,16 +260,16 @@ describe("the stop of an Author", () => {
     const opened = world();
 
     expect(await stopIn(opened)).toEqual({ kind: "allow" });
-    expect(opened.relays).toEqual([{ pr: 12, session: "S1", headless: null, clone: null, checkout: opened.checkout }]);
+    expect(opened.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: opened.checkout }]);
     expect(opened.records).toContainEqual({ step: "relay", pr: 12, relay: "started" });
 
     const pushed = world({ listed: readyPr("e".repeat(40)) });
 
     expect(await stopIn(pushed)).toEqual({ kind: "allow" });
-    expect(pushed.relays).toEqual([{ pr: 12, session: "S1", headless: null, clone: null, checkout: pushed.checkout }]);
+    expect(pushed.relays).toEqual([{ pr: 12, session: "S1", headless: null, checkout: pushed.checkout }]);
   });
 
-  test("the stop of an Author Dispatch launched in no clone: its forks take no sandbox and name no key helper, its relay no headless resume and no clone, its outcome no API Worker", async () => {
+  test("the stop of an Author Dispatch launched in no clone: its forks take no sandbox and name no key helper, its relay no headless resume, its outcome no API Worker", async () => {
     const found = world();
 
     await stopIn(found);
@@ -280,7 +280,6 @@ describe("the stop of an Author", () => {
     expect(fork).not.toContain("--setting-sources");
     expect(JSON.parse(FORK_SETTINGS)).not.toHaveProperty("sandbox");
     expect(JSON.parse(FORK_SETTINGS)).not.toHaveProperty("apiKeyHelper");
-    expect(found.relays[0]?.clone).toBeNull();
     expect(found.relays[0]?.headless).toBeNull();
     expect(found.outcomes[0]?.line.api).toBe(false);
   });
@@ -668,6 +667,7 @@ describe("the outcome of each stop", () => {
       "at",
       "session",
       "api",
+      "headless",
       "worktree",
       "branch",
       "head",
@@ -720,6 +720,7 @@ describe("the outcome of each stop", () => {
         "at",
         "session",
         "api",
+        "headless",
         "worktree",
         "branch",
         "head",

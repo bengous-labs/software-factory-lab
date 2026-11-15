@@ -61,9 +61,14 @@ describe("the stop of a background Worker in its clone", () => {
     ]);
     expect(settings).not.toContain("apiKeyHelper");
     expect(found.relays).toEqual([
-      { pr: 12, session: "S1", headless: null, clone: found.root, checkout: found.checkout },
+      {
+        pr: 12,
+        session: "S1",
+        headless: { model: "claude-haiku-5-5", worktree: found.root, api: false },
+        checkout: found.checkout,
+      },
     ]);
-    expect(found.outcomes.at(-1)?.line).toMatchObject({ api: false, outcome: "published", pr: 12 });
+    expect(found.outcomes.at(-1)?.line).toMatchObject({ api: false, headless: true, outcome: "published", pr: 12 });
   });
 
   test("a stop outside the clones runs no git and publishes nothing: a Worker in a sandbox cannot send the hook's git elsewhere", async () => {
@@ -113,12 +118,11 @@ describe("the stop of an API Worker", () => {
       {
         pr: 12,
         session: "S1",
-        headless: { model: "claude-haiku-5-5", worktree: found.root },
-        clone: null,
+        headless: { model: "claude-haiku-5-5", worktree: found.root, api: true },
         checkout: found.checkout,
       },
     ]);
-    expect(found.outcomes.at(-1)?.line).toMatchObject({ api: true, outcome: "published", pr: 12 });
+    expect(found.outcomes.at(-1)?.line).toMatchObject({ api: true, headless: true, outcome: "published", pr: 12 });
     expect(found.records).toContainEqual({ step: "stop-checks", checks: "left", next: "ask-done-judge" });
   });
 

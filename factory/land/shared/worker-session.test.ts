@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import {
   apiKeyHelperOf,
-  apiWorkerLogOf,
-  apiWorkerSettingsOf,
   firstTurnArgvOf,
   NO_SETTING_SOURCES,
   ONE_RESULT,
   resumedTurnArgvOf,
-} from "./api-worker.ts";
+  sessionSettingsOf,
+  workerLogOf,
+} from "./worker-session.ts";
 
 const TURN = {
   session: "S1",
@@ -46,14 +46,17 @@ describe("the key of an API Worker", () => {
   });
 });
 
-describe("the files of an API Worker", () => {
-  test("its settings file lies in the config directory, and its log in the main checkout's state", () => {
-    expect(apiWorkerSettingsOf("/home/me")).toBe("/home/me/.config/software-factory-lab/api-worker-settings.json");
-    expect(apiWorkerLogOf("/repo", "S1")).toBe("/repo/.lab/state/api-worker-S1.log");
+describe("the files of a Worker's session", () => {
+  test("its settings file lies in the config directory, one for each kind, and its log in the main checkout's state", () => {
+    expect(sessionSettingsOf("/home/me", false)).toBe(
+      "/home/me/.config/software-factory-lab/subscription-worker-settings.json",
+    );
+    expect(sessionSettingsOf("/home/me", true)).toBe("/home/me/.config/software-factory-lab/api-worker-settings.json");
+    expect(workerLogOf("/repo", "S1")).toBe("/repo/.lab/state/worker-S1.log");
   });
 });
 
-describe("the turns of an API Worker", () => {
+describe("the turns of a Worker", () => {
   test("a turn loads no settings source, and its settings make it print one result", () => {
     expect(NO_SETTING_SOURCES).toEqual(["--setting-sources", ""]);
     expect(ONE_RESULT).toEqual({ verbose: false });

@@ -3,7 +3,7 @@
  * session, with none of the session's environment but what the relay needs. Its state lives under
  * `.lab/state/` of the main checkout: `relay-<pr>.pid`, the process that watches the PR, which the relay writes;
  * `relay-<pr>.session`, the session of the PR's latest Publication, where its Wakes go, with what a headless
- * resume needs when it is an API Worker's; `relay-<pr>.log`.
+ * resume needs when it is a Worker's in a clone; `relay-<pr>.log`.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,7 +21,7 @@ const RELAY = resolve(import.meta.dir, "..", "..", "bin", "relay.ts");
 /**
  * The variables the relay keeps of the hook's environment. It resumes sessions with `claude --bg`, and a
  * launch that starts Claude Code's background service gives its environment to every session started
- * after it; an API Worker's headless turn takes from the relay what a session needs to start and to reach
+ * after it; a Worker's headless turn takes from the relay what a session needs to start and to reach
  * the API. So the relay keeps that, and where the Author's token lies. The Author's marker, its token and
  * the fork flag never reach the relay.
  */
@@ -57,10 +57,10 @@ export interface RelayStartIo {
  * a relay unless the one `relay-<pr>.pid` names still watches the PR.
  */
 export function relayStarter(io: RelayStartIo, env: Env): StartRelay {
-  return ({ pr, session, headless, clone, checkout }: RelayStart) => {
+  return ({ pr, session, headless, checkout }: RelayStart) => {
     const files = relayFilesOf(checkout, pr);
     mkdirSync(files.stateDir, { recursive: true });
-    writeFileSync(files.session, targetTextOf({ session, headless, clone }));
+    writeFileSync(files.session, targetTextOf({ session, headless }));
 
     const pid = existsSync(files.pid) ? readFileSync(files.pid, "utf8").trim() : "";
 

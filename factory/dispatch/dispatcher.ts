@@ -1,17 +1,17 @@
 /**
  * Dispatch: hands one issue to a Worker. It makes the Worker a clone of its own, outside the main
- * checkout, on a new branch from the Trunk, installs it, then launches the Worker there: a background
- * session, or for an API Worker a headless one, detached. Either runs on the settings file Dispatch
- * writes for its kind, which holds its sandbox and the main checkout's hooks.
+ * checkout, on a new branch from the Trunk, installs it, then leaves the Worker's first turn running
+ * there, headless and detached, on the settings file Dispatch writes for its kind, which holds its
+ * sandbox and the main checkout's hooks. An API Worker differs by its settings file alone.
  */
 
 import { Schema } from "effect";
 
 import { OWNER_LOGIN } from "../install/logins.ts";
 import { apiKeyFileOf } from "../install/paths.ts";
-import { apiWorkerLogOf, apiWorkerSettingsOf, firstTurnArgvOf } from "../land/shared/api-worker.ts";
 import { sandboxPlaceProblemOf } from "../land/shared/worker-sandbox.ts";
 import type { SandboxPlace } from "../land/shared/worker-sandbox.ts";
+import { firstTurnArgvOf, sessionSettingsOf, workerLogOf } from "../land/shared/worker-session.ts";
 import { decodeJson } from "../lib/json.ts";
 import { checked } from "../lib/run.port.ts";
 import type { Leave, Ran, Run, RunOptions } from "../lib/run.port.ts";
@@ -20,21 +20,17 @@ import { printableOf } from "../lib/terminal.ts";
 import {
   apiKeyProblemOf,
   apiWorkerSettingsTextOf,
-  backgroundWorkerSettingsOf,
-  backgroundWorkerSettingsTextOf,
   branchOf,
   cloneArgvOf,
   cloneOf,
   firstTurnProblemOf,
   INSTALL_ARGV,
   issueBranchesIn,
-  launchArgvOf,
   projectSettingsOf,
   promptOf,
   repoOfIssueUrl,
-  sessionIdOf,
   sessionNameOf,
-  trustAdviceOf,
+  subscriptionWorkerSettingsTextOf,
   workerSettingsOf,
   workerSettingsProblemOf,
 } from "./dispatch-plan.ts";
@@ -42,9 +38,7 @@ import type { Assignment, DispatchArgs } from "./dispatch-plan.ts";
 
 export interface DispatchPorts {
   readonly run: Run;
-  /** Runs the Worker's launch with `options.env` as its whole environment. */
-  readonly launch: Run;
-  /** Leaves an API Worker's first turn running, with `options.env` as its whole environment. */
+  /** Leaves a Worker's first turn running, with `options.env` as its whole environment. */
   readonly leave: Leave;
   readonly readText: (path: string) => Promise<string>;
   /** Writes `text` to the file at `path`, which only its owner may read. */
@@ -70,8 +64,8 @@ export interface Dispatched {
   readonly worktree: string;
   readonly branch: string;
   readonly session: string;
-  /** The log an API Worker's turns append their output to; null for a background Worker. */
-  readonly log: string | null;
+  /** The log the Worker's turns append their output to. */
+  readonly log: string;
 }
 
 const IssueView = Schema.Struct({
@@ -193,11 +187,6 @@ interface Launching {
   readonly env: DispatchRequest["env"];
 }
 
-/** A launch that went through: what `claude --bg` printed, or the session and the log of an API Worker. */
-type Launched =
-  | { readonly kind: "background"; readonly stdout: string }
-  | { readonly kind: "headless"; readonly session: string; readonly log: string };
-
 /**
  * Makes the Worker's clone, which holds the Trunk's files alone, ready for its session: creates its
  * branch and installs its dependencies there, then writes the settings file of its kind.
@@ -212,47 +201,26 @@ async function prepare(
   await writeSecret(settings, settingsText);
 }
 
-/** Launches the background Worker in its clone, on its settings file; throws when the launch fails. */
-async function launchBackground(ports: DispatchPorts, assignment: Assignment, launching: Launching): Promise<Launched> {
-  const { model, effort, settings, checkout, env } = launching;
-  await prepare(ports, assignment, launching);
-
-  const argv = launchArgvOf({
-    issue: assignment.issue,
-    model,
-    effort,
-    settings,
-    checkout,
-    prompt: promptOf(assignment),
-  });
-
-  const launched = await ports.launch(argv, { cwd: assignment.worktree, env: sessionEnvOf(env) });
-
-  if (launched.code !== 0) {
-    const failure = failureOf("claude --bg", launched);
-
-    throw new Error(`${failure}${trustAdviceOf(failure)}`);
-  }
-
-  return { kind: "background", stdout: launched.stdout };
-}
-
-/** How long Dispatch looks at an API Worker's first turn before it says the Worker is launched. */
+/** How long Dispatch looks at a Worker's first turn before it says the Worker is launched. */
 const FIRST_LOOK_MS = 10_000;
 
 /**
- * Launches the API Worker in its clone: leaves its first turn running headless there, its output
- * appended to the session's log in the main checkout. A turn that ends with an error while Dispatch
- * looks, its key refused or its command wrong, throws.
+ * Launches the Worker in its clone: leaves its first turn running headless there, its output appended
+ * to the session's log in the main checkout. A turn that ends with an error while Dispatch looks, its
+ * login or its key refused, its usage spent or its command wrong, throws.
  */
-async function launchHeadless(ports: DispatchPorts, assignment: Assignment, launching: Launching): Promise<Launched> {
+async function launch(
+  ports: DispatchPorts,
+  assignment: Assignment,
+  launching: Launching,
+): Promise<Pick<Dispatched, "session" | "log">> {
   const { leave, newSession, sleep } = ports;
   const { model, effort, settings, checkout, env } = launching;
   const { issue, worktree } = assignment;
   await prepare(ports, assignment, launching);
 
   const session = newSession();
-  const log = apiWorkerLogOf(checkout, session);
+  const log = workerLogOf(checkout, session);
   const turn = { session, model, effort: effort ?? null, settings, checkout, prompt: promptOf(assignment) };
 
   const left = leave(firstTurnArgvOf(turn, sessionNameOf(issue)), { cwd: worktree, env: sessionEnvOf(env), log });
@@ -262,7 +230,7 @@ async function launchHeadless(ports: DispatchPorts, assignment: Assignment, laun
     throw new Error(problem);
   }
 
-  return { kind: "headless", session, log };
+  return { session, log };
 }
 
 /** What a failed launch leaves, said after its failure: nothing, or the Worker's clone, with how to remove it. */
@@ -292,7 +260,7 @@ export async function dispatch(ports: DispatchPorts, request: DispatchRequest): 
 
   const settingsText = api
     ? await apiSettingsText(ports, place, text)
-    : backgroundWorkerSettingsTextOf(text, await readText(projectSettingsOf(checkout)), place);
+    : subscriptionWorkerSettingsTextOf(text, await readText(projectSettingsOf(checkout)), place);
 
   const at = { cwd: checkout };
   const { title, repo } = await ownersIssue(run, issue, at);
@@ -307,20 +275,16 @@ export async function dispatch(ports: DispatchPorts, request: DispatchRequest): 
   await checked(run, cloneArgvOf(remote, worktree), at);
 
   const assignment = { issue, repo, worktree, branch };
-  const launching = { model, effort, settingsText, checkout, env };
-  let launched: Launched;
+  const launching = { model, effort, settings: sessionSettingsOf(home, api), settingsText, checkout, env };
+  let launched: Pick<Dispatched, "session" | "log">;
 
   try {
-    launched = await (api
-      ? launchHeadless(ports, assignment, { ...launching, settings: apiWorkerSettingsOf(home) })
-      : launchBackground(ports, assignment, { ...launching, settings: backgroundWorkerSettingsOf(home) }));
+    launched = await launch(ports, assignment, launching);
   } catch (error) {
     const failure = error instanceof Error ? error.message : String(error);
 
     throw new Error(`${failure}${await leftoverOf(run, assignment, at)}`, { cause: error });
   }
 
-  return launched.kind === "headless"
-    ? { issue, title, worktree, branch, session: launched.session, log: launched.log }
-    : { issue, title, worktree, branch, session: sessionIdOf(launched.stdout), log: null };
+  return { issue, title, worktree, branch, ...launched };
 }
