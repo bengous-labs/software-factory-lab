@@ -61,6 +61,7 @@ import {
   threadsResolver,
 } from "./github.ts";
 import { followUpIssueOf, landedOpenNoteOf } from "./ledger.ts";
+import type { StateRead } from "./ledger.ts";
 import {
   ActionsRun,
   CheckRuns,
@@ -78,7 +79,6 @@ import {
   startOf,
   stateCommentIn,
 } from "./readings.ts";
-import type { StateComment } from "./readings.ts";
 import type { ReviewState, StateRecord } from "./record.ts";
 import { postedFindingsOf } from "./review-job.ts";
 import { route } from "./route.live.ts";
@@ -112,7 +112,7 @@ async function pullOf(env: Env, number: number): Promise<Pull> {
   return pr;
 }
 
-async function stateOf(env: Env, pr: number): Promise<StateComment> {
+async function stateOf(env: Env, pr: number): Promise<StateRead> {
   return stateCommentIn(await conversationReader(env.run)(env, pr), env);
 }
 
@@ -211,7 +211,6 @@ export async function snapshotOf(
     state: pr.merged ? "MERGED" : pr.state === "open" ? "OPEN" : "CLOSED",
     sameRepository: pr.head.repo?.full_name === env.repo,
     openedByFactory: openedByFactoryOf(pr.user?.login, env),
-    openedByAuthor: pr.user?.login === env.authorLogin,
     draft: pr.draft,
     head: pr.head.sha,
     patch,
@@ -258,7 +257,7 @@ async function perform(
 ): Promise<StateRecord | null> {
   switch (step.kind) {
     case "route": {
-      const { answer, judge } = await route(env, range, record, { patchDelta: step.patchDelta, pr: pr.number });
+      const { answer, judge } = await route(env, range, record, { patchDelta: step.patchDelta });
       log(routingLineOf(pr.number, step.patch, answer, judge));
       const next = { ...record, triage: { ...record.triage, [step.patch]: answer } };
       await write(next);
@@ -469,7 +468,7 @@ async function advance(
 
     const decideAgain = await stepsDone(
       decision.steps,
-      { read: state, record, inputs: { findings: ledgerFindingsOf(logins, threads), fixed: state.fixed } },
+      { read: state, record, inputs: { findings: ledgerFindingsOf(logins, threads) } },
       {
         perform: (step, current, write) => perform(env, pr, range, write, current, step, log),
         findings: async () => ledgerFindingsOf(logins, await threadsOf(env, number)),

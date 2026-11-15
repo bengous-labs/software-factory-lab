@@ -1,8 +1,7 @@
 /**
  * The Publication of an Author's stop, and what it asks on the way: a fork of the session, GitHub as the
- * Author's machine account, and git. The rejections first, each a reply and a resolved thread, and the
- * findings the Author fixed, then the push, the PR opened or readied, the Nit threads resolved and the
- * relay left. A stop that leaves a question puts it to the Owner on a draft PR instead.
+ * Author's machine account, and git. The rejections first, each a reply and a resolved thread, then the
+ * push, the PR opened or readied, and the relay left. A stop that leaves a question puts it to the Owner on a draft PR instead.
  */
 
 import { resolve } from "node:path";
@@ -22,16 +21,8 @@ import { openFindingsOf, ReviewThreads, threadsQueryOf } from "../shared/finding
 import type { OpenFinding } from "../shared/findings.ts";
 import type { StartRelay } from "../shared/relay.port.ts";
 import { replyInThread, resolveThread } from "../shared/threads.ts";
-import {
-  closingLineOf,
-  decide,
-  fixedOf,
-  fixedRecordBodyOf,
-  questionCommentOf,
-  rejectionReplyOf,
-  rejectionsOf,
-} from "./decide.ts";
-import type { Action, ClosedPullRequest, DoneAnswer, FixedRecord, Outcome, PullRequest, Rejection } from "./decide.ts";
+import { closingLineOf, decide, questionCommentOf, rejectionReplyOf, rejectionsOf } from "./decide.ts";
+import type { Action, ClosedPullRequest, DoneAnswer, Outcome, PullRequest, Rejection } from "./decide.ts";
 import { DONE_JUDGE } from "./done-judge.actor.ts";
 import { BODY_REQUEST } from "./done-judge.prompt.ts";
 import { apiForkOf, forkArgvOf, forkResultOf, forkSettingsOf, prTextOf } from "./fork.ts";
@@ -245,28 +236,6 @@ interface Credential {
   readonly gh: RunOptions;
 }
 
-/**
- * Resolves the App's open Nit threads of `findings`: the Author's stop closes them. A failure leaves the
- * rest open and is logged: the next stop of an Author on the PR closes them.
- */
-export async function closeNits(stopping: AuthorStop, gh: RunOptions, findings: readonly OpenFinding[]): Promise<void> {
-  const nits = findings.filter((finding) => finding.severity === "nit");
-
-  try {
-    for (const nit of nits) {
-      await resolveThread(stopping.deps.run, gh, nit.thread);
-    }
-
-    stopping.log({ step: "nits", resolved: nits.length });
-  } catch (error) {
-    stopping.log({
-      step: "nits",
-      resolved: null,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
 /** Leaves the PR's relay, when none watches it. A failure is logged: the PR is published either way. */
 function leaveRelay(stopping: AuthorStop, pr: number): void {
   try {
@@ -335,8 +304,6 @@ interface Judged {
   readonly answer: DoneAnswer;
   /** The PR's conversation holds a question the hook put to the Owner, still unanswered. */
   readonly asked: boolean;
-  /** What the PR records of the findings the Author says it fixed. */
-  readonly fixed: FixedRecord;
 }
 
 async function push(stopping: AuthorStop, author: Credential): Promise<void> {
@@ -382,52 +349,8 @@ async function askOwner(
 }
 
 /**
- * Records on PR `pr` the findings the Author says it fixed, in the hook's one comment there, posted or
- * edited. It goes before the push, so the Merge bot run the push starts reads it for its ledger. A
- * failure is logged: the ledger only shows it, so the PR is published either way.
- */
-async function recordFixed(
-  stopping: AuthorStop,
-  author: Credential,
-  pr: number,
-  { judged, posted }: { readonly judged: Judged; readonly posted: readonly Rejection[] },
-): Promise<void> {
-  const recorded = fixedOf(
-    judged.answer.fixed,
-    judged.findings.map((finding) => finding.thread),
-    posted,
-  );
-
-  const body = fixedRecordBodyOf(judged.fixed, recorded);
-
-  if (body === null) {
-    return;
-  }
-
-  const { comment } = judged.fixed;
-
-  try {
-    await (comment === null
-      ? checked(stopping.deps.run, ["gh", "pr", "comment", String(pr), "--body-file", "-"], {
-          ...author.gh,
-          stdin: body,
-        })
-      : checked(
-          stopping.deps.run,
-          ["gh", "api", "-X", "PATCH", `repos/{owner}/{repo}/issues/comments/${comment}`, "--input", "-"],
-          { ...author.gh, stdin: JSON.stringify({ body }) },
-        ));
-
-    stopping.log({ step: "fixed", threads: [...recorded] });
-  } catch (error) {
-    stopping.log({ step: "fixed", threads: null, error: error instanceof Error ? error.message : String(error) });
-  }
-}
-
-/**
- * The Publication: the rejections first, each a reply and a resolved thread, and the findings the Author
- * fixed, then the push, the PR opened or readied, the Nit threads resolved and the relay left. A push that
- * fails writes nothing after it.
+ * The Publication: the rejections first, each a reply and a resolved thread, then the push, the PR opened
+ * or readied, and the relay left. A push that fails writes nothing after it.
  */
 export async function publish(stopping: AuthorStop, author: Credential, judged: Judged): Promise<Stopped> {
   const { deps, log, head } = stopping;
@@ -470,10 +393,6 @@ export async function publish(stopping: AuthorStop, author: Credential, judged: 
     log({ step: "rejection", thread: rejection.thread });
   }
 
-  if (action.kind === "push") {
-    await recordFixed(stopping, author, action.pr, { judged, posted: rejections.posted });
-  }
-
   await push(stopping, author);
 
   let number: number;
@@ -490,13 +409,6 @@ export async function publish(stopping: AuthorStop, author: Credential, judged: 
 
   log({ step: "published", action: action.kind, pr: number, head });
 
-  const rejected = new Set(rejections.posted.map((rejection) => rejection.thread));
-
-  await closeNits(
-    stopping,
-    author.gh,
-    judged.findings.filter((finding) => !rejected.has(finding.thread)),
-  );
   leaveRelay(stopping, number);
 
   return { answer: ALLOW, outcome: { kind: "published", pr: number } };

@@ -88,7 +88,7 @@ describe("wakesOf", () => {
     expect(wakesOf(7, { ...OPEN, conflicting: true, checks })).toEqual([conflict]);
   });
 
-  test("an open Important or Nit finding wakes as a Finding and a human thread as a Comment, with its thread id; a resolved one or a Pre-existing makes no Wake", () => {
+  test("an open Important finding wakes as a Finding and a human thread as a Comment, with its thread id; a resolved one, a Nit or a Pre-existing makes no Wake", () => {
     const threads = [
       {
         id: "T1",
@@ -132,16 +132,13 @@ describe("wakesOf", () => {
 
     const wakes = wakesOf(7, { ...OPEN, threads });
 
-    expect(wakes.map((wake) => wake.key)).toEqual(["thread:T1", "thread:T3", "thread:T5", "thread:T6"]);
+    expect(wakes.map((wake) => wake.key)).toEqual(["thread:T1", "thread:T5", "thread:T6"]);
     expect(wakes[0]?.line).toStartWith("Finding T1 on app/src/cli.ts:12 by bengous-labs-agents: **Important**: off");
-    expect(wakes[1]?.line).toBe(
-      "Finding T3 on a.ts:2 by bengous-labs-agents: **Nit**: n <!-- lab-finding severity=nit -->",
-    );
-    expect(wakes[2]?.line).toBe("Comment T5 on a.ts:4 by bengous: why this name?");
-    expect(wakes[3]?.line).toStartWith("Comment T6 on a.ts:5 by bengous: quoting");
+    expect(wakes[1]?.line).toBe("Comment T5 on a.ts:4 by bengous: why this name?");
+    expect(wakes[2]?.line).toStartWith("Comment T6 on a.ts:5 by bengous: quoting");
   });
 
-  test("a reply in an open thread wakes, a Nit thread included, keyed by its comment id; the author's own marked reply does not", () => {
+  test("the Owner's reply in an open thread wakes, a Nit thread's included, keyed by its comment id; the Nit itself and the author's own marked reply do not", () => {
     const nit = "**Nit**: n <!-- lab-finding severity=nit -->";
 
     const threads = [
@@ -170,7 +167,6 @@ describe("wakesOf", () => {
     ];
 
     expect(wakesOf(7, { ...OPEN, threads })).toEqual([
-      { key: "thread:T7", kind: "finding", line: `Finding T7 on a.ts:9 by bengous-labs-agents: ${nit}` },
       { key: "comment:C1", kind: "owner", line: "Reply in T7 on a.ts:9 by bengous: please fix this one anyway" },
     ]);
   });
@@ -323,7 +319,7 @@ describe("wakesOf", () => {
     const finding = {
       key: "thread:T1",
       kind: "finding",
-      line: "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n",
+      line: "Finding T1 on a.ts:2 by bengous-labs-agents: **Important**: i",
     } as const;
 
     expect(ownerWordsIn({ wakes: [finding, owners], ends: false })).toBe(true);
@@ -552,14 +548,14 @@ describe("answerOf", () => {
 describe("wakeTextOf", () => {
   test("the Wakes of an open PR are one text: its opening, each line, then how the Author answers", () => {
     const wakes = [
-      { key: "thread:T1", kind: "finding", line: "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n" },
+      { key: "thread:T1", kind: "finding", line: "Finding T1 on a.ts:2 by bengous-labs-agents: **Important**: i" },
       { key: `draft:${HEAD}`, kind: "draft", line: DRAFT_LINE },
     ] as const;
 
     expect(wakeTextOf(7, { wakes, ends: false })).toBe(
       [
         "The Land loop, about your pull request #7:",
-        "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n",
+        "Finding T1 on a.ts:2 by bengous-labs-agents: **Important**: i",
         DRAFT_LINE,
         "Fix what you accept with a commit, name in your last message each finding you reject and why, then stop.",
       ].join("\n"),

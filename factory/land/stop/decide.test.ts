@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { AUTHOR_LOGIN, OWNER_LOGIN } from "../../install/logins.ts";
-import { AUTHOR_MARK, FIXED_MARK, fixedListOf, QUESTION_MARK, REJECT_MARK } from "../shared/author-mark.ts";
+import { AUTHOR_MARK, QUESTION_MARK, REJECT_MARK } from "../shared/author-mark.ts";
 import {
   admit,
   afterClosed,
@@ -13,9 +12,6 @@ import {
   decide,
   DONE_SCHEMA,
   doneAnswerOf,
-  fixedOf,
-  fixedRecordBodyOf,
-  fixedRecordIn,
   noAuthorToken,
   noDoneAnswer,
   outcomeLineOf,
@@ -37,7 +33,7 @@ const SNAPSHOT: Snapshot = {
   pr: null,
 };
 
-const FINISHED: DoneAnswer = { finished: true, question: "", reason: "done and tested", rejections: [], fixed: [] };
+const FINISHED: DoneAnswer = { finished: true, question: "", reason: "done and tested", rejections: [] };
 
 describe("bystanderOf", () => {
   test("a session whose environment holds LAB_AUTHOR=1, and is no fork, is an Author", () => {
@@ -144,10 +140,9 @@ describe("admit", () => {
     expect(admit({ ...SNAPSHOT, ahead: 0 }, true)).toEqual(none);
   });
 
-  test("a PR ready at this head publishes nothing", () => {
+  test("a PR ready at this head publishes nothing, and closes no thread", () => {
     expect(admit({ ...SNAPSHOT, pr: { number: 7, draft: false, headSha: HEAD } }, false)).toEqual({
-      kind: "ready",
-      pr: 7,
+      kind: "none",
       reason: `#7 is ready at ${HEAD} already`,
     });
   });
@@ -223,30 +218,18 @@ describe("the Stop checks left to a Worker", () => {
 });
 
 describe("doneAnswerOf", () => {
-  test("a structured output that fits the schema is the Done judge's answer: what became of each open finding included", () => {
-    const finished = { finished: true, question: "", reason: "done", rejections: [], fixed: ["T2", "T3"] };
+  test("a structured output that fits the schema is the Done judge's answer: the findings the Author rejects included", () => {
+    const finished = { finished: true, question: "", reason: "done", rejections: [] };
 
     const unfinished = {
       finished: false,
       question: "Which wording do you want?",
       reason: "a test is missing",
       rejections: [{ thread: "T1", reason: "by design" }],
-      fixed: [],
     };
 
     expect(doneAnswerOf({ code: 0, structured: finished })).toEqual(finished);
     expect(doneAnswerOf({ code: 0, structured: unfinished })).toEqual(unfinished);
-  });
-
-  test("an answer that says nothing of the fixed findings, as one written before the question asked, still reads: nothing fixed", () => {
-    const before = {
-      finished: true,
-      question: "",
-      reason: "done",
-      rejections: [{ thread: "T1", reason: "by design" }],
-    };
-
-    expect(doneAnswerOf({ code: 0, structured: before })).toEqual({ ...before, fixed: [] });
   });
 
   test("a fork that exits non-zero gave no answer, whatever its output", () => {
@@ -271,8 +254,6 @@ describe("doneAnswerOf", () => {
       { finished: true, question: "", reason: "done" },
       { finished: true, question: "", reason: "done", rejections: [{ thread: "T1" }] },
       { finished: true, question: "", reason: "done", rejections: "none" },
-      { finished: true, question: "", reason: "done", rejections: [], fixed: "T1" },
-      { finished: true, question: "", reason: "done", rejections: [], fixed: [1] },
     ];
 
     for (const structured of unfit) {
@@ -280,7 +261,7 @@ describe("doneAnswerOf", () => {
     }
   });
 
-  test("the schema the fork follows names the five fields, and no hold", () => {
+  test("the schema the fork follows names the four fields, and no hold", () => {
     expect(DONE_SCHEMA).toEqual({
       type: "object",
       properties: {
@@ -296,9 +277,8 @@ describe("doneAnswerOf", () => {
             additionalProperties: false,
           },
         },
-        fixed: { type: "array", items: { type: "string" } },
       },
-      required: ["finished", "question", "reason", "rejections", "fixed"],
+      required: ["finished", "question", "reason", "rejections"],
       additionalProperties: false,
     });
   });
@@ -328,7 +308,6 @@ describe("decide", () => {
       question: "",
       reason: "a test is missing",
       rejections: [],
-      fixed: [],
     };
 
     expect(decide(null, unfinished, false)).toEqual({
@@ -372,7 +351,6 @@ describe("decide", () => {
       question: "Which wording?",
       reason: "a test is missing",
       rejections: [],
-      fixed: [],
     };
 
     expect(decide(ready, asking, false)).toMatchObject({
@@ -506,74 +484,6 @@ describe("rejectionReplyOf", () => {
     expect(rejectionReplyOf("  the flag is read by <cli>  ")).toBe(
       `Rejected: the flag is read by &lt;cli>\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`,
     );
-  });
-});
-
-/** The Stop hook's record of the threads `fixed`, as comment `id` of the Author's machine account. */
-const fixedRecordOf = (fixed: readonly string[], id = "C1") => ({
-  id,
-  author: AUTHOR_LOGIN,
-  body: fixedRecordBodyOf({ comment: null, fixed: [] }, fixed) ?? "",
-});
-
-describe("the findings the Author fixed", () => {
-  test("a fix is recorded when it names an open thread of the App, once, and no rejection the hook posts", () => {
-    expect(fixedOf(["T1", "T2", "T1"], ["T1", "T2"], [])).toEqual(["T1", "T2"]);
-    expect(fixedOf(["T1", "T9"], ["T1", "T2"], [])).toEqual(["T1"]);
-    expect(fixedOf(["T1", "T2"], ["T1", "T2"], [{ thread: "T2", reason: "by design" }])).toEqual(["T1"]);
-    expect(fixedOf([], ["T1"], [])).toEqual([]);
-  });
-
-  test("the record lists the fixed threads under its mark, says it is the Author's word, and carries the Author's mark", () => {
-    expect(fixedRecordBodyOf({ comment: null, fixed: [] }, ["T1", "T2"])).toBe(
-      [
-        "The Author says its change fixed 2 review finding(s), as the Done judge read them from its session. The Merge bot's ledger shows each, by the Author's word. Do not edit.",
-        `${FIXED_MARK} T1 T2 -->`,
-        AUTHOR_MARK,
-      ].join("\n\n"),
-    );
-  });
-
-  test("a later stop adds its fixes to the record; one that adds none writes nothing", () => {
-    const record = { comment: "C1", fixed: ["T1"] };
-
-    expect(fixedListOf(fixedRecordBodyOf(record, ["T2", "T1"]) ?? "")).toEqual(["T1", "T2"]);
-    expect(fixedRecordBodyOf(record, ["T1"])).toBeNull();
-    expect(fixedRecordBodyOf(record, [])).toBeNull();
-  });
-
-  test("the record is the comment of the Author's machine account that carries the mark; another login's is not", () => {
-    const forged = { ...fixedRecordOf(["T9"], "C0"), author: OWNER_LOGIN };
-    const question = { id: "C2", author: AUTHOR_LOGIN, body: questionCommentOf("Which?", "feat/7-x", "S1") };
-
-    expect(fixedRecordIn([forged, question, fixedRecordOf(["T1", "T2"])])).toEqual({
-      comment: "C1",
-      fixed: ["T1", "T2"],
-    });
-    expect(fixedRecordIn([forged, question])).toEqual({ comment: null, fixed: [] });
-    expect(fixedRecordIn([])).toEqual({ comment: null, fixed: [] });
-  });
-
-  test("a comment that quotes the mark inside a line, such as the Author's question in a code span, holds no list", () => {
-    const quoted = `Should \`${FIXED_MARK} T1 -->\` stay?`;
-    const question = { id: "C2", author: AUTHOR_LOGIN, body: questionCommentOf(quoted, "feat/7-x", "S1") };
-
-    expect(question.body).toContain(`${FIXED_MARK} T1 -->`);
-    expect(fixedListOf(question.body)).toBeNull();
-    expect(fixedListOf(`x ${FIXED_MARK} T1 -->`)).toBeNull();
-    expect(fixedListOf(`${FIXED_MARK} T1 --> x`)).toBeNull();
-    expect(fixedListOf(`intro\n${FIXED_MARK} T1 -->\nend`)).toEqual(["T1"]);
-    expect(fixedRecordIn([question, fixedRecordOf(["T2"])])).toEqual({ comment: "C1", fixed: ["T2"] });
-    expect(fixedRecordIn([question])).toEqual({ comment: null, fixed: [] });
-  });
-
-  test("the Author's question quotes each of its lines, so a mark it holds in a fenced block is no list either", () => {
-    const fenced = `Keep this?\n\n\`\`\`\n${FIXED_MARK} T9 -->\n\`\`\``;
-    const question = { id: "C2", author: AUTHOR_LOGIN, body: questionCommentOf(fenced, "feat/7-x", "S1") };
-
-    expect(question.body).toContain(`\n> ${FIXED_MARK} T9 -->\n`);
-    expect(fixedListOf(question.body)).toBeNull();
-    expect(fixedRecordIn([question])).toEqual({ comment: null, fixed: [] });
   });
 });
 

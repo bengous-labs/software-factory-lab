@@ -119,44 +119,33 @@ describe("the review job's run", () => {
     ]);
   });
 
-  test("a round with a Nit and no Important sends an Author's PR to draft, and leaves an Owner's PR ready", () => {
-    const nit = reported(finding("nit"), finding("pre_existing"));
-    const byAuthor = { ...asked, openedByAuthor: true, reviewJob: completed(nit) };
+  test("a round with Nits and no Important posts them and leaves the PR ready, its Review check green", () => {
+    const nit = reported(finding("nit"), finding("nit"), finding("pre_existing"));
 
-    expect(stepsOf(byAuthor)).toEqual([
+    expect(stepsOf({ ...asked, reviewJob: completed(nit) })).toEqual([
       { kind: "post-review", result: nit, heldOpen: [] },
-      { kind: "to-draft" },
       { kind: "record", record: afterReview(asked.record, nit) },
       GREEN,
     ]);
-    expect(kinds({ ...byAuthor, openedByAuthor: false })).toEqual(["post-review", "record", "review-check"]);
   });
 
-  test("a round with no Important and no Nit leaves the PR ready, whoever opened it; a PR already in draft is not sent again", () => {
-    for (const result of [reported(), reported(finding("pre_existing"))]) {
-      expect(kinds({ ...asked, openedByAuthor: true, reviewJob: completed(result) })).toEqual([
-        "post-review",
-        "record",
-        "review-check",
-      ]);
+  test("a round with no Important leaves the PR ready; a PR already in draft is not sent again", () => {
+    for (const result of [reported(), reported(finding("pre_existing")), reported(finding("nit"))]) {
+      expect(kinds({ ...asked, reviewJob: completed(result) })).toEqual(["post-review", "record", "review-check"]);
     }
 
     for (const result of [reported(finding("nit")), reported(finding("important"))]) {
-      expect(kinds({ ...asked, openedByAuthor: true, draft: true, reviewJob: completed(result) })).not.toContain(
-        "to-draft",
-      );
+      expect(kinds({ ...asked, draft: true, reviewJob: completed(result) })).not.toContain("to-draft");
     }
   });
 
-  test("an Important sends the PR to draft whoever opened it, before the round is recorded", () => {
-    for (const openedByAuthor of [true, false]) {
-      expect(kinds({ ...asked, openedByAuthor, reviewJob: completed(reported(finding("important"))) })).toEqual([
-        "post-review",
-        "to-draft",
-        "record",
-        "review-check",
-      ]);
-    }
+  test("an Important sends the PR to draft, before the round is recorded", () => {
+    expect(kinds({ ...asked, reviewJob: completed(reported(finding("important"), finding("nit"))) })).toEqual([
+      "post-review",
+      "to-draft",
+      "record",
+      "review-check",
+    ]);
   });
 
   test("a Review round 1 was shown no earlier finding: it leaves an open Important as it is, and its Review check counts it", () => {

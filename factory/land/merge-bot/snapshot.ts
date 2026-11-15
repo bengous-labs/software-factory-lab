@@ -14,8 +14,6 @@ export interface Snapshot {
   readonly sameRepository: boolean;
   /** The PR was opened by the Owner or by the Author's machine account, the only logins this public lab works for. */
   readonly openedByFactory: boolean;
-  /** The PR was opened by the Author's machine account: a round that posts a finding sends it back to draft. */
-  readonly openedByAuthor: boolean;
   readonly draft: boolean;
   readonly head: string;
   readonly patch: string;

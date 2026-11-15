@@ -87,7 +87,6 @@ export function thread(id: string, severity: "important" | "nit" | "pre_existing
   return {
     id,
     isResolved: resolved,
-    isOutdated: false,
     resolvedBy: null,
     path: "app/src/cli.ts",
     line: 7,

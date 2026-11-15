@@ -92,7 +92,7 @@ export function issueOpener(runner: Run): (where: Pick<Env, "repo" | "cwd">, iss
   };
 }
 
-/** Every page of the PR's conversation comments: the Stop hook's record of the fixed findings may come past the first hundred. */
+/** Every page of the PR's conversation comments: the state comment may come past the first hundred. */
 export function conversationReader(
   runner: Run,
 ): (where: Pick<Env, "repo" | "cwd">, pr: number) => Promise<typeof IssueComments.Type> {

@@ -16,7 +16,6 @@ import {
   ledgerFindingsOf,
   markerOf,
   movedLineOf,
-  nitPathsOf,
   openFindingsOf,
   openImportantOf,
   rejectedImportantOf,
@@ -51,7 +50,6 @@ const thread = (
 ): ReviewThread => ({
   id: "T",
   isResolved,
-  isOutdated: false,
   resolvedBy: null,
   path: "a.ts",
   line,
@@ -87,9 +85,7 @@ describe("the review threads", () => {
   test("the query names the PR and takes the repository as variables", () => {
     expect(threadsQueryOf(12)).toContain("query($owner:String!,$name:String!){repository(owner:$owner,name:$name)");
     expect(threadsQueryOf(12)).toContain("pullRequest(number:12)");
-    expect(threadsQueryOf(12)).toContain(
-      "nodes{id isResolved isOutdated resolvedBy{login} path line comments(first:20)",
-    );
+    expect(threadsQueryOf(12)).toContain("nodes{id isResolved resolvedBy{login} path line comments(first:20)");
     expect(threadsQueryOf(12)).toContain("comments(first:20){nodes{author{login} body url pullRequestReview{body}}}");
   });
 
@@ -310,37 +306,6 @@ describe("findingFileOf", () => {
   });
 });
 
-describe("nitPathsOf", () => {
-  const ROUND_3 = { patch: "p3", round: 3 } as const;
-
-  test("the files of the App's Nit threads of the review given, open or resolved, once each; none of another review's, an Important's or a human's", () => {
-    expect(
-      nitPathsOf(APP, ROUND_3, [
-        postedIn(thread(NIT), ROUND_3, "b.ts"),
-        postedIn(thread(NIT, [], { isResolved: true }), ROUND_3, "a.ts"),
-        postedIn(thread(NIT), ROUND_3, "b.ts"),
-        postedIn(thread(NIT), { patch: "p3", round: 2 }, "f.ts"),
-        postedIn(thread(NIT), { patch: "p0", round: 3 }, "h.ts"),
-        postedIn(thread(IMPORTANT), ROUND_3, "c.ts"),
-        postedIn(thread(NIT, [], { by: "bengous" }), ROUND_3, "d.ts"),
-        postedIn(thread(NIT, [], { by: null }), ROUND_3, "e.ts"),
-        { ...thread(NIT), path: "g.ts" },
-      ]),
-    ).toEqual(["a.ts", "b.ts"]);
-    expect(nitPathsOf(APP, ROUND_3, [])).toEqual([]);
-    expect(nitPathsOf(APP, { patch: null, round: 3 }, [postedIn(thread(NIT), ROUND_3, "a.ts")])).toEqual([]);
-  });
-
-  test("a Nit anchored on another file, its own outside the diff, names neither; one moved within its own file names it", () => {
-    expect(
-      nitPathsOf(APP, ROUND_3, [
-        postedIn(thread(MOVED_NIT("factory/lib/foo.ts:4")), ROUND_3, "AGENTS.md"),
-        postedIn(thread(MOVED_NIT("a.ts:120")), ROUND_3, "a.ts"),
-      ]),
-    ).toEqual(["a.ts"]);
-  });
-});
-
 describe("earlierThreadsOf", () => {
   test("each of the App's findings, open or resolved, with the author's answers and its thread's state", () => {
     expect(
@@ -515,7 +480,7 @@ const rejectionIn = (found: ReviewThread): string | null | undefined =>
 describe("ledgerFindingsOf", () => {
   test("an App finding of a review that names its round reads with its place, its pass, its summary and its thread's state", () => {
     const secured = `**Important (security)**: off by &lt;one\n\nwhy\n\n${markerOf("important")}`;
-    const found = { ...postedIn(thread(secured), ROUND_2, "app/a.ts"), isOutdated: true };
+    const found = postedIn(thread(secured), ROUND_2, "app/a.ts");
 
     expect(ledgerFindingsOf(LOGINS, [found])).toEqual([
       {
@@ -530,7 +495,6 @@ describe("ledgerFindingsOf", () => {
         resolved: false,
         closedByApp: false,
         landedOpen: false,
-        outdated: true,
         rejection: null,
         ownerAnswer: null,
         again: [],
@@ -665,23 +629,23 @@ describe("ledgerFindingsOf", () => {
       rejection: null,
       ownerAnswer: "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537739764",
     });
-    expect(important === undefined ? null : standingOf(important, new Set(), 2)).toEqual({
+    expect(important === undefined ? null : standingOf(important, 2)).toEqual({
       kind: "owner",
       reply: "https://github.com/bengous-labs/software-factory-lab/pull/158#discussion_r4537739764",
       open: false,
     });
-    expect(ledgerOf(findings, new Set(), 2, false).split("\n")[0]).toBe(
-      "**Review findings**: 4 fixed and confirmed, 7 answered by the Owner, 2 with no answer.",
+    expect(ledgerOf(findings, 2, false).split("\n")[0]).toBe(
+      "**Review findings**: 4 fixed and confirmed, 7 answered by the Owner, 2 closed.",
     );
   });
 
-  test("PR #173's findings read as its review left them: by round, Importants fixed and confirmed, rejected, Nits closed with no answer, and Importants open", () => {
+  test("PR #173's findings read as its review left them: by round, Importants fixed and confirmed, rejected, Nits closed, and Importants open", () => {
     const findings = ledgerFindingsOf(LOGINS, fixtureThreads("pr-173-threads.json"));
 
     const table = [1, 2, 3].map((round) => {
       const standings = findings
         .filter((finding) => finding.round === round)
-        .map((finding) => `${finding.severity} ${standingOf(finding, new Set(), 3).kind}`);
+        .map((finding) => `${finding.severity} ${standingOf(finding, 3).kind}`);
 
       return Object.fromEntries(
         [...new Set(standings)].map((standing) => [standing, standings.filter((one) => one === standing).length]),
@@ -689,12 +653,12 @@ describe("ledgerFindingsOf", () => {
     });
 
     expect(table).toEqual([
-      { "important confirmed": 6, "important rejected": 2, "nit no-answer": 4 },
-      { "important confirmed": 1, "important rejected": 1, "nit no-answer": 5 },
-      { "important open": 2, "nit no-answer": 3, "nit rejected": 2 },
+      { "important confirmed": 6, "important rejected": 2, "nit closed": 4 },
+      { "important confirmed": 1, "important rejected": 1, "nit closed": 5 },
+      { "important open": 2, "nit closed": 3, "nit rejected": 2 },
     ]);
-    expect(ledgerOf(findings, new Set(), 3, false).split("\n")[0]).toBe(
-      "**Review findings**: 7 fixed and confirmed, 5 rejected, 12 with no answer, 2 open.",
+    expect(ledgerOf(findings, 3, false).split("\n")[0]).toBe(
+      "**Review findings**: 7 fixed and confirmed, 5 rejected, 12 closed, 2 open.",
     );
     expect(findings.find((finding) => finding.again.length > 0)).toMatchObject({
       round: 1,

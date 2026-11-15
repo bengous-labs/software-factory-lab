@@ -9,48 +9,44 @@ import { EMPTY_RECORD, recordOfJson, stateCommentOf, storedOfRecord } from "./re
 import type { StateRecord } from "./record.ts";
 
 describe("where a finding stands", () => {
-  const none = new Set<string>();
-
-  test("an Important is fixed on the reading of the round after the last that reported it, never on its Author's word", () => {
-    const fixed = new Set(["I"]);
-
-    expect(standingOf(ledgerFinding("I", { resolved: true }), none, 2)).toEqual({ kind: "confirmed", round: 2 });
-    expect(standingOf(ledgerFinding("I", { resolved: true, again: [2] }), none, 3)).toEqual({
+  test("an Important is fixed on the reading of the round after the last that reported it", () => {
+    expect(standingOf(ledgerFinding("I", { resolved: true }), 2)).toEqual({ kind: "confirmed", round: 2 });
+    expect(standingOf(ledgerFinding("I", { resolved: true, again: [2] }), 3)).toEqual({
       kind: "confirmed",
       round: 3,
     });
-    expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), fixed, 2)).toEqual({ kind: "unread" });
-    expect(standingOf(ledgerFinding("I"), fixed, 3)).toEqual({ kind: "open", again: null });
-    expect(standingOf(ledgerFinding("I", { again: [2, 3] }), none, 3)).toEqual({ kind: "open", again: 3 });
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), 2)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I"), 3)).toEqual({ kind: "open", again: null });
+    expect(standingOf(ledgerFinding("I", { again: [2, 3] }), 3)).toEqual({ kind: "open", again: 3 });
   });
 
   test("past round 3, an Important the App closed with no landing's reply is fixed, confirmed by a Delta read, once one ran", () => {
-    expect(standingOf(ledgerFinding("I", { resolved: true, again: [3, 2] }), none, 3, true)).toEqual({
+    expect(standingOf(ledgerFinding("I", { resolved: true, again: [3, 2] }), 3, true)).toEqual({
       kind: "confirmed",
       round: 4,
     });
-    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), none, 3, true)).toEqual({
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), 3, true)).toEqual({
       kind: "confirmed",
       round: 4,
     });
-    expect(standingOf(ledgerFinding("I", { resolved: true, round: 4, again: [4] }), none, 3, true)).toEqual({
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 4, again: [4] }), 3, true)).toEqual({
       kind: "confirmed",
       round: 4,
     });
-    expect(standingOf(ledgerFinding("I", { round: 3, again: [4] }), none, 3, true)).toEqual({
+    expect(standingOf(ledgerFinding("I", { round: 3, again: [4] }), 3, true)).toEqual({
       kind: "open",
       again: 4,
     });
-    expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), none, 3, true)).toEqual({
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), 3, true)).toEqual({
       kind: "confirmed",
       round: 3,
     });
   });
 
   test("past round 3, with no Delta read run, an Important the App closed with no landing's reply is confirmed by none", () => {
-    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), none, 3)).toEqual({ kind: "unread" });
-    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), none, 3, false)).toEqual({ kind: "unread" });
-    expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), none, 3)).toEqual({
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), 3)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 3 }), 3, false)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I", { resolved: true, round: 2 }), 3)).toEqual({
       kind: "confirmed",
       round: 3,
     });
@@ -58,29 +54,29 @@ describe("where a finding stands", () => {
 
   test("an Important the Owner's Land approval closed, its thread saying so, landed open, whatever round posted it", () => {
     for (const round of [1, 3, 4]) {
-      expect(standingOf(ledgerFinding("I", { resolved: true, round, landedOpen: true }), none, 3)).toEqual({
+      expect(standingOf(ledgerFinding("I", { resolved: true, round, landedOpen: true }), 3)).toEqual({
         kind: "landed-open",
       });
     }
 
-    expect(standingOf(ledgerFinding("I", { resolved: true, closedByApp: false, landedOpen: true }), none, 3)).toEqual({
+    expect(standingOf(ledgerFinding("I", { resolved: true, closedByApp: false, landedOpen: true }), 3)).toEqual({
       kind: "unread",
     });
-    expect(standingOf(ledgerFinding("I", { landedOpen: true }), none, 3)).toEqual({ kind: "open", again: null });
+    expect(standingOf(ledgerFinding("I", { landedOpen: true }), 3)).toEqual({ kind: "open", again: null });
   });
 
   test("an Important whose thread was closed by hand is confirmed by no round, though later rounds ran", () => {
     const byHand = { resolved: true, closedByApp: false } as const;
 
-    expect(standingOf(ledgerFinding("I", byHand), none, 2)).toEqual({ kind: "unread" });
-    expect(standingOf(ledgerFinding("I", { ...byHand, again: [2] }), none, 3)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I", byHand), 2)).toEqual({ kind: "unread" });
+    expect(standingOf(ledgerFinding("I", { ...byHand, again: [2] }), 3)).toEqual({ kind: "unread" });
   });
 
   test("a rejection stands whatever else the finding holds", () => {
     const rejected = { resolved: true, rejection: "https://r" } as const;
 
-    expect(standingOf(ledgerFinding("I", rejected), none, 3)).toEqual({ kind: "rejected", reply: "https://r" });
-    expect(standingOf(ledgerFinding("N", { ...rejected, severity: "nit" }), new Set(["N"]), 1)).toEqual({
+    expect(standingOf(ledgerFinding("I", rejected), 3)).toEqual({ kind: "rejected", reply: "https://r" });
+    expect(standingOf(ledgerFinding("N", { ...rejected, severity: "nit" }), 1)).toEqual({
       kind: "rejected",
       reply: "https://r",
     });
@@ -89,48 +85,38 @@ describe("where a finding stands", () => {
   test("a finding the Owner answered last stands as answered, whatever its severity and whoever closed its thread", () => {
     const answered = { ownerAnswer: "https://o" } as const;
 
-    expect(standingOf(ledgerFinding("I", { ...answered, resolved: true }), none, 2)).toEqual({
+    expect(standingOf(ledgerFinding("I", { ...answered, resolved: true }), 2)).toEqual({
       kind: "owner",
       reply: "https://o",
       open: false,
     });
-    expect(standingOf(ledgerFinding("N", { ...answered, severity: "nit", resolved: true }), new Set(["N"]), 1)).toEqual(
-      {
-        kind: "owner",
-        reply: "https://o",
-        open: false,
-      },
-    );
-    expect(standingOf(ledgerFinding("N", { ...answered, severity: "nit" }), none, 1)).toEqual({
+    expect(standingOf(ledgerFinding("N", { ...answered, severity: "nit", resolved: true }), 1)).toEqual({
+      kind: "owner",
+      reply: "https://o",
+      open: false,
+    });
+    expect(standingOf(ledgerFinding("N", { ...answered, severity: "nit" }), 1)).toEqual({
       kind: "owner",
       reply: "https://o",
       open: true,
     });
   });
 
-  test("a Nit is fixed on its Author's word, open until closed, else closed with no answer; GitHub's outdated mark goes beside", () => {
+  test("a Nit is open until its thread closes, then closed, whoever closed it: no round reads it again", () => {
     const nit = { severity: "nit" } as const;
 
-    expect(standingOf(ledgerFinding("N", { ...nit, resolved: true, outdated: true }), new Set(["N"]), 1)).toEqual({
-      kind: "author-fixed",
-      outdated: true,
+    expect(standingOf(ledgerFinding("N", nit), 1)).toEqual({ kind: "open", again: null });
+    expect(standingOf(ledgerFinding("N", { ...nit, again: [2] }), 3)).toEqual({ kind: "open", again: null });
+    expect(standingOf(ledgerFinding("N", { ...nit, resolved: true }), 3)).toEqual({ kind: "closed" });
+    expect(standingOf(ledgerFinding("N", { ...nit, resolved: true, closedByApp: false }), 3, true)).toEqual({
+      kind: "closed",
     });
-    expect(standingOf(ledgerFinding("N", nit), new Set(["N"]), 1)).toEqual({ kind: "author-fixed", outdated: false });
-    expect(standingOf(ledgerFinding("N", { ...nit, resolved: true }), none, 3)).toEqual({
-      kind: "no-answer",
-      outdated: false,
-    });
-    expect(standingOf(ledgerFinding("N", { ...nit, resolved: true, outdated: true }), none, 3)).toEqual({
-      kind: "no-answer",
-      outdated: true,
-    });
-    expect(standingOf(ledgerFinding("N", { ...nit, again: [2] }), none, 3)).toEqual({ kind: "open", again: null });
   });
 });
 
 /** The summary the ledger's line shows of an open Important of round 1 whose summary is `summary`. */
 const shownSummaryOf = (summary: string): string | undefined =>
-  ledgerOf([ledgerFinding("I", { summary })], new Set(), 1, false)
+  ledgerOf([ledgerFinding("I", { summary })], 1, false)
     .split("\n")
     .at(-1)
     ?.replace(`- **Open.** Important ${at("app/src/cli.ts:7", "I")}: `, "");
@@ -141,7 +127,7 @@ describe("the ledger", () => {
       ledgerFinding("I1", { resolved: true }),
       ledgerFinding("I2", { resolved: true, security: true, again: [2] }),
       ledgerFinding("I3", { resolved: true, rejection: "https://github.com/o/r/pull/9#discussion_r3" }),
-      ledgerFinding("N1", { severity: "nit", resolved: true, outdated: true }),
+      ledgerFinding("N1", { severity: "nit", resolved: true }),
       ledgerFinding("N2", { severity: "nit", security: true, resolved: true }),
       ledgerFinding("I4", { round: 2, again: [3] }),
       ledgerFinding("N3", { severity: "nit", round: 2 }),
@@ -156,16 +142,16 @@ describe("the ledger", () => {
 
     const cli = "app/src/cli.ts:7";
 
-    expect(ledgerOf(findings, new Set(["N1", "N4", "I5"]), 3, true)).toBe(
+    expect(ledgerOf(findings, 3, true)).toBe(
       [
-        "**Review findings**: 3 fixed and confirmed, 1 rejected, 2 answered by the Owner, 2 fixed by the Author's word, 1 with no answer, 3 open, 1 landed open, 1 closed unconfirmed.",
+        "**Review findings**: 3 fixed and confirmed, 1 rejected, 2 answered by the Owner, 3 closed, 3 open, 1 landed open, 1 closed unconfirmed.",
         "",
         "**Round 1**: 3 Important (1 security), 2 Nit (1 security).",
         `- **Fixed, confirmed by round 2.** Important ${at(cli, "I1")}: I1 is wrong`,
         `- **Fixed, confirmed by round 3.** Important (security) ${at(cli, "I2")}: I2 is wrong`,
         `- **[Rejected](https://github.com/o/r/pull/9#discussion_r3) by the Author.** Important ${at(cli, "I3")}: I3 is wrong`,
-        `- **Fixed, by the Author's word; its lines changed since.** Nit ${at(cli, "N1")}: N1 is wrong`,
-        `- **No answer; its lines unchanged.** Nit (security) ${at(cli, "N2")}: N2 is wrong`,
+        `- **Closed.** Nit ${at(cli, "N1")}: N1 is wrong`,
+        `- **Closed.** Nit (security) ${at(cli, "N2")}: N2 is wrong`,
         "",
         "**Round 2**: 2 Important, 2 Nit.",
         `- **Open: round 3 reports it again.** Important ${at(cli, "I4")}: I4 is wrong`,
@@ -175,7 +161,7 @@ describe("the ledger", () => {
         "",
         "**Round 3**: 4 Important, 1 Nit.",
         `- **Open.** Important ${at("app/src/store/file.ts", "I5")}: I5 is wrong`,
-        `- **Fixed, by the Author's word; its lines unchanged.** Nit ${at(cli, "N4")}: N4 is wrong`,
+        `- **Closed.** Nit ${at(cli, "N4")}: N4 is wrong`,
         `- **Landed open by the Owner's Land approval.** Important ${at(cli, "I6")}: I6 is wrong`,
         `- **Closed with no later round confirming it.** Important ${at(cli, "I7")}: I7 is wrong`,
         `- **Fixed, confirmed by a Delta read.** Important ${at(cli, "I8")}: I8 is wrong`,
@@ -184,14 +170,14 @@ describe("the ledger", () => {
   });
 
   test("before any round there is no ledger; a round that posted nothing says so", () => {
-    expect(ledgerOf([], new Set(), 0, false)).toBe("");
-    expect(ledgerOf([], new Set(), 2, false)).toBe(
+    expect(ledgerOf([], 0, false)).toBe("");
+    expect(ledgerOf([], 2, false)).toBe(
       "**Review findings**: none.\n\n**Round 1**: no new finding.\n\n**Round 2**: no new finding.",
     );
   });
 
   test("a round posted before the record counts it is shown", () => {
-    expect(ledgerOf([ledgerFinding("I", { round: 2 })], new Set(), 1, false)).toBe(
+    expect(ledgerOf([ledgerFinding("I", { round: 2 })], 1, false)).toBe(
       [
         "**Review findings**: 1 open.",
         "",
@@ -214,7 +200,7 @@ describe("the ledger", () => {
 
     const cli = "app/src/cli.ts:7";
 
-    expect(ledgerOf(findings, new Set(), 3, true).split("\n\n").slice(-2)).toEqual([
+    expect(ledgerOf(findings, 3, true).split("\n\n").slice(-2)).toEqual([
       [
         "**Round 3**: 2 Important.",
         `- **Fixed, confirmed by a Delta read.** Important ${at(cli, "I3")}: I3 is wrong`,
@@ -297,7 +283,6 @@ describe("writing the state comment", () => {
 
   const open: LedgerInputs = {
     findings: [ledgerFinding("I1"), ledgerFinding("N1", { severity: "nit" })],
-    fixed: new Set(),
   };
 
   const closed: LedgerInputs = {
@@ -305,12 +290,10 @@ describe("writing the state comment", () => {
     findings: [ledgerFinding("I1", { resolved: true }), ...open.findings.slice(1)],
   };
 
-  test("the body holds the record and the ledger after the rounds the record counts, the Author's fixes included", () => {
-    const fixed = { ...closed, fixed: new Set(["N1"]) };
-
-    expect(stateBodyOf(record, fixed)).toBe(stateCommentOf(record, ledgerOf(fixed.findings, fixed.fixed, 2, false)));
-    expect(stateBodyOf(record, fixed)).toContain("**Fixed, confirmed by round 2.** Important");
-    expect(stateBodyOf(record, fixed)).toContain("**Fixed, by the Author's word; its lines unchanged.** Nit");
+  test("the body holds the record and the ledger after the rounds the record counts", () => {
+    expect(stateBodyOf(record, closed)).toBe(stateCommentOf(record, ledgerOf(closed.findings, 2, false)));
+    expect(stateBodyOf(record, closed)).toContain("**Fixed, confirmed by round 2.** Important");
+    expect(stateBodyOf(record, closed)).toContain("**Open.** Nit");
     expect(stateBodyOf({ ...record, reviewRounds: 1 }, closed)).toContain(
       "**Closed with no later round confirming it.**",
     );
@@ -346,7 +329,7 @@ describe("writing the state comment", () => {
   test("a PR with no comment is given none for the record it has, whatever the ledger shows", () => {
     const none: StateRead = { id: null, body: null, record: EMPTY_RECORD };
 
-    expect(stateWriteOf(none, EMPTY_RECORD, { findings: [], fixed: new Set() })).toBeNull();
+    expect(stateWriteOf(none, EMPTY_RECORD, { findings: [] })).toBeNull();
     expect(stateWriteOf(none, EMPTY_RECORD, open)).toBeNull();
   });
 });

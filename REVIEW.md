@@ -14,8 +14,8 @@ The Code review reads this guide in its prompt. Review each change against what 
 
 ## Severity
 
-- **Important**: a failure from the list above that this change introduces, or a behaviour the change adds or changes with no test. It blocks the merge.
-- **Nit**: anything else worth saying, such as a name, a structure or a simpler form. Report every Nit, the most useful first: each pass of the review posts only its first three.
+- **Important**: a failure from the list above that this change causes with the code as it lands, or a behaviour the change adds or changes with no test. Its scenario names an input or a state that exists today, then the wrong result. It blocks the merge.
+- **Nit**: what is worth saying and no such failure: a name, a structure, a simpler form, or a failure that needs a later change to happen ("if a hook is added later", "after an update of Claude Code"). It costs nothing: the Owner reads it on the pull request, and it asks the author for no turn. Report every Nit, the most useful first: each pass of the review posts only its first three.
 - **Pre-existing**: a defect this change did not introduce, whatever its weight. It never blocks.
 
 ## Evidence

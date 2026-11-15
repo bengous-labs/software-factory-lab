@@ -36,7 +36,7 @@ import {
 } from "./land/review/review-report.ts";
 import { FORK_PARENT } from "./land/review/review-session.live.ts";
 import { STRUCTURED_OUTPUT } from "./land/shared/ask.live.ts";
-import { AUTHOR_MARK, FIXED_MARK, QUESTION_MARK, REJECT_MARK } from "./land/shared/author-mark.ts";
+import { AUTHOR_MARK, QUESTION_MARK, REJECT_MARK } from "./land/shared/author-mark.ts";
 import { markerOf, movedLineOf, reviewMarkerOf, reviewOfBody, severityOfBody } from "./land/shared/findings.ts";
 import { apiKeyHelperOf, sessionSettingsOf, workerLogOf } from "./land/shared/worker-session.ts";
 import { FORK_MARKER, outcomeLineOf } from "./land/stop/decide.ts";
@@ -73,7 +73,7 @@ const FULL_RECORD: StateRecord = {
   deltaReadPatch: "p2",
   followUpIssue: 12,
   triage: {
-    p1: { land: "owner", review: "deep", secondRound: true, deltaRead: true, reason: "r", model: null, security: true },
+    p1: { land: "owner", review: "deep", secondRound: true, reason: "r", model: null, security: true },
   },
   landOkPatch: "p1",
   dequeued: { head: "a".repeat(40), reason: "a conflict" },
@@ -142,11 +142,10 @@ describe("the markers posted comments carry", () => {
   });
 
   test("the Author's marks", () => {
-    expect({ AUTHOR_MARK, QUESTION_MARK, REJECT_MARK, FIXED_MARK }).toEqual({
+    expect({ AUTHOR_MARK, QUESTION_MARK, REJECT_MARK }).toEqual({
       AUTHOR_MARK: "<!-- lab-author-reply -->",
       QUESTION_MARK: "<!-- lab-author-question -->",
       REJECT_MARK: "<!-- lab-author-reject -->",
-      FIXED_MARK: "<!-- lab-author-fixed",
     });
   });
 
@@ -195,7 +194,6 @@ describe("the state record a comment stores", () => {
       "triage",
     ]);
     expect(Object.keys(stored.triage["p1"] ?? {}).toSorted()).toEqual([
-      "deltaRead",
       "land",
       "model",
       "reason",

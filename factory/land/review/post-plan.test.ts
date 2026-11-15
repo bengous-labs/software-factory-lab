@@ -417,7 +417,6 @@ const APP = "bengous-labs-agents";
 const threadOf = (id: string, ...comments: ReadonlyArray<readonly [string, string]>): ReviewThread => ({
   id,
   isResolved: false,
-  isOutdated: false,
   resolvedBy: null,
   path: "b.ts",
   line: 1,

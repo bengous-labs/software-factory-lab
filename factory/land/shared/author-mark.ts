@@ -1,8 +1,8 @@
 /**
  * The marks the Stop hook writes on what it posts for the Author, and what reads them back: the Merge
- * bot, the relay and the watch tell the Author's replies, its question to the Owner and the findings it
- * says it fixed from any other comment. The lab is public: any login can write a mark, so each reader
- * also checks who wrote the comment.
+ * bot, the relay and the watch tell the Author's replies and its question to the Owner from any other
+ * comment. The lab is public: any login can write a mark, so each reader also checks who wrote the
+ * comment.
  */
 
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../../install/logins.ts";
@@ -16,28 +16,10 @@ export const QUESTION_MARK = "<!-- lab-author-question -->";
 /** Marks the author's reply as a rejection of the finding, so the Review check counts it apart from a fix. */
 export const REJECT_MARK = "<!-- lab-author-reject -->";
 
-/** Opens the hidden list, in the Stop hook's one comment on a PR, of the findings the Author says it fixed. */
-export const FIXED_MARK = "<!-- lab-author-fixed";
-
 /** A comment on a PR, by its author's login. */
 export interface PrComment {
   readonly author: string;
   readonly body: string;
-}
-
-/**
- * The fixed list: a line of its own, as the record writes it. The hook's questions to the Owner quote
- * each line after `> `, so a mark they quote, in a code span or a fenced block, is never a line of its
- * own. A comment the Worker posts itself with the Author's token, the mark on a line of its own, is
- * taken for the record: its list is the Author's word too, which only the ledger shows.
- */
-const FIXED_LIST = new RegExp(`(?<=^|\\n)${FIXED_MARK}((?: [^\\s>]+)*) -->(?=\\n|$)`, "u");
-
-/** The threads the fixed list of `body` names; null when `body` holds no such list on a line of its own. */
-export function fixedListOf(body: string): readonly string[] | null {
-  const listed = FIXED_LIST.exec(body)?.[1];
-
-  return listed === undefined ? null : listed.split(" ").filter((thread) => thread !== "");
 }
 
 /**

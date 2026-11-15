@@ -171,7 +171,6 @@ export const SNAPSHOT: fc.Arbitrary<Snapshot> = fc.record({
   state: fc.oneof({ arbitrary: fc.constant("OPEN"), weight: 8 }, fc.constantFrom("CLOSED", "MERGED")),
   sameRepository: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
   openedByFactory: fc.oneof({ arbitrary: fc.constant(true), weight: 8 }, fc.constant(false)),
-  openedByAuthor: fc.boolean(),
   draft: fc.boolean(),
   head: HEAD,
   patch: PATCH,

@@ -9,7 +9,6 @@ import { Schema } from "effect";
 import { CI_CHECKS, LAND_APPROVAL_LABEL, landLabelOf, MERGE_BOT_STATE_MARKER } from "../../contract.ts";
 import { escapeHtml } from "../../lib/markdown.ts";
 import type { Ran } from "../../lib/run.port.ts";
-import { fixedListOf } from "../shared/author-mark.ts";
 import { reviewOfBody } from "../shared/findings.ts";
 import type { Env } from "./env.ts";
 import type { StateRead } from "./ledger.ts";
@@ -197,34 +196,16 @@ export const PullReviews = Schema.Array(
   Schema.Struct({ user: Schema.NullOr(Login), body: Schema.String, submitted_at: Schema.NullOr(Schema.String) }),
 );
 
-/**
- * What the PR's conversation holds for the Merge bot: its state comment as a decision reads it, and the
- * threads the Author says it fixed, from the Stop hook's comment.
- */
-export interface StateComment extends StateRead {
-  readonly fixed: ReadonlySet<string>;
-}
-
 /** The state comment of the PR's conversation `comments`; a comment of any other login is not read, since any login can write a mark. */
-export function stateCommentIn(
-  comments: typeof IssueComments.Type,
-  { appLogin, authorLogin }: Pick<Env, "appLogin" | "authorLogin">,
-): StateComment {
+export function stateCommentIn(comments: typeof IssueComments.Type, { appLogin }: Pick<Env, "appLogin">): StateRead {
   const mine = comments.find(
     (comment) => comment.user?.login === appLogin && comment.body.includes(MERGE_BOT_STATE_MARKER),
   );
-
-  const fixed = comments.flatMap((comment) => {
-    const listed = comment.user?.login === authorLogin ? fixedListOf(comment.body) : null;
-
-    return listed === null ? [] : [listed];
-  })[0];
 
   return {
     id: mine?.id ?? null,
     body: mine?.body ?? null,
     record: mine === undefined ? EMPTY_RECORD : recordOfComment(mine.body),
-    fixed: new Set(fixed),
   };
 }
 

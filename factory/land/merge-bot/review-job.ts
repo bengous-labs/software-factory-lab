@@ -193,40 +193,24 @@ export function postedFindingsOf(
 
 /**
  * Whether the review of `result` sends the PR back to draft, for its Author's turn: an Important does,
- * whoever opened the PR; a Nit does on a PR the Author's machine account opened, which then cannot land
- * before that Author's next stop. A PR the Owner opened stays ready after Nits alone. A Delta read on a PR
- * `record` holds for the Owner sends nothing back: the Owner, the last reader, is asked after each read,
- * and a draft would keep the Owner out while the Author pushes again. A Review round always asks its Author.
+ * whoever opened the PR; a Nit never does, since it costs no turn. A Delta read on a PR `record` holds
+ * for the Owner sends nothing back: the Owner, the last reader, is asked after each read, and a draft
+ * would keep the Owner out while the Author pushes again.
  */
 function sendsBack(snapshot: Snapshot, record: StateRecord, result: ReportedResult): boolean {
-  const reports = (severity: "important" | "nit"): boolean =>
-    result.report.findings.some((finding) => finding.severity === severity);
-
   const heldRead = result.request.round === DELTA_READ && record.ownerHold !== undefined;
 
-  return !snapshot.draft && !heldRead && (reports("important") || (reports("nit") && snapshot.openedByAuthor));
+  return !snapshot.draft && !heldRead && importantOf(result) > 0;
 }
 
 /**
  * The review is posted, the earlier Importants it no longer holds are resolved, the PR goes back to
- * draft when the round asks its Author for something, and only then is the round recorded: a run that
+ * draft when the review asks its Author for something, and only then is the round recorded: a run that
  * stops before the record does all of it again. The Review check counts the Important findings open
- * once the review is posted. A Delta read posts its Importants alone: a Nit after Review round 3 is not
- * worth another turn. A Land approval given before the review stops counting once it is posted
+ * once the review is posted. A Land approval given before the review stops counting once it is posted
  * (`landApprovalCounts`), and the next decision removes it.
  */
-function postedSteps(snapshot: Snapshot, record: StateRecord, reported: ReportedResult): readonly Step[] {
-  const result: ReportedResult =
-    reported.request.round === DELTA_READ
-      ? {
-          ...reported,
-          report: {
-            ...reported.report,
-            findings: reported.report.findings.filter((finding) => finding.severity === "important"),
-          },
-        }
-      : reported;
-
+function postedSteps(snapshot: Snapshot, record: StateRecord, result: ReportedResult): readonly Step[] {
   const earlier = earlierImportantsOf(result, snapshot.openImportant);
 
   return [

@@ -1,14 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
-import { Schema } from "effect";
+import type { Schema } from "effect";
 
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../../install/logins.ts";
-import { decodeJson } from "../../lib/json.ts";
-import { AUTHOR_MARK, FIXED_MARK, fixedListOf, REJECT_MARK } from "../shared/author-mark.ts";
-import { fixedRecordBodyOf, questionCommentOf } from "./decide.ts";
+import { AUTHOR_MARK, REJECT_MARK } from "../shared/author-mark.ts";
+import { questionCommentOf } from "./decide.ts";
 import { doneQuestionOf } from "./done-judge.prompt.ts";
 import { draftPr, FINISHED, HEAD, readyPr, stopIn, thread, TOKEN, UNFINISHED, world, writes } from "./stop.fixtures.ts";
-import type { World } from "./stop.fixtures.ts";
 
 const conversationLine = (id: string, author: string, body: string): string =>
   `${JSON.stringify({ id, author, body })}\n`;
@@ -207,7 +205,7 @@ describe("the Done judge", () => {
   });
 });
 
-describe("rejections and Nit threads", () => {
+describe("rejections", () => {
   const REJECTING = {
     finished: true,
     question: "",
@@ -268,7 +266,7 @@ describe("rejections and Nit threads", () => {
     expect(found.records).toContainEqual({ step: "rejection-dropped", thread: "T3", reason: "resolved before" });
   });
 
-  test("after a push, the App's open Nit threads are resolved; an Important thread is not", async () => {
+  test("a Publication leaves the App's open Nit threads open, for the Owner to read; an Important's too", async () => {
     const found = world({
       listed: readyPr("e".repeat(40)),
       threads: [thread("T1", "important"), thread("T2", "nit"), thread("T3", "nit"), thread("T4", "pre_existing")],
@@ -276,175 +274,29 @@ describe("rejections and Nit threads", () => {
 
     await stopIn(found);
 
-    expect(writes(found.calls)).toEqual(["push", "resolve T2", "resolve T3"]);
-    expect(found.records).toContainEqual({ step: "nits", resolved: 2 });
+    expect(writes(found.calls)).toEqual(["push"]);
+    expect(found.records.some((record) => record.step === "nits")).toBe(false);
   });
 
-  test("a rejected Nit is resolved once, by its rejection", async () => {
+  test("a rejected Nit is resolved by its rejection; the other Nits stay open", async () => {
     const found = world({ done: [REJECTING], listed: draftPr(), threads: [thread("T1", "nit"), thread("T2", "nit")] });
     await stopIn(found);
 
-    expect(writes(found.calls)).toEqual(["reply T1", "resolve T1", "push", "pr ready", "resolve T2"]);
+    expect(writes(found.calls)).toEqual(["reply T1", "resolve T1", "push", "pr ready"]);
   });
 
   test("no reply the hook posts cites a commit: a fix is declared by nobody", async () => {
     const found = world({ listed: draftPr(), threads: [thread("T1", "important"), thread("T2", "nit")] });
     await stopIn(found);
 
-    expect(writes(found.calls).filter((write) => write.startsWith("reply"))).toEqual([]);
-    expect(writes(found.calls)).toEqual(["push", "pr ready", "resolve T2"]);
+    expect(writes(found.calls)).toEqual(["push", "pr ready"]);
   });
 
-  test("Nit threads that cannot be resolved leave the PR published; the next stop of an Author on the PR resolves them", async () => {
-    const failed = world({
-      listed: draftPr(),
-      threads: [thread("T2", "nit")],
-      failing: ["gh api graphql -f query=mutation"],
-    });
-
-    expect(await stopIn(failed)).toEqual({ kind: "allow" });
-    expect(failed.outcomes.map((outcome) => outcome.line)).toMatchObject([{ outcome: "published", pr: 12 }]);
-    expect(failed.records).toContainEqual({
-      step: "nits",
-      resolved: null,
-      error: "gh api graphql exited 1: gh failed",
-    });
-
-    const next = world({ listed: readyPr(), threads: [thread("T1", "important"), thread("T2", "nit")] });
-
-    expect(await stopIn(next)).toEqual({ kind: "allow" });
-    expect(writes(next.calls)).toEqual(["resolve T2"]);
-    expect(next.calls.some((call) => call.argv[0] === "claude" || call.argv[0] === "bun")).toBe(false);
-  });
-});
-
-/** The body the hook wrote for its record, as `gh pr comment` or the edit read it on stdin. */
-function recordWritten(found: World): string | undefined {
-  const call = found.calls.find((one) => /^gh (pr comment|api -X PATCH)/u.test(one.argv.join(" ")));
-  const stdin = call?.options.stdin;
-
-  return call?.argv[1] === "api" && stdin !== undefined
-    ? decodeJson(Schema.Struct({ body: Schema.String }), "the edit", stdin).body
-    : stdin;
-}
-
-describe("the findings the Author fixed", () => {
-  const FIXING = {
-    ...FINISHED,
-    rejections: [{ thread: "T1", reason: "by design" }],
-    fixed: ["T1", "T2", "T3", "T9"],
-  };
-
-  const THREADS = [thread("T1", "important"), thread("T2", "nit"), thread("T3", "important"), thread("T4", "nit")];
-
-  test("the hook records the open findings the Author fixed, but a rejected one, in one comment posted before the push", async () => {
-    const found = world({ done: [FIXING], listed: draftPr(), threads: THREADS });
-    await stopIn(found);
-
-    expect(writes(found.calls)).toEqual([
-      "reply T1",
-      "resolve T1",
-      "pr comment",
-      "push",
-      "pr ready",
-      "resolve T2",
-      "resolve T4",
-    ]);
-    expect(fixedListOf(recordWritten(found) ?? "")).toEqual(["T2", "T3"]);
-    expect(recordWritten(found)).toContain(AUTHOR_MARK);
-    expect(found.records).toContainEqual({ step: "fixed", threads: ["T2", "T3"] });
-  });
-
-  test("a later stop edits the record the PR's conversation holds, adding its fixes to those listed", async () => {
-    const record = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T0"]) ?? "";
-
-    const found = world({
-      done: [{ ...FINISHED, fixed: ["T2"] }],
-      listed: draftPr(),
-      threads: THREADS,
-      conversation: conversationLine("901", AUTHOR_LOGIN, record),
-    });
-
-    await stopIn(found);
-
-    expect(writes(found.calls)).toEqual([
-      "edit repos/{owner}/{repo}/issues/comments/901",
-      "push",
-      "pr ready",
-      "resolve T2",
-      "resolve T4",
-    ]);
-    expect(fixedListOf(recordWritten(found) ?? "")).toEqual(["T0", "T2"]);
-  });
-
-  test("a stop that adds no fix writes no record; a forged record of another login is not edited", async () => {
-    const forged = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T2"]) ?? "";
-
-    const none = world({ listed: draftPr(), threads: THREADS });
-    await stopIn(none);
-
-    const again = world({
-      done: [{ ...FINISHED, fixed: ["T2"] }],
-      listed: draftPr(),
-      threads: THREADS,
-      conversation: conversationLine("901", AUTHOR_LOGIN, forged),
-    });
-
-    await stopIn(again);
-
-    const other = world({
-      done: [{ ...FINISHED, fixed: ["T2"] }],
-      listed: draftPr(),
-      threads: THREADS,
-      conversation: conversationLine("902", OWNER_LOGIN, forged),
-    });
-
-    await stopIn(other);
-
-    expect(writes(none.calls)).toEqual(["push", "pr ready", "resolve T2", "resolve T4"]);
-    expect(writes(again.calls)).toEqual(["push", "pr ready", "resolve T2", "resolve T4"]);
-    expect(writes(other.calls)[0]).toBe("pr comment");
-  });
-
-  test("the Author's question that quotes the fixed mark in a code span is never edited over: the record is a comment of its own", async () => {
-    const question = questionCommentOf(`Keep \`${FIXED_MARK} T9 -->\`?`, "feat/7-x", "S1");
-
-    const found = world({
-      done: [{ ...FINISHED, fixed: ["T2"] }],
-      listed: draftPr(),
-      threads: THREADS,
-      conversation: `${conversationLine("900", AUTHOR_LOGIN, question)}${conversationLine("901", OWNER_LOGIN, "Keep it.")}`,
-    });
-
-    await stopIn(found);
-
-    expect(writes(found.calls)[0]).toBe("pr comment");
-    expect(fixedListOf(recordWritten(found) ?? "")).toEqual(["T2"]);
-  });
-
-  test("a record that cannot be written is logged, and the PR is published", async () => {
-    const found = world({
-      done: [{ ...FINISHED, fixed: ["T2"] }],
-      listed: draftPr(),
-      threads: THREADS,
-      failing: ["gh pr comment"],
-    });
+  test("a stop on a PR ready at this head writes nothing and asks no fork, its Nit threads left open", async () => {
+    const found = world({ listed: readyPr(), threads: [thread("T1", "important"), thread("T2", "nit")] });
 
     expect(await stopIn(found)).toEqual({ kind: "allow" });
-    expect(found.outcomes.map((outcome) => outcome.line)).toMatchObject([{ outcome: "published", pr: 12 }]);
-    expect(found.records).toContainEqual({ step: "fixed", threads: null, error: "gh pr comment exited 1: gh failed" });
-  });
-
-  test("a stop that asks the Owner, or holds for the answer, records no fix", async () => {
-    const asking = world({
-      done: [{ ...FINISHED, question: "Which?", fixed: ["T2"] }],
-      listed: draftPr(),
-      threads: THREADS,
-    });
-
-    await stopIn(asking);
-
-    expect(fixedListOf(recordWritten(asking) ?? "")).toBeNull();
-    expect(asking.records.some((record) => record.step === "fixed")).toBe(false);
+    expect(writes(found.calls)).toEqual([]);
+    expect(found.calls.some((call) => call.argv[0] === "claude" || call.argv[0] === "bun")).toBe(false);
   });
 });

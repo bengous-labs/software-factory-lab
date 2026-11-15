@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { AUTHOR_LOGIN, OWNER_LOGIN } from "../../install/logins.ts";
-import { fixedRecordBodyOf, questionCommentOf } from "../stop/decide.ts";
-import { AUTHOR_MARK, byOwner, FIXED_MARK, fixedListOf, openQuestionOf, questionOpen } from "./author-mark.ts";
+import { questionCommentOf } from "../stop/decide.ts";
+import { AUTHOR_MARK, byOwner, openQuestionOf, questionOpen } from "./author-mark.ts";
 
 describe("the Owner's question", () => {
   const asked = { author: AUTHOR_LOGIN, body: questionCommentOf("Which wording?", "feat/7-x", "S1") };
@@ -36,22 +36,5 @@ describe("the Owner's question", () => {
     expect(byOwner(answer)).toBe(true);
     expect(byOwner({ ...answer, author: AUTHOR_LOGIN })).toBe(false);
     expect(byOwner({ author: OWNER_LOGIN, body: `x ${AUTHOR_MARK}` })).toBe(false);
-  });
-});
-
-describe("the findings the Author fixed", () => {
-  test("the list reads back as written, ids of GitHub's alphabet included; a body with no list names none", () => {
-    const body = fixedRecordBodyOf({ comment: null, fixed: [] }, ["PRRT_kwDOQ0-ab_c1", "PRRT_x2"]) ?? "";
-
-    expect(fixedListOf(body)).toEqual(["PRRT_kwDOQ0-ab_c1", "PRRT_x2"]);
-    expect(fixedListOf(`${FIXED_MARK} -->`)).toEqual([]);
-    expect(fixedListOf("a comment")).toBeNull();
-  });
-
-  test("the list is a line of its own: a mark inside a line, before or after other words, holds none", () => {
-    expect(fixedListOf(`x ${FIXED_MARK} T1 -->`)).toBeNull();
-    expect(fixedListOf(`${FIXED_MARK} T1 --> x`)).toBeNull();
-    expect(fixedListOf(`> ${FIXED_MARK} T9 -->`)).toBeNull();
-    expect(fixedListOf(`intro\n${FIXED_MARK} T1 -->\nend`)).toEqual(["T1"]);
   });
 });

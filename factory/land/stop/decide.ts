@@ -8,11 +8,9 @@
 import { Result, Schema } from "effect";
 
 import { RELEASE_BRANCH, TRUNK } from "../../install/host.ts";
-import { AUTHOR_LOGIN } from "../../install/logins.ts";
 import { AUTHOR_VARIABLE } from "../../lib/author-session.ts";
 import { codeSpan, escapeHtml } from "../../lib/markdown.ts";
-import { AUTHOR_MARK, FIXED_MARK, fixedListOf, QUESTION_MARK, REJECT_MARK } from "../shared/author-mark.ts";
-import type { ConversationComment } from "../shared/conversation.ts";
+import { AUTHOR_MARK, QUESTION_MARK, REJECT_MARK } from "../shared/author-mark.ts";
 
 /**
  * The marker that opens every question the hook puts to a fork, so a fork stays recognisable. The
@@ -123,8 +121,6 @@ export type Admission =
   | { readonly kind: "block"; readonly reason: string; readonly outcome: string }
   /** The stop could open a PR: `afterClosed` decides, once the branch's closed PRs are read. */
   | { readonly kind: "read-closed" }
-  /** The PR is ready at this head: nothing to publish; the Nit threads a stop closes are closed. */
-  | { readonly kind: "ready"; readonly pr: number; readonly reason: string }
   | { readonly kind: "stop-checks" };
 
 /**
@@ -148,15 +144,13 @@ export interface Rejection {
 
 /**
  * The Done judge's answer: whether the change is finished, the question the Author's last message
- * leaves to its user (empty when it asks none), why, the findings the Author rejects, and the threads of
- * those it says it fixed. A finding in neither list has no answer.
+ * leaves to its user (empty when it asks none), why, and the findings the Author rejects.
  */
 export interface DoneAnswer {
   readonly finished: boolean;
   readonly question: string;
   readonly reason: string;
   readonly rejections: readonly Rejection[];
-  readonly fixed: readonly string[];
 }
 
 export type Action =
@@ -205,7 +199,7 @@ export function admit(snapshot: Snapshot, blocked: boolean): Admission {
   }
 
   if (!pr.draft && pr.headSha === snapshot.head) {
-    return { kind: "ready", pr: pr.number, reason: `#${pr.number} is ready at ${snapshot.head} already` };
+    return none(`#${pr.number} is ready at ${snapshot.head} already`);
   }
 
   return { kind: "stop-checks" };
@@ -273,9 +267,8 @@ export const DONE_SCHEMA = {
         additionalProperties: false,
       },
     },
-    fixed: { type: "array", items: { type: "string" } },
   },
-  required: ["finished", "question", "reason", "rejections", "fixed"],
+  required: ["finished", "question", "reason", "rejections"],
   additionalProperties: false,
 };
 
@@ -284,8 +277,6 @@ const DoneAnswerSchema = Schema.Struct({
   question: Schema.String,
   reason: Schema.String,
   rejections: Schema.Array(Schema.Struct({ thread: Schema.String, reason: Schema.String })),
-  // An answer given before the Done judge was asked what the Author fixed has none: it reads as nothing fixed.
-  fixed: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 const decodeDoneAnswer = Schema.decodeUnknownResult(DoneAnswerSchema);
@@ -298,12 +289,10 @@ export interface ForkAnswer {
 
 /**
  * The Done judge's answer a fork gave; null, no answer, for a fork that failed or whose structured
- * output does not fit `DONE_SCHEMA`. An answer with no `fixed` says the Author fixed nothing.
+ * output does not fit `DONE_SCHEMA`.
  */
 export function doneAnswerOf(fork: ForkAnswer): DoneAnswer | null {
-  const answer = fork.code === 0 ? Result.getOrNull(decodeDoneAnswer(fork.structured)) : null;
-
-  return answer === null ? null : { ...answer, fixed: answer.fixed ?? [] };
+  return fork.code === 0 ? Result.getOrNull(decodeDoneAnswer(fork.structured)) : null;
 }
 
 /**
@@ -393,66 +382,6 @@ export function rejectionsOf(rejections: readonly Rejection[], openThreads: read
  */
 export function rejectionReplyOf(reason: string): string {
   return `Rejected: ${escapeHtml(reason.trim())}\n\n${REJECT_MARK}\n\n${AUTHOR_MARK}`;
-}
-
-/**
- * The threads the Done judge says the Author fixed that the hook records: each names an open thread of
- * the App and no rejection the hook posts, once. Any other is dropped.
- */
-export function fixedOf(
-  fixed: readonly string[],
-  openThreads: readonly string[],
-  posted: readonly Rejection[],
-): readonly string[] {
-  const rejected = new Set(posted.map((rejection) => rejection.thread));
-
-  return [...new Set(fixed)].filter((thread) => openThreads.includes(thread) && !rejected.has(thread));
-}
-
-/**
- * The record a PR holds of the findings the Author says it fixed: the Stop hook's one comment there,
- * null before it posts one, and the threads it lists.
- */
-export interface FixedRecord {
-  readonly comment: string | null;
-  readonly fixed: readonly string[];
-}
-
-/**
- * The record the PR's conversation `comments` hold: the comment of the Author's machine account that
- * carries the fixed list. Any login can write the mark.
- */
-export function fixedRecordIn(comments: readonly ConversationComment[]): FixedRecord {
-  for (const comment of comments) {
-    const fixed = comment.author === AUTHOR_LOGIN ? fixedListOf(comment.body) : null;
-
-    if (fixed !== null) {
-      return { comment: comment.id, fixed };
-    }
-  }
-
-  return { comment: null, fixed: [] };
-}
-
-/**
- * The body of the record once the threads of `recorded` join it, or null when it lists each already. It
- * cites no commit and replies in no thread: the Author's word on a fix is shown by the Merge bot's
- * ledger, and closes nothing.
- */
-export function fixedRecordBodyOf(record: FixedRecord, recorded: readonly string[]): string | null {
-  const added = recorded.filter((thread) => !record.fixed.includes(thread));
-
-  if (added.length === 0) {
-    return null;
-  }
-
-  const fixed = [...record.fixed, ...added];
-
-  return [
-    `The Author says its change fixed ${fixed.length} review finding(s), as the Done judge read them from its session. The Merge bot's ledger shows each, by the Author's word. Do not edit.`,
-    `${FIXED_MARK} ${fixed.join(" ")} -->`,
-    AUTHOR_MARK,
-  ].join("\n\n");
 }
 
 /** The comment that puts the Author's quoted `question` to the Owner, from `branch` and `session`. */
