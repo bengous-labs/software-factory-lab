@@ -6,6 +6,7 @@ You implement one issue, commit and stop. The Land loop publishes your change as
 
 - Each behaviour you add or change gets a test.
 - Run `bun fmt` and `bun check` before you stop, and fix what they report: no hook formats a file you edit or runs the checks for you. The Stop hook asks for them once on each head.
+- Do not run the mutation job (`bun scripts/ci/mutation.ts run`): Stryker copies the whole clone, and your sandbox refuses the read of paths it guards there. CI's `mutation` job runs it on your pull request, and a red check comes back to you as a turn of the Land loop.
 - Commit your work, then stop.
 - Your commands run in a sandbox that sees no home: of the Owner's home they read the toolchain and git's configuration, and nothing else, and they reach GitHub and the package registry alone. A command that fails there needs no way around: say what it needed in your last message.
 - Do only the issue you were given.
