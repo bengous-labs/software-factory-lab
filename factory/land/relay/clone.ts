@@ -4,7 +4,8 @@
  * the Worker's session lives there. The relay runs with the Owner's access and the Worker wrote the
  * clone, so it removes only a directory that lies directly under the clones' directory, both paths
  * with their links resolved, and only once nothing uses it: no turn of the session runs there, no
- * other relay resumes a session there, and no branch holds a commit that was never pushed.
+ * other relay resumes a session there, no branch holds a commit that was never pushed, and no change,
+ * new file or stash waits uncommitted.
  */
 
 import { cloneRootOf } from "../shared/clone-git.ts";
@@ -30,10 +31,26 @@ export interface CloneUse {
   readonly relays: readonly number[];
   /** The commits on its branches that no remote branch holds. */
   readonly unpushed: number;
+  /** The changed and new files of its tree, and its stashes. */
+  readonly uncommitted: number;
+}
+
+/**
+ * The changed and new files and the stashes of a clone, from what `git status --porcelain=v2
+ * --show-stash` printed: one line per file, and a `# stash <n>` header when it holds any.
+ */
+export function uncommittedOf(status: string): number {
+  return status
+    .split("\n")
+    .filter((line) => line !== "")
+    .reduce(
+      (count, line) => count + (line.startsWith("# stash ") ? Number(line.slice(8)) : line.startsWith("#") ? 0 : 1),
+      0,
+    );
 }
 
 /** Why the clone `clone` stays, from what still uses it; null when nothing does, and it goes. */
-export function keptWhyOf(clone: string, { running, relays, unpushed }: CloneUse): string | null {
+export function keptWhyOf(clone: string, { running, relays, unpushed, uncommitted }: CloneUse): string | null {
   if (running) {
     return `its clone ${clone} stays, as a turn of its session still runs there`;
   }
@@ -44,6 +61,10 @@ export function keptWhyOf(clone: string, { running, relays, unpushed }: CloneUse
 
   if (unpushed > 0) {
     return `its clone ${clone} stays, as it holds ${unpushed} commit(s) no remote branch holds`;
+  }
+
+  if (uncommitted > 0) {
+    return `its clone ${clone} stays, as it holds ${uncommitted} uncommitted file(s) or stash(es)`;
   }
 
   return null;

@@ -1,19 +1,20 @@
 /**
  * The end of a landed PR's clone (`clone.ts`), on the disk: the relay calls it once, at the end of its
- * PR. It reads what still uses the clone from the listing of sessions, the other relays' files and
+ * PR. It reads what still uses the clone from the listing of sessions, the other running relays and
  * git, run on the clone through its pinned environment, and removes the clone when nothing does.
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync } from "node:fs";
 
 import { clonesDirOf } from "../../install/paths.ts";
 import { checked } from "../../lib/run.port.ts";
 import type { Run } from "../../lib/run.port.ts";
 import { pinnedGitEnvOf } from "../shared/clone-git.ts";
 import { realPathOf } from "../shared/real-path.live.ts";
-import { keptWhyOf, removableCloneOf } from "./clone.ts";
+import { keptWhyOf, removableCloneOf, uncommittedOf } from "./clone.ts";
 import type { CloneEnd, CloneUse } from "./clone.ts";
-import { relayFilesOf } from "./relay-start.live.ts";
+import { relayFilesOf, relayRuns, relayWatches } from "./relay-start.live.ts";
+import type { RelayStartIo } from "./relay-start.live.ts";
 import { stoppedIn, targetOf } from "./wakes.ts";
 
 /** What the end of a PR's clone needs: where the relay runs, the PR, the home that holds the clones, and its commands. */
@@ -25,21 +26,23 @@ export interface CloneEndIo {
   readonly pr: number;
   /** Removes a directory and what it holds; a test hands one that fails. */
   readonly remove?: (path: string) => void;
+  /** Whether a process is the relay of a PR; a test hands a fake of `ps`. */
+  readonly watches?: RelayStartIo["watches"];
 }
 
 function removeTree(path: string): void {
   rmSync(path, { recursive: true });
 }
 
-/** The PRs other than `pr` whose relay still runs, by its pid file, and whose session works in `clone`. */
-function relaysIn(checkout: string, pr: number, clone: string): number[] {
+/** The PRs other than `pr` whose relay still runs, and whose session works in `clone`. */
+function relaysIn({ checkout, pr, watches = relayWatches }: CloneEndIo, clone: string): number[] {
   const { stateDir } = relayFilesOf(checkout, pr);
 
   return readdirSync(stateDir)
     .map((name) => /^relay-(\d+)\.session$/u.exec(name)?.[1])
     .filter((other) => other !== undefined)
     .map(Number)
-    .filter((other) => other !== pr && existsSync(relayFilesOf(checkout, other).pid))
+    .filter((other) => other !== pr && relayRuns(checkout, other, watches))
     .filter((other) => {
       const { headless } = targetOf(readFileSync(relayFilesOf(checkout, other).session, "utf8"));
 
@@ -47,15 +50,20 @@ function relaysIn(checkout: string, pr: number, clone: string): number[] {
     });
 }
 
-async function useOf({ run, checkout, pr }: CloneEndIo, clone: string, session: string): Promise<CloneUse> {
+async function useOf(io: CloneEndIo, clone: string, session: string): Promise<CloneUse> {
+  const { run, checkout } = io;
   const agents = await checked(run, ["claude", "agents", "--json"], { cwd: checkout });
 
-  const unpushed = await checked(run, ["git", "rev-list", "--count", "--branches", "--not", "--remotes"], {
-    cwd: checkout,
-    env: pinnedGitEnvOf(clone),
-  });
+  const git = { cwd: checkout, env: pinnedGitEnvOf(clone) };
+  const unpushed = await checked(run, ["git", "rev-list", "--count", "--branches", "--not", "--remotes"], git);
+  const status = await checked(run, ["git", "--no-optional-locks", "status", "--porcelain=v2", "--show-stash"], git);
 
-  return { running: !stoppedIn(agents, session), relays: relaysIn(checkout, pr, clone), unpushed: Number(unpushed) };
+  return {
+    running: !stoppedIn(agents, session),
+    relays: relaysIn(io, clone),
+    unpushed: Number(unpushed),
+    uncommitted: uncommittedOf(status),
+  };
 }
 
 /**

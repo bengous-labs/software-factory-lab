@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { endReasonOf, keptWhyOf, removableCloneOf } from "./clone.ts";
+import { endReasonOf, keptWhyOf, removableCloneOf, uncommittedOf } from "./clone.ts";
 
 const CLONES = "/home/me/clones";
 
@@ -22,7 +22,7 @@ describe("removableCloneOf", () => {
 });
 
 describe("keptWhyOf", () => {
-  const unused = { running: false, relays: [], unpushed: 0 };
+  const unused = { running: false, relays: [], unpushed: 0, uncommitted: 0 };
 
   test("a clone nothing uses goes", () => {
     expect(keptWhyOf(CLONE, unused)).toBeNull();
@@ -38,6 +38,22 @@ describe("keptWhyOf", () => {
     expect(keptWhyOf(CLONE, { ...unused, unpushed: 2 })).toBe(
       `its clone ${CLONE} stays, as it holds 2 commit(s) no remote branch holds`,
     );
+    expect(keptWhyOf(CLONE, { ...unused, uncommitted: 4 })).toBe(
+      `its clone ${CLONE} stays, as it holds 4 uncommitted file(s) or stash(es)`,
+    );
+  });
+});
+
+describe("uncommittedOf", () => {
+  test("a clean tree with no stash holds nothing uncommitted", () => {
+    expect(uncommittedOf("")).toBe(0);
+    expect(uncommittedOf("# branch.oid abc\n# branch.head x\n")).toBe(0);
+  });
+
+  test("each changed or new file counts one, and the stash header its stashes", () => {
+    expect(uncommittedOf("# stash 2\n1 .M N... 100644 100644 100644 a b app/a.ts\n? c.ts\n")).toBe(4);
+    expect(uncommittedOf("? c.ts\n")).toBe(1);
+    expect(uncommittedOf("# stash 1\n")).toBe(1);
   });
 });
 

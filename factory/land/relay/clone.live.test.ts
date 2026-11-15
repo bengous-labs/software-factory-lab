@@ -59,19 +59,22 @@ const failing: Run = () => Promise.resolve({ code: 1, stdout: "", stderr: "not l
 interface Outside {
   readonly agents?: string;
   readonly unpushed?: string;
+  readonly status?: string;
 }
 
 /** A fake of the relay's commands, which records each call. */
-function runOf({ agents = "[]", unpushed = "0\n" }: Outside, calls: Call[] = []): Run {
+function runOf({ agents = "[]", unpushed = "0\n", status = "" }: Outside, calls: Call[] = []): Run {
   return (argv, options) => {
     calls.push([[...argv], options]);
 
-    return Promise.resolve({ code: 0, stdout: argv[0] === "claude" ? agents : unpushed, stderr: "" });
+    const stdout = argv[0] === "claude" ? agents : argv.includes("status") ? status : unpushed;
+
+    return Promise.resolve({ code: 0, stdout, stderr: "" });
   };
 }
 
 function ioOf(outside: Outside = {}, more: Partial<CloneEndIo> = {}): CloneEndIo {
-  return { run: runOf(outside), checkout, home, pr: 7, ...more };
+  return { run: runOf(outside), checkout, home, pr: 7, watches: () => true, ...more };
 }
 
 /** A removal the disk refuses. */
@@ -82,6 +85,7 @@ function refuse(): void {
 describe("cloneEndOf", () => {
   test("a landed PR removes its Worker's clone, which lies directly under the clones of the home", async () => {
     const calls: Call[] = [];
+    const pinned = { GIT_DIR: `${clone}/.git`, GIT_COMMON_DIR: `${clone}/.git`, GIT_WORK_TREE: clone };
 
     relayOf(7, clone);
 
@@ -89,10 +93,8 @@ describe("cloneEndOf", () => {
     expect(existsSync(clone)).toBe(false);
     expect(calls).toEqual([
       [["claude", "agents", "--json"], { cwd: checkout }],
-      [
-        ["git", "rev-list", "--count", "--branches", "--not", "--remotes"],
-        { cwd: checkout, env: { GIT_DIR: `${clone}/.git`, GIT_COMMON_DIR: `${clone}/.git`, GIT_WORK_TREE: clone } },
-      ],
+      [["git", "rev-list", "--count", "--branches", "--not", "--remotes"], { cwd: checkout, env: pinned }],
+      [["git", "--no-optional-locks", "status", "--porcelain=v2", "--show-stash"], { cwd: checkout, env: pinned }],
     ]);
   });
 
@@ -168,7 +170,7 @@ describe("cloneEndOf", () => {
     expect(existsSync(clone)).toBe(true);
   });
 
-  test("a turn of the session still running there, or a commit never pushed, keeps the clone", async () => {
+  test("a turn of the session still running there, a commit never pushed, or work uncommitted keeps the clone", async () => {
     relayOf(7, clone);
 
     expect(await cloneEndOf(true, ioOf({ agents: '[{"sessionId":"S1","pid":42}]' }))).toEqual({
@@ -179,10 +181,14 @@ describe("cloneEndOf", () => {
       removed: false,
       why: `its clone ${clone} stays, as it holds 3 commit(s) no remote branch holds`,
     });
+    expect(await cloneEndOf(true, ioOf({ status: "# stash 1\n? notes.md\n" }))).toEqual({
+      removed: false,
+      why: `its clone ${clone} stays, as it holds 2 uncommitted file(s) or stash(es)`,
+    });
     expect(existsSync(clone)).toBe(true);
   });
 
-  test("another running relay whose session works in the clone keeps it; one that ended, or works elsewhere, does not", async () => {
+  test("another running relay whose session works in the clone keeps it; one whose pid is dead or gone, or that works elsewhere, does not", async () => {
     relayOf(7, clone);
     relayOf(8, clone, true, "S2");
 
@@ -191,11 +197,20 @@ describe("cloneEndOf", () => {
       why: `its clone ${clone} stays, as the relay of #8 resumes a session there`,
     });
 
-    rmSync(relayFilesOf(checkout, 8).pid);
     relayOf(9, join(clones, "issue-9"), true, "S3");
     relayOf(10, null, true, "S4");
+    relayOf(11, clone, false, "S5");
 
-    expect(await cloneEndOf(true, ioOf())).toEqual({ removed: true, clone });
+    const asked: Array<readonly [number, number]> = [];
+
+    const deadEight = (pid: number, pr: number): boolean => {
+      asked.push([pid, pr]);
+
+      return pr !== 8;
+    };
+
+    expect(await cloneEndOf(true, ioOf({}, { watches: deadEight }))).toEqual({ removed: true, clone });
+    expect(asked).toContainEqual([123, 8]);
   });
 
   test("a removal that fails, or a session file or command unread, keeps the clone and says why", async () => {
