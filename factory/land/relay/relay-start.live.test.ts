@@ -69,7 +69,7 @@ describe("relayStarter", () => {
 
   test("a Publication of an API Worker names, with its session, what the relay's headless resume needs", () => {
     const { checkout, start } = world();
-    const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7" };
+    const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7", api: true };
 
     expect(start({ pr: 12, session: "S1", headless, checkout })).toBe("started");
     expect(readFileSync(relayFilesOf(checkout, 12).session, "utf8")).toBe(`S1\n${JSON.stringify(headless)}\n`);
@@ -78,7 +78,7 @@ describe("relayStarter", () => {
   test("a later Publication of another session names it alone: what an API Worker's left is gone", () => {
     const { checkout, start } = world();
 
-    start({ pr: 12, session: "S1", headless: { model: null, worktree: "/w" }, checkout });
+    start({ pr: 12, session: "S1", headless: { model: null, worktree: "/w", api: true }, checkout });
     start({ pr: 12, session: "S2", headless: null, checkout });
 
     expect(readFileSync(relayFilesOf(checkout, 12).session, "utf8")).toBe("S2\n");

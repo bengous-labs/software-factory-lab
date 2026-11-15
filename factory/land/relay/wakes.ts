@@ -17,11 +17,11 @@ import { TRUNK } from "../../install/host.ts";
 import { APP_LOGIN } from "../../install/logins.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { unescapeHtml } from "../../lib/markdown.ts";
-import { apiWorkerLogOf, apiWorkerSettingsOf, resumedTurnArgvOf } from "../shared/api-worker.ts";
 import { byOwner, questionOpen } from "../shared/author-mark.ts";
 import { conversationOf } from "../shared/conversation.ts";
 import { severityOfBody } from "../shared/findings.ts";
 import type { HeadlessSession } from "../shared/relay.port.ts";
+import { resumedTurnArgvOf, sessionSettingsOf, workerLogOf } from "../shared/worker-session.ts";
 
 /** One check as `gh pr checks --json name,bucket,link` prints it. */
 const Check = Schema.Struct({ name: Schema.String, bucket: Schema.String, link: Schema.String });
@@ -303,8 +303,8 @@ const Agent = Schema.Struct({
 
 /**
  * How a Wake reaches the Author's session: its messaging socket while it runs, a resume when it no
- * longer does; for the Owner's words, a stop then a resume, or nothing yet. An API Worker's session gets
- * a headless resume, left running in its clone with its output appended to `log`.
+ * longer does; for the Owner's words, a stop then a resume, or nothing yet. The session of a Worker in a
+ * clone gets a headless resume, left running in its clone with its output appended to `log`.
  */
 export type Route =
   | { readonly kind: "socket"; readonly pid: number }
@@ -364,18 +364,19 @@ export const stoppedIn = (agents: string, session: string): boolean =>
 
 /**
  * The session a PR's Wakes go to, as `relay-<pr>.session` holds it: the session of the PR's latest
- * Publication, and what a headless resume needs when it is an API Worker's.
+ * Publication, and what a headless resume needs when it is a Worker's in a clone.
  */
 export interface Target {
   readonly session: string;
   readonly headless: HeadlessSession | null;
 }
 
-const Headless = Schema.Struct({ model: Schema.NullOr(Schema.String), worktree: Schema.String });
+const Headless = Schema.Struct({ model: Schema.NullOr(Schema.String), worktree: Schema.String, api: Schema.Boolean });
 
 /**
- * The text of `relay-<pr>.session`: the session's id on the first line, and for an API Worker a second
- * line of JSON. An on-disk format: the Stop hook writes it at each Publication and a running relay reads it.
+ * The text of `relay-<pr>.session`: the session's id on the first line, and for a Worker in a clone a
+ * second line of JSON, what its headless resume needs. An on-disk format: the Stop hook writes it at
+ * each Publication and a running relay reads it.
  */
 export function targetTextOf({ session, headless }: Target): string {
   return headless === null ? `${session}\n` : `${session}\n${JSON.stringify(headless)}\n`;
@@ -419,18 +420,19 @@ export function retryDelayOf(failures: number): number {
   return Math.min(60_000 * 2 ** Math.max(0, failures - 1), RETRY_MAX_MS);
 }
 
-/** The main checkout the relay runs in, and the home that holds the API Worker settings file. */
+/** The main checkout the relay runs in, and the home that holds the settings file of a Worker's session. */
 export interface RelayPlace {
   readonly checkout: string;
   readonly home: string;
 }
 
 /**
- * How `text` reaches `target`, from what `claude agents --json` printed. An API Worker's session has no
- * socket and takes every turn as its user's: it waits while the listing shows its turn running, since a
- * second resume would start a copy of the conversation, and is resumed headless, with the API Worker
- * settings file and its model, once the listing shows it stopped and no failed start holds it back. Any other session takes `routeOf`,
- * where `stop` says whether the Owner's words still seek a stop.
+ * How `text` reaches `target`, from what `claude agents --json` printed. The session of a Worker in a
+ * clone has no socket and takes every turn as its user's: it waits while the listing shows its turn
+ * running, since a second resume would start a copy of the conversation, and is resumed headless, with
+ * the settings file of its kind and its model, once the listing shows it stopped and no failed start
+ * holds it back. Any other session takes `routeOf`, where `stop` says whether the Owner's words still
+ * seek a stop.
  */
 export function sendingOf(
   agents: string,
@@ -448,14 +450,14 @@ export function sendingOf(
   return {
     route:
       !held && stoppedIn(agents, session)
-        ? { kind: "headless", worktree: headless.worktree, log: apiWorkerLogOf(checkout, session) }
+        ? { kind: "headless", worktree: headless.worktree, log: workerLogOf(checkout, session) }
         : { kind: "wait" },
     socketLine,
     resumeArgs: resumedTurnArgvOf({
       session,
       model: headless.model,
       effort: null,
-      settings: apiWorkerSettingsOf(home),
+      settings: sessionSettingsOf(home, headless.api),
       checkout,
       prompt: text,
     }),
@@ -467,7 +469,10 @@ export function socketLineOf(text: string): string {
   return `${JSON.stringify({ type: "user", message: { role: "user", content: text } })}\n`;
 }
 
-/** The command that resumes `session` in the background with `text` as its next turn, and no other flag: it keeps its launch options. */
+/**
+ * The command that resumes `session` in the background with `text` as its next turn, and no other flag:
+ * it keeps its launch options, and Claude Code starts a copy of a session whose resume names one.
+ */
 export function resumeArgsOf(session: string, text: string): readonly string[] {
   return ["claude", "--bg", "--resume", session, text];
 }

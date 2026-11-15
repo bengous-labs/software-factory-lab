@@ -2,8 +2,8 @@
  * One turn of the relay of a pull request (`bin/relay.ts`): it reads the PR as the Author's machine
  * account and delivers the Wakes it has not delivered yet, as one turn in the session of the PR's latest
  * Publication: on that session's messaging socket while it runs, else by resuming it. The Owner's words
- * reach an idle background session as its user's: the relay stops it, then resumes it with them. An API
- * Worker's session is resumed headless once its turn has ended.
+ * reach an idle background session as its user's: the relay stops it, then resumes it with them. The
+ * session of a Worker in a clone is resumed headless once its turn has ended.
  */
 
 import { checked } from "../../lib/run.port.ts";
@@ -46,7 +46,7 @@ export async function readPr(runner: Run, options: RunOptions, pr: number): Prom
 /** What one turn of the relay needs from outside: the PR's state, the session its Wakes go to, and their delivery. */
 export interface RelayIo {
   readonly read: () => Promise<PrState>;
-  /** The session of the PR's latest Publication, and what a headless resume needs when it is an API Worker's. */
+  /** The session of the PR's latest Publication, and what a headless resume needs when it is a Worker's in a clone. */
   readonly session: () => Target;
   /** Delivers `text` to `target`, as the Owner's words when `ownerWords`; null when it did not go through. */
   readonly deliver: (target: Target, text: string, ownerWords: boolean) => Promise<Delivered | null>;
@@ -94,8 +94,8 @@ export class NotStopped extends Error {
 }
 
 /**
- * A headless turn of an API Worker's session that failed at its start, its key refused, its credits
- * spent or its settings unread: the relay counts these to space its tries.
+ * A headless turn of a Worker's session that failed at its start, its login or its key refused, its
+ * usage spent or its settings unread: the relay counts these to space its tries.
  */
 export class TurnFailed extends Error {
   override readonly name = "TurnFailed";

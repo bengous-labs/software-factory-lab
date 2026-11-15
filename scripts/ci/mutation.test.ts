@@ -626,11 +626,16 @@ describe("a pass leaves the checkout as it found it", () => {
   function spawnPass(): Bun.Subprocess<"ignore", "pipe", "pipe"> {
     const call = `(${JSON.stringify(root)}, "mod.ts", { "mod.ts": ["mod.test.ts"] })`;
 
-    return Bun.spawn([process.execPath, "-e", `await (await import(${JSON.stringify(MUTATION)})).mutate${call};`], {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    // No auto-install: the pass runs where no `node_modules` lies, and bun would fetch from the registry
+    // every optional plugin Stryker tries to load, into whatever cache the session's environment names.
+    return Bun.spawn(
+      [process.execPath, "--no-install", "-e", `await (await import(${JSON.stringify(MUTATION)})).mutate${call};`],
+      {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
   }
 
   beforeEach(() => {

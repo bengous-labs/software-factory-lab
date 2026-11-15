@@ -655,7 +655,7 @@ describe("routeOf", () => {
 });
 
 describe("targetOf", () => {
-  const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7" };
+  const headless = { model: "claude-opus-5-5", worktree: "/repo/.claude/worktrees/issue-7", api: true };
 
   test("a session file of one line names a session the relay reaches as any other", () => {
     expect(targetOf("S1\n")).toEqual({ session: "S1", headless: null });
@@ -688,7 +688,7 @@ describe("sendingOf", () => {
 
   const place = { checkout: "/repo", home: "/home/me" };
   const worktree = "/repo/.claude/worktrees/issue-7";
-  const api = (session: string): Target => ({ session, headless: { model: "claude-opus-5-5", worktree } });
+  const api = (session: string): Target => ({ session, headless: { model: "claude-opus-5-5", worktree, api: true } });
   const wake = { text: "the lines", stop: false, held: false };
 
   test("a session that is no API Worker's takes the socket, the stop or the background resume", () => {
@@ -710,7 +710,7 @@ describe("sendingOf", () => {
 
   test("an API Worker's session that no longer runs is resumed headless in its worktree, on the API Worker settings file alone, its guide and its model", () => {
     expect(sendingOf(agents, api("S-api-gone"), wake, place)).toEqual({
-      route: { kind: "headless", worktree, log: "/repo/.lab/state/api-worker-S-api-gone.log" },
+      route: { kind: "headless", worktree, log: "/repo/.lab/state/worker-S-api-gone.log" },
       socketLine: socketLineOf("the lines"),
       resumeArgs: [
         "claude",

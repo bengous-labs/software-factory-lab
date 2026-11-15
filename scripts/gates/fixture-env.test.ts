@@ -24,10 +24,23 @@ afterAll(() => {
   }
 });
 
-test("drops every GIT_ variable and keeps the others", () => {
+test("drops every GIT_ variable it is given, keeps the others, and tells git to sign no commit: a signing key can be out of reach, as in a Worker's sandbox", () => {
   expect(
-    fixtureEnv({ GIT_DIR: "/x", GIT_WORK_TREE: "/y", GIT_INDEX_FILE: "/z", PATH: "/bin", HOME: undefined }),
-  ).toEqual({ PATH: "/bin" });
+    fixtureEnv({
+      GIT_DIR: "/x",
+      GIT_WORK_TREE: "/y",
+      GIT_INDEX_FILE: "/z",
+      GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_KEY_2: "tag.gpgsign",
+      PATH: "/bin",
+      HOME: undefined,
+    }),
+  ).toEqual({
+    PATH: "/bin",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "commit.gpgsign",
+    GIT_CONFIG_VALUE_0: "false",
+  });
 });
 
 test("a fixture's git ignores an inherited GIT_DIR and stays in the fixture", async () => {
