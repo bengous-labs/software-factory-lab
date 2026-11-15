@@ -18,7 +18,7 @@ bun check
 
 `check` runs the typecheck (`bun run typecheck`), the lint (`bun run lint`), the format check (`bun run format:check`), the gates on lint suppressions, typecheck coverage, budget exceptions and paths that name no file (`bun run gates`), the dead code check (`bun run knip`: unused files, exports and dependencies), then the tests with their coverage (`bun test --coverage`), and last the coverage floor (`scripts/gates/check-coverage-floor.ts`), which fails when the suite's total line or function coverage falls under the floor it sets. It must pass. `bun fmt` formats the files the format check reads.
 
-CI's `mutation` job mutates each module `stryker.config.ts` names (the app's listed ones, and every logic file of `factory/` with a test in its directory) whose lines or tests your branch changes, and fails on a mutant that survives on a changed line, or one the tests killed on `origin/dev` that survives now. Run it before you push, unless you are a Worker: a Worker leaves it to CI, because Stryker copies the whole clone and the Worker's sandbox refuses the read of paths it guards there, such as `.claude/loop.md`:
+CI's `mutation` job mutates each module `stryker.config.ts` names (the app's listed ones, and every logic file of `factory/` with a test in its directory) whose lines or tests your branch changes, and fails on a mutant that survives on a changed line, or one the tests killed on `origin/dev` that survives now. Run it before you push; a Worker leaves it to CI, for the reason `factory/roles/worker.md` gives:
 
 ```bash
 bun scripts/ci/mutation.ts run
