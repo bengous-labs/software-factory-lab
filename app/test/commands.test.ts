@@ -68,15 +68,23 @@ describe("remove", () => {
 
 describe("count", () => {
   test("an empty list has no open task", () => {
-    expect(count([])).toBe("0 open");
+    expect(count([], { done: false })).toBe("0 open");
   });
 
   test("only the open tasks are counted", () => {
-    expect(count(TASKS)).toBe("1 open");
+    expect(count(TASKS, { done: false })).toBe("1 open");
   });
 
   test("a list of done tasks has no open task", () => {
-    expect(count([{ id: 1, title: "write the spec", done: true }])).toBe("0 open");
+    expect(count([{ id: 1, title: "write the spec", done: true }], { done: false })).toBe("0 open");
+  });
+
+  test("--done counts only the done tasks", () => {
+    expect(count(TASKS, { done: true })).toBe("1 done");
+  });
+
+  test("--done on an empty list has no done task", () => {
+    expect(count([], { done: true })).toBe("0 done");
   });
 });
 

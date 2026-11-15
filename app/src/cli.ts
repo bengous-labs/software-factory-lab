@@ -13,7 +13,7 @@ import { load, save } from "./store/store.ts";
 import { TaskError } from "./task.ts";
 
 const USAGE =
-  "usage: todo add <title> | todo list [--all | --done] | todo count | todo done <id> | todo clear | todo rename <id> <title> | todo remove <id> | todo search <word> | todo undone <id>";
+  "usage: todo add <title> | todo list [--all | --done] | todo count [--done] | todo done <id> | todo clear | todo rename <id> <title> | todo remove <id> | todo search <word> | todo undone <id>";
 
 /** Runs one command against the store at `path` and returns what to print. */
 export function run(argv: readonly string[], path: string): string {
@@ -32,7 +32,13 @@ export function run(argv: readonly string[], path: string): string {
     }
 
     case "count": {
-      return count(load(path));
+      const unknown = rest.find((argument) => argument !== "--done");
+
+      if (unknown !== undefined) {
+        throw new TaskError(`count takes no argument but --done: ${unknown}`);
+      }
+
+      return count(load(path), { done: rest.includes("--done") });
     }
 
     case "done": {

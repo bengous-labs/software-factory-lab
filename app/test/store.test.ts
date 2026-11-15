@@ -173,6 +173,23 @@ describe("cli", () => {
     expect(run(["count"], path)).toBe("1 open");
   });
 
+  test("count --done prints the done tasks, open ones left out", () => {
+    const path = tempFile();
+
+    expect(run(["count", "--done"], path)).toBe("0 done");
+
+    run(["add", "a"], path);
+    run(["add", "b"], path);
+    run(["done", "1"], path);
+
+    expect(run(["count", "--done"], path)).toBe("1 done");
+  });
+
+  test("count with any other argument is refused", () => {
+    expect(() => run(["count", "--all"], tempFile())).toThrow(TaskError);
+    expect(() => run(["count", "--done", "x"], tempFile())).toThrow("count takes no argument but --done: x");
+  });
+
   test("list --done shows only the done tasks", () => {
     const path = tempFile();
 
