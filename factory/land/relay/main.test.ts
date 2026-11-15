@@ -17,13 +17,13 @@ const OPEN: PrState = {
   comments: [],
 };
 
-const NIT = {
+const IMPORTANT = {
   id: "T1",
   resolved: false,
   path: "a.ts",
   line: 2,
   author: "bengous-labs-agents",
-  body: "**Nit**: n <!-- lab-finding severity=nit -->",
+  body: "**Important**: i <!-- lab-finding severity=important -->",
   replies: [],
 };
 
@@ -72,7 +72,7 @@ describe("turn", () => {
   });
 
   test("the Wakes of a reading go to the session of the PR's latest Publication as one text", async () => {
-    const { io, sent } = relay({ ...OPEN, draft: true, threads: [NIT] });
+    const { io, sent } = relay({ ...OPEN, draft: true, threads: [IMPORTANT] });
 
     expect(await turn(7, new Set(), io)).toEqual({
       delivered: ["thread:T1", `draft:${HEAD}`],
@@ -85,7 +85,7 @@ describe("turn", () => {
         session: TARGET,
         text: [
           "The Land loop, about your pull request #7:",
-          "Finding T1 on a.ts:2 by bengous-labs-agents: **Nit**: n <!-- lab-finding severity=nit -->",
+          "Finding T1 on a.ts:2 by bengous-labs-agents: **Important**: i <!-- lab-finding severity=important -->",
           "PR #7 is back in draft at c0ffee1: it lands only after your next stop.",
           "Fix what you accept with a commit, name in your last message each finding you reject and why, then stop.",
         ].join("\n"),
@@ -96,7 +96,7 @@ describe("turn", () => {
 
   test("a reading that holds the Owner's words is delivered as such", async () => {
     const comments = [{ id: "11", author: "bengous", body: "use wording B" }];
-    const { io, sent } = relay({ ...OPEN, threads: [NIT], comments });
+    const { io, sent } = relay({ ...OPEN, threads: [IMPORTANT], comments });
 
     await turn(7, new Set(), io);
 
@@ -104,7 +104,7 @@ describe("turn", () => {
   });
 
   test("each Wake is delivered once: a Wake delivered before is not sent again", async () => {
-    const state = { ...OPEN, draft: true, threads: [NIT] };
+    const state = { ...OPEN, draft: true, threads: [IMPORTANT] };
     const { io, sent } = relay(state);
     const seen = new Set<string>();
 
@@ -127,7 +127,7 @@ describe("turn", () => {
   });
 
   test("a delivery that does not go through marks nothing delivered: a later turn sends it again", async () => {
-    const { io, sent } = relay({ ...OPEN, threads: [NIT] }, null);
+    const { io, sent } = relay({ ...OPEN, threads: [IMPORTANT] }, null);
     const seen = new Set<string>();
 
     expect(await turn(7, seen, io)).toEqual({ delivered: [], via: null, pending: 1, ends: false });
@@ -174,7 +174,7 @@ describe("turn", () => {
 
   test("a landed or closed PR ends the relay and starts no turn, whatever the PR still carries", async () => {
     for (const state of ["MERGED", "CLOSED"] as const) {
-      const ended = relay({ ...OPEN, state, draft: true, threads: [NIT] });
+      const ended = relay({ ...OPEN, state, draft: true, threads: [IMPORTANT] });
 
       expect(await turn(7, new Set(), ended.io)).toEqual({ delivered: [], via: null, pending: 0, ends: true });
       expect(ended.sent).toEqual([]);

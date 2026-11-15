@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 
 import * as fc from "fast-check";
 
-import { LAND_APPROVAL_LABEL } from "../contract.ts";
+import { DELTA_READ, LAND_APPROVAL_LABEL } from "../contract.ts";
 import { FACTORY_CONFIG_PATH } from "../install/factory-config.ts";
 import type { RoutingPolicy } from "../install/factory-config.ts";
 import {
@@ -235,7 +235,6 @@ const NEAR_LANDABLE: fc.Arbitrary<Snapshot> = PATCH.chain((patch) =>
     state: fc.constant("OPEN"),
     sameRepository: fc.constant(true),
     openedByFactory: fc.constant(true),
-    openedByAuthor: fc.boolean(),
     draft: mostly(false, fc.constant(true)),
     head: HEAD,
     patch: fc.constant(patch),
@@ -390,17 +389,25 @@ describe("the Merge bot's guarantees", () => {
     });
   });
 
-  test("a round that reports an Important or a Nit on a ready PR its Author opened sends it to draft before the round is recorded, and merges nothing", () => {
+  test("a round that reports an Important on a ready PR sends it to draft before the round is recorded, and merges nothing; one that reports none sends nothing back", () => {
     holdsForSnapshots((snapshot) => {
       const steps = stepsOrNone(snapshot);
       const kinds = steps.map((step) => step.kind);
       const post = steps.find((step) => step.kind === "post-review");
 
-      const asksTheAuthor =
-        post?.kind === "post-review" &&
-        post.result.report.findings.some((finding) => finding.severity !== "pre_existing");
+      const reportsImportant =
+        post?.kind === "post-review" && post.result.report.findings.some((finding) => finding.severity === "important");
 
-      if (asksTheAuthor && snapshot.openedByAuthor && !snapshot.draft) {
+      if (post !== undefined && !reportsImportant) {
+        expect(kinds).not.toContain("to-draft");
+      }
+
+      const heldRead =
+        post?.kind === "post-review" &&
+        post.result.request.round === DELTA_READ &&
+        snapshot.record.ownerHold !== undefined;
+
+      if (reportsImportant && !heldRead && !snapshot.draft) {
         expect(kinds).toContain("to-draft");
         expect(kinds.indexOf("to-draft")).toBeLessThan(kinds.lastIndexOf("record"));
         expect(kinds.indexOf("post-review")).toBeLessThan(kinds.indexOf("to-draft"));

@@ -1,13 +1,13 @@
 /**
  * The Wakes of a pull request, as pure functions over one reading of it: a failing check on its head, a
- * conflict with the Trunk, a new open Important or Nit finding of the App, an Important a later round reports
+ * conflict with the Trunk, a new open Important finding of the App, an Important a later round reports
  * again, a new comment of the Owner in an open thread or in the conversation, the PR back in draft unless it
  * holds the Author's question the Owner has not answered yet. A failing check another Wake already tells
  * makes none: the Review check, which a finding carries, and the Land gate of a conflicting PR. Nor do the
- * App's own Pre-existing findings and its conversation comments (state record, verdicts); nor the replies the
- * Stop hook posts for the Author; nor any other login's comment: the lab is public, and a Wake starts a turn
- * in a session that holds the Author's token. A PR that lands or closes starts no turn. Each Wake has a key,
- * so the relay delivers it once.
+ * App's Nit and Pre-existing findings, which cost the Author no turn, and its conversation comments (state
+ * record, verdicts); nor the replies the Stop hook posts for the Author; nor any other login's comment:
+ * the lab is public, and a Wake starts a turn in a session that holds the Author's token. A PR that lands
+ * or closes starts no turn. Each Wake has a key, so the relay delivers it once.
  */
 
 import { Schema } from "effect";
@@ -85,7 +85,7 @@ const saidElsewhere = (check: Check, conflicting: boolean): boolean =>
 /** The most characters of a reply that reports an Important again: it may hold the finding of each pass of its round. */
 const AGAIN_MAX = 3000;
 
-/** The Wake of an open thread's first comment: the App's Important or Nit finding, or the Owner's comment. */
+/** The Wake of an open thread's first comment: the App's Important finding or other comment, or the Owner's comment. */
 function threadWakesOf(thread: Thread, where: string): readonly Wake[] {
   const key = `thread:${thread.id}`;
 
@@ -94,7 +94,7 @@ function threadWakesOf(thread: Thread, where: string): readonly Wake[] {
     const kind = severity === null ? "Comment" : "Finding";
     const line = `${kind} ${thread.id} on ${where} by ${thread.author}: ${flat(unescapeHtml(thread.body))}`;
 
-    return severity === "pre_existing" ? [] : [{ key, kind: "finding", line }];
+    return severity === "nit" || severity === "pre_existing" ? [] : [{ key, kind: "finding", line }];
   }
 
   return byOwner(thread)

@@ -36,8 +36,6 @@ const Login = Schema.Struct({ login: Schema.String });
 const ReviewThread = Schema.Struct({
   id: Schema.String,
   isResolved: Schema.Boolean,
-  /** GitHub marks the thread outdated once the lines it is anchored on changed. */
-  isOutdated: Schema.Boolean,
   /** Who resolved the thread, the App with REST's `[bot]` suffix; null while it is open. */
   resolvedBy: Schema.NullOr(Login),
   path: Schema.String,
@@ -69,7 +67,7 @@ export const ReviewThreads = Schema.Struct({
 
 /** The GraphQL query of the review threads of PR `pr`, over the variables `owner` and `name`. */
 export function threadsQueryOf(pr: number): string {
-  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved isOutdated resolvedBy{login} path line comments(first:20){nodes{author{login} body url pullRequestReview{body}}}}}}}}`;
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequest(number:${pr}){reviewThreads(first:100){nodes{id isResolved resolvedBy{login} path line comments(first:20){nodes{author{login} body url pullRequestReview{body}}}}}}}}`;
 }
 
 /** The App's login as GraphQL prints it, without REST's `[bot]` suffix. */
@@ -203,29 +201,6 @@ export function findingFileOf(anchorPath: string, body: string): string {
   return movedPlaceOf(body) ?? anchorPath;
 }
 
-/**
- * The files of the Nit threads the App posted in the review of `review`'s patch and round, open or
- * resolved, sorted, once each. A Nit anchored on another file than its own, outside the diff, names
- * neither. `appLogin` is the App's login as GraphQL prints it.
- */
-export function nitPathsOf(
-  appLogin: string,
-  review: { readonly patch: string | null; readonly round: number },
-  threads: readonly ReviewThread[],
-): string[] {
-  const paths = threads.flatMap((thread) => {
-    const [finding] = thread.comments.nodes;
-    const posted = reviewOfBody(finding?.pullRequestReview?.body ?? "");
-
-    const ofReview = posted !== null && posted.patch === review.patch && posted.round === review.round;
-    const nit = finding?.author?.login === appLogin && severityOfBody(finding.body) === "nit";
-
-    return ofReview && nit && findingFileOf(thread.path, finding.body) === thread.path ? [thread.path] : [];
-  });
-
-  return [...new Set(paths)].toSorted();
-}
-
 const EarlierThread = Schema.Struct({
   thread: Schema.String,
   where: Schema.String,
@@ -284,8 +259,8 @@ export function earlierThreadsOf(logins: ThreadLogins, threads: readonly ReviewT
 
 /**
  * The earlier findings the review of `round` is shown, as `earlierThreadsOf` writes them: on the Delta
- * read, the App's open Importants alone, whose fix it confirms, since it posts no Nit; on a Review round,
- * every finding of the App.
+ * read, the App's open Importants alone, whose fix it confirms; on a Review round, every finding of the
+ * App.
  */
 export function shownThreadsOf(logins: ThreadLogins, round: number, threads: readonly ReviewThread[]): EarlierThread[] {
   if (round !== DELTA_READ) {
@@ -360,7 +335,6 @@ export function ledgerFindingsOf(logins: ThreadLogins, threads: readonly ReviewT
         closedByApp:
           thread.isResolved && thread.resolvedBy !== null && graphqlLogin(thread.resolvedBy.login) === logins.app,
         landedOpen: landedOpenIn(logins.app, thread),
-        outdated: thread.isOutdated,
         rejection: rejectedOf(logins, thread) ? (latest?.url ?? null) : null,
         ownerAnswer: ownerWords ? latest.url : null,
         again,

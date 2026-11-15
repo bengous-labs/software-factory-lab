@@ -351,7 +351,12 @@ describe("the stop of an Author", () => {
   });
 
   test("the push and every gh call carry the Author's credential; git fetch and the forks do not", async () => {
-    const found = world({ listed: draftPr("e".repeat(40)), threads: [thread("T1", "nit")] });
+    const found = world({
+      done: [{ ...FINISHED, rejections: [{ thread: "T1", reason: "by design" }] }],
+      listed: draftPr("e".repeat(40)),
+      threads: [thread("T1", "nit")],
+    });
+
     await stopIn(found);
 
     const envOf = (prefix: string): RunOptions["env"] =>

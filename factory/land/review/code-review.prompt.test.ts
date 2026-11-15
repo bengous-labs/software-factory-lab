@@ -85,7 +85,6 @@ describe("promptOf", () => {
       {
         id: "T",
         isResolved: true,
-        isOutdated: false,
         resolvedBy: null,
         path: "a.ts",
         line: 3,
@@ -128,9 +127,7 @@ describe("promptOf", () => {
 describe("the Delta read", () => {
   const OPENING = `This is a read of a push after review round 3, the last round. ${BASE} is the head review round 3 read: read only what changed since, and the rest only to judge it.`;
 
-  const IMPORTANT_ONLY = "Report Important findings only: a Nit is not worth another turn now.";
-
-  test("it names the head round 3 read, lists the open Importants under their ids without their answers, asks which are still wrong, and asks for Important findings alone", () => {
+  test("it names the head round 3 read, lists the open Importants under their ids without their answers, and asks which are still wrong; it asks for every finding, its Nits too", () => {
     const threads = [
       {
         thread: "PRRT_1",
@@ -148,13 +145,13 @@ describe("the Delta read", () => {
       "Important findings still open:",
       "- [E1] a.ts:3: **Important**: off by one",
       "Report again each of them that is still wrong, with `earlier` set to the id in its brackets: one you do not report again is closed as fixed. Judge the code as it stands.",
-      IMPORTANT_ONLY,
     ]);
     expect(text.join("\n")).not.toContain("covered elsewhere");
+    expect(text.join("\n")).not.toContain("Important findings only");
   });
 
   test("with no Important open, it lists none", () => {
-    expect(roundText({ ...REQUEST, round: 4 }, [])).toEqual(["", OPENING, IMPORTANT_ONLY]);
+    expect(roundText({ ...REQUEST, round: 4 }, [])).toEqual(["", OPENING]);
   });
 });
 

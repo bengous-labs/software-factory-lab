@@ -1,7 +1,7 @@
 # The relay
 
 The relay (`factory/land/relay/`, started as `factory/bin/relay.ts`) is one detached process per PR, which the Stop hook leaves at a Publication or at a question to the Owner, in the main checkout, and which outlives the session; a later Publication of the PR starts none while it runs.
-Every 30 s it reads the PR and delivers each Wake once, as a turn in the session of the PR's latest Publication: a failing check on the PR's head, a conflict with `dev`, with the fetch and the rebase to run, an open Important or Nit finding, an Important a later round reports again, a comment of the Owner, the PR back in draft.
+Every 30 s it reads the PR and delivers each Wake once, as a turn in the session of the PR's latest Publication: a failing check on the PR's head, a conflict with `dev`, with the fetch and the rebase to run, an open Important finding, an Important a later round reports again, a comment of the Owner, the PR back in draft.
 A draft that holds the Author's question with no comment of the Owner after it makes no draft Wake: the Owner's answer in the conversation is the Wake that reaches the session, the draft line with it.
 A failing check another Wake already tells makes none: `agent-review`, red on an open Important its finding carries, and the `land-gate` of a conflicting PR; any other red `land-gate`, an ejection from the merge queue among them, makes one.
 How the Author answers closes the Wakes: findings ask for its rejections alone, a failing check or a conflict for the fix, and the Owner's words or a draft line get nothing added.

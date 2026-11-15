@@ -84,17 +84,14 @@ describe("the stored record", () => {
     expect(() => recordOfJson(JSON.stringify({ review: { ...review, round: 5 } }))).toThrow('at ["review"]');
   });
 
-  test("a Delta read's Routing flag and patch are stored and read back; a record written before them reads with neither", () => {
-    const record = { ...EMPTY_RECORD, deltaReadPatch: P1, triage: { [P1]: { ...LIGHT, deltaRead: true } } };
+  test("a Delta read's patch is stored and read back; a record written before it reads with none", () => {
+    const record = { ...EMPTY_RECORD, deltaReadPatch: P1, triage: { [P1]: LIGHT } };
     const old = recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, land: "auto" } } }));
 
     expect(recordOfJson(JSON.stringify(storedOfRecord(record)))).toEqual(record);
     expect(old).not.toHaveProperty("deltaReadPatch");
     expect(old.triage[P1]).toEqual(LIGHT);
     expect(() => recordOfJson(JSON.stringify({ deltaReadPatch: 1 }))).toThrow('at ["deltaReadPatch"]');
-    expect(() => recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, deltaRead: "yes" } } }))).toThrow(
-      `at ["triage"]["${P1}"]["deltaRead"]`,
-    );
   });
 
   test("a record that counted Important findings posted in a review's body still reads, and the count is left out", () => {
@@ -121,6 +118,15 @@ describe("the stored record", () => {
     expect(() => recordOfJson(JSON.stringify({ fableFailures: { [P1]: "1" } }))).toThrow('at ["fableFailures"]');
     expect(() => recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, needsFable: "yes" } } }))).toThrow(
       `at ["triage"]["${P1}"]["needsFable"]`,
+    );
+  });
+
+  test("a Routing answer written while a push that answered Nits alone could get a Delta read still reads, and its flag is left out", () => {
+    const record = recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, deltaRead: true } } }));
+
+    expect(record).toEqual({ ...EMPTY_RECORD, triage: { [P1]: LIGHT } });
+    expect(() => recordOfJson(JSON.stringify({ triage: { [P1]: { ...LIGHT, deltaRead: "yes" } } }))).toThrow(
+      `at ["triage"]["${P1}"]["deltaRead"]`,
     );
   });
 

@@ -23,17 +23,11 @@ export interface RoutingAnswer {
   readonly review: ReviewDepth;
   /**
    * On a Patch delta: whether the delta deserves another read on its own: it touches a path a Routing
-   * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names; never when it
-   * only answers the Nits of the last Review round, which posted no Important (`withNitAnswers`). After Review
+   * rule names, it is past `lineCap`, or the Routing judge says so of a delta no rule names. After Review
    * round 1 it runs Review round 2, after Review round 2 Review round 3; after Review round 3 it holds the
-   * change for the Owner, unless `deltaRead`.
+   * change for the Owner.
    */
   readonly secondRound: boolean;
-  /**
-   * On a Patch delta after Review round 3 that only answers that round's Nits, its tests included
-   * (`withNitAnswers`): one Delta read in place of the hold for the Owner. Absent, as in older records, reads as false.
-   */
-  readonly deltaRead?: boolean;
   readonly reason: string;
   /** The model asked, exact when it answered; null when the Routing rules decided. */
   readonly model: string | null;
@@ -182,69 +176,4 @@ export function routingOf(
     ...verdict.answer,
     secondRound: patchDelta.kind === "ruled" ? patchDelta.answer.secondRound : judged().secondRound,
   };
-}
-
-/** The most lines the pushes after a Review round change, from the head it read, and still only answer its Nits. */
-export const NIT_ANSWER_LINE_CAP = 100;
-
-/** What a Patch delta after a Review round is weighed against. */
-export interface NitAnswerInput {
-  /** What the PR's state record holds of its reviews: its rounds, each round's Important count, the head the last round read. */
-  readonly record: {
-    readonly reviewRounds: number;
-    readonly importantByRound?: ReadonlyArray<number | null>;
-    readonly reviewedHead: string | null;
-  };
-  /** Where the Patch delta starts: the head the last round read, or the merge base once that head left the PR's history. */
-  readonly deltaFrom: string;
-  /** The files the last Review round posted a Nit finding on. */
-  readonly nitPaths: readonly string[];
-}
-
-/** A test file and the file it tests beside it: `x.test.ts` for `x.ts`. */
-const TEST_FILE = /\.test(\.[^./]+)$/u;
-
-/**
- * The Routing answer of a Patch delta that only answers the Nits of the last Review round, whichever it was, when it posted no
- * Important: the delta starts at the head that round read, touches no `deepReviewPaths` path, in at most
- * NIT_ANSWER_LINE_CAP lines. One that touches only files the round posted a Nit on needs no read, so it
- * starts no round, holds nothing for the Owner and the change keeps its Land route. After Review round 3,
- * one that also touches the test file beside a Nit file, on a change that lands `auto`, gets a Delta read
- * in place of the hold for the Owner: an unread test could switch a guard's test off. Any other answer stands.
- */
-export function withNitAnswers(
-  policy: RoutingPolicy,
-  answer: RoutingAnswer,
-  delta: RoutingInput,
-  { record, deltaFrom, nitPaths }: NitAnswerInput,
-): RoutingAnswer {
-  const nits = new Set(nitPaths);
-
-  const inBounds =
-    answer.secondRound &&
-    record.importantByRound?.[record.reviewRounds - 1] === 0 &&
-    record.reviewedHead === deltaFrom &&
-    delta.lines <= NIT_ANSWER_LINE_CAP &&
-    matching(policy.deepReviewPaths, delta.paths).length === 0;
-
-  if (!inBounds) {
-    return answer;
-  }
-
-  const nitAnswer = `a push after Review round ${record.reviewRounds} that only answers its Nits`;
-  const what = `${delta.lines} lines in ${listed(delta.paths)}`;
-
-  if (delta.paths.every((path) => nits.has(path))) {
-    // The Owner's route keeps its reason alone: the land-gate and the Owner's comment give it as why the PR is held.
-    return { ...answer, secondRound: false, reason: answer.land === "owner" ? answer.reason : `${nitAnswer}: ${what}` };
-  }
-
-  const testedAnswer =
-    record.reviewRounds === 3 &&
-    answer.land === "auto" &&
-    delta.paths.every((path) => nits.has(path) || nits.has(path.replace(TEST_FILE, "$1")));
-
-  return testedAnswer
-    ? { ...answer, deltaRead: true, reason: `${nitAnswer}, its tests included: ${what}; one Delta read` }
-    : answer;
 }

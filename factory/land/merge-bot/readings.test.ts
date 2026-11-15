@@ -4,8 +4,6 @@ import { Result, Schema } from "effect";
 
 import { decodeJson } from "../../lib/json.ts";
 import type { Run } from "../../lib/run.port.ts";
-import { FIXED_MARK } from "../shared/author-mark.ts";
-import { fixedRecordBodyOf, questionCommentOf } from "../stop/decide.ts";
 import { reviewsReader } from "./github.ts";
 import { labeled, runIn, WHERE } from "./merge-bot.fixtures.ts";
 import {
@@ -430,45 +428,30 @@ const commentsOf = (...listed: ReadonlyArray<readonly [number, string, string]>)
   listed.map(([id, login, body]) => ({ id, user: { login }, body }));
 
 describe("stateCommentIn", () => {
-  const logins = { appLogin: "bengous-labs-agents[bot]", authorLogin: "bengous-labs-author" };
+  const logins = { appLogin: "bengous-labs-agents[bot]" };
   const record = { ...EMPTY_RECORD, reviewRounds: 2 };
   const state = stateCommentOf(record, "**Review findings**: none.");
-  const fixed = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T1", "T2"]) ?? "";
 
-  test("reads the App's state comment, its ledger included, and the threads the Author's record says it fixed", () => {
-    expect(
-      stateCommentIn(
-        commentsOf([1, "bengous", "hello"], [2, logins.appLogin, state], [3, logins.authorLogin, fixed]),
-        logins,
-      ),
-    ).toEqual({ id: 2, body: state, record, fixed: new Set(["T1", "T2"]) });
+  test("reads the App's state comment, its ledger included", () => {
+    expect(stateCommentIn(commentsOf([1, "bengous", "hello"], [2, logins.appLogin, state]), logins)).toEqual({
+      id: 2,
+      body: state,
+      record,
+    });
   });
 
-  test("a mark another login wrote is not read: no state comment, nothing fixed", () => {
-    expect(
-      stateCommentIn(commentsOf([1, "someone", state], [2, "someone", fixed], [3, logins.appLogin, fixed]), logins),
-    ).toEqual({ id: null, body: null, record: EMPTY_RECORD, fixed: new Set() });
+  test("a mark another login wrote is not read: no state comment", () => {
+    expect(stateCommentIn(commentsOf([1, "someone", state]), logins)).toEqual({
+      id: null,
+      body: null,
+      record: EMPTY_RECORD,
+    });
   });
 
-  test("a comment of a deleted user, whom GitHub gives as null, is skipped: the App's and the Author's after it are read", () => {
+  test("a comment of a deleted user, whom GitHub gives as null, is skipped: the App's after it is read", () => {
     expect(
-      stateCommentIn(
-        [
-          { id: 1, user: null, body: state },
-          ...commentsOf([2, logins.appLogin, state], [3, logins.authorLogin, fixed]),
-        ],
-        logins,
-      ),
-    ).toEqual({ id: 2, body: state, record, fixed: new Set(["T1", "T2"]) });
-  });
-
-  test("the Author's question that quotes the fixed mark in a code span is no record; the record after it is read", () => {
-    const question = questionCommentOf(`Keep \`${FIXED_MARK} T9 -->\`?`, "feat/7-x", "S1");
-
-    expect(stateCommentIn(commentsOf([1, logins.authorLogin, question]), logins).fixed).toEqual(new Set());
-    expect(
-      stateCommentIn(commentsOf([1, logins.authorLogin, question], [2, logins.authorLogin, fixed]), logins).fixed,
-    ).toEqual(new Set(["T1", "T2"]));
+      stateCommentIn([{ id: 1, user: null, body: state }, ...commentsOf([2, logins.appLogin, state])], logins),
+    ).toEqual({ id: 2, body: state, record });
   });
 });
 

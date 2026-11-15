@@ -44,7 +44,7 @@ const lineOf = (thread: EarlierThread, index: number): string =>
 /**
  * Round 1 has no round text; rounds 2 and 3 read the earlier threads with their answers, each under its
  * id, and report again every earlier Important that is still wrong: the Merge bot closes the open ones
- * they leave out. The Delta read reads the push after round 3 alone and reports only what blocks; shown
+ * they leave out. The Delta read reads the push after round 3 alone; shown
  * the open Importants without their answers, since a light read that closes one confirms its fix to the
  * Owner, it reports again each one still wrong, and the Merge bot closes the others as fixed.
  */
@@ -67,7 +67,6 @@ export function roundText(request: ReviewRequest, threads: readonly EarlierThrea
       "",
       `This is a read of a push after review round 3, the last round. ${request.base} is the head review round 3 read: read only what changed since, and the rest only to judge it.`,
       ...open,
-      "Report Important findings only: a Nit is not worth another turn now.",
     ];
   }
 

@@ -57,8 +57,6 @@ export interface LedgerFinding extends Counted {
   readonly closedByApp: boolean;
   /** The App's reply in its thread says the Owner's Land approval landed it open (`LANDED_OPEN_MARKER`). */
   readonly landedOpen: boolean;
-  /** GitHub marks its thread outdated: the lines it is anchored on changed since. */
-  readonly outdated: boolean;
   /** The Author's rejection reply, the resolved thread's latest answer; null when the Author did not reject it. */
   readonly rejection: string | null;
   /** The Owner's reply, the thread's latest answer, written by hand; null when the latest answer is none of the Owner's. */

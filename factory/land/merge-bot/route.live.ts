@@ -15,14 +15,13 @@ import type { Run, RunOptions } from "../../lib/run.port.ts";
 import { ROUTING_JUDGE } from "../routing/routing-judge.actor.ts";
 import { judgeFailed, routingJudge } from "../routing/routing-judge.ts";
 import type { RoutingVerdict } from "../routing/routing-judge.ts";
-import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf, withNitAnswers } from "../routing/routing-rules.ts";
+import { judgeAskOf, patchDeltaRulesOf, routingOf, routingRulesOf } from "../routing/routing-rules.ts";
 import type { JudgeAsk, RoutingAnswer } from "../routing/routing-rules.ts";
 import type { Reader } from "../shared/ask.port.ts";
-import { graphqlLogin, nitPathsOf } from "../shared/findings.ts";
 import { resolverOf } from "../shared/resolve.live.ts";
 import { readGuardOf } from "../shared/tool-guard.ts";
 import type { Env } from "./env.ts";
-import { git, threadsOf } from "./github.ts";
+import { git } from "./github.ts";
 import type { StateRecord } from "./record.ts";
 import {
   changedPathsArgs,
@@ -115,7 +114,7 @@ export async function route(
   env: Env,
   range: Range,
   record: StateRecord,
-  { patchDelta, pr }: { readonly patchDelta: boolean; readonly pr: number },
+  { patchDelta }: { readonly patchDelta: boolean },
 ): Promise<{ readonly answer: RoutingAnswer; readonly judge: RoutingVerdict | null }> {
   const policy = routingPolicyAt(env.cwd);
   const from = await rangeStart(env, range, record, patchDelta);
@@ -155,17 +154,5 @@ export async function route(
     ),
   );
 
-  const answer = routingOf(rules, patchDeltaRules, judge?.routing ?? null);
-
-  if (delta === null) {
-    return { answer, judge };
-  }
-
-  const nitPaths = nitPathsOf(
-    graphqlLogin(env.appLogin),
-    { patch: record.reviewedPatch, round: record.reviewRounds },
-    await threadsOf(env, pr),
-  );
-
-  return { answer: withNitAnswers(policy, answer, delta, { record, deltaFrom: from, nitPaths }), judge };
+  return { answer: routingOf(rules, patchDeltaRules, judge?.routing ?? null), judge };
 }

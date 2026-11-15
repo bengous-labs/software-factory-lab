@@ -98,6 +98,7 @@ const ReadRecord = Schema.Struct({
       // Records written before the Routing answer named its model have none.
       model: Schema.optionalKey(Schema.NullOr(Schema.String)),
       security: Schema.optionalKey(Schema.Boolean),
+      // Records written while a push that answered Nits alone could get a Delta read: the field still reads, and is left out.
       deltaRead: Schema.optionalKey(Schema.Boolean),
       // Records written while the Principal judge existed: the field still reads, and is left out.
       needsFable: Schema.optionalKey(Schema.Boolean),
@@ -126,13 +127,13 @@ const StoredJson = ReadRecord.mapFields(Struct.map(Schema.optionalKey));
 
 /**
  * The record a comment stores, with each Land route read back from its stored value; `bodyImportant`,
- * `fable`, `fableFailures` and each answer's `needsFable` are left out.
+ * `fable`, `fableFailures` and each answer's `needsFable` and `deltaRead` are left out.
  */
 export function recordOfStored(stored: ReadRecord): StateRecord {
   const { bodyImportant: _uncounted, fable: _fable, fableFailures: _fableFailures, ...kept } = stored;
 
   const triage = Object.entries(kept.triage).map(
-    ([patch, { needsFable: _needsFable, ...routing }]) =>
+    ([patch, { needsFable: _needsFable, deltaRead: _deltaRead, ...routing }]) =>
       [patch, { ...routing, land: landRouteOf(routing.land), model: routing.model ?? null }] as const,
   );
 

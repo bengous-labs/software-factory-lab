@@ -2,11 +2,10 @@
  * The Stop hook. It does nothing for a session that is not an Author, whose environment holds no
  * `LAB_AUTHOR=1`, nor for a fork it launched. For an Author it reads git and the branch's PR, decides with
  * `decide.ts`, and acts: asks the Worker for the Stop checks, runs the Done judge, which asks a fork of the session whether
- * the change is finished and which findings the Author rejects or fixed, then publishes (`publish.live.ts`):
- * posts the rejections, records the fixed findings on the PR, pushes the branch, opens or readies the PR,
- * resolves the App's open Nit threads, and leaves the PR's relay. A stop that leaves a question to the Owner
- * pushes the branch to a PR in draft, posts the question there once, and leaves the relay that brings the
- * answer back. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's latency and
+ * the change is finished and which findings the Author rejects, then publishes (`publish.live.ts`): posts
+ * the rejections, pushes the branch, opens or readies the PR, and leaves the PR's relay. A stop that leaves
+ * a question to the Owner pushes the branch to a PR in draft, posts the question there once, and leaves
+ * the relay that brings the answer back. Every step is appended to `.lab/stop.log` as one JSON line, with the fork's latency and
  * tokens, and every stop of an Author leaves one line in `.lab/outcomes.log` of the main checkout.
  *
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
@@ -36,7 +35,6 @@ import {
   checkoutOf,
   DONE_SCHEMA,
   doneAnswerOf,
-  fixedRecordIn,
   noAuthorToken,
   noDoneAnswer,
   outcomeLineOf,
@@ -51,7 +49,6 @@ import {
   ALLOW,
   askFork,
   closedPrsOf,
-  closeNits,
   FORK_FLAG,
   ghOptions,
   gitOut,
@@ -82,7 +79,7 @@ function stopChecks(record: string): StopChecks {
 const stoppedOf = (next: Refusal, why: string): Stopped =>
   next.kind === "block" ? notPublished(why, next) : notPublished(next.reason);
 
-/** The Done judge: a fork of the session answers whether the change is finished and which findings the Author rejects or fixed. */
+/** The Done judge: a fork of the session answers whether the change is finished and which findings the Author rejects. */
 function askDoneJudge(stopping: AuthorStop, findings: readonly OpenFinding[]): Promise<ForkResult> {
   const question = doneQuestionOf(
     findings.map((finding) => ({
@@ -143,14 +140,6 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     return notPublished(admission.outcome, { kind: "block", reason: admission.reason });
   }
 
-  if (admission.kind === "ready") {
-    if (token.kind === "found") {
-      await closeNits(stopping, gh, await openFindings(deps, gh, admission.pr));
-    }
-
-    return notPublished(admission.reason);
-  }
-
   log({ step: "author-token", found: token.kind === "found", path: token.path });
 
   if (token.kind === "missing") {
@@ -182,7 +171,6 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
     question: answer === null ? null : quotedQuestionOf(answer.question),
     reason: answer?.reason.slice(0, 300) ?? null,
     rejections: answer?.rejections.length ?? null,
-    fixed: answer?.fixed.length ?? null,
     ms: doneJudge.ms,
     tokens: doneJudge.tokens,
     code: doneJudge.code,
@@ -199,7 +187,7 @@ async function authorStop(stopping: AuthorStop, stateDir: string): Promise<Stopp
   return publish(
     stopping,
     { token: token.token, gh },
-    { pr: snapshot.pr, findings, answer, asked: questionOpen(conversation), fixed: fixedRecordIn(conversation) },
+    { pr: snapshot.pr, findings, answer, asked: questionOpen(conversation) },
   );
 }
 

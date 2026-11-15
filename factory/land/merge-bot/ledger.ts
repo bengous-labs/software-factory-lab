@@ -21,10 +21,8 @@ export type Standing =
   | { readonly kind: "rejected"; readonly reply: string }
   /** The Owner answered it last: `reply` holds the answer; `open`, its thread is still open. */
   | { readonly kind: "owner"; readonly reply: string; readonly open: boolean }
-  /** A Nit the Author says it fixed. `outdated`: the lines its thread is anchored on changed since. */
-  | { readonly kind: "author-fixed"; readonly outdated: boolean }
-  /** A Nit closed with no answer of the Author. */
-  | { readonly kind: "no-answer"; readonly outdated: boolean }
+  /** A Nit whose thread is closed: no round reads a Nit again. */
+  | { readonly kind: "closed" }
   /** Its thread is open; `again` is the last round that reports it again, null when none did. */
   | { readonly kind: "open"; readonly again: number | null }
   /** An Important the Owner's Land approval closed with no read confirming its fix: its thread says so. */
@@ -34,19 +32,13 @@ export type Standing =
 
 /**
  * Where `finding` stands, after `rounds` Review rounds, and `deltaRead` when a Delta read ran after
- * them, given the threads the Author says it fixed. A finding the Owner answered last stands as answered,
- * whatever its severity and whoever closed its thread: a round that read the Owner's answer and left the
- * finding out fixed nothing. An Important is fixed only on a later read, never on its Author's word: the
- * App closes it when a later round, or after round 3 a Delta read, no longer reports it, and when the
- * Owner's Land approval lands it open, with a reply that says so. A Nit is fixed on the Author's word,
- * since no later round reads a Nit again; GitHub's outdated mark shows beside it.
+ * them. A finding the Owner answered last stands as answered, whatever its severity and whoever closed
+ * its thread: a round that read the Owner's answer and left the finding out fixed nothing. An Important
+ * is fixed only on a later read, never on its Author's word: the App closes it when a later round, or
+ * after round 3 a Delta read, no longer reports it, and when the Owner's Land approval lands it open,
+ * with a reply that says so. A Nit costs no turn and no round reads it again: it is open or closed.
  */
-export function standingOf(
-  finding: LedgerFinding,
-  fixed: ReadonlySet<string>,
-  rounds: number,
-  deltaRead = false,
-): Standing {
+export function standingOf(finding: LedgerFinding, rounds: number, deltaRead = false): Standing {
   if (finding.rejection !== null) {
     return { kind: "rejected", reply: finding.rejection };
   }
@@ -56,11 +48,7 @@ export function standingOf(
   }
 
   if (finding.severity === "nit") {
-    if (fixed.has(finding.thread)) {
-      return { kind: "author-fixed", outdated: finding.outdated };
-    }
-
-    return finding.resolved ? { kind: "no-answer", outdated: finding.outdated } : { kind: "open", again: null };
+    return finding.resolved ? { kind: "closed" } : { kind: "open", again: null };
   }
 
   const last = Math.max(finding.round, ...finding.again);
@@ -85,8 +73,6 @@ export function standingOf(
   return deltaRead ? { kind: "confirmed", round: DELTA_READ } : { kind: "unread" };
 }
 
-const linesOf = (outdated: boolean): string => (outdated ? "its lines changed since" : "its lines unchanged");
-
 /** A read as a ledger line names it: `round 2`, or `a Delta read`, of which a PR may have several. */
 const readOf = (round: number): string => (round === DELTA_READ ? "a Delta read" : `round ${round}`);
 
@@ -105,12 +91,8 @@ function standingTextOf(standing: Standing): string {
       return `[Answered](${standing.reply}) by the Owner${standing.open ? "; its thread is open" : ""}.`;
     }
 
-    case "author-fixed": {
-      return `Fixed, by the Author's word; ${linesOf(standing.outdated)}.`;
-    }
-
-    case "no-answer": {
-      return `No answer; ${linesOf(standing.outdated)}.`;
+    case "closed": {
+      return "Closed.";
     }
 
     case "open": {
@@ -132,8 +114,7 @@ const TOTALS: ReadonlyArray<readonly [Standing["kind"], string]> = [
   ["confirmed", "fixed and confirmed"],
   ["rejected", "rejected"],
   ["owner", "answered by the Owner"],
-  ["author-fixed", "fixed by the Author's word"],
-  ["no-answer", "with no answer"],
+  ["closed", "closed"],
   ["open", "open"],
   ["landed-open", "landed open"],
   ["unread", "closed unconfirmed"],
@@ -160,15 +141,10 @@ function ledgerLineOf(finding: LedgerFinding, standing: Standing): string {
 /**
  * The ledger of a PR's review, for a person to read: how many findings stand where, then each round,
  * and the Delta read once it posted a finding, what it posted and where each of its findings stands now.
- * Empty before any round. `findings` are the App's, `fixed` the threads the Author says it fixed,
- * `rounds` the Review rounds posted, `deltaRead` whether a Delta read ran after them.
+ * Empty before any round. `findings` are the App's, `rounds` the Review rounds posted, `deltaRead`
+ * whether a Delta read ran after them.
  */
-export function ledgerOf(
-  findings: readonly LedgerFinding[],
-  fixed: ReadonlySet<string>,
-  rounds: number,
-  deltaRead: boolean,
-): string {
+export function ledgerOf(findings: readonly LedgerFinding[], rounds: number, deltaRead: boolean): string {
   // The Delta read is numbered after round 3, the last round.
   const last = Math.max(rounds, ...findings.map((finding) => finding.round));
 
@@ -178,7 +154,7 @@ export function ledgerOf(
 
   const standings = findings.map((finding) => ({
     finding,
-    standing: standingOf(finding, fixed, rounds, deltaRead),
+    standing: standingOf(finding, rounds, deltaRead),
   }));
 
   const totals = TOTALS.flatMap(([kind, words]) => {
@@ -254,10 +230,9 @@ export function followUpIssueOf(
   };
 }
 
-/** What the ledger is written from: the App's findings, and the threads the Author says it fixed. */
+/** What the ledger is written from: the App's findings. */
 export interface LedgerInputs {
   readonly findings: readonly LedgerFinding[];
-  readonly fixed: ReadonlySet<string>;
 }
 
 /** The state comment as a decision read it: its id and body, null before the Merge bot posts one, and its record. */
@@ -269,10 +244,7 @@ export interface StateRead {
 
 /** The body of the state comment that holds `record`, its ledger written from `inputs` after the rounds `record` counts and the Delta read it names. */
 export function stateBodyOf(record: StateRecord, inputs: LedgerInputs): string {
-  return stateCommentOf(
-    record,
-    ledgerOf(inputs.findings, inputs.fixed, record.reviewRounds, record.deltaReadPatch !== undefined),
-  );
+  return stateCommentOf(record, ledgerOf(inputs.findings, record.reviewRounds, record.deltaReadPatch !== undefined));
 }
 
 /**

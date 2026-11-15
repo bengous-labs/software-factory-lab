@@ -22,16 +22,15 @@ const OPEN_IMPORTANT: LedgerFinding = {
   resolved: false,
   closedByApp: false,
   landedOpen: false,
-  outdated: false,
   rejection: null,
   ownerAnswer: null,
   again: [],
 };
 
-const OPEN: LedgerInputs = { findings: [OPEN_IMPORTANT], fixed: new Set() };
+const OPEN: LedgerInputs = { findings: [OPEN_IMPORTANT] };
 
 /** The same Important, its thread closed by the App. */
-const CLOSED: LedgerInputs = { findings: [{ ...OPEN_IMPORTANT, resolved: true, closedByApp: true }], fixed: new Set() };
+const CLOSED: LedgerInputs = { findings: [{ ...OPEN_IMPORTANT, resolved: true, closedByApp: true }] };
 
 const ROUND_1: StateRecord = { ...EMPTY_RECORD, reviewedPatch: "p1", reviewRounds: 1, importantByRound: [1] };
 
@@ -114,7 +113,6 @@ describe("stepsDone", () => {
 
     const landed: LedgerInputs = {
       findings: [{ ...OPEN_IMPORTANT, resolved: true, closedByApp: true, landedOpen: true }],
-      fixed: new Set(),
     };
 
     const followed: StateRecord = { ...ROUND_1, followUpIssue: 31 };

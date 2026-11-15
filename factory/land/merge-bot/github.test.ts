@@ -5,7 +5,6 @@ import { Schema } from "effect";
 import { decodeJson } from "../../lib/json.ts";
 import type { Ran, Run, RunOptions } from "../../lib/run.port.ts";
 import { threadsQueryOf } from "../shared/findings.ts";
-import { fixedRecordBodyOf } from "../stop/decide.ts";
 import type { Env } from "./env.ts";
 import {
   againPoster,
@@ -31,12 +30,18 @@ import {
 import { commandsAnswering, labeled, ok, page, runIn, WHERE } from "./merge-bot.fixtures.ts";
 import type { CheckRun, LabelEvent } from "./merge-bot.fixtures.ts";
 import { checkRunBodyOf, ciRunsPathsOf, devRedOf, humanLabelByOf, PostedComment, stateCommentIn } from "./readings.ts";
+import { EMPTY_RECORD, stateCommentOf } from "./record.ts";
 import { rangeRefspecsOf } from "./routing-inputs.ts";
 
 describe("conversationReader", () => {
-  test("reads every page of the PR's conversation, so the Author's record past the first 100 comments is found", async () => {
-    const record = fixedRecordBodyOf({ comment: null, fixed: [] }, ["T1"]) ?? "";
-    const pages = [page(1, 100), [...page(101, 5), { id: 106, user: { login: "bengous-labs-author" }, body: record }]];
+  test("reads every page of the PR's conversation, so the state comment past the first 100 comments is found", async () => {
+    const state = stateCommentOf({ ...EMPTY_RECORD, reviewRounds: 1 }, "");
+
+    const pages = [
+      page(1, 100),
+      [...page(101, 5), { id: 106, user: { login: "bengous-labs-agents[bot]" }, body: state }],
+    ];
+
     const calls: string[][] = [];
 
     const runner: Run = (argv) => {
@@ -51,9 +56,7 @@ describe("conversationReader", () => {
       ["gh", "api", "-X", "GET", "--paginate", "--slurp", "repos/o/r/issues/12/comments?per_page=100"],
     ]);
     expect(comments).toHaveLength(106);
-    expect(
-      stateCommentIn(comments, { appLogin: "bengous-labs-agents[bot]", authorLogin: "bengous-labs-author" }).fixed,
-    ).toEqual(new Set(["T1"]));
+    expect(stateCommentIn(comments, { appLogin: "bengous-labs-agents[bot]" }).id).toBe(106);
   });
 });
 
