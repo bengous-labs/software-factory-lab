@@ -24,9 +24,10 @@ import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
 import { questionOpen } from "../shared/author-mark.ts";
 import { authorTokenOf } from "../shared/author.live.ts";
+import { cloneRootOf } from "../shared/clone-root.ts";
 import { conversationArgsOf, conversationOf } from "../shared/conversation.ts";
 import type { OpenFinding } from "../shared/findings.ts";
-import { cloneRootOf, pinnedGitEnvOf } from "./clone-git.ts";
+import { pinnedGitEnvOf } from "./clone-git.ts";
 import {
   admit,
   afterClosed,

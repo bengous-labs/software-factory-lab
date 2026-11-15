@@ -1,7 +1,7 @@
 /**
  * The relay's process (`bin/relay.ts`): every 30 s it takes one turn of `main.ts` and keeps the keys it
- * delivered in `.lab/state/watch-<pr>.json`. It ends when the PR is landed or closed, and writes its
- * start and its end to `.lab/outcomes.log`.
+ * delivered in `.lab/state/watch-<pr>.json`. It ends when the PR is landed or closed, removes the clone
+ * of a Worker whose PR landed (`clone.ts`), and writes its start and its end to `.lab/outcomes.log`.
  *
  *   bun factory/bin/relay.ts <pr>
  */
@@ -10,11 +10,14 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
+import { clonesDirOf } from "../../install/paths.ts";
 import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
 import type { Leave, Run, RunOptions } from "../../lib/run.port.ts";
 import { ghEnv, requiredAuthorToken } from "../shared/author.live.ts";
+import { removeClone } from "./clone.live.ts";
+import { endReasonOf } from "./clone.ts";
 import { deliverer, postToSocket } from "./deliver.live.ts";
 import { readPr, relayDeliverer, turn } from "./main.ts";
 import type { RelayIo } from "./main.ts";
@@ -51,6 +54,7 @@ export async function main({ run, leave }: RelayPorts): Promise<void> {
     appendFileSync(join(cwd, OUTCOMES_LOG), `${relayLineOf(new Date().toISOString(), pr, event, reason)}\n`);
   };
 
+  const home = requiredOf(process.env, "HOME");
   const gh: RunOptions = { cwd, env: ghEnv(requiredAuthorToken(process.env)) };
 
   const io: RelayIo = {
@@ -58,7 +62,7 @@ export async function main({ run, leave }: RelayPorts): Promise<void> {
     session: () => targetOf(readFileSync(files.session, "utf8")),
     deliver: relayDeliverer({
       agents: () => checked(run, ["claude", "agents", "--json"], { cwd }),
-      place: { checkout: cwd, home: requiredOf(process.env, "HOME") },
+      place: { checkout: cwd, home },
       now: Date.now,
       deliver: deliverer({
         run,
@@ -76,7 +80,7 @@ export async function main({ run, leave }: RelayPorts): Promise<void> {
 
   for (;;) {
     try {
-      const { delivered, via, pending, ends } = await turn(pr, seen, io);
+      const { delivered, via, pending, ends, landed } = await turn(pr, seen, io);
 
       for (const key of delivered) {
         seen.add(key);
@@ -90,7 +94,9 @@ export async function main({ run, leave }: RelayPorts): Promise<void> {
       }
 
       if (ends) {
-        outcomes("ended", "the PR landed or closed");
+        const clone = landed ? removeClone(clonesDirOf(home), () => readFileSync(files.session, "utf8")) : null;
+
+        outcomes("ended", endReasonOf(landed, clone));
         rmSync(files.pid, { force: true });
         process.exit(0);
       }

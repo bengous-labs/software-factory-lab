@@ -20,4 +20,7 @@ The relay looks at that turn for a minute: one that ends with an error in that t
 A turn that still runs after that minute is delivered, whatever its end: one that fails late is not given the same Wakes twice, and one that hangs does not hold the relay, which goes back to its PR.
 A background session the relay resumes takes the lines as its prompt too.
 It ends when the PR lands or closes, which starts no turn, and writes its start and its end to `.lab/outcomes.log`.
-A relay that dies is not restarted: the log shows a start with no end.
+When the PR lands and its session is a Worker's in a clone, the relay removes that clone, which nothing names again, and its end line says whether it did (`clone.ts`).
+The relay runs with the Owner's access and the Worker wrote the clone: it removes only a directory that lies directly under the clones' directory, both paths with their links resolved (`factory/land/shared/clone-root.ts`), and a removal that fails is named in the end line, and the relay ends all the same.
+A PR closed without landing keeps its clone: the Owner may reopen it, and the Worker's session lives there.
+A relay that dies is not restarted: the log shows a start with no end, and the clone of its Worker stays.
