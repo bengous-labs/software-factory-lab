@@ -84,13 +84,21 @@ describe("removeClone", () => {
     });
   });
 
-  test("a clone already gone is no directory to remove", () => {
+  test("a clone already gone, or a clones' directory that is gone, is no directory to remove", () => {
     const gone = join(clones, "issue-9");
 
     expect(removeClone(clones, sessionOf(gone))).toEqual({
       removed: false,
       why: `its clone ${gone} stays, as it is no directory directly under ${clones}`,
     });
+
+    const noClones = join(root, "no-clones");
+
+    expect(removeClone(noClones, sessionOf(join(clones, "issue-7")))).toEqual({
+      removed: false,
+      why: `its clone ${join(clones, "issue-7")} stays, as it is no directory directly under ${noClones}`,
+    });
+    expect(existsSync(join(clones, "issue-7"))).toBe(true);
   });
 
   test("a removal that fails, or a session file unread, is returned with its error", () => {

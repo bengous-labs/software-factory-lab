@@ -48,7 +48,9 @@ export function removeClone(
     };
   }
 
-  const clone = removableCloneOf(realPathOf(clones), realPathOf(worktree));
+  const realClones = realPathOf(clones);
+  const realWorktree = realPathOf(worktree);
+  const clone = realClones === null || realWorktree === null ? null : removableCloneOf(realClones, realWorktree);
 
   if (clone === null) {
     return { removed: false, why: `its clone ${worktree} stays, as it is no directory directly under ${clones}` };

@@ -19,11 +19,6 @@ describe("removableCloneOf", () => {
     expect(removableCloneOf(CLONES, `${CLONES}/..`)).toBeNull();
     expect(removableCloneOf(CLONES, "/repo/.claude/worktrees/issue-7")).toBeNull();
   });
-
-  test("a path whose links did not resolve is never removed", () => {
-    expect(removableCloneOf(null, CLONE)).toBeNull();
-    expect(removableCloneOf(CLONES, null)).toBeNull();
-  });
 });
 
 describe("endReasonOf", () => {

@@ -13,15 +13,11 @@ export type CloneEnd =
   { readonly removed: true; readonly clone: string } | { readonly removed: false; readonly why: string };
 
 /**
- * The directory to remove for the clone `worktree`, from the clones' directory and the clone with
- * their links resolved, null when either is unresolved: the clone itself when it lies directly under
- * the clones' directory, and null for any other path, one deeper or outside them.
+ * The directory to remove for the clone `realWorktree`, from the clones' directory and the clone with
+ * their links resolved: the clone itself when it lies directly under the clones' directory, and null
+ * for any other path, one deeper or outside them.
  */
-export function removableCloneOf(realClones: string | null, realWorktree: string | null): string | null {
-  if (realClones === null || realWorktree === null) {
-    return null;
-  }
-
+export function removableCloneOf(realClones: string, realWorktree: string): string | null {
   return cloneRootOf(realClones, realWorktree) === realWorktree ? realWorktree : null;
 }
 
