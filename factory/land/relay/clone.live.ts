@@ -50,13 +50,28 @@ function relaysIn({ checkout, pr, watches = relayWatches }: CloneEndIo, clone: s
     });
 }
 
+/**
+ * What reads a clone's uncommitted work: every new file named, each stash counted, and no index
+ * written. A submodule's status is git run in a directory of the clone, under the config the Worker
+ * wrote there, so none is entered.
+ */
+const STATUS_ARGS = [
+  "git",
+  "--no-optional-locks",
+  "status",
+  "--porcelain=v2",
+  "--show-stash",
+  "--untracked-files=all",
+  "--ignore-submodules=all",
+];
+
 async function useOf(io: CloneEndIo, clone: string, session: string): Promise<CloneUse> {
   const { run, checkout } = io;
   const agents = await checked(run, ["claude", "agents", "--json"], { cwd: checkout });
 
   const git = { cwd: checkout, env: pinnedGitEnvOf(clone) };
   const unpushed = await checked(run, ["git", "rev-list", "--count", "--branches", "--not", "--remotes"], git);
-  const status = await checked(run, ["git", "--no-optional-locks", "status", "--porcelain=v2", "--show-stash"], git);
+  const status = await checked(run, STATUS_ARGS, git);
 
   return {
     running: !stoppedIn(agents, session),

@@ -37,7 +37,8 @@ export interface CloneUse {
 
 /**
  * The changed and new files and the stashes of a clone, from what `git status --porcelain=v2
- * --show-stash` printed: one line per file, and a `# stash <n>` header when it holds any.
+ * --show-stash --untracked-files=all` printed: one line per file, each new one too, and a `# stash <n>`
+ * header when it holds any.
  */
 export function uncommittedOf(status: string): number {
   return status

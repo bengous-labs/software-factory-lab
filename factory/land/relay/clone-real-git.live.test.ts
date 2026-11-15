@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { clonesDirOf } from "../../install/paths.ts";
 import { runIsolated } from "../../lib/run.live.ts";
 import type { Run } from "../../lib/run.port.ts";
-import { git as fixtureGit } from "../stop/stop.fixtures.ts";
+import { FIXTURE_ENV, git as fixtureGit } from "../stop/stop.fixtures.ts";
 import { cloneEndOf } from "./clone.live.ts";
 import { relayFilesOf } from "./relay-start.live.ts";
 import { targetTextOf } from "./wakes.ts";
@@ -26,18 +26,11 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
   expect({ args, code: ran.code }).toEqual({ args, code: 0 });
 }
 
-/** This process's environment without its `GIT_` variables, which would point git at the real repository. */
-const NO_GIT_ENV = Object.fromEntries(
-  Object.entries(process.env).flatMap(([name, value]) =>
-    name.startsWith("GIT_") || value === undefined ? [] : [[name, value] as const],
-  ),
-);
-
 /** The relay's commands: the real git, on the environment the relay pins, and a listing of sessions that shows none running. */
 const realGit: Run = (argv, options) =>
   argv[0] === "claude"
     ? Promise.resolve({ code: 0, stdout: "[]", stderr: "" })
-    : runIsolated(argv, { ...options, env: { ...NO_GIT_ENV, ...options.env } });
+    : runIsolated(argv, { ...options, env: { ...FIXTURE_ENV, ...options.env } });
 
 beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "relay-clone-git-")));
@@ -96,7 +89,17 @@ describe("cloneEndOf, on a clone git reads", () => {
       why: `its clone ${clone} stays, as it holds 2 uncommitted file(s) or stash(es)`,
     });
 
+    mkdirSync(join(clone, "scratch"));
+    writeFileSync(join(clone, "scratch", "one.md"), "1\n");
+    writeFileSync(join(clone, "scratch", "two.md"), "2\n");
+
+    expect(await cloneEndOf(true, io())).toEqual({
+      removed: false,
+      why: `its clone ${clone} stays, as it holds 4 uncommitted file(s) or stash(es)`,
+    });
+
     rmSync(join(clone, "notes.md"));
+    rmSync(join(clone, "scratch"), { recursive: true });
     await git(clone, "stash", "--quiet");
 
     expect(await cloneEndOf(true, io())).toEqual({
@@ -104,5 +107,23 @@ describe("cloneEndOf, on a clone git reads", () => {
       why: `its clone ${clone} stays, as it holds 1 uncommitted file(s) or stash(es)`,
     });
     expect(existsSync(clone)).toBe(true);
+  });
+
+  test("a submodule the Worker planted is never entered: its config runs nothing", async () => {
+    const nested = join(clone, "sub");
+    const marker = join(root, "ran");
+
+    await git(root, "init", "--quiet", "--initial-branch=dev", nested);
+    writeFileSync(join(nested, "s.ts"), "s\n");
+    await git(nested, "add", "s.ts");
+    await git(nested, "commit", "--quiet", "-m", "s");
+    await git(clone, "add", "sub");
+    await git(clone, "commit", "--quiet", "-m", "sub");
+    await git(clone, "push", "--quiet", "origin", "HEAD:refs/heads/issue/7");
+    await git(nested, "config", "core.fsmonitor", `touch ${marker}`);
+    writeFileSync(join(nested, "s.ts"), "changed\n");
+
+    expect(await cloneEndOf(true, io())).toEqual({ removed: true, clone });
+    expect(existsSync(marker)).toBe(false);
   });
 });

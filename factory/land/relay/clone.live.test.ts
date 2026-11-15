@@ -94,7 +94,18 @@ describe("cloneEndOf", () => {
     expect(calls).toEqual([
       [["claude", "agents", "--json"], { cwd: checkout }],
       [["git", "rev-list", "--count", "--branches", "--not", "--remotes"], { cwd: checkout, env: pinned }],
-      [["git", "--no-optional-locks", "status", "--porcelain=v2", "--show-stash"], { cwd: checkout, env: pinned }],
+      [
+        [
+          "git",
+          "--no-optional-locks",
+          "status",
+          "--porcelain=v2",
+          "--show-stash",
+          "--untracked-files=all",
+          "--ignore-submodules=all",
+        ],
+        { cwd: checkout, env: pinned },
+      ],
     ]);
   });
 
