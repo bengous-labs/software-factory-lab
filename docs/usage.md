@@ -8,13 +8,14 @@ bun app/src/cli.ts list                    # [ ] #1 write the spec
 bun app/src/cli.ts done 1                  # done #1 write the spec
 bun app/src/cli.ts list --all              # [x] #1 write the spec
 bun app/src/cli.ts count                   # 0 open
+bun app/src/cli.ts count --done            # 1 done
 bun app/src/cli.ts rename 1 "final spec"   # renamed #1
 bun app/src/cli.ts undone 1                # undone #1
 bun app/src/cli.ts remove 1                # removed #1
 bun app/src/cli.ts clear                   # cleared 0
 ```
 
-`list` shows open tasks; `--all` shows every task; `--done` shows only the done ones. `--done` and `--all` cannot be combined. `count` prints how many tasks are open.
+`list` shows open tasks; `--all` shows every task; `--done` shows only the done ones. `--done` and `--all` cannot be combined. `count` prints how many tasks are open; `count --done` prints how many are done. `count` takes no other argument.
 
 `remove <id>` deletes the task with that id, whether it is done or open. `clear` deletes every done task and keeps the open ones; it prints how many it deleted. Neither command can be undone, so check the list first.
 
