@@ -3,69 +3,139 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { removeClone } from "./clone.live.ts";
+import { clonesDirOf } from "../../install/paths.ts";
+import type { Run, RunOptions } from "../../lib/run.port.ts";
+import { cloneEndOf } from "./clone.live.ts";
+import type { CloneEndIo } from "./clone.live.ts";
+import { relayFilesOf } from "./relay-start.live.ts";
 import { targetTextOf } from "./wakes.ts";
 
 let root = "";
 
+let home = "";
+
+let checkout = "";
+
 let clones = "";
+
+let clone = "";
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "relay-clone-")));
-  clones = join(root, "clones");
-  mkdirSync(join(clones, "issue-7", "app"), { recursive: true });
-  writeFileSync(join(clones, "issue-7", "app", "a.ts"), "x\n");
+  home = join(root, "home");
+  checkout = join(root, "checkout");
+  clones = clonesDirOf(home);
+  clone = join(clones, "issue-7");
+  mkdirSync(join(clone, "app"), { recursive: true });
+  writeFileSync(join(clone, "app", "a.ts"), "x\n");
   mkdirSync(join(root, "precious"));
   writeFileSync(join(root, "precious", "secret"), "s\n");
+  mkdirSync(relayFilesOf(checkout, 7).stateDir, { recursive: true });
 });
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+/** Writes `relay-<pr>.session` for the Worker session `session` in `worktree`, and its pid file when `running`. */
+function relayOf(pr: number, worktree: string | null, running = false, session = "S1"): void {
+  const files = relayFilesOf(checkout, pr);
+  const headless = worktree === null ? null : { model: "opus", worktree, api: false };
+
+  writeFileSync(files.session, targetTextOf({ session, headless }));
+
+  if (running) {
+    writeFileSync(files.pid, "123\n");
+  }
+}
+
+/** One command the fake ran, and its options. */
+type Call = readonly [readonly string[], RunOptions];
+
+/** A command that fails, as `claude` does when it is logged out. */
+const failing: Run = () => Promise.resolve({ code: 1, stdout: "", stderr: "not logged in" });
+
+/** What the fake commands print: the listing of sessions, and git's count of commits no remote holds. */
+interface Outside {
+  readonly agents?: string;
+  readonly unpushed?: string;
+}
+
+/** A fake of the relay's commands, which records each call. */
+function runOf({ agents = "[]", unpushed = "0\n" }: Outside, calls: Call[] = []): Run {
+  return (argv, options) => {
+    calls.push([[...argv], options]);
+
+    return Promise.resolve({ code: 0, stdout: argv[0] === "claude" ? agents : unpushed, stderr: "" });
+  };
+}
+
+function ioOf(outside: Outside = {}, more: Partial<CloneEndIo> = {}): CloneEndIo {
+  return { run: runOf(outside), checkout, home, pr: 7, ...more };
+}
+
 /** A removal the disk refuses. */
 function refuse(): void {
   throw new Error("EACCES: permission denied");
 }
 
-/** The text of `relay-<pr>.session` for a Worker whose clone is `worktree`. */
-function sessionOf(worktree: string): () => string {
-  return () => targetTextOf({ session: "S1", headless: { model: "opus", worktree, api: false } });
-}
+describe("cloneEndOf", () => {
+  test("a landed PR removes its Worker's clone, which lies directly under the clones of the home", async () => {
+    const calls: Call[] = [];
 
-describe("removeClone", () => {
-  test("removes a clone that lies directly under the clones' directory", () => {
-    const clone = join(clones, "issue-7");
+    relayOf(7, clone);
 
-    expect(removeClone(clones, sessionOf(clone))).toEqual({ removed: true, clone });
+    expect(await cloneEndOf(true, ioOf({}, { run: runOf({}, calls) }))).toEqual({ removed: true, clone });
     expect(existsSync(clone)).toBe(false);
+    expect(calls).toEqual([
+      [["claude", "agents", "--json"], { cwd: checkout }],
+      [
+        ["git", "rev-list", "--count", "--branches", "--not", "--remotes"],
+        { cwd: checkout, env: { GIT_DIR: `${clone}/.git`, GIT_COMMON_DIR: `${clone}/.git`, GIT_WORK_TREE: clone } },
+      ],
+    ]);
   });
 
-  test("a session in no clone removes nothing", () => {
-    expect(removeClone(clones, () => targetTextOf({ session: "S1", headless: null }))).toBeNull();
-    expect(existsSync(join(clones, "issue-7"))).toBe(true);
+  test("a PR closed without landing, or a session in no clone, removes nothing and reads nothing", async () => {
+    const calls: Call[] = [];
+
+    relayOf(7, clone);
+
+    expect(await cloneEndOf(false, ioOf({}, { run: runOf({}, calls) }))).toBeNull();
+
+    relayOf(7, null);
+
+    expect(await cloneEndOf(true, ioOf({}, { run: runOf({}, calls) }))).toBeNull();
+    expect(calls).toEqual([]);
+    expect(existsSync(clone)).toBe(true);
   });
 
-  test("a path outside the clones' directory, or deeper than a clone, is never removed", () => {
-    for (const worktree of [join(root, "precious"), clones, join(clones, "issue-7", "app"), `${clones}/../precious`]) {
-      const end = removeClone(clones, sessionOf(worktree));
+  test("a path outside the clones' directory, or deeper than a clone, is never removed", async () => {
+    for (const worktree of [
+      join(root, "precious"),
+      clones,
+      join(clone, "app"),
+      `${clones}/${"../".repeat(5)}precious`,
+    ]) {
+      relayOf(7, worktree);
 
-      expect(end).toEqual({
+      expect(await cloneEndOf(true, ioOf())).toEqual({
         removed: false,
         why: `its clone ${worktree} stays, as it is no directory directly under ${clones}`,
       });
     }
 
     expect(existsSync(join(root, "precious", "secret"))).toBe(true);
-    expect(existsSync(join(clones, "issue-7", "app", "a.ts"))).toBe(true);
+    expect(existsSync(join(clone, "app", "a.ts"))).toBe(true);
   });
 
-  test("a clone that is a link out of the clones' directory is never removed, nor what it points to", () => {
+  test("a clone that is a link out of the clones' directory is never removed, nor what it points to", async () => {
     const link = join(clones, "issue-8");
 
     symlinkSync(join(root, "precious"), link);
+    relayOf(7, link);
 
-    expect(removeClone(clones, sessionOf(link))).toEqual({
+    expect(await cloneEndOf(true, ioOf())).toEqual({
       removed: false,
       why: `its clone ${link} stays, as it is no directory directly under ${clones}`,
     });
@@ -73,45 +143,82 @@ describe("removeClone", () => {
     expect(existsSync(link)).toBe(true);
   });
 
-  test("a clones' directory reached through a link names the same clones", () => {
-    const linked = join(root, "linked-clones");
+  test("a home reached through a link names the same clones", async () => {
+    const linked = join(root, "linked-home");
 
-    symlinkSync(clones, linked);
+    symlinkSync(home, linked);
+    relayOf(7, clone);
 
-    expect(removeClone(linked, sessionOf(join(clones, "issue-7")))).toEqual({
-      removed: true,
-      clone: join(clones, "issue-7"),
-    });
+    expect(await cloneEndOf(true, ioOf({}, { home: linked }))).toEqual({ removed: true, clone });
   });
 
-  test("a clone already gone, or a clones' directory that is gone, is no directory to remove", () => {
+  test("a clone already gone says so; a clones' directory that is gone removes nothing", async () => {
     const gone = join(clones, "issue-9");
 
-    expect(removeClone(clones, sessionOf(gone))).toEqual({
-      removed: false,
-      why: `its clone ${gone} stays, as it is no directory directly under ${clones}`,
-    });
+    relayOf(7, gone);
 
-    const noClones = join(root, "no-clones");
+    expect(await cloneEndOf(true, ioOf())).toEqual({ removed: false, why: `its clone ${gone} is gone already` });
 
-    expect(removeClone(noClones, sessionOf(join(clones, "issue-7")))).toEqual({
+    relayOf(7, clone);
+
+    expect(await cloneEndOf(true, ioOf({}, { home: join(root, "no-home") }))).toEqual({
       removed: false,
-      why: `its clone ${join(clones, "issue-7")} stays, as it is no directory directly under ${noClones}`,
+      why: `its clone ${clone} stays, as it is no directory directly under ${clonesDirOf(join(root, "no-home"))}`,
     });
-    expect(existsSync(join(clones, "issue-7"))).toBe(true);
+    expect(existsSync(clone)).toBe(true);
   });
 
-  test("a removal that fails, or a session file unread, is returned with its error", () => {
-    const clone = join(clones, "issue-7");
+  test("a turn of the session still running there, or a commit never pushed, keeps the clone", async () => {
+    relayOf(7, clone);
 
-    expect(removeClone(clones, sessionOf(clone), refuse)).toEqual({
+    expect(await cloneEndOf(true, ioOf({ agents: '[{"sessionId":"S1","pid":42}]' }))).toEqual({
+      removed: false,
+      why: `its clone ${clone} stays, as a turn of its session still runs there`,
+    });
+    expect(await cloneEndOf(true, ioOf({ unpushed: "3\n" }))).toEqual({
+      removed: false,
+      why: `its clone ${clone} stays, as it holds 3 commit(s) no remote branch holds`,
+    });
+    expect(existsSync(clone)).toBe(true);
+  });
+
+  test("another running relay whose session works in the clone keeps it; one that ended, or works elsewhere, does not", async () => {
+    relayOf(7, clone);
+    relayOf(8, clone, true, "S2");
+
+    expect(await cloneEndOf(true, ioOf())).toEqual({
+      removed: false,
+      why: `its clone ${clone} stays, as the relay of #8 resumes a session there`,
+    });
+
+    rmSync(relayFilesOf(checkout, 8).pid);
+    relayOf(9, join(clones, "issue-9"), true, "S3");
+    relayOf(10, null, true, "S4");
+
+    expect(await cloneEndOf(true, ioOf())).toEqual({ removed: true, clone });
+  });
+
+  test("a removal that fails, or a session file or command unread, keeps the clone and says why", async () => {
+    relayOf(7, clone);
+
+    expect(await cloneEndOf(true, ioOf({}, { remove: refuse }))).toEqual({
       removed: false,
       why: `its clone ${clone} stays, as its removal failed: EACCES: permission denied`,
     });
+
+    expect(await cloneEndOf(true, ioOf({}, { run: failing }))).toEqual({
+      removed: false,
+      why: "its clone stays, as what uses it is unread: claude agents --json exited 1: not logged in",
+    });
+
+    rmSync(relayFilesOf(checkout, 7).session);
+
+    const unread = await cloneEndOf(true, ioOf());
+
+    expect(unread).toMatchObject({ removed: false });
     expect(
-      removeClone(clones, () => {
-        throw new Error("ENOENT: no such file");
-      }),
-    ).toEqual({ removed: false, why: "its clone stays, as its session is unread: ENOENT: no such file" });
+      unread !== null && !unread.removed && unread.why.startsWith("its clone stays, as what uses it is unread: ENOENT"),
+    ).toBe(true);
+    expect(existsSync(clone)).toBe(true);
   });
 });

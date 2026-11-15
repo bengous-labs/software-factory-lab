@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { endReasonOf, removableCloneOf } from "./clone.ts";
+import { endReasonOf, keptWhyOf, removableCloneOf } from "./clone.ts";
 
 const CLONES = "/home/me/clones";
 
@@ -18,6 +18,26 @@ describe("removableCloneOf", () => {
     expect(removableCloneOf(CLONES, "/home/me/clones-two/issue-7")).toBeNull();
     expect(removableCloneOf(CLONES, `${CLONES}/..`)).toBeNull();
     expect(removableCloneOf(CLONES, "/repo/.claude/worktrees/issue-7")).toBeNull();
+  });
+});
+
+describe("keptWhyOf", () => {
+  const unused = { running: false, relays: [], unpushed: 0 };
+
+  test("a clone nothing uses goes", () => {
+    expect(keptWhyOf(CLONE, unused)).toBeNull();
+  });
+
+  test("a turn still running there, another relay's session, or a commit never pushed keeps it, and says which", () => {
+    expect(keptWhyOf(CLONE, { ...unused, running: true })).toBe(
+      `its clone ${CLONE} stays, as a turn of its session still runs there`,
+    );
+    expect(keptWhyOf(CLONE, { ...unused, relays: [8, 9] })).toBe(
+      `its clone ${CLONE} stays, as the relay of #8, #9 resumes a session there`,
+    );
+    expect(keptWhyOf(CLONE, { ...unused, unpushed: 2 })).toBe(
+      `its clone ${CLONE} stays, as it holds 2 commit(s) no remote branch holds`,
+    );
   });
 });
 

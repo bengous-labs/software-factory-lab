@@ -1,69 +1,118 @@
 /**
- * The removal of a landed PR's clone (`clone.ts`), on the disk: the relay calls it once, at the end of
- * a PR that landed.
+ * The end of a landed PR's clone (`clone.ts`), on the disk: the relay calls it once, at the end of its
+ * PR. It reads what still uses the clone from the listing of sessions, the other relays' files and
+ * git, run on the clone through its pinned environment, and removes the clone when nothing does.
  */
 
-import { realpathSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 
-import { removableCloneOf } from "./clone.ts";
-import type { CloneEnd } from "./clone.ts";
-import { targetOf } from "./wakes.ts";
+import { clonesDirOf } from "../../install/paths.ts";
+import { checked } from "../../lib/run.port.ts";
+import type { Run } from "../../lib/run.port.ts";
+import { pinnedGitEnvOf } from "../shared/clone-git.ts";
+import { realPathOf } from "../shared/real-path.live.ts";
+import { keptWhyOf, removableCloneOf } from "./clone.ts";
+import type { CloneEnd, CloneUse } from "./clone.ts";
+import { relayFilesOf } from "./relay-start.live.ts";
+import { stoppedIn, targetOf } from "./wakes.ts";
 
-function realPathOf(path: string): string | null {
-  try {
-    return realpathSync(path);
-  } catch {
-    return null;
-  }
+/** What the end of a PR's clone needs: where the relay runs, the PR, the home that holds the clones, and its commands. */
+export interface CloneEndIo {
+  readonly run: Run;
+  /** The main checkout, whose `.lab/state/` holds the relays' files. */
+  readonly checkout: string;
+  readonly home: string;
+  readonly pr: number;
+  /** Removes a directory and what it holds; a test hands one that fails. */
+  readonly remove?: (path: string) => void;
 }
 
 function removeTree(path: string): void {
   rmSync(path, { recursive: true });
 }
 
+/** The PRs other than `pr` whose relay still runs, by its pid file, and whose session works in `clone`. */
+function relaysIn(checkout: string, pr: number, clone: string): number[] {
+  const { stateDir } = relayFilesOf(checkout, pr);
+
+  return readdirSync(stateDir)
+    .map((name) => /^relay-(\d+)\.session$/u.exec(name)?.[1])
+    .filter((other) => other !== undefined)
+    .map(Number)
+    .filter((other) => other !== pr && existsSync(relayFilesOf(checkout, other).pid))
+    .filter((other) => {
+      const { headless } = targetOf(readFileSync(relayFilesOf(checkout, other).session, "utf8"));
+
+      return headless !== null && realPathOf(headless.worktree) === clone;
+    });
+}
+
+async function useOf({ run, checkout, pr }: CloneEndIo, clone: string, session: string): Promise<CloneUse> {
+  const agents = await checked(run, ["claude", "agents", "--json"], { cwd: checkout });
+
+  const unpushed = await checked(run, ["git", "rev-list", "--count", "--branches", "--not", "--remotes"], {
+    cwd: checkout,
+    env: pinnedGitEnvOf(clone),
+  });
+
+  return { running: !stoppedIn(agents, session), relays: relaysIn(checkout, pr, clone), unpushed: Number(unpushed) };
+}
+
 /**
- * Removes the clone of the session `sessionText` reads, the text of `relay-<pr>.session`, when it lies
- * directly under `clones`; null when the session works in no clone. A removal that fails, or a session
- * file that cannot be read, is returned with its error: the relay still ends.
+ * Removes the clone of the session `relay-<pr>.session` names when the PR `landed`, it lies directly
+ * under the clones' directory of `home`, and nothing uses it; null when the PR closed without landing or
+ * its session works in no clone. A clone kept, a removal that fails, or a file or command that cannot be
+ * read, is returned with why: the relay still ends.
  */
-export function removeClone(
-  clones: string,
-  sessionText: () => string,
-  remove: (path: string) => void = removeTree,
-): CloneEnd | null {
-  let worktree: string;
+export async function cloneEndOf(landed: boolean, io: CloneEndIo): Promise<CloneEnd | null> {
+  if (!landed) {
+    return null;
+  }
 
   try {
-    const { headless } = targetOf(sessionText());
+    const { session, headless } = targetOf(readFileSync(relayFilesOf(io.checkout, io.pr).session, "utf8"));
 
     if (headless === null) {
       return null;
     }
 
-    worktree = headless.worktree;
-  } catch (error) {
-    return {
-      removed: false,
-      why: `its clone stays, as its session is unread: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
+    const clones = clonesDirOf(io.home);
+    const realClones = realPathOf(clones);
+    const realWorktree = realPathOf(headless.worktree);
 
-  const realClones = realPathOf(clones);
-  const realWorktree = realPathOf(worktree);
-  const clone = realClones === null || realWorktree === null ? null : removableCloneOf(realClones, realWorktree);
+    if (realWorktree === null) {
+      return { removed: false, why: `its clone ${headless.worktree} is gone already` };
+    }
 
-  if (clone === null) {
-    return { removed: false, why: `its clone ${worktree} stays, as it is no directory directly under ${clones}` };
-  }
+    const clone = realClones === null ? null : removableCloneOf(realClones, realWorktree);
 
-  try {
-    remove(clone);
+    if (clone === null) {
+      return {
+        removed: false,
+        why: `its clone ${headless.worktree} stays, as it is no directory directly under ${clones}`,
+      };
+    }
+
+    const why = keptWhyOf(clone, await useOf(io, clone, session));
+
+    if (why !== null) {
+      return { removed: false, why };
+    }
+
+    try {
+      (io.remove ?? removeTree)(clone);
+    } catch (error) {
+      return {
+        removed: false,
+        why: `its clone ${clone} stays, as its removal failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
 
     return { removed: true, clone };
   } catch (error) {
     return {
       removed: false,
-      why: `its clone ${clone} stays, as its removal failed: ${error instanceof Error ? error.message : String(error)}`,
+      why: `its clone stays, as what uses it is unread: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }

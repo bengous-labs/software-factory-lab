@@ -21,6 +21,8 @@ A turn that still runs after that minute is delivered, whatever its end: one tha
 A background session the relay resumes takes the lines as its prompt too.
 It ends when the PR lands or closes, which starts no turn, and writes its start and its end to `.lab/outcomes.log`.
 When the PR lands and its session is a Worker's in a clone, the relay removes that clone, which nothing names again, and its end line says whether it did (`clone.ts`).
-The relay runs with the Owner's access and the Worker wrote the clone: it removes only a directory that lies directly under the clones' directory, both paths with their links resolved (`factory/land/shared/clone-root.ts`), and a removal that fails is named in the end line, and the relay ends all the same.
+The relay runs with the Owner's access and the Worker wrote the clone: it removes only a directory that lies directly under the clones' directory, both paths with their links resolved (`factory/land/shared/clone-git.ts`).
+It keeps the clone while something still uses it: `claude agents --json` lists a turn of the session running there, the running relay of another PR names a session there, or a branch of the clone holds a commit no remote branch holds, which git, pinned to the clone, counts.
+A clone kept, one already gone, a removal that fails or a file or command it cannot read is named in the end line, and the relay ends all the same: what it keeps, the Owner removes.
 A PR closed without landing keeps its clone: the Owner may reopen it, and the Worker's session lives there.
 A relay that dies is not restarted: the log shows a start with no end, and the clone of its Worker stays.

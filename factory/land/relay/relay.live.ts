@@ -10,13 +10,12 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
-import { clonesDirOf } from "../../install/paths.ts";
 import { requiredOf } from "../../lib/env.ts";
 import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
 import type { Leave, Run, RunOptions } from "../../lib/run.port.ts";
 import { ghEnv, requiredAuthorToken } from "../shared/author.live.ts";
-import { removeClone } from "./clone.live.ts";
+import { cloneEndOf } from "./clone.live.ts";
 import { endReasonOf } from "./clone.ts";
 import { deliverer, postToSocket } from "./deliver.live.ts";
 import { readPr, relayDeliverer, turn } from "./main.ts";
@@ -94,9 +93,7 @@ export async function main({ run, leave }: RelayPorts): Promise<void> {
       }
 
       if (ends) {
-        const clone = landed ? removeClone(clonesDirOf(home), () => readFileSync(files.session, "utf8")) : null;
-
-        outcomes("ended", endReasonOf(landed, clone));
+        outcomes("ended", endReasonOf(landed, await cloneEndOf(landed, { run, checkout: cwd, home, pr })));
         rmSync(files.pid, { force: true });
         process.exit(0);
       }
