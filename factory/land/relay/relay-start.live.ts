@@ -52,6 +52,14 @@ export interface RelayStartIo {
   readonly leave: Leave;
 }
 
+/** Whether the relay of PR `pr` in `checkout` runs: `relay-<pr>.pid` names a process that `watches` the PR. */
+export function relayRuns(checkout: string, pr: number, watches: RelayStartIo["watches"]): boolean {
+  const { pid } = relayFilesOf(checkout, pr);
+  const text = existsSync(pid) ? readFileSync(pid, "utf8").trim() : "";
+
+  return /^[1-9]\d*$/u.test(text) && watches(Number(text), pr);
+}
+
 /**
  * A `StartRelay` over `io`: it names the publishing session as the one the PR's Wakes go to, then starts
  * a relay unless the one `relay-<pr>.pid` names still watches the PR.
@@ -62,9 +70,7 @@ export function relayStarter(io: RelayStartIo, env: Env): StartRelay {
     mkdirSync(files.stateDir, { recursive: true });
     writeFileSync(files.session, targetTextOf({ session, headless }));
 
-    const pid = existsSync(files.pid) ? readFileSync(files.pid, "utf8").trim() : "";
-
-    if (/^[1-9]\d*$/u.test(pid) && io.watches(Number(pid), pr)) {
+    if (relayRuns(checkout, pr, io.watches)) {
       return "running";
     }
 
@@ -82,13 +88,13 @@ export function watchesOf(args: string, pr: number): boolean {
   return script !== -1 && words[script + 1] === String(pr);
 }
 
-const IO: RelayStartIo = {
-  watches: (pid, pr) => {
-    const ps = Bun.spawnSync(["ps", "-p", String(pid), "-o", "args="], { stdout: "pipe", stderr: "ignore" });
+/** Whether process `pid` is the relay of PR `pr`, from its command line as `ps` prints it. */
+export function relayWatches(pid: number, pr: number): boolean {
+  const ps = Bun.spawnSync(["ps", "-p", String(pid), "-o", "args="], { stdout: "pipe", stderr: "ignore" });
 
-    return ps.exitCode === 0 && watchesOf(ps.stdout.toString(), pr);
-  },
-  leave,
-};
+  return ps.exitCode === 0 && watchesOf(ps.stdout.toString(), pr);
+}
+
+const IO: RelayStartIo = { watches: relayWatches, leave };
 
 export const startRelay: StartRelay = relayStarter(IO, process.env);

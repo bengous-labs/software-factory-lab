@@ -67,7 +67,7 @@ describe("turn", () => {
   test("a quiet PR delivers nothing, and the relay goes on", async () => {
     const { io, sent } = relay(OPEN);
 
-    expect(await turn(7, new Set(), io)).toEqual({ delivered: [], via: null, pending: 0, ends: false });
+    expect(await turn(7, new Set(), io)).toEqual({ delivered: [], via: null, pending: 0, ends: false, landed: false });
     expect(sent).toEqual([]);
   });
 
@@ -79,6 +79,7 @@ describe("turn", () => {
       via: "socket",
       pending: 2,
       ends: false,
+      landed: false,
     });
     expect(sent).toEqual([
       {
@@ -112,7 +113,7 @@ describe("turn", () => {
       seen.add(key);
     }
 
-    expect(await turn(7, seen, io)).toEqual({ delivered: [], via: null, pending: 0, ends: false });
+    expect(await turn(7, seen, io)).toEqual({ delivered: [], via: null, pending: 0, ends: false, landed: false });
     expect(sent).toHaveLength(1);
 
     const later = relay({ ...state, checks: [{ name: "validate", bucket: "fail", link: "https://ci/1" }] });
@@ -122,6 +123,7 @@ describe("turn", () => {
       via: "socket",
       pending: 1,
       ends: false,
+      landed: false,
     });
     expect(later.sent[0]?.text).not.toContain("Finding T1");
   });
@@ -130,15 +132,21 @@ describe("turn", () => {
     const { io, sent } = relay({ ...OPEN, threads: [NIT] }, null);
     const seen = new Set<string>();
 
-    expect(await turn(7, seen, io)).toEqual({ delivered: [], via: null, pending: 1, ends: false });
-    expect(await turn(7, seen, io)).toEqual({ delivered: [], via: null, pending: 1, ends: false });
+    expect(await turn(7, seen, io)).toEqual({ delivered: [], via: null, pending: 1, ends: false, landed: false });
+    expect(await turn(7, seen, io)).toEqual({ delivered: [], via: null, pending: 1, ends: false, landed: false });
     expect(sent).toHaveLength(2);
   });
 
   test("a red Review check alone starts no turn: its findings start theirs", async () => {
     const held = relay({ ...OPEN, checks: [{ name: "agent-review", bucket: "fail", link: "https://ci/2" }] });
 
-    expect(await turn(7, new Set(), held.io)).toEqual({ delivered: [], via: null, pending: 0, ends: false });
+    expect(await turn(7, new Set(), held.io)).toEqual({
+      delivered: [],
+      via: null,
+      pending: 0,
+      ends: false,
+      landed: false,
+    });
     expect(held.sent).toEqual([]);
   });
 
@@ -172,11 +180,17 @@ describe("turn", () => {
     ]);
   });
 
-  test("a landed or closed PR ends the relay and starts no turn, whatever the PR still carries", async () => {
+  test("a landed or closed PR ends the relay and starts no turn, whatever the PR still carries; only a merge lands it", async () => {
     for (const state of ["MERGED", "CLOSED"] as const) {
       const ended = relay({ ...OPEN, state, draft: true, threads: [NIT] });
 
-      expect(await turn(7, new Set(), ended.io)).toEqual({ delivered: [], via: null, pending: 0, ends: true });
+      expect(await turn(7, new Set(), ended.io)).toEqual({
+        delivered: [],
+        via: null,
+        pending: 0,
+        ends: true,
+        landed: state === "MERGED",
+      });
       expect(ended.sent).toEqual([]);
     }
   });

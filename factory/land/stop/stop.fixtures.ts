@@ -338,8 +338,11 @@ export function writes(calls: readonly Call[]): string[] {
   });
 }
 
-// An inherited GIT_DIR would point a fixture's git at the real repository; the test layer cannot import fixtureEnv.
-const FIXTURE_ENV = Object.fromEntries(
+/**
+ * This process's environment without its `GIT_` variables, for git on a fixture repository: an
+ * inherited GIT_DIR would point it at the real repository. The test layer cannot import fixtureEnv.
+ */
+export const FIXTURE_ENV = Object.fromEntries(
   Object.entries(process.env).flatMap(([name, value]) =>
     name.startsWith("GIT_") || value === undefined ? [] : [[name, value] as const],
   ),

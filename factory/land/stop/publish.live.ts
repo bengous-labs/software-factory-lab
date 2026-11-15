@@ -229,7 +229,7 @@ export interface AuthorStop {
   readonly clone: string | null;
   /**
    * Where and how the hook runs git for this stop: in the session's directory, or, for an API Worker, in
-   * the main checkout with the clone handed over through git's environment (`clone-git.ts`).
+   * the main checkout with the clone handed over through git's environment (`../shared/clone-git.ts`).
    */
   readonly git: RunOptions;
   /** The directory the hook runs gh in: the session's, or the main checkout for an API Worker. */

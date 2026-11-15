@@ -18,6 +18,7 @@ A worktree shares the main checkout's git directory, and a command of the Worker
 - Dispatch clones the main checkout's remote on the Trunk, then creates the branch in the clone and installs its dependencies there, while the clone holds the Trunk's files alone.
   No hook installs for such a Worker: an install in a directory the Worker has written follows what it left there.
 - `git worktree list` does not show a Worker, the main checkout holds no branch of its issue, and deleting its clone is all that removes it.
+  The relay of its PR deletes the clone when the PR lands and nothing uses it any more (`factory/land/relay/AGENTS.md`); a PR closed without landing, a Worker that stops with no PR, a clone the relay keeps and a relay that died leave it to the Owner.
 - The Worker's session starts in its clone, and its settings name the main checkout (`LAB_MAIN_CHECKOUT`): that variable is what makes a session one that works in a clone, for every hook that would otherwise trust the Worker's tree (`factory/hooks/AGENTS.md`).
 
 ## What runs outside the sandbox asks the clone nothing

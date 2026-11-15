@@ -12,7 +12,7 @@
  * Reads the Stop input on stdin; `LAB_STOP_FORK=1` marks a fork this hook launched.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { OUTCOMES_LOG } from "../../contract.ts";
@@ -24,9 +24,10 @@ import { decodeJson } from "../../lib/json.ts";
 import { checked } from "../../lib/run.port.ts";
 import { questionOpen } from "../shared/author-mark.ts";
 import { authorTokenOf } from "../shared/author.live.ts";
+import { cloneRootOf, pinnedGitEnvOf } from "../shared/clone-git.ts";
 import { conversationArgsOf, conversationOf } from "../shared/conversation.ts";
 import type { OpenFinding } from "../shared/findings.ts";
-import { cloneRootOf, pinnedGitEnvOf } from "./clone-git.ts";
+import { realPathOf } from "../shared/real-path.live.ts";
 import {
   admit,
   afterClosed,
@@ -229,20 +230,11 @@ async function placeOf(deps: Deps, cwd: string): Promise<Place> {
   };
 }
 
-/** `path` with every link in it resolved; null when it names nothing, or cannot be resolved. */
-function realPathOf(path: string): string | null {
-  try {
-    return realpathSync(path);
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Where the session of a Worker that works in a clone stops: the clone its directory `cwd` lies in, among those `clones`
  * holds, with git handed that clone through its environment and run, as gh is, in the main checkout,
  * where the hook's state lies too. The hook is outside the Worker's sandbox, so it lets git find nothing
- * from the clone and writes nothing there (`clone-git.ts`). Both paths are compared with their links
+ * from the clone and writes nothing there (`../shared/clone-git.ts`). Both paths are compared with their links
  * resolved: a home reached through a link names the same clones. Null when `cwd` lies in no clone.
  */
 function clonePlaceOf({ checkout, realpath }: Deps, clones: string, cwd: string): Place | null {

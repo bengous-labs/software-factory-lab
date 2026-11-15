@@ -61,6 +61,8 @@ export interface Turn {
   /** The Wakes the turn had to deliver. */
   readonly pending: number;
   readonly ends: boolean;
+  /** The PR landed: the relay ends, and removes the clone of a Worker's session. */
+  readonly landed: boolean;
 }
 
 /**
@@ -68,16 +70,18 @@ export interface Turn {
  * that did not go through are delivered by a later turn; a landed or closed PR has none, and ends the relay.
  */
 export async function turn(pr: number, seen: ReadonlySet<string>, io: RelayIo): Promise<Turn> {
-  const reading: Reading = readingOf(pr, await io.read(), seen);
+  const state = await io.read();
+  const reading: Reading = readingOf(pr, state, seen);
+  const landed = state.state === "MERGED";
 
   if (reading.wakes.length === 0) {
-    return { delivered: [], via: null, pending: 0, ends: reading.ends };
+    return { delivered: [], via: null, pending: 0, ends: reading.ends, landed };
   }
 
   const keys = reading.wakes.map((wake) => wake.key);
   const via = await io.deliver(io.session(), wakeTextOf(pr, reading), ownerWordsIn(reading));
 
-  return { delivered: via === null ? [] : keys, via, pending: keys.length, ends: reading.ends };
+  return { delivered: via === null ? [] : keys, via, pending: keys.length, ends: reading.ends, landed };
 }
 
 /**
